@@ -232,6 +232,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -417,7 +418,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
     };
     setPendingUserMsg(userMsg);
     setInputValue("");
-    setAttachedFile(null);
+    clearAttachedFile();
     setIsStreaming(true);
 
     const streamMsg: ChatMsg = {
@@ -562,12 +563,44 @@ function ChatPanel({ idea }: { idea: Idea }) {
     }
   }
 
+  function attachFile(file: File) {
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
+    setAttachedFile(file);
+    if (file.type.startsWith("image/")) {
+      setFilePreviewUrl(URL.createObjectURL(file));
+    } else {
+      setFilePreviewUrl(null);
+    }
+  }
+
+  function clearAttachedFile() {
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
+    setAttachedFile(null);
+    setFilePreviewUrl(null);
+  }
+
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) {
-      setAttachedFile(file);
+      attachFile(file);
     }
     e.target.value = "";
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) {
+          const named = new File([file], `screenshot-${Date.now()}.png`, { type: file.type });
+          attachFile(named);
+        }
+        return;
+      }
+    }
   }
 
   if (loadingHistory) {
@@ -733,10 +766,14 @@ function ChatPanel({ idea }: { idea: Idea }) {
       <div className="p-3 border-t border-border">
         {attachedFile && (
           <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-md bg-secondary/50 border border-border text-xs" data-testid="chip-attached-file">
-            <FileIcon className="h-3 w-3 text-muted-foreground shrink-0" />
+            {filePreviewUrl ? (
+              <img src={filePreviewUrl} alt="Preview" className="h-10 w-10 rounded object-cover shrink-0 border border-border" />
+            ) : (
+              <FileIcon className="h-3 w-3 text-muted-foreground shrink-0" />
+            )}
             <span className="truncate text-foreground/80">{attachedFile.name}</span>
             <button
-              onClick={() => setAttachedFile(null)}
+              onClick={clearAttachedFile}
               className="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
               data-testid="button-remove-file"
             >
@@ -771,6 +808,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder="Describe your process..."
             className="min-h-[36px] max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
             rows={1}
