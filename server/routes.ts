@@ -7,6 +7,7 @@ import { seedDemoUsers, seedDemoIdeas } from "./seed";
 import { loginSchema, createIdeaSchema, ROLES, type UserRole } from "@shared/schema";
 import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerProcessMapRoutes } from "./process-map-routes";
+import { registerDocumentRoutes } from "./document-routes";
 
 declare module "express-session" {
   interface SessionData {
@@ -43,6 +44,7 @@ export async function registerRoutes(
 
   registerChatRoutes(app);
   registerProcessMapRoutes(app);
+  registerDocumentRoutes(app);
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     if (!req.session.userId) {

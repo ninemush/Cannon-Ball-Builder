@@ -1,0 +1,36 @@
+Now add document generation to the CannonBall Idea Workspace.
+
+PROCESS DESIGN DOCUMENT (PDD)
+After the As-Is map is approved, the LLM should automatically generate a PDD in the chat. 
+
+Trigger this by sending the following to Claude after approval, along with the full conversation history and a JSON snapshot of all current process map nodes:
+
+"The SME has approved the As-Is process map. Now generate a Process Design Document. The PDD must include: 1) Executive Summary, 2) Process Scope, 3) As-Is Process Description (narrative form, referencing the steps in the map), 4) Pain Points and Inefficiencies, 5) Automation Opportunity Assessment, 6) Assumptions and Exceptions, 7) Data and System Requirements. Write this as a professional document, not a bullet list. Be specific and use the details from our conversation."
+
+RENDERING THE PDD IN CHAT
+Render the PDD response in the chat with:
+- A distinct card style — slightly elevated surface (#2a2a2a), left border in teal, a document icon header
+- Sections are collapsible
+- An "Approve PDD" button at the bottom of the card
+- The SME can continue chatting to request changes. If they say something like "update section 3" or "add an exception for X", send the updated request to Claude and re-render the PDD card with the revision (keep the old version in history, show the new one as current)
+- Approval flow same as As-Is map: confirmation modal → write to approvals table → chat acknowledgment → stage advances
+
+SOLUTION DESIGN DOCUMENT (SDD)
+After PDD approval, trigger SDD generation automatically:
+
+"The SME has approved the PDD. Now generate a Solution Design Document for UiPath automation. Include: 1) Automation Architecture Overview, 2) Process Components and Workflow Breakdown, 3) UiPath Activities and Packages Required, 4) Integration Points and API/System Connections, 5) Exception Handling Strategy, 6) Security Considerations, 7) Test Strategy. Be specific. Reference UiPath best practices. This will be used to generate the automation package."
+
+Same rendering pattern as PDD. Same approval flow.
+
+UIPATH PACKAGE GENERATION
+After SDD approval, show a button in the chat: "Generate UiPath Package".
+
+On click, send the full SDD and conversation context to Claude:
+"Based on the approved SDD, generate a UiPath automation package structure. Output a JSON object with this shape: { projectName, description, dependencies: [array of UiPath package names], workflows: [{ name, description, steps: [{ activity, properties, notes }] }] }. Be as specific as possible."
+
+Parse the JSON response and:
+- Render a clean package summary card in the chat showing the workflow names and dependency list
+- Generate a downloadable ZIP file containing: project.json (properly formatted for UiPath Studio), one XAML stub per workflow (with comments mapping to the SDD steps), and a README.md with import instructions
+- Show a "Download UiPath Package" button (orange, prominent)
+
+All generated documents and their version snapshots should be saved to Supabase.
