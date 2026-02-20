@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -19,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -701,12 +703,23 @@ function ChatPanel({ idea }: { idea: Idea }) {
                     : "bg-card border border-card-border rounded-bl-sm"
                 }`}
               >
-                <p className="text-xs leading-relaxed whitespace-pre-wrap">
-                  {msg.content}
-                  {msg.isStreaming && (
-                    <span className="inline-block w-1.5 h-3.5 bg-primary ml-0.5 animate-pulse rounded-sm" />
-                  )}
-                </p>
+                {msg.role === "assistant" ? (
+                  <div className="text-xs leading-relaxed prose-chat">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.content}
+                    </ReactMarkdown>
+                    {msg.isStreaming && (
+                      <span className="inline-block w-1.5 h-3.5 bg-primary ml-0.5 animate-pulse rounded-sm" />
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs leading-relaxed whitespace-pre-wrap">
+                    {msg.content}
+                    {msg.isStreaming && (
+                      <span className="inline-block w-1.5 h-3.5 bg-primary ml-0.5 animate-pulse rounded-sm" />
+                    )}
+                  </p>
+                )}
                 {!msg.isStreaming && (
                   <span
                     className={`text-[9px] mt-1.5 block ${
