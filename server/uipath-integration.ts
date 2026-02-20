@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import archiver from "archiver";
 import { PassThrough } from "stream";
 
-type UiPathConfig = {
+export type UiPathConfig = {
   orgName: string;
   tenantName: string;
   clientId: string;

@@ -1,5 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { getUiPathConfig, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, runHealthCheck } from "./uipath-integration";
+import { parseArtifactsFromSDD, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
+import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 
@@ -243,6 +245,38 @@ export function registerUiPathRoutes(app: Express): void {
         ? `\n**Process created:** "${result.details?.processName}" — ready to run`
         : `\n**Process:** Could not auto-create (${processResult.message}). You may need to create it manually in Orchestrator.`;
 
+      let deploymentReport = "";
+      try {
+        const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+        if (sdd?.content) {
+          const artifacts = parseArtifactsFromSDD(sdd.content);
+          if (artifacts && (
+            (artifacts.queues?.length || 0) > 0 ||
+            (artifacts.assets?.length || 0) > 0 ||
+            (artifacts.machines?.length || 0) > 0 ||
+            (artifacts.triggers?.length || 0) > 0 ||
+            (artifacts.storageBuckets?.length || 0) > 0 ||
+            (artifacts.actionCenter?.length || 0) > 0
+          )) {
+            const releaseId = result.details?.processId || null;
+            const releaseKey = result.details?.releaseKey || null;
+            console.log(`[UiPath] Found SDD artifacts, deploying... (releaseId=${releaseId})`);
+
+            const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey);
+            deploymentReport = formatDeploymentReport(deployResult.results);
+
+            result.details = {
+              ...result.details,
+              deploymentResults: deployResult.results,
+              deploymentSummary: deployResult.summary,
+            };
+          }
+        }
+      } catch (err: any) {
+        console.error("[UiPath] Artifact deployment failed:", err.message);
+        deploymentReport = `\n\n⚠️ Artifact deployment encountered an error: ${err.message}`;
+      }
+
       const chatMsg = [
         `Package pushed to UiPath Orchestrator successfully.`,
         ``,
@@ -250,6 +284,7 @@ export function registerUiPathRoutes(app: Express): void {
         `Org: ${details?.orgName || "—"} / Tenant: ${details?.tenantName || "—"}`,
         folderLine,
         processLine,
+        deploymentReport,
         ``,
         processResult.success
           ? `The automation is now deployed and ready. You can trigger a job from this workspace or from Orchestrator directly.`

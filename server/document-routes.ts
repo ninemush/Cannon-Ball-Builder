@@ -15,7 +15,43 @@ const PDD_PROMPT = `The SME has approved the As-Is process map. Now generate a P
 
 Format your response as sections separated by "## " headings. Each section should start with "## 1. Executive Summary", "## 2. Process Scope", etc.`;
 
-const SDD_PROMPT = `The SME has approved the PDD. Now generate a Solution Design Document for UiPath automation. Include: 1) Automation Architecture Overview, 2) Process Components and Workflow Breakdown, 3) UiPath Activities and Packages Required, 4) Integration Points and API/System Connections, 5) Exception Handling Strategy, 6) Security Considerations, 7) Test Strategy. Be specific. Reference UiPath best practices. This will be used to generate the automation package.
+const SDD_PROMPT = `The SME has approved the PDD. Now generate a Solution Design Document for UiPath automation. Include these sections:
+
+1) Automation Architecture Overview
+2) Process Components and Workflow Breakdown
+3) UiPath Activities and Packages Required
+4) Integration Points and API/System Connections
+5) Exception Handling Strategy
+6) Security Considerations
+7) Test Strategy
+8) Orchestrator Deployment Specification
+
+For section 8 "Orchestrator Deployment Specification", you MUST output a fenced JSON block tagged as orchestrator_artifacts. This block defines every Orchestrator artifact needed to run this automation end-to-end. Use this exact format:
+
+\`\`\`orchestrator_artifacts
+{
+  "queues": [
+    { "name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true }
+  ],
+  "assets": [
+    { "name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default value or empty", "description": "Purpose" }
+  ],
+  "machines": [
+    { "name": "TemplateName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose" }
+  ],
+  "triggers": [
+    { "name": "TriggerName", "type": "Queue|Time", "queueName": "if queue trigger", "cron": "if time trigger e.g. 0 0 9 ? * MON-FRI *", "description": "Purpose" }
+  ],
+  "storageBuckets": [
+    { "name": "BucketName", "description": "Purpose" }
+  ],
+  "actionCenter": [
+    { "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }
+  ]
+}
+\`\`\`
+
+Include ALL artifacts the automation needs. For credential assets, set value to "" (empty) since the user must fill in real credentials. For text/integer/bool assets, provide sensible defaults. For queue triggers, reference the queue name defined above. For time triggers, use UiPath 7-field cron expressions. Be comprehensive — this specification will be used to auto-provision everything in Orchestrator.
 
 Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc.`;
 
