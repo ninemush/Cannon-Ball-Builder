@@ -1,0 +1,42 @@
+Build a full-stack web app called CannonBall using React (Vite) for the frontend and Node.js/Express for the backend. Use Supabase for the database and authentication.
+
+DESIGN SYSTEM
+Use this exact color palette throughout the entire app:
+- Background (dark): #0a0a0a
+- Surface: #1a1a1a
+- Surface elevated: #242424
+- Border: #3d3d3d
+- Text primary: #ffffff
+- Text muted: #c8c8c8
+- Orange (primary accent): #e8450a
+- Teal (secondary accent): #008b9b
+- Light Teal: #00b4c8
+- Gold: #c8940a
+- Magenta: #d4006a
+- Purple: #7b1fa2
+- Dark Slate: #2d4a5a
+- Success: #008b9b
+- Warning: #c8940a
+- Danger: #d4006a
+
+Dark mode is the default. Include a light mode toggle in the top nav. In light mode, swap the background to #f5f5f5 and surface to #ffffff, keeping all accent colors the same.
+
+LAYOUT SHELL
+Build the global app shell with:
+1. Top nav bar: CannonBall logo (text-based, use orange accent) on the left. On the right: a "Demo Mode – Switch Role" dropdown, a notifications bell icon, a dark/light mode toggle, and a user avatar.
+2. Left sidebar: Navigation links – Pipeline, My Ideas, User Guide, Settings (Settings visible to Admin role only). Sidebar collapses to icons on smaller screens.
+3. Main canvas: Empty placeholder for now with a centered message "CannonBall is loading..." in muted text.
+
+AUTH AND ROLES
+Set up Supabase Auth. Create three demo users on first load if they do not already exist:
+- sme@cannonball.demo / CannonBall2026!  → role: Process SME
+- coe@cannonball.demo / CannonBall2026!  → role: CoE
+- admin@cannonball.demo / CannonBall2026! → role: Admin
+
+Store roles in a Supabase profiles table linked to auth.users.
+
+The "Demo Mode – Switch Role" dropdown in the top nav should instantly switch the active role context without logging out. The role chip next to the avatar should update to reflect the current active role. Label the roles clearly: "Process SME", "CoE", "Admin".
+
+All API keys go in environment variables / Replit Secrets. No keys in client-side code.
+
+Do not add any other features yet. Get this shell working cleanly first.
