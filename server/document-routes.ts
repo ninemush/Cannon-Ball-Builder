@@ -60,15 +60,32 @@ async function verifyIdeaAccess(req: Request, res: Response): Promise<string | n
   return ideaId;
 }
 
+function trimChatForDocGen(messages: { role: string; content: string }[]): { role: "user" | "assistant"; content: string }[] {
+  const trimmed = messages
+    .filter((m) => !m.content.startsWith("[DOC:") && !m.content.startsWith("[UIPATH:"))
+    .map((m) => {
+      let content = m.content;
+      if (content.length > 2000) {
+        content = content.slice(0, 2000) + "\n...[truncated]";
+      }
+      return { role: m.role as "user" | "assistant", content };
+    });
+  const MAX_MSGS = 30;
+  if (trimmed.length > MAX_MSGS) {
+    return trimmed.slice(trimmed.length - MAX_MSGS);
+  }
+  return trimmed;
+}
+
 async function generateDocument(ideaId: string, docType: string): Promise<string> {
   const idea = await storage.getIdea(ideaId);
   if (!idea) throw new Error("Idea not found");
 
   const history = await chatStorage.getMessagesByIdeaId(ideaId);
-  const chatMessages = history.map((m) => ({
+  const chatMessages = trimChatForDocGen(history.map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
-  }));
+  })));
 
   let contextPrompt = "";
   if (docType === "PDD") {
@@ -76,9 +93,10 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
     const asIsEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "as-is");
     const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
     const toBeEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
-    contextPrompt = `\n\nHere is the approved As-Is process map:\n${JSON.stringify({ nodes: asIsNodes, edges: asIsEdges }, null, 2)}`;
+    const mapSummary = (nodes: any[]) => nodes.map((n) => ({ name: n.name, type: n.nodeType, role: n.role, system: n.system }));
+    contextPrompt = `\n\nApproved As-Is process map:\n${JSON.stringify({ nodes: mapSummary(asIsNodes), edges: asIsEdges.map((e: any) => ({ source: e.sourceNodeId, target: e.targetNodeId, label: e.label })) })}`;
     if (toBeNodes.length > 0) {
-      contextPrompt += `\n\nHere is the To-Be (optimised/automated) process map:\n${JSON.stringify({ nodes: toBeNodes, edges: toBeEdges }, null, 2)}`;
+      contextPrompt += `\n\nTo-Be process map:\n${JSON.stringify({ nodes: mapSummary(toBeNodes), edges: toBeEdges.map((e: any) => ({ source: e.sourceNodeId, target: e.targetNodeId, label: e.label })) })}`;
     }
   } else if (docType === "SDD") {
     const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
@@ -91,8 +109,8 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 8192,
-    system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific, thorough, and use details from the conversation history.${contextPrompt}`,
+    max_tokens: 4096,
+    system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`,
     messages: [...chatMessages, { role: "user", content: prompt }],
   });
 
@@ -157,9 +175,11 @@ export function registerDocumentRoutes(app: Express): void {
       );
 
       return res.json(doc);
-    } catch (error) {
-      console.error(`Error generating ${type}:`, error);
-      return res.status(500).json({ message: `Failed to generate ${type}` });
+    } catch (error: any) {
+      const msg = error?.message || error?.toString() || "Unknown error";
+      console.error(`Error generating ${type}:`, msg);
+      if (error?.status) console.error(`API status: ${error.status}`);
+      return res.status(500).json({ message: `Failed to generate ${type}: ${msg.slice(0, 200)}` });
     }
   });
 

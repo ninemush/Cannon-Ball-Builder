@@ -260,17 +260,26 @@ function ChatPanel({ idea }: { idea: Idea }) {
     setIsGeneratingDoc(true);
     setGeneratingDocType(type);
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
       const res = await fetch(`/api/ideas/${idea.id}/documents/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ type }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       if (!res.ok) {
-        console.error(`Failed to generate ${type}`);
+        const err = await res.json().catch(() => ({}));
+        console.error(`Failed to generate ${type}:`, err);
       }
-    } catch (err) {
-      console.error(`Error generating ${type}:`, err);
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        console.error(`${type} generation timed out`);
+      } else {
+        console.error(`Error generating ${type}:`, err);
+      }
     } finally {
       setIsGeneratingDoc(false);
       setGeneratingDocType("");
@@ -299,15 +308,16 @@ function ChatPanel({ idea }: { idea: Idea }) {
     }
   }, [idea.id]);
 
+  const pddTriggeredRef = useRef(false);
+  const sddTriggeredRef = useRef(false);
+
   const handleDocApproved = useCallback(async (docType: "PDD" | "SDD") => {
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-    if (docType === "PDD") {
+    if (docType === "PDD" && !sddTriggeredRef.current) {
+      sddTriggeredRef.current = true;
       setTimeout(() => generateDocument("SDD"), 500);
     }
   }, [idea.id, generateDocument]);
-
-  const pddTriggeredRef = useRef(false);
-  const sddTriggeredRef = useRef(false);
 
   const guidance = STAGE_GUIDANCE[idea.stage];
 
