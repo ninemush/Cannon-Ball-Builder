@@ -81,6 +81,14 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+        cb: {
+          teal: "hsl(var(--cb-teal) / <alpha-value>)",
+          "light-teal": "hsl(var(--cb-light-teal) / <alpha-value>)",
+          gold: "hsl(var(--cb-gold) / <alpha-value>)",
+          magenta: "hsl(var(--cb-magenta) / <alpha-value>)",
+          purple: "hsl(var(--cb-purple) / <alpha-value>)",
+          "dark-slate": "hsl(var(--cb-dark-slate) / <alpha-value>)",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
