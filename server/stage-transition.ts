@@ -50,6 +50,64 @@ async function hasDocument(ideaId: string, docType: string): Promise<boolean> {
   return (result?.count || 0) > 0;
 }
 
+async function evaluateNextStage(ideaId: string, currentStage: PipelineStage): Promise<{ nextStage: PipelineStage; reason: string } | null> {
+  switch (currentStage) {
+    case "Idea": {
+      const nodeCount = await getNodeCount(ideaId);
+      const msgCount = await getMessageCount(ideaId);
+      if (nodeCount >= 3 && msgCount >= 4) {
+        return { nextStage: "Feasibility Assessment", reason: `${nodeCount} process steps mapped, ${msgCount} chat messages exchanged` };
+      }
+      return null;
+    }
+
+    case "Feasibility Assessment": {
+      const nodeCount = await getNodeCount(ideaId);
+      const msgCount = await getMessageCount(ideaId);
+      if (nodeCount >= 5 && msgCount >= 8) {
+        return { nextStage: "Validated Backlog", reason: "Feasibility assessment criteria met" };
+      }
+      return null;
+    }
+
+    case "Validated Backlog":
+      return { nextStage: "Design", reason: "Idea validated and added to backlog" };
+
+    case "Design": {
+      const asIsApproved = await hasMapApproval(ideaId, "as-is");
+      const hasPdd = await hasDocument(ideaId, "PDD");
+      if (asIsApproved && hasPdd) {
+        return { nextStage: "Build", reason: "As-Is map approved and PDD generated" };
+      }
+      return null;
+    }
+
+    case "Build": {
+      const sddExists = await hasDocument(ideaId, "SDD");
+      const sddApproved = await hasDocApproval(ideaId, "SDD");
+      if (sddExists && sddApproved) {
+        return { nextStage: "Test", reason: "SDD approved and UiPath package generated" };
+      }
+      return null;
+    }
+
+    case "Test":
+      return { nextStage: "Governance / Security Scan", reason: "Testing phase complete" };
+
+    case "Governance / Security Scan":
+      return { nextStage: "CoE Approval", reason: "Governance scan passed" };
+
+    case "CoE Approval":
+      return { nextStage: "Deploy", reason: "CoE approval granted" };
+
+    case "Deploy":
+      return { nextStage: "Maintenance", reason: "Deployment complete" };
+
+    default:
+      return null;
+  }
+}
+
 export async function evaluateTransition(
   ideaId: string,
   userId?: string,
@@ -59,109 +117,48 @@ export async function evaluateTransition(
   const idea = await storage.getIdea(ideaId);
   if (!idea) return { transitioned: false, reason: "Idea not found" };
 
-  const currentStage = idea.stage as PipelineStage;
-  const currentIndex = PIPELINE_STAGES.indexOf(currentStage);
-  if (currentIndex === -1) return { transitioned: false, reason: "Unknown stage" };
+  let currentStage = idea.stage as PipelineStage;
+  if (PIPELINE_STAGES.indexOf(currentStage) === -1) return { transitioned: false, reason: "Unknown stage" };
 
-  let nextStage: PipelineStage | null = null;
-  let reason = "";
+  let firstFrom: string | undefined;
+  let lastTo: string | undefined;
+  let allReasons: string[] = [];
+  let didTransition = false;
 
-  switch (currentStage) {
-    case "Idea": {
-      const nodeCount = await getNodeCount(ideaId);
-      const msgCount = await getMessageCount(ideaId);
-      if (nodeCount >= 3 && msgCount >= 4) {
-        nextStage = "Feasibility Assessment";
-        reason = `${nodeCount} process steps mapped, ${msgCount} chat messages exchanged`;
-      }
-      break;
-    }
+  const maxChain = 10;
+  for (let i = 0; i < maxChain; i++) {
+    const result = await evaluateNextStage(ideaId, currentStage);
+    if (!result) break;
 
-    case "Feasibility Assessment": {
-      const nodeCount = await getNodeCount(ideaId);
-      const msgCount = await getMessageCount(ideaId);
-      if (nodeCount >= 5 && msgCount >= 8) {
-        nextStage = "Validated Backlog";
-        reason = "Feasibility assessment criteria met";
-      }
-      break;
-    }
+    if (!firstFrom) firstFrom = currentStage;
+    lastTo = result.nextStage;
+    allReasons.push(`${currentStage} → ${result.nextStage}: ${result.reason}`);
+    didTransition = true;
 
-    case "Validated Backlog": {
-      nextStage = "Design";
-      reason = "Idea validated and added to backlog";
-      break;
-    }
+    await storage.updateIdeaStage(ideaId, result.nextStage);
 
-    case "Design": {
-      const asIsApproved = await hasMapApproval(ideaId, "as-is");
-      const hasPdd = await hasDocument(ideaId, "PDD");
-      if (asIsApproved && hasPdd) {
-        nextStage = "Build";
-        reason = "As-Is map approved and PDD generated";
-      }
-      break;
-    }
+    await storage.createAuditLog({
+      ideaId,
+      userId: userId || null,
+      userName: userName || "System",
+      userRole: userRole || "System",
+      action: "stage_transition",
+      fromStage: currentStage,
+      toStage: result.nextStage,
+      details: result.reason,
+    });
 
-    case "Build": {
-      const sddExists = await hasDocument(ideaId, "SDD");
-      const sddApproved = await hasDocApproval(ideaId, "SDD");
-      if (sddExists && sddApproved) {
-        nextStage = "Test";
-        reason = "SDD approved and UiPath package generated";
-      }
-      break;
-    }
-
-    case "Test": {
-      nextStage = "Governance / Security Scan";
-      reason = "Testing phase complete";
-      break;
-    }
-
-    case "Governance / Security Scan": {
-      nextStage = "CoE Approval";
-      reason = "Governance scan passed";
-      break;
-    }
-
-    case "CoE Approval": {
-      nextStage = "Deploy";
-      reason = "CoE approval granted";
-      break;
-    }
-
-    case "Deploy": {
-      nextStage = "Maintenance";
-      reason = "Deployment complete";
-      break;
-    }
-
-    default:
-      return { transitioned: false, reason: "Already at final stage" };
+    currentStage = result.nextStage;
   }
 
-  if (!nextStage) {
+  if (!didTransition) {
     return { transitioned: false, reason: "Transition conditions not yet met" };
   }
 
-  await storage.updateIdeaStage(ideaId, nextStage);
-
-  await storage.createAuditLog({
-    ideaId,
-    userId: userId || null,
-    userName: userName || "System",
-    userRole: userRole || "System",
-    action: "stage_transition",
-    fromStage: currentStage,
-    toStage: nextStage,
-    details: reason,
-  });
-
   return {
     transitioned: true,
-    fromStage: currentStage,
-    toStage: nextStage,
-    reason,
+    fromStage: firstFrom,
+    toStage: lastTo,
+    reason: allReasons.join("; "),
   };
 }
