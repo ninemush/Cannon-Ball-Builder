@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link } from "wouter";
 import {
   ArrowLeft,
@@ -224,9 +225,8 @@ function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: n
   return { displayContent: content };
 }
 
-const WELCOME_MESSAGE = `Hi, I'm your automation design assistant. Tell me about the process you want to automate. The more detail you give me, the better.\n\nYou can also upload process maps, videos, or documents.`;
-
 function ChatPanel({ idea }: { idea: Idea }) {
+  const { toast } = useToast();
   const [streamingMsg, setStreamingMsg] = useState<ChatMsg | null>(null);
   const [pendingUserMsg, setPendingUserMsg] = useState<ChatMsg | null>(null);
   const [inputValue, setInputValue] = useState("");
@@ -238,6 +238,19 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMsgRef = useRef<string>("");
+  const chatInitializedRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (chatInitializedRef.current) return;
+    chatInitializedRef.current = true;
+    fetch(`/api/ideas/${idea.id}/init-chat`, {
+      method: "POST",
+      credentials: "include",
+    }).then(() => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+    }).catch(() => {});
+  }, [idea.id]);
 
   const generateDocument = useCallback(async (type: "PDD" | "SDD") => {
     setIsGeneratingDoc(true);
@@ -326,9 +339,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
       return result;
     }
     if (!loadingHistory) {
-      const result: ChatMsg[] = [
-        { id: "welcome", role: "assistant", content: WELCOME_MESSAGE, timestamp: new Date() },
-      ];
+      const result: ChatMsg[] = [];
       if (pendingUserMsg) result.push(pendingUserMsg);
       if (streamingMsg) result.push(streamingMsg);
       return result;
@@ -365,6 +376,28 @@ function ChatPanel({ idea }: { idea: Idea }) {
       generateDocument("SDD");
     }
   }, [savedMessages, isGeneratingDoc, generateDocument]);
+
+  useEffect(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    if (!savedMessages || savedMessages.length === 0 || isStreaming || isGeneratingDoc) return;
+
+    const lastMsg = savedMessages[savedMessages.length - 1];
+    if (lastMsg.role === "assistant" && lastMsg.content.endsWith("?")) {
+      idleTimerRef.current = setTimeout(async () => {
+        try {
+          await fetch(`/api/ideas/${idea.id}/nudge`, {
+            method: "POST",
+            credentials: "include",
+          });
+          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+        } catch {}
+      }, 60000);
+    }
+
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [savedMessages, isStreaming, isGeneratingDoc, idea.id]);
 
   const handleSend = useCallback(async () => {
     let text = inputValue.trim();
@@ -437,6 +470,15 @@ function ChatPanel({ idea }: { idea: Idea }) {
                 setStreamingMsg((prev) =>
                   prev ? { ...prev, isStreaming: false } : prev
                 );
+              }
+              if (data.transition) {
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
+                const { fromStage, toStage, reason } = data.transition;
+                toast({
+                  title: `Stage Advanced: ${toStage}`,
+                  description: reason || `Moved from ${fromStage}`,
+                });
               }
               if (data.error) {
                 setStreamingMsg((prev) =>
@@ -702,7 +744,11 @@ function ChatPanel({ idea }: { idea: Idea }) {
             </button>
           </div>
         )}
-        <div className="flex items-end gap-2 rounded-lg bg-card border border-card-border p-2">
+        <div className={`flex items-end gap-2 rounded-lg bg-card border p-2 transition-all duration-500 ${
+          !isStreaming && displayMessages.length > 0 && displayMessages[displayMessages.length - 1]?.role === "assistant" && displayMessages[displayMessages.length - 1]?.content.endsWith("?")
+            ? "border-primary/40 ring-1 ring-primary/20 animate-pulse"
+            : "border-card-border"
+        }`}>
           <input
             ref={fileInputRef}
             type="file"
@@ -881,9 +927,17 @@ export default function Workspace() {
           <ResizableHandle withHandle />
 
           <ResizablePanel defaultSize={50} minSize={30}>
-            <ProcessMapPanel ideaId={idea.id} onApproved={() => {
-              queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-            }} />
+            <ProcessMapPanel
+              ideaId={idea.id}
+              onApproved={() => {
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+              }}
+              onCompletenessChange={(pct) => {
+                if (pct >= 85) {
+                  queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map"] });
+                }
+              }}
+            />
           </ResizablePanel>
 
           <ResizableHandle withHandle />

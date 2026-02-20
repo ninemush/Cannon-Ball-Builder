@@ -50,6 +50,7 @@ interface ProcessMapPanelProps {
   ideaId: string;
   onStepsChange?: (count: number) => void;
   onApproved?: () => void;
+  onCompletenessChange?: (pct: number) => void;
 }
 
 const NODE_SPACING_X = 300;
@@ -67,10 +68,32 @@ function getNodePosition(index: number, total: number) {
   };
 }
 
+function getNodeConfidence(data: any): number {
+  let score = 0;
+  if (data.label && data.label.trim()) score += 25;
+  if (data.role && data.role.trim()) score += 25;
+  if (data.system && data.system.trim() && data.system !== "Manual") score += 25;
+  if (data.description && data.description.trim()) score += 25;
+  if (data.nodeType === "start" || data.nodeType === "end") return 100;
+  return score;
+}
+
+function getConfidenceStyles(confidence: number, isGhost: boolean) {
+  if (isGhost || confidence < 50) {
+    return { opacity: 0.4, borderStyle: "dashed" as const, level: "low" };
+  }
+  if (confidence < 80) {
+    return { opacity: 0.7, borderStyle: "solid" as const, level: "medium" };
+  }
+  return { opacity: 1, borderStyle: "solid" as const, level: "high" };
+}
+
 function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
   const nodeType = data.nodeType || "task";
   const isGhost = data.isGhost;
   const isPainPoint = data.isPainPoint;
+  const confidence = getNodeConfidence(data);
+  const confStyle = getConfidenceStyles(confidence, isGhost);
 
   const baseClasses = "relative transition-all duration-300";
   const ghostClasses = isGhost ? "opacity-50 border-dashed" : "";
@@ -78,10 +101,12 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
   if (nodeType === "start" || nodeType === "end") {
     return (
       <div
-        className={`${baseClasses} ${ghostClasses} px-5 py-3 rounded-full border-2 cursor-pointer`}
+        className={`${baseClasses} px-5 py-3 rounded-full border-2 cursor-pointer`}
         style={{
           backgroundColor: "#008b9b",
-          borderColor: isGhost ? "#008b9b" : "#00a5b8",
+          borderColor: "#00a5b8",
+          borderStyle: confStyle.borderStyle,
+          opacity: confStyle.opacity,
           minWidth: 120,
           textAlign: "center",
         }}
@@ -99,8 +124,8 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
   if (nodeType === "decision") {
     return (
       <div
-        className={`${baseClasses} ${ghostClasses} cursor-pointer`}
-        style={{ width: 140, height: 100 }}
+        className={`${baseClasses} cursor-pointer`}
+        style={{ width: 140, height: 100, opacity: confStyle.opacity }}
         data-testid={`node-${id}`}
       >
         <Handle type="target" position={Position.Left} className="!bg-[#c8940a] !border-[#daa520] !w-2 !h-2" style={{ top: "50%" }} />
@@ -108,9 +133,9 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
           className="absolute inset-0 flex flex-col items-center justify-center"
           style={{
             transform: "rotate(45deg)",
-            backgroundColor: "#c8940a",
+            backgroundColor: confStyle.level === "low" ? "#555" : "#c8940a",
             borderRadius: 8,
-            border: isGhost ? "2px dashed #daa520" : "2px solid #daa520",
+            border: `2px ${confStyle.borderStyle} #daa520`,
             width: "70%",
             height: "70%",
             top: "15%",
@@ -131,12 +156,14 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
 
   return (
     <div
-      className={`${baseClasses} ${ghostClasses} rounded-lg border cursor-pointer`}
+      className={`${baseClasses} rounded-lg border cursor-pointer`}
       style={{
-        backgroundColor: "#242424",
-        borderColor: isGhost ? "#444" : "#333",
+        backgroundColor: confStyle.level === "low" ? "#1a1a1a" : "#242424",
+        borderColor: confStyle.level === "low" ? "#444" : "#333",
+        borderStyle: confStyle.borderStyle,
         borderLeftWidth: 3,
-        borderLeftColor: "#e8450a",
+        borderLeftColor: confStyle.level === "low" ? "#888" : "#e8450a",
+        opacity: confStyle.opacity,
         minWidth: 180,
         maxWidth: 220,
       }}
@@ -761,7 +788,7 @@ function ProcessMapFlow({ ideaId, activeView }: { ideaId: string; activeView: "a
   );
 }
 
-export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved }: ProcessMapPanelProps) {
+export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onCompletenessChange }: ProcessMapPanelProps) {
   const [activeView, setActiveView] = useState<"as-is" | "to-be">("as-is");
 
   const { data: mapData } = useQuery<ProcessMapData>({
@@ -777,9 +804,28 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved }: P
   const nodeCount = mapData?.nodes?.length || 0;
   const approval = mapData?.approval;
 
+  const mapCompleteness = useMemo(() => {
+    if (!mapData?.nodes || mapData.nodes.length === 0) return 0;
+    const nodes = mapData.nodes;
+    const totalConfidence = nodes.reduce((sum, node) => {
+      let score = 0;
+      if (node.name?.trim()) score += 25;
+      if (node.role?.trim()) score += 25;
+      if (node.system?.trim() && node.system !== "Manual") score += 25;
+      if (node.description?.trim()) score += 25;
+      if (node.nodeType === "start" || node.nodeType === "end") score = 100;
+      return sum + score;
+    }, 0);
+    return Math.round(totalConfidence / (nodes.length * 100) * 100);
+  }, [mapData?.nodes]);
+
   useEffect(() => {
     onStepsChange?.(nodeCount);
   }, [nodeCount, onStepsChange]);
+
+  useEffect(() => {
+    onCompletenessChange?.(mapCompleteness);
+  }, [mapCompleteness, onCompletenessChange]);
 
   const approveMutation = useMutation({
     mutationFn: async () => {
@@ -829,6 +875,25 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved }: P
           <span>To-Be</span>
         </button>
       </div>
+
+      {nodeCount > 0 && !approval && (
+        <div className="px-4 py-2 border-b border-border" data-testid="map-completeness-bar">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-muted-foreground font-medium">Map Completeness</span>
+            <span className={`text-[10px] font-semibold ${mapCompleteness >= 85 ? "text-green-400" : mapCompleteness >= 50 ? "text-cb-gold" : "text-muted-foreground"}`}>
+              {mapCompleteness}%
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-secondary/50 overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                mapCompleteness >= 85 ? "bg-green-500" : mapCompleteness >= 50 ? "bg-cb-gold" : "bg-muted-foreground/40"
+              }`}
+              style={{ width: `${mapCompleteness}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       <ReactFlowProvider>
         <ProcessMapFlow ideaId={ideaId} activeView={activeView} />

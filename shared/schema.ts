@@ -74,3 +74,4 @@ export const createIdeaSchema = z.object({
 export * from "./models/chat";
 export * from "./models/process-map";
 export * from "./models/document";
+export * from "./models/audit-log";

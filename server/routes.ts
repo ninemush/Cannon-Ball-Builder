@@ -8,6 +8,7 @@ import { loginSchema, createIdeaSchema, ROLES, type UserRole } from "@shared/sch
 import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerProcessMapRoutes } from "./process-map-routes";
 import { registerDocumentRoutes } from "./document-routes";
+import { evaluateTransition } from "./stage-transition";
 
 declare module "express-session" {
   interface SessionData {
@@ -136,6 +137,96 @@ export async function registerRoutes(
       tag: parsed.data.tag || null,
     });
     return res.status(201).json(idea);
+  });
+
+  app.post("/api/ideas/:id/evaluate-transition", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    const result = await evaluateTransition(
+      req.params.id as string,
+      req.session.userId,
+      user?.displayName || "Unknown",
+      req.session.activeRole || "Process SME"
+    );
+    return res.json(result);
+  });
+
+  app.post("/api/ideas/:id/advance-stage", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { stage } = req.body;
+    if (!stage) {
+      return res.status(400).json({ message: "Stage is required" });
+    }
+    const ideaId = req.params.id as string;
+    const idea = await storage.getIdea(ideaId);
+    if (!idea) {
+      return res.status(404).json({ message: "Idea not found" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    const updated = await storage.updateIdeaStage(ideaId, stage);
+    await storage.createAuditLog({
+      ideaId,
+      userId: req.session.userId,
+      userName: user?.displayName || "Unknown",
+      userRole: req.session.activeRole || "Process SME",
+      action: "manual_stage_advance",
+      fromStage: idea.stage,
+      toStage: stage,
+      details: req.body.reason || "Manual advancement",
+    });
+    return res.json(updated);
+  });
+
+  app.get("/api/audit-logs", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const ideaId = req.query.ideaId as string | undefined;
+    const logs = await storage.getAuditLogs(ideaId);
+    return res.json(logs);
+  });
+
+  app.get("/api/users", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const allUsers = await storage.getAllUsers();
+    const safeUsers = allUsers.map(({ password, ...u }) => u);
+    return res.json(safeUsers);
+  });
+
+  app.patch("/api/users/:id", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const activeRole = req.session.activeRole;
+    if (activeRole !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const { role, displayName } = req.body;
+    const updates: any = {};
+    if (role) updates.role = role;
+    if (displayName) updates.displayName = displayName;
+    const updated = await storage.updateUser(req.params.id as string, updates);
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    const { password, ...safeUser } = updated;
+    await storage.createAuditLog({
+      ideaId: null,
+      userId: req.session.userId,
+      userName: (await storage.getUser(req.session.userId))?.displayName || "Unknown",
+      userRole: activeRole,
+      action: "user_updated",
+      fromStage: null,
+      toStage: null,
+      details: `Updated user ${safeUser.email}: ${JSON.stringify(updates)}`,
+    });
+    return res.json(safeUser);
   });
 
   return httpServer;

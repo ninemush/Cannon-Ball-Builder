@@ -85,7 +85,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
   const prompt = docType === "PDD" ? PDD_PROMPT : docType === "SDD" ? SDD_PROMPT : UIPATH_PROMPT;
 
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-5",
+    model: "claude-sonnet-4-6",
     max_tokens: 8192,
     system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific, thorough, and use details from the conversation history.${contextPrompt}`,
     messages: [...chatMessages, { role: "user", content: prompt }],
@@ -236,7 +236,7 @@ export function registerDocumentRoutes(app: Express): void {
       const revisionPrompt = `The user has requested a revision to the ${type}. Here is the current document:\n\n${currentDoc.content}\n\nRevision request: ${revision}\n\nPlease regenerate the complete ${type} with this revision applied. Keep the same section structure (## headings). Output only the revised document.`;
 
       const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-6",
         max_tokens: 8192,
         system: `You are a professional automation consultant revising a ${type} for the "${idea.title}" project.`,
         messages: [...chatMessages, { role: "user", content: revisionPrompt }],
@@ -289,7 +289,7 @@ export function registerDocumentRoutes(app: Express): void {
       }));
 
       const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-6",
         max_tokens: 8192,
         system: `You are a UiPath automation architect. Generate a detailed package structure based on the approved SDD.\n\nSDD:\n${sdd.content}`,
         messages: [...chatMessages, { role: "user", content: UIPATH_PROMPT }],

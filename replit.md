@@ -1,21 +1,27 @@
 # CannonBall
 
 ## Overview
-CannonBall is a full-stack web application for automation pipeline management. It features a role-based shell with three demo user accounts, dark/light mode toggle, responsive sidebar navigation, a Kanban pipeline board, idea capture workflow, a three-panel workspace with live AI chat, and a visual process map engine powered by React Flow.
+CannonBall is a full-stack web application for automation pipeline management. It features a role-based shell with three demo user accounts, dark/light mode toggle, responsive sidebar navigation, a Kanban pipeline board, idea capture workflow, a three-panel workspace with live AI chat, and a visual process map engine powered by React Flow. The system is AI-first: the assistant drives all interactions from idea capture through deployable automation package.
 
 ## Current State
 - App shell complete with authentication, role switching, and navigation
-- Pipeline board with 10-stage Kanban view
+- Pipeline board with 10-stage Kanban view + stalled idea detection (amber "Needs attention" chip)
 - Idea capture modal with auto-redirect to workspace
 - Three-panel workspace: stage tracker, live process map (React Flow), AI chat interface
+- AI-first chat: proactive opening message, idle nudge timer (60s), pulsing input indicator
 - Live AI chat using Anthropic Claude (Replit AI Integrations) with streaming SSE
-- Process map engine: custom nodes (start/end pill, task rectangle, decision diamond), auto-layout, inline editing, right-click context menu, edge labels, approval workflow
+- Process map engine: custom nodes, confidence scoring, map completeness bar, auto-layout, inline editing, context menu, edge labels, approval workflow
 - Chat parses [STEP:] tags from LLM responses and auto-creates process map nodes
 - Process map approval with snapshot recording
 - Document generation: PDD auto-generated after As-Is map approval, SDD after PDD approval
 - DocumentCard component in chat with collapsible sections, approve/revise buttons, version tracking
 - UiPath package generation: ZIP with project.json, XAML workflow stubs, README after SDD approval
 - Auto-trigger chain: Map approval → PDD → PDD approval → SDD → SDD approval → UiPath export
+- Automated stage transition engine with audit logging
+- CoE review page with idea list, review detail, approve/reject buttons
+- Admin panel with Users tab (role management), Audit Log tab (filterable + CSV export), System tab (model info, stage chart)
+- User Guide with 9 sections, role-filtered display, left sub-nav + reading pane
+- My Ideas page with filtered idea listing
 - Authorization on all process-map and document routes (ownership + Admin/CoE role check)
 - Three demo users and seed ideas on startup
 
@@ -31,35 +37,38 @@ CannonBall is a full-stack web application for automation pipeline management. I
 client/src/
   App.tsx                 - Main layout shell (sidebar + topnav + router)
   components/
-    app-sidebar.tsx       - Left sidebar navigation
+    app-sidebar.tsx       - Left sidebar navigation (role-filtered: CoE/Admin sections)
     top-nav.tsx           - Top navigation bar with role switcher + New Idea button
     new-idea-modal.tsx    - Modal for creating new ideas
-    process-map-panel.tsx - React Flow process map with node editing, context menu, approval
+    process-map-panel.tsx - React Flow process map with confidence scoring, completeness bar, node editing, approval
     theme-provider.tsx    - Dark/light mode context
-    ui/                   - shadcn/ui components (includes resizable.tsx)
+    ui/                   - shadcn/ui components (card, table, tabs, skeleton, resizable, etc.)
   hooks/
     use-auth.tsx          - Auth context (login, logout, role switching)
   lib/
     step-parser.ts        - Parses [STEP:] tags from LLM responses
   pages/
     login.tsx             - Login page with demo account buttons
-    home.tsx              - Pipeline Kanban board (10 stage columns)
+    home.tsx              - Pipeline Kanban board (10 stage columns, stalled detection)
     workspace.tsx         - Three-panel workspace (stage tracker + process map + chat)
-    ideas.tsx             - My Ideas placeholder
-    guide.tsx             - User Guide placeholder
-    settings.tsx          - Settings placeholder (admin only)
+    ideas.tsx             - My Ideas page with filtered listing
+    guide.tsx             - User Guide (9 sections, role-filtered)
+    reviews.tsx           - CoE review page (idea list + detail + approve/reject)
+    settings.tsx          - Admin panel (Users/Audit Log/System tabs)
 
 server/
   index.ts               - Express server setup
-  routes.ts              - API routes (auth + ideas + registers sub-routes)
-  storage.ts             - Database storage interface (users + ideas)
+  routes.ts              - API routes (auth + ideas + users + audit + stage transitions)
+  storage.ts             - Database storage interface (users + ideas + audit logs)
+  stage-transition.ts    - Automated stage transition engine
   process-map-storage.ts - Process map CRUD (nodes, edges, approvals)
   process-map-routes.ts  - Process map API endpoints
+  document-routes.ts     - Document generation + approval routes
   db.ts                  - Drizzle + pg pool
   seed.ts                - Demo user + idea seeding
   replit_integrations/
     chat/
-      routes.ts          - Chat streaming with Anthropic Claude SSE
+      routes.ts          - Chat streaming with Anthropic Claude SSE + auto-transition evaluation
       storage.ts         - Chat message persistence
 
 shared/
@@ -67,23 +76,42 @@ shared/
   models/
     chat.ts              - Chat messages table schema
     process-map.ts       - Process nodes, edges, approvals table schemas
+    document.ts          - Documents + document approvals table schemas
+    audit-log.ts         - Audit log table schema
 ```
 
 ## Workspace Layout
 Three resizable panels (react-resizable-panels):
 - **Left (~15%)**: Vertical stage progress tracker - completed (checkmark + timestamp), current (pulsing orange dot), future (lock icon). Clicking completed stage shows read-only summary drawer.
-- **Center (~50%)**: Live process map (React Flow) with As-Is/To-Be toggle, custom nodes, inline edit panel, right-click context menu, approval button
-- **Right (~35%)**: AI chat interface with streaming, contextual stage guidance, file upload button
+- **Center (~50%)**: Live process map (React Flow) with As-Is/To-Be toggle, custom nodes, confidence-based styling, completeness bar, inline edit panel, right-click context menu, approval button
+- **Right (~35%)**: AI chat interface with streaming, proactive greeting, idle nudge, contextual stage guidance, file upload button
 
 ## Process Map Features
 - **Node Types**: Start/End (teal pill), Task (dark rect with orange left border), Decision (gold diamond)
-- **Ghost Nodes**: dashed border + 50% opacity for partially described steps
+- **Confidence Scoring**: Nodes scored 0-100% based on fields (name/role/system/description at 25% each)
+- **Ghost Nodes**: dashed border + 40% opacity for low-confidence steps, 70% for medium
+- **Map Completeness Bar**: Progress bar showing overall map completion percentage
 - **Inline Edit**: Click node → edit name/role/system/type/description, mark as pain point
 - **Context Menu**: Right-click canvas → "Add Step Here" creates new node at position
 - **Edge Labels**: Click edge to add labels (Yes/No/Approved/Rejected)
 - **Approval**: Button appears at >=3 nodes, records approval with user info + snapshot
 - **Live Updates**: [STEP:] tags parsed from LLM responses auto-create nodes+edges
-- **Animations**: Nodes fade in + scale (300ms), edges animate path (400ms)
+
+## Stage Transition Engine
+Automated transitions evaluated after each chat exchange:
+- Idea → Feasibility: 3+ process steps + 4+ messages
+- Feasibility → Validated: 5+ steps + 8+ messages
+- Validated → Design: Automatic
+- Design → Build: As-Is map approved + PDD generated
+- Build → Test: SDD approved
+- Later stages: Manual via CoE/Admin approval
+
+## AI-First Behavior
+- Proactive opening message when workspace opens
+- 60-second idle nudge when AI's last message was a question
+- Pulsing border on chat input when waiting for user response
+- [STEP:] tag parsing auto-creates process map nodes
+- Stage transition toast notifications in real-time
 
 ## Pipeline Stages
 1. Idea → 2. Feasibility Assessment → 3. Validated Backlog → 4. Design → 5. Build → 6. Test → 7. Governance / Security Scan → 8. CoE Approval → 9. Deploy → 10. Maintenance
@@ -113,7 +141,9 @@ Three resizable panels (react-resizable-panels):
 
 ### Chat
 - `GET /api/ideas/:id/messages` - Get chat history for an idea
-- `POST /api/chat` - Send message, streams SSE response with {token, done, error}
+- `POST /api/chat` - Send message, streams SSE response with {token, done, transition, error}
+- `POST /api/ideas/:id/init-chat` - Initialize chat with proactive greeting
+- `POST /api/ideas/:id/nudge` - Send idle nudge message
 
 ### Process Map
 - `GET /api/ideas/:id/process-map?view=as-is|to-be` - Get nodes, edges, approval
@@ -125,6 +155,15 @@ Three resizable panels (react-resizable-panels):
 - `DELETE /api/process-edges/:id` - Delete edge
 - `POST /api/ideas/:id/process-approvals` - Create approval (requires >=3 nodes)
 
+### Stage Transitions
+- `POST /api/ideas/:id/evaluate-transition` - Evaluate and apply automatic stage transition
+- `POST /api/ideas/:id/advance-stage` - Manually advance stage (with audit log)
+
+### Users & Admin
+- `GET /api/users` - List all users (sanitized, no passwords)
+- `PATCH /api/users/:id` - Update user role/name (Admin only)
+- `GET /api/audit-logs` - Get audit logs (optional ?ideaId filter)
+
 ## Design System
 - Dark mode default (#0a0a0a background)
 - Light mode toggle (#f5f5f5 background)
@@ -133,11 +172,17 @@ Three resizable panels (react-resizable-panels):
 - Font: Inter
 - Cards: NOT draggable - stage progression is automated
 - Sidebar background: #141414 (8% lightness) vs main canvas #0a0a0a (4%)
+- Sidebar footer: "CannonBall" + "MVP 1 · Internal Build" label
 - Resize handles: glow orange on hover/drag, grip icon appears on hover
 - Scrollbars: thin custom styling (scrollbar-thin class)
 - Process map nodes: dark surface (#242424), React Flow on #0d0d0d canvas
+- Skeleton loaders for loading states
 
 ## Recent Changes
+- 2026-02-20: Added confidence scoring, map completeness bar, automated stage transitions, audit logging
+- 2026-02-20: Built CoE review page, Admin panel (Users/Audit/System), User Guide (9 sections)
+- 2026-02-20: Added stalled idea detection, My Ideas page, skeleton loaders
+- 2026-02-20: AI-first behavioral model: proactive greeting, idle nudge, pulsing input indicator
 - 2026-02-20: Built live process map engine with React Flow, custom nodes, inline editing, approval workflow
 - 2026-02-20: Added AI chat streaming with Anthropic Claude, message persistence, [STEP:] tag parsing
 - 2026-02-20: Built three-panel workspace with stage tracker, process map, chat interface

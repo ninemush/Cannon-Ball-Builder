@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { PIPELINE_STAGES, type Idea, type PipelineStage } from "@shared/schema";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
-import { Loader2, Clock } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Clock, AlertTriangle } from "lucide-react";
 
 function getStatusChip(stage: string): { label: string; className: string } {
   const approvalStages = ["CoE Approval", "Governance / Security Scan"];
@@ -31,13 +32,24 @@ function formatTimestamp(date: string | Date): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function isStalled(idea: Idea): boolean {
+  const now = new Date();
+  const updated = new Date(idea.updatedAt);
+  const hoursDiff = (now.getTime() - updated.getTime()) / (1000 * 60 * 60);
+  const terminalStages = ["Deploy", "Maintenance"];
+  return hoursDiff >= 48 && !terminalStages.includes(idea.stage);
+}
+
 function IdeaCard({ idea }: { idea: Idea }) {
   const status = getStatusChip(idea.stage);
+  const stalled = isStalled(idea);
 
   return (
     <Link
       href={`/workspace/${idea.id}`}
-      className="block p-3 rounded-lg bg-card border border-card-border hover:border-primary/30 transition-colors cursor-pointer group"
+      className={`block p-3 rounded-lg bg-card border transition-colors cursor-pointer group ${
+        stalled ? "border-amber-500/40 hover:border-amber-500/60" : "border-card-border hover:border-primary/30"
+      }`}
       data-testid={`card-idea-${idea.id}`}
     >
       <div className="space-y-2.5">
@@ -47,6 +59,15 @@ function IdeaCard({ idea }: { idea: Idea }) {
         <p className="text-xs text-muted-foreground truncate">
           {idea.owner}
         </p>
+        {stalled && (
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 border border-amber-500/25"
+            data-testid={`chip-stalled-${idea.id}`}
+          >
+            <AlertTriangle className="h-2.5 w-2.5" />
+            Needs attention
+          </span>
+        )}
         <div className="flex items-center justify-between gap-2">
           <span
             className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full ${status.className}`}
@@ -97,10 +118,19 @@ export default function Home() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Loading pipeline...</p>
+      <div className="flex flex-col h-full" data-testid="page-pipeline-loading">
+        <div className="px-6 py-4 border-b border-border">
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-3 w-40 mt-1.5" />
+        </div>
+        <div className="flex gap-4 p-6">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="min-w-[220px] space-y-3">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-24 w-full rounded-lg" />
+              <Skeleton className="h-24 w-full rounded-lg" />
+            </div>
+          ))}
         </div>
       </div>
     );

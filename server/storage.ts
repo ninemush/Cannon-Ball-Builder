@@ -1,4 +1,4 @@
-import { users, ideas, type User, type InsertUser, type Idea, type InsertIdea } from "@shared/schema";
+import { users, ideas, auditLogs, type User, type InsertUser, type Idea, type InsertIdea, type AuditLog, type InsertAuditLog } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc } from "drizzle-orm";
 
@@ -7,10 +7,14 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   getAllUsers(): Promise<User[]>;
+  updateUser(id: string, updates: Partial<Omit<User, "id">>): Promise<User | undefined>;
   getIdea(id: string): Promise<Idea | undefined>;
   getAllIdeas(): Promise<Idea[]>;
   createIdea(idea: InsertIdea): Promise<Idea>;
   getIdeasByOwnerEmail(email: string): Promise<Idea[]>;
+  updateIdeaStage(id: string, stage: string): Promise<Idea | undefined>;
+  createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(ideaId?: string): Promise<AuditLog[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -49,6 +53,36 @@ export class DatabaseStorage implements IStorage {
 
   async getIdeasByOwnerEmail(email: string): Promise<Idea[]> {
     return db.select().from(ideas).where(eq(ideas.ownerEmail, email)).orderBy(desc(ideas.createdAt));
+  }
+
+  async updateIdeaStage(id: string, stage: string): Promise<Idea | undefined> {
+    const [updated] = await db
+      .update(ideas)
+      .set({ stage, updatedAt: new Date() })
+      .where(eq(ideas.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updateUser(id: string, updates: Partial<Omit<User, "id">>): Promise<User | undefined> {
+    const [updated] = await db
+      .update(users)
+      .set(updates)
+      .where(eq(users.id, id))
+      .returning();
+    return updated;
+  }
+
+  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+    const [entry] = await db.insert(auditLogs).values(log).returning();
+    return entry;
+  }
+
+  async getAuditLogs(ideaId?: string): Promise<AuditLog[]> {
+    if (ideaId) {
+      return db.select().from(auditLogs).where(eq(auditLogs.ideaId, ideaId)).orderBy(desc(auditLogs.createdAt));
+    }
+    return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt));
   }
 }
 
