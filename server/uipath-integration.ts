@@ -355,16 +355,16 @@ export async function pushToUiPath(pkg: any): Promise<{ success: boolean; messag
   try {
     const token = await getAccessToken(config);
 
-    let version = "1.0.0";
+    const now = new Date();
+    const patch = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
+    let version = `1.0.${patch}`;
     let result = await uploadToOrchestrator(config, token, pkg, projectName, version);
 
     if (result.status === 409) {
-      for (let bump = 1; bump <= 20; bump++) {
-        version = `1.0.${bump}`;
-        console.log(`[UiPath] Version conflict — retrying with v${version}`);
-        result = await uploadToOrchestrator(config, token, pkg, projectName, version);
-        if (result.status !== 409) break;
-      }
+      const hourMin = now.getHours() * 100 + now.getMinutes();
+      version = `1.${hourMin}.${patch}`;
+      console.log(`[UiPath] Version conflict — retrying with v${version}`);
+      result = await uploadToOrchestrator(config, token, pkg, projectName, version);
     }
 
     if (!result.ok) {
@@ -464,6 +464,489 @@ export async function pushToUiPath(pkg: any): Promise<{ success: boolean; messag
 
     return { success: false, message: friendlyMsg };
   }
+}
+
+function orchBaseUrl(config: UiPathConfig): string {
+  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
+}
+
+function folderHeaders(config: UiPathConfig, token: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  if (config.folderId) {
+    headers["X-UIPATH-OrganizationUnitId"] = config.folderId;
+  }
+  return headers;
+}
+
+export async function createProcess(
+  packageId: string,
+  packageVersion: string,
+  processName: string,
+  description?: string
+): Promise<{ success: boolean; message: string; process?: any }> {
+  const config = await getUiPathConfig();
+  if (!config) return { success: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const existingRes = await fetch(
+      `${base}/odata/Releases?$filter=ProcessKey eq '${encodeURIComponent(packageId)}'&$top=1`,
+      { headers }
+    );
+    if (existingRes.ok) {
+      const existingData = await existingRes.json();
+      if (existingData.value?.length > 0) {
+        const existing = existingData.value[0];
+        if (existing.ProcessVersion !== packageVersion) {
+          const updateRes = await fetch(`${base}/odata/Releases(${existing.Id})`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ ProcessVersion: packageVersion }),
+          });
+          if (updateRes.ok) {
+            console.log(`[UiPath] Updated process "${existing.Name}" to v${packageVersion}`);
+            return {
+              success: true,
+              message: `Process "${existing.Name}" updated to v${packageVersion}.`,
+              process: { ...existing, ProcessVersion: packageVersion },
+            };
+          }
+        }
+        console.log(`[UiPath] Process already exists: "${existing.Name}" (ID: ${existing.Id})`);
+        return {
+          success: true,
+          message: `Process "${existing.Name}" already exists.`,
+          process: existing,
+        };
+      }
+    }
+
+    const pkgCheck = await fetch(
+      `${base}/odata/Processes?$filter=Id eq '${encodeURIComponent(packageId)}'&$top=1`,
+      { headers }
+    );
+    let packageInFeed = false;
+    if (pkgCheck.ok) {
+      const pkgData = await pkgCheck.json();
+      packageInFeed = (pkgData.value?.length || 0) > 0;
+      console.log(`[UiPath] Package feed check: ${packageInFeed ? "found" : "not found"} for ${packageId}`);
+    }
+
+    if (!packageInFeed) {
+      return {
+        success: false,
+        message: `Package "${packageId}" was uploaded but is not yet indexed in the Orchestrator feed. This typically happens with stub packages. Open the package in UiPath Studio and publish it to create a runnable process.`,
+      };
+    }
+
+    const body: Record<string, any> = {
+      Name: processName,
+      ProcessKey: packageId,
+      ProcessVersion: packageVersion,
+      EntryPointPath: "Main.xaml",
+      Description: description || `Created by CannonBall`,
+    };
+
+    console.log(`[UiPath] Creating process: ${JSON.stringify(body)}`);
+
+    const res = await fetch(`${base}/odata/Releases`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    console.log(`[UiPath] Create process response (${res.status}): ${text.slice(0, 500)}`);
+
+    if (!res || !res.ok) {
+      if (res?.status === 403) {
+        return { success: false, message: "Access denied creating process. Ensure your app has OR.Execution scope with Create permission." };
+      }
+      return { success: false, message: `Failed to create process (${res?.status}): ${text.slice(0, 200)}` };
+    }
+
+    const data = JSON.parse(text);
+    return {
+      success: true,
+      message: `Process "${data.Name}" created successfully (ID: ${data.Id}).`,
+      process: data,
+    };
+  } catch (err: any) {
+    console.error("[UiPath] Create process error:", err.message);
+    return { success: false, message: `Failed to create process: ${err.message}` };
+  }
+}
+
+export async function listMachines(): Promise<{ success: boolean; machines?: any[]; message?: string }> {
+  const config = await getUiPathConfig();
+  if (!config) return { success: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const res = await fetch(`${base}/odata/Machines?$top=50&$orderby=Name`, { headers });
+    if (!res.ok) {
+      const errText = await res.text();
+      if (res.status === 403) {
+        return { success: false, message: "Access denied. Ensure your app has OR.Machines.Read scope." };
+      }
+      return { success: false, message: `Failed to fetch machines (${res.status}): ${errText.slice(0, 200)}` };
+    }
+    const data = await res.json();
+    const machines = (data.value || []).map((m: any) => ({
+      id: m.Id,
+      name: m.Name,
+      type: m.Type,
+      status: m.Status,
+      description: m.Description,
+    }));
+    return { success: true, machines };
+  } catch (err: any) {
+    return { success: false, message: `Failed to fetch machines: ${err.message}` };
+  }
+}
+
+export async function listRobots(): Promise<{ success: boolean; robots?: any[]; message?: string }> {
+  const config = await getUiPathConfig();
+  if (!config) return { success: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const res = await fetch(`${base}/odata/Sessions?$top=50&$orderby=Robot/Name`, { headers });
+    if (!res.ok) {
+      const errText = await res.text();
+      if (res.status === 403) {
+        return { success: false, message: "Access denied. Ensure your app has OR.Robots.Read scope." };
+      }
+      return { success: false, message: `Failed to fetch robots (${res.status}): ${errText.slice(0, 200)}` };
+    }
+    const data = await res.json();
+    const robots = (data.value || []).map((s: any) => ({
+      id: s.Id,
+      robotId: s.Robot?.Id,
+      robotName: s.Robot?.Name || s.Robot?.MachineName || "Unknown",
+      machineName: s.Robot?.MachineName || s.HostMachineName || "Unknown",
+      status: s.Status || "Unknown",
+      type: s.Robot?.Type || "Unknown",
+      isUnresponsive: s.IsUnresponsive,
+    }));
+    return { success: true, robots };
+  } catch (err: any) {
+    return { success: false, message: `Failed to fetch robots: ${err.message}` };
+  }
+}
+
+export async function listProcesses(): Promise<{ success: boolean; processes?: any[]; message?: string }> {
+  const config = await getUiPathConfig();
+  if (!config) return { success: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const res = await fetch(`${base}/odata/Releases?$top=50&$orderby=Name`, { headers });
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, message: `Failed to fetch processes (${res.status}): ${errText.slice(0, 200)}` };
+    }
+    const data = await res.json();
+    const processes = (data.value || []).map((r: any) => ({
+      id: r.Id,
+      name: r.Name,
+      processKey: r.ProcessKey,
+      processVersion: r.ProcessVersion,
+      isLatestVersion: r.IsLatestVersion,
+      description: r.Description,
+    }));
+    return { success: true, processes };
+  } catch (err: any) {
+    return { success: false, message: `Failed to fetch processes: ${err.message}` };
+  }
+}
+
+export async function startJob(
+  processReleaseKey: string,
+  robotIds?: number[]
+): Promise<{ success: boolean; message: string; job?: any }> {
+  const config = await getUiPathConfig();
+  if (!config) return { success: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const startInfo: Record<string, any> = {
+      ReleaseKey: processReleaseKey,
+      Strategy: "ModernJobsCount",
+      JobsCount: 1,
+    };
+
+    if (robotIds && robotIds.length > 0) {
+      startInfo.Strategy = "Specific";
+      startInfo.RobotIds = robotIds;
+    }
+
+    const body = { startInfo };
+    console.log(`[UiPath] Starting job: ${JSON.stringify(body)}`);
+
+    const res = await fetch(
+      `${base}/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs`,
+      { method: "POST", headers, body: JSON.stringify(body) }
+    );
+
+    const text = await res.text();
+    console.log(`[UiPath] Start job response (${res.status}): ${text.slice(0, 500)}`);
+
+    if (!res.ok) {
+      if (res.status === 403) {
+        return { success: false, message: "Access denied. Ensure your app has OR.Jobs scope with Create permission." };
+      }
+      let errorDetail = text.slice(0, 300);
+      try {
+        const errObj = JSON.parse(text);
+        errorDetail = errObj.message || errObj.errorMessage || errorDetail;
+      } catch {}
+      return { success: false, message: `Failed to start job (${res.status}): ${errorDetail}` };
+    }
+
+    const data = JSON.parse(text);
+    const jobs = data.value || [data];
+    const job = jobs[0];
+    return {
+      success: true,
+      message: `Job started successfully (ID: ${job.Id}, State: ${job.State}).`,
+      job: {
+        id: job.Id,
+        key: job.Key,
+        state: job.State,
+        startTime: job.StartTime,
+        releaseKey: processReleaseKey,
+      },
+    };
+  } catch (err: any) {
+    console.error("[UiPath] Start job error:", err.message);
+    return { success: false, message: `Failed to start job: ${err.message}` };
+  }
+}
+
+export async function getJobStatus(jobId: number): Promise<{ success: boolean; message: string; job?: any }> {
+  const config = await getUiPathConfig();
+  if (!config) return { success: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const res = await fetch(`${base}/odata/Jobs(${jobId})`, { headers });
+    if (!res.ok) {
+      return { success: false, message: `Failed to fetch job status (${res.status})` };
+    }
+    const data = await res.json();
+    return {
+      success: true,
+      message: `Job ${data.Id}: ${data.State}`,
+      job: {
+        id: data.Id,
+        key: data.Key,
+        state: data.State,
+        startTime: data.StartTime,
+        endTime: data.EndTime,
+        info: data.Info,
+        outputData: data.OutputData,
+        hostMachineName: data.HostMachineName,
+        releaseName: data.ReleaseName,
+      },
+    };
+  } catch (err: any) {
+    return { success: false, message: `Failed to fetch job status: ${err.message}` };
+  }
+}
+
+export async function runHealthCheck(packageId?: string): Promise<{
+  checks: Array<{ name: string; status: "pass" | "fail" | "warn"; message: string; details?: any }>;
+  summary: string;
+}> {
+  const checks: Array<{ name: string; status: "pass" | "fail" | "warn"; message: string; details?: any }> = [];
+
+  const config = await getUiPathConfig();
+  if (!config) {
+    checks.push({ name: "Connection", status: "fail", message: "UiPath is not configured. Go to Admin > Integrations to set it up." });
+    return { checks, summary: "Not configured" };
+  }
+
+  let token: string;
+  try {
+    token = await getAccessToken(config);
+    checks.push({ name: "Authentication", status: "pass", message: "OAuth token obtained successfully." });
+  } catch (err: any) {
+    checks.push({ name: "Authentication", status: "fail", message: `Authentication failed: ${err.message}` });
+    return { checks, summary: "Authentication failed" };
+  }
+
+  const headers = folderHeaders(config, token);
+  const base = orchBaseUrl(config);
+
+  try {
+    const res = await fetch(`${base}/odata/Folders?$top=1`, { headers });
+    if (res.ok) {
+      checks.push({ name: "API Access", status: "pass", message: "Connected to Orchestrator API." });
+    } else {
+      checks.push({ name: "API Access", status: "fail", message: `API returned ${res.status}. Check org/tenant names.` });
+      return { checks, summary: "API access failed" };
+    }
+  } catch (err: any) {
+    checks.push({ name: "API Access", status: "fail", message: `Cannot reach Orchestrator: ${err.message}` });
+    return { checks, summary: "Cannot reach API" };
+  }
+
+  if (config.folderId) {
+    try {
+      const res = await fetch(`${base}/odata/Folders?$filter=Id eq ${config.folderId}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.value?.length > 0) {
+          checks.push({ name: "Target Folder", status: "pass", message: `Folder "${config.folderName}" (ID: ${config.folderId}) exists.` });
+        } else {
+          checks.push({ name: "Target Folder", status: "fail", message: `Folder ID ${config.folderId} not found. Re-select in Admin > Integrations.` });
+        }
+      }
+    } catch {
+      checks.push({ name: "Target Folder", status: "warn", message: "Could not verify folder." });
+    }
+  } else {
+    checks.push({ name: "Target Folder", status: "warn", message: "No folder selected — packages go to tenant feed. Select a folder in Admin > Integrations for better organization." });
+  }
+
+  if (packageId) {
+    try {
+      const res = await fetch(
+        `${base}/odata/Processes?$filter=Id eq '${encodeURIComponent(packageId)}'&$top=1`,
+        { headers }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.value?.length > 0) {
+          const pkg = data.value[0];
+          checks.push({ name: "Package", status: "pass", message: `Package "${packageId}" v${pkg.Version} found in feed.`, details: { version: pkg.Version } });
+        } else {
+          checks.push({ name: "Package", status: "fail", message: `Package "${packageId}" not found in feed. Push it first.` });
+        }
+      }
+    } catch {
+      checks.push({ name: "Package", status: "warn", message: "Could not check package status." });
+    }
+
+    try {
+      const res = await fetch(
+        `${base}/odata/Releases?$filter=ProcessKey eq '${encodeURIComponent(packageId)}'&$top=1`,
+        { headers }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.value?.length > 0) {
+          const proc = data.value[0];
+          checks.push({
+            name: "Process",
+            status: "pass",
+            message: `Process "${proc.Name}" linked to package (v${proc.ProcessVersion}).`,
+            details: { processId: proc.Id, releaseKey: proc.Key, version: proc.ProcessVersion },
+          });
+        } else {
+          checks.push({ name: "Process", status: "fail", message: `No process created from package "${packageId}". Create one to run it.` });
+        }
+      }
+    } catch {
+      checks.push({ name: "Process", status: "warn", message: "Could not check process status." });
+    }
+  }
+
+  try {
+    const res = await fetch(`${base}/odata/Sessions?$top=10`, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      const sessions = data.value || [];
+      const available = sessions.filter((s: any) => s.Status === "Available");
+      if (sessions.length === 0) {
+        checks.push({
+          name: "Robots",
+          status: "fail",
+          message: "No robot sessions found in this folder. Assign robots in Orchestrator > Folder Settings > Machines & Robots.",
+          details: { count: 0 },
+        });
+      } else if (available.length === 0) {
+        checks.push({
+          name: "Robots",
+          status: "warn",
+          message: `${sessions.length} robot(s) found but none are "Available". They may be busy or disconnected.`,
+          details: { total: sessions.length, available: 0 },
+        });
+      } else {
+        checks.push({
+          name: "Robots",
+          status: "pass",
+          message: `${available.length} robot(s) available out of ${sessions.length} total.`,
+          details: { total: sessions.length, available: available.length },
+        });
+      }
+    } else {
+      checks.push({ name: "Robots", status: "warn", message: "Could not check robot sessions. You may need OR.Robots.Read scope." });
+    }
+  } catch {
+    checks.push({ name: "Robots", status: "warn", message: "Could not check robot sessions." });
+  }
+
+  try {
+    const res = await fetch(`${base}/odata/Machines?$top=10`, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      const machines = data.value || [];
+      if (machines.length === 0) {
+        checks.push({
+          name: "Machines",
+          status: "warn",
+          message: "No machine templates found. Create machine templates in Orchestrator > Tenant > Machines.",
+          details: { count: 0 },
+        });
+      } else {
+        checks.push({
+          name: "Machines",
+          status: "pass",
+          message: `${machines.length} machine template(s) available.`,
+          details: { count: machines.length },
+        });
+      }
+    }
+  } catch {
+    checks.push({ name: "Machines", status: "warn", message: "Could not check machines." });
+  }
+
+  const failCount = checks.filter((c) => c.status === "fail").length;
+  const warnCount = checks.filter((c) => c.status === "warn").length;
+  const passCount = checks.filter((c) => c.status === "pass").length;
+
+  let summary: string;
+  if (failCount > 0) {
+    summary = `${failCount} issue(s) found — fix them to run automations.`;
+  } else if (warnCount > 0) {
+    summary = `All critical checks passed. ${warnCount} warning(s).`;
+  } else {
+    summary = `All ${passCount} checks passed — ready to run automations.`;
+  }
+
+  return { checks, summary };
 }
 
 export async function testUiPathConnection(): Promise<{ success: boolean; message: string; errorType?: string }> {

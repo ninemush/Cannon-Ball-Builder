@@ -13,6 +13,11 @@ import {
   X,
   Upload,
   Cloud,
+  Play,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -290,6 +295,8 @@ interface UiPathPackageCardProps {
 
 export function UiPathPackageCard({ packageData, ideaId }: UiPathPackageCardProps) {
   const [expanded, setExpanded] = useState(true);
+  const [pushResult, setPushResult] = useState<{ success: boolean; details?: any } | null>(null);
+  const [jobState, setJobState] = useState<{ id?: number; state?: string; polling?: boolean } | null>(null);
   const { toast } = useToast();
 
   const { data: orchestratorStatus } = useQuery<{ configured: boolean }>({
@@ -303,11 +310,10 @@ export function UiPathPackageCard({ packageData, ideaId }: UiPathPackageCardProp
     },
     onSuccess: (data: { success: boolean; message: string; details?: any }) => {
       if (data.success) {
+        setPushResult(data);
         const d = data.details;
-        const desc = d
-          ? `"${d.packageId}" v${d.version} uploaded to ${d.orgName}/${d.tenantName}. Find it in Tenant → Packages.`
-          : data.message;
-        toast({ title: "Pushed to UiPath Orchestrator", description: desc });
+        const processInfo = d?.processName ? ` Process "${d.processName}" created.` : "";
+        toast({ title: "Deployed to UiPath", description: `"${d?.packageId}" v${d?.version} deployed.${processInfo}` });
       } else {
         toast({ title: "Push failed", description: data.message, variant: "destructive" });
       }
@@ -318,6 +324,71 @@ export function UiPathPackageCard({ packageData, ideaId }: UiPathPackageCardProp
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
     },
   });
+
+  const startJobMutation = useMutation({
+    mutationFn: async (releaseKey: string) => {
+      const res = await apiRequest("POST", `/api/ideas/${ideaId}/start-job`, { releaseKey });
+      return res.json();
+    },
+    onSuccess: (data: { success: boolean; message: string; job?: any }) => {
+      if (data.success && data.job) {
+        setJobState({ id: data.job.id, state: data.job.state, polling: true });
+        toast({ title: "Job started", description: `Job ${data.job.id} is running.` });
+        pollJobStatus(data.job.id);
+      } else {
+        toast({ title: "Failed to start job", description: data.message, variant: "destructive" });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to start job", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const pollJobStatus = async (jobId: number) => {
+    let attempts = 0;
+    const maxAttempts = 60;
+    const interval = 3000;
+
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        setJobState((prev) => prev ? { ...prev, polling: false } : null);
+        return;
+      }
+      attempts++;
+      try {
+        const res = await fetch(`/api/ideas/${ideaId}/job-status/${jobId}`, { credentials: "include" });
+        const data = await res.json();
+        if (data.success && data.job) {
+          const state = data.job.state;
+          setJobState({ id: jobId, state, polling: !["Successful", "Faulted", "Stopped", "Suspended"].includes(state) });
+          if (["Successful", "Faulted", "Stopped", "Suspended"].includes(state)) {
+            if (state === "Successful") {
+              toast({ title: "Job completed", description: `Job ${jobId} finished successfully.` });
+            } else {
+              toast({ title: `Job ${state.toLowerCase()}`, description: data.job.info || `Job ${jobId} ended with state: ${state}`, variant: "destructive" });
+            }
+            return;
+          }
+        }
+      } catch {}
+      setTimeout(poll, interval);
+    };
+    setTimeout(poll, interval);
+  };
+
+  const jobStateColor = (state?: string) => {
+    if (!state) return "text-muted-foreground";
+    if (state === "Successful") return "text-green-500";
+    if (state === "Pending" || state === "Running") return "text-amber-400";
+    return "text-red-500";
+  };
+
+  const jobStateIcon = (state?: string) => {
+    if (!state || state === "Pending" || state === "Running") return <Loader2 className="h-3 w-3 animate-spin" />;
+    if (state === "Successful") return <CheckCircle2 className="h-3 w-3 text-green-500" />;
+    return <XCircle className="h-3 w-3 text-red-500" />;
+  };
 
   return (
     <div
@@ -399,15 +470,75 @@ export function UiPathPackageCard({ packageData, ideaId }: UiPathPackageCardProp
             {pushMutation.isPending ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Pushing to Orchestrator...
+                Deploying to Orchestrator...
               </>
             ) : (
               <>
                 <Cloud className="h-3.5 w-3.5" />
-                Push to UiPath Orchestrator
+                Deploy to UiPath Orchestrator
               </>
             )}
           </button>
+        )}
+
+        {pushResult?.success && (
+          <div className="space-y-2 pt-1" data-testid="deploy-result-section">
+            <div className={`p-2 rounded text-xs space-y-1 ${pushResult.details?.releaseKey ? 'bg-green-500/10 border border-green-600/30' : 'bg-blue-500/10 border border-blue-600/30'}`}>
+              <div className={`flex items-center gap-1.5 font-medium ${pushResult.details?.releaseKey ? 'text-green-400' : 'text-blue-400'}`}>
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {pushResult.details?.releaseKey ? 'Deployed & Process Created' : 'Package Uploaded'}
+              </div>
+              <p className={`text-[10px] ${pushResult.details?.releaseKey ? 'text-green-400/80' : 'text-blue-400/80'}`}>
+                {pushResult.details?.packageId} v{pushResult.details?.version}
+                {pushResult.details?.folderName && ` → ${pushResult.details.folderName}`}
+              </p>
+              {!pushResult.details?.releaseKey && (
+                <p className="text-[10px] text-muted-foreground">
+                  Create a Process from this package in Orchestrator to run it.
+                </p>
+              )}
+            </div>
+
+            {pushResult.details?.releaseKey && (
+              <button
+                onClick={() => startJobMutation.mutate(pushResult.details.releaseKey)}
+                disabled={startJobMutation.isPending || (jobState?.polling ?? false)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium transition-colors w-full justify-center disabled:opacity-50"
+                data-testid="button-run-job"
+              >
+                {startJobMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Starting Job...
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3.5 w-3.5" />
+                    Run in UiPath
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        )}
+
+        {jobState && (
+          <div className="p-2 rounded bg-card border border-border text-xs space-y-1" data-testid="job-status-section">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                {jobStateIcon(jobState.state)}
+                <span className={`font-medium ${jobStateColor(jobState.state)}`}>
+                  Job #{jobState.id}: {jobState.state || "Starting..."}
+                </span>
+              </div>
+              {jobState.polling && (
+                <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                  <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+                  Monitoring
+                </span>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>

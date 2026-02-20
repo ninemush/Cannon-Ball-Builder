@@ -35,6 +35,14 @@ import {
   Clock,
   FolderOpen,
   RefreshCw,
+  Stethoscope,
+  AlertTriangle,
+  Bot,
+  Server,
+  Play,
+  Activity,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -386,6 +394,229 @@ function extractOrgSlug(input: string): string {
   val = val.replace(/\/+$/, "");
   val = val.split("/")[0];
   return val.trim();
+}
+
+function OrchestratorHealthPanel() {
+  const [expanded, setExpanded] = useState(false);
+  const [machinesOpen, setMachinesOpen] = useState(false);
+  const [robotsOpen, setRobotsOpen] = useState(false);
+  const [processesOpen, setProcessesOpen] = useState(false);
+
+  const { data: healthData, isLoading: healthLoading, refetch: refetchHealth } = useQuery<{
+    checks: Array<{ name: string; status: "pass" | "fail" | "warn"; message: string; details?: any }>;
+    summary: string;
+  }>({
+    queryKey: ["/api/settings/uipath/health-check"],
+    enabled: false,
+  });
+
+  const { data: machinesData, isLoading: machinesLoading, refetch: refetchMachines } = useQuery<{
+    success: boolean;
+    machines?: Array<{ id: number; name: string; type: string; status: string; description: string }>;
+    message?: string;
+  }>({
+    queryKey: ["/api/settings/uipath/machines"],
+    enabled: false,
+  });
+
+  const { data: robotsData, isLoading: robotsLoading, refetch: refetchRobots } = useQuery<{
+    success: boolean;
+    robots?: Array<{ id: number; robotId: number; robotName: string; machineName: string; status: string; type: string; isUnresponsive: boolean }>;
+    message?: string;
+  }>({
+    queryKey: ["/api/settings/uipath/robots"],
+    enabled: false,
+  });
+
+  const { data: processesData, isLoading: processesLoading, refetch: refetchProcesses } = useQuery<{
+    success: boolean;
+    processes?: Array<{ id: number; name: string; processKey: string; processVersion: string; description: string }>;
+    message?: string;
+  }>({
+    queryKey: ["/api/settings/uipath/processes"],
+    enabled: false,
+  });
+
+  const runDiagnostics = () => {
+    setExpanded(true);
+    refetchHealth();
+    refetchMachines();
+    refetchRobots();
+    refetchProcesses();
+  };
+
+  const statusIcon = (status: string) => {
+    if (status === "pass") return <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />;
+    if (status === "fail") return <XCircle className="h-4 w-4 text-red-500 shrink-0" />;
+    return <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />;
+  };
+
+  const statusColor = (status: string) => {
+    if (status === "pass") return "border-green-600/30 bg-green-500/10";
+    if (status === "fail") return "border-red-600/30 bg-red-500/10";
+    return "border-amber-500/30 bg-amber-500/10";
+  };
+
+  const isLoading = healthLoading || machinesLoading || robotsLoading || processesLoading;
+
+  return (
+    <div className="border-t border-border pt-4 mt-4 space-y-3" data-testid="health-check-section">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Stethoscope className="h-4 w-4 text-[#e8450a]" />
+          <h4 className="text-sm font-semibold text-foreground">Orchestrator Diagnostics</h4>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={runDiagnostics}
+          disabled={isLoading}
+          data-testid="button-run-diagnostics"
+        >
+          {isLoading ? (
+            <>
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              Checking...
+            </>
+          ) : (
+            <>
+              <Activity className="mr-1.5 h-3.5 w-3.5" />
+              Run Diagnostics
+            </>
+          )}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Check if everything is set up correctly to run automations: authentication, folder, packages, processes, machines, and robots.
+      </p>
+
+      {expanded && (
+        <div className="space-y-3 mt-2">
+          {healthData && (
+            <div className="space-y-2" data-testid="health-check-results">
+              <div className={`p-3 rounded-md border text-sm font-medium ${
+                healthData.checks.some(c => c.status === "fail")
+                  ? "border-red-600/30 bg-red-500/10 text-red-400"
+                  : healthData.checks.some(c => c.status === "warn")
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
+                    : "border-green-600/30 bg-green-500/10 text-green-400"
+              }`} data-testid="health-summary">
+                {healthData.summary}
+              </div>
+
+              <div className="space-y-1.5">
+                {healthData.checks.map((check, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-start gap-2.5 p-2.5 rounded-md border ${statusColor(check.status)}`}
+                    data-testid={`health-check-${check.name.toLowerCase().replace(/\s/g, "-")}`}
+                  >
+                    {statusIcon(check.status)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-foreground">{check.name}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{check.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <button
+              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+              onClick={() => { setProcessesOpen(!processesOpen); if (!processesData) refetchProcesses(); }}
+              data-testid="toggle-processes-list"
+            >
+              {processesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <Play className="h-3.5 w-3.5 text-[#e8450a]" />
+              Processes ({processesData?.processes?.length ?? "..."})
+            </button>
+            {processesOpen && (
+              <div className="ml-6 space-y-1" data-testid="processes-list">
+                {processesLoading && <Skeleton className="h-8 w-full" />}
+                {processesData?.processes?.length === 0 && (
+                  <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                    No processes found in this folder. Push a package and a process will be created automatically.
+                  </p>
+                )}
+                {processesData?.processes?.map((proc) => (
+                  <div key={proc.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
+                    <div>
+                      <span className="font-medium text-foreground">{proc.name}</span>
+                      <span className="ml-2 text-muted-foreground">v{proc.processVersion}</span>
+                    </div>
+                    <code className="text-[10px] text-muted-foreground">{proc.processKey}</code>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <button
+              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+              onClick={() => { setRobotsOpen(!robotsOpen); if (!robotsData) refetchRobots(); }}
+              data-testid="toggle-robots-list"
+            >
+              {robotsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <Bot className="h-3.5 w-3.5 text-[#008b9b]" />
+              Robots ({robotsData?.robots?.length ?? "..."})
+            </button>
+            {robotsOpen && (
+              <div className="ml-6 space-y-1" data-testid="robots-list">
+                {robotsLoading && <Skeleton className="h-8 w-full" />}
+                {robotsData?.robots?.length === 0 && (
+                  <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                    No robot sessions found. Assign robots to this folder in Orchestrator &gt; Folder Settings.
+                  </p>
+                )}
+                {robotsData?.robots?.map((robot) => (
+                  <div key={robot.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{robot.robotName}</span>
+                      <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
+                        {robot.status}
+                      </Badge>
+                    </div>
+                    <span className="text-muted-foreground">{robot.machineName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <button
+              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+              onClick={() => { setMachinesOpen(!machinesOpen); if (!machinesData) refetchMachines(); }}
+              data-testid="toggle-machines-list"
+            >
+              {machinesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <Server className="h-3.5 w-3.5 text-[#7b1fa2]" />
+              Machines ({machinesData?.machines?.length ?? "..."})
+            </button>
+            {machinesOpen && (
+              <div className="ml-6 space-y-1" data-testid="machines-list">
+                {machinesLoading && <Skeleton className="h-8 w-full" />}
+                {machinesData?.machines?.length === 0 && (
+                  <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                    No machine templates found. Create them in Orchestrator &gt; Tenant &gt; Machines.
+                  </p>
+                )}
+                {machinesData?.machines?.map((machine) => (
+                  <div key={machine.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
+                    <span className="font-medium text-foreground">{machine.name}</span>
+                    <span className="text-muted-foreground">{machine.type || "Standard"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function IntegrationsTab() {
@@ -934,6 +1165,8 @@ function IntegrationsTab() {
             )}
           </div>
         )}
+
+        {config?.configured && <OrchestratorHealthPanel />}
 
         {step < 3 && (
           <div className="flex items-center gap-3 pt-2">
