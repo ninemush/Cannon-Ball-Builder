@@ -43,7 +43,7 @@ export function TopNav() {
 
   return (
     <header
-      className="flex items-center justify-between gap-3 px-4 h-14 border-b bg-card z-50 sticky top-0"
+      className="flex items-center justify-between gap-3 px-4 h-14 bg-card z-50 sticky top-0 border-b border-[#3d3d3d] dark:border-[#3d3d3d]"
       data-testid="top-nav"
     >
       <div className="flex items-center gap-3 flex-wrap">

@@ -33,9 +33,6 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarContent className="pt-2">
         <SidebarGroup>
-          <SidebarGroupLabel className="text-xs uppercase tracking-wider text-muted-foreground">
-            Navigation
-          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => {
