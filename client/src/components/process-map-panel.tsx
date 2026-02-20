@@ -25,8 +25,6 @@ import { queryClient } from "@/lib/queryClient";
 import type { ProcessNode, ProcessApproval } from "@shared/schema";
 import {
   Map,
-  ToggleLeft,
-  ChevronRight,
   Sparkles,
   Flag,
   X,
@@ -936,16 +934,25 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             </Badge>
           )}
         </div>
-        <button
-          onClick={() => setActiveView((v) => (v === "as-is" ? "to-be" : "as-is"))}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-secondary/50 border border-border hover:bg-secondary transition-colors"
+        <div
+          className="flex items-center rounded-full bg-secondary/60 border border-border p-0.5"
           data-testid="button-toggle-view"
         >
-          <ToggleLeft className="h-3 w-3" />
-          <span>As-Is</span>
-          <ChevronRight className="h-2.5 w-2.5 text-muted-foreground" />
-          <span>To-Be</span>
-        </button>
+          <button
+            onClick={() => setActiveView("as-is")}
+            className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "as-is" ? "bg-cb-teal text-white shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            data-testid="button-view-as-is"
+          >
+            As-Is
+          </button>
+          <button
+            onClick={() => setActiveView("to-be")}
+            className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "to-be" ? "bg-cb-teal text-white shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            data-testid="button-view-to-be"
+          >
+            To-Be
+          </button>
+        </div>
       </div>
 
       {activeView === "to-be" && nodeCount > 0 && (
