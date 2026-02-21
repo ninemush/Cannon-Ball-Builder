@@ -1,4 +1,5 @@
 import { getUiPathConfig, type UiPathConfig } from "./uipath-integration";
+import Anthropic from "@anthropic-ai/sdk";
 
 function odataEscape(value: string): string {
   return value.replace(/'/g, "''");
@@ -39,6 +40,76 @@ export function parseArtifactsFromSDD(sddContent: string): OrchestratorArtifacts
   try {
     return JSON.parse(match[1]);
   } catch {
+    return null;
+  }
+}
+
+export async function extractArtifactsWithLLM(sddContent: string): Promise<OrchestratorArtifacts | null> {
+  try {
+    const anthropic = new Anthropic({
+      apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+      baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+    });
+
+    console.log("[UiPath Deploy] Extracting artifacts from SDD using LLM...");
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 2048,
+      system: "You are a UiPath automation consultant. Extract Orchestrator artifact definitions from the SDD and output ONLY valid JSON. No other text, no markdown formatting, no code fences — just the raw JSON object.",
+      messages: [{
+        role: "user",
+        content: `Extract ALL UiPath Orchestrator artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, actionCenter. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults.
+
+Expected JSON shape:
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}]}
+
+SDD content:
+${sddContent.slice(0, 12000)}`
+      }],
+    });
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    const text = textBlock?.text?.trim() || "";
+
+    let jsonStr = text;
+    const fencedMatch = text.match(/```(?:json|orchestrator_artifacts)?\s*\n?([\s\S]*?)\n?```/);
+    if (fencedMatch) {
+      jsonStr = fencedMatch[1].trim();
+    }
+
+    const raw = JSON.parse(jsonStr);
+
+    const validated: OrchestratorArtifacts = {};
+    if (Array.isArray(raw.queues)) {
+      validated.queues = raw.queues.filter((q: any) => typeof q?.name === "string" && q.name.length > 0);
+    }
+    if (Array.isArray(raw.assets)) {
+      validated.assets = raw.assets.filter((a: any) => typeof a?.name === "string" && a.name.length > 0 && typeof a?.type === "string");
+    }
+    if (Array.isArray(raw.machines)) {
+      validated.machines = raw.machines.filter((m: any) => typeof m?.name === "string" && m.name.length > 0);
+    }
+    if (Array.isArray(raw.triggers)) {
+      validated.triggers = raw.triggers.filter((t: any) => typeof t?.name === "string" && t.name.length > 0 && typeof t?.type === "string");
+    }
+    if (Array.isArray(raw.storageBuckets)) {
+      validated.storageBuckets = raw.storageBuckets.filter((b: any) => typeof b?.name === "string" && b.name.length > 0);
+    }
+    if (Array.isArray(raw.actionCenter)) {
+      validated.actionCenter = raw.actionCenter.filter((a: any) => typeof a?.taskCatalog === "string" && a.taskCatalog.length > 0);
+    }
+
+    const hasContent = (validated.queues?.length || 0) + (validated.assets?.length || 0) +
+      (validated.triggers?.length || 0) + (validated.machines?.length || 0) +
+      (validated.storageBuckets?.length || 0) + (validated.actionCenter?.length || 0);
+
+    if (hasContent > 0) {
+      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts`);
+      return validated;
+    }
+    return null;
+  } catch (err: any) {
+    console.error("[UiPath Deploy] LLM artifact extraction failed:", err?.message);
     return null;
   }
 }

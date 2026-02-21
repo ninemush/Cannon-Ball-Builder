@@ -504,11 +504,17 @@ function ChatPanel({ idea }: { idea: Idea }) {
                 );
               }
               if (data.deployStatus) {
-                setStreamingMsg((prev) =>
-                  prev ? { ...prev, content: prev.content + "\n\n[Deploy] " + data.deployStatus } : prev
-                );
                 if (data.deployComplete) {
+                  setStreamingMsg(null);
                   queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+                } else {
+                  setStreamingMsg({
+                    id: `deploy-${Date.now()}`,
+                    role: "assistant",
+                    content: data.deployStatus,
+                    timestamp: new Date(),
+                    isStreaming: true,
+                  });
                 }
               }
               if (data.transition) {

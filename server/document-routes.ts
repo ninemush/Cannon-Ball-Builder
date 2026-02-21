@@ -161,7 +161,73 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
   });
 
   const textBlock = response.content.find((b) => b.type === "text");
-  return textBlock?.text || "";
+  let content = textBlock?.text || "";
+
+  if (docType === "SDD" && content.length > 0) {
+    const hasArtifactsBlock = /```orchestrator_artifacts\s*\n[\s\S]*?\n```/.test(content);
+    if (!hasArtifactsBlock) {
+      console.log("[SDD] orchestrator_artifacts block missing, extracting with follow-up call...");
+      try {
+        const extractionResponse = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 2048,
+          system: "You are a UiPath automation consultant. Extract the Orchestrator artifact definitions from the SDD document and output ONLY a fenced JSON block. Output nothing else.",
+          messages: [
+            {
+              role: "user",
+              content: `From this Solution Design Document, extract ALL Orchestrator artifacts needed and output them as a single fenced JSON block using this exact format. Include every queue, asset, machine template, trigger, storage bucket, and action center catalog mentioned or implied in the document. For credential assets use value "". For text/integer/bool assets provide sensible defaults.
+
+\`\`\`orchestrator_artifacts
+{
+  "queues": [
+    { "name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true }
+  ],
+  "assets": [
+    { "name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default or empty", "description": "Purpose" }
+  ],
+  "machines": [
+    { "name": "TemplateName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose" }
+  ],
+  "triggers": [
+    { "name": "TriggerName", "type": "Queue|Time", "queueName": "if queue trigger", "cron": "if time trigger", "description": "Purpose" }
+  ],
+  "storageBuckets": [
+    { "name": "BucketName", "description": "Purpose" }
+  ],
+  "actionCenter": [
+    { "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }
+  ]
+}
+\`\`\`
+
+Here is the SDD:
+${content}`
+            }
+          ],
+        });
+        const extractBlock = extractionResponse.content.find((b) => b.type === "text");
+        const extractedText = extractBlock?.text || "";
+        const artifactMatch = extractedText.match(/```orchestrator_artifacts\s*\n[\s\S]*?\n```/);
+        if (artifactMatch) {
+          const section8Regex = /## 8[\.\s][^\n]*/i;
+          const section8Match = content.match(section8Regex);
+          if (section8Match) {
+            const insertPos = content.indexOf(section8Match[0]) + section8Match[0].length;
+            content = content.slice(0, insertPos) + `\n\n${artifactMatch[0]}` + content.slice(insertPos);
+          } else {
+            content += `\n\n## 8. Orchestrator Deployment Specification\n\n${artifactMatch[0]}`;
+          }
+          console.log("[SDD] Successfully appended orchestrator_artifacts block");
+        } else {
+          console.warn("[SDD] Follow-up extraction did not produce a valid artifacts block");
+        }
+      } catch (extractErr: any) {
+        console.error("[SDD] Artifact extraction failed:", extractErr?.message);
+      }
+    }
+  }
+
+  return content;
 }
 
 export function registerDocumentRoutes(app: Express): void {
@@ -322,7 +388,55 @@ export function registerDocumentRoutes(app: Express): void {
       });
 
       const textBlock = response.content.find((b) => b.type === "text");
-      const content = textBlock?.text || "";
+      let content = textBlock?.text || "";
+
+      if (type === "SDD" && content.length > 0) {
+        const hasArtifactsBlock = /```orchestrator_artifacts\s*\n[\s\S]*?\n```/.test(content);
+        if (!hasArtifactsBlock) {
+          console.log("[SDD Revision] orchestrator_artifacts block missing, extracting...");
+          try {
+            const extractionResponse = await anthropic.messages.create({
+              model: "claude-sonnet-4-6",
+              max_tokens: 2048,
+              system: "You are a UiPath automation consultant. Extract the Orchestrator artifact definitions from the SDD document and output ONLY a fenced JSON block. Output nothing else.",
+              messages: [{
+                role: "user",
+                content: `From this Solution Design Document, extract ALL Orchestrator artifacts needed and output them as a single fenced JSON block using this exact format:
+
+\`\`\`orchestrator_artifacts
+{
+  "queues": [{ "name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true }],
+  "assets": [{ "name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default or empty", "description": "Purpose" }],
+  "machines": [{ "name": "TemplateName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose" }],
+  "triggers": [{ "name": "TriggerName", "type": "Queue|Time", "queueName": "if queue trigger", "cron": "if time trigger", "description": "Purpose" }],
+  "storageBuckets": [{ "name": "BucketName", "description": "Purpose" }],
+  "actionCenter": [{ "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }]
+}
+\`\`\`
+
+Here is the SDD:
+${content}`
+              }],
+            });
+            const extractBlock = extractionResponse.content.find((b) => b.type === "text");
+            const extractedText = extractBlock?.text || "";
+            const artifactMatch = extractedText.match(/```orchestrator_artifacts\s*\n[\s\S]*?\n```/);
+            if (artifactMatch) {
+              const section8Regex = /## 8[\.\s][^\n]*/i;
+              const section8Match = content.match(section8Regex);
+              if (section8Match) {
+                const insertPos = content.indexOf(section8Match[0]) + section8Match[0].length;
+                content = content.slice(0, insertPos) + `\n\n${artifactMatch[0]}` + content.slice(insertPos);
+              } else {
+                content += `\n\n## 8. Orchestrator Deployment Specification\n\n${artifactMatch[0]}`;
+              }
+              console.log("[SDD Revision] Successfully appended orchestrator_artifacts block");
+            }
+          } catch (extractErr: any) {
+            console.error("[SDD Revision] Artifact extraction failed:", extractErr?.message);
+          }
+        }
+      }
 
       await documentStorage.updateDocument(currentDoc.id, { status: "superseded" });
 

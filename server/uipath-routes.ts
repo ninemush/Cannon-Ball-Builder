@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { getUiPathConfig, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, runHealthCheck } from "./uipath-integration";
-import { parseArtifactsFromSDD, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
+import { parseArtifactsFromSDD, extractArtifactsWithLLM, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
 import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
@@ -249,7 +249,13 @@ export function registerUiPathRoutes(app: Express): void {
       try {
         const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
         if (sdd?.content) {
-          const artifacts = parseArtifactsFromSDD(sdd.content);
+          let artifacts = parseArtifactsFromSDD(sdd.content);
+
+          if (!artifacts) {
+            console.log("[UiPath] No artifacts block in SDD, attempting LLM extraction...");
+            artifacts = await extractArtifactsWithLLM(sdd.content);
+          }
+
           if (artifacts && (
             (artifacts.queues?.length || 0) > 0 ||
             (artifacts.assets?.length || 0) > 0 ||
@@ -260,7 +266,10 @@ export function registerUiPathRoutes(app: Express): void {
           )) {
             const releaseId = result.details?.processId || null;
             const releaseKey = result.details?.releaseKey || null;
-            console.log(`[UiPath] Found SDD artifacts, deploying... (releaseId=${releaseId})`);
+            const totalArtifacts = (artifacts.queues?.length || 0) + (artifacts.assets?.length || 0) +
+              (artifacts.machines?.length || 0) + (artifacts.triggers?.length || 0) +
+              (artifacts.storageBuckets?.length || 0) + (artifacts.actionCenter?.length || 0);
+            console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId})`);
 
             const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey);
             deploymentReport = formatDeploymentReport(deployResult.results);
@@ -270,11 +279,17 @@ export function registerUiPathRoutes(app: Express): void {
               deploymentResults: deployResult.results,
               deploymentSummary: deployResult.summary,
             };
+          } else {
+            console.warn("[UiPath] No artifacts could be extracted from SDD");
+            deploymentReport = "\n\nNo Orchestrator artifacts (queues, assets, triggers) were found in the SDD to provision. To provision artifacts, regenerate the SDD to include the Orchestrator Deployment Specification section.";
           }
+        } else {
+          console.warn("[UiPath] No SDD found for idea, skipping artifact provisioning");
+          deploymentReport = "\n\nNo SDD found — artifact provisioning skipped. Generate and approve an SDD to enable automatic artifact provisioning.";
         }
       } catch (err: any) {
         console.error("[UiPath] Artifact deployment failed:", err.message);
-        deploymentReport = `\n\n⚠️ Artifact deployment encountered an error: ${err.message}`;
+        deploymentReport = `\n\nArtifact deployment encountered an error: ${err.message}`;
       }
 
       const chatMsg = [
