@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { chatStorage } from "./storage";
 import { storage } from "../../storage";
+import { documentStorage } from "../../document-storage";
 import { evaluateTransition } from "../../stage-transition";
 import { PIPELINE_STAGES, type PipelineStage } from "@shared/schema";
 
@@ -10,10 +11,11 @@ const anthropic = new Anthropic({
   baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
 });
 
-function buildSystemPrompt(ideaTitle: string, currentStage: string): string {
+function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string): string {
   return `You are the CannonBall automation design assistant. Your job is to guide Process SMEs through designing business process automations. You are AI-first — you lead, you draft, you build. The SME's job is to give you information, refine your output, and approve it. They should never have to figure out what to do next — you always tell them.
 
 Current idea: ${ideaTitle}. Current stage: ${currentStage}.
+${docContext || ""}
 
 BEHAVIORAL RULES (non-negotiable):
 1. Never wait passively. After every SME message, either ask a specific targeted question, produce an output, or tell them exactly what you need next and why.
@@ -21,6 +23,8 @@ BEHAVIORAL RULES (non-negotiable):
 3. When you have enough to act, act. Do not ask for permission to draft something. Draft it and present it.
 4. After any approval or milestone, immediately tell the SME what just happened and what you are doing next. Do not make them ask.
 5. Keep responses concise and purposeful. No filler. No restating what the SME just said back to them.
+6. NEVER blame the platform, the deployment system, or the infrastructure for any issue. NEVER suggest the user contact a platform administrator. If something went wrong, acknowledge it and immediately offer to fix it (e.g. regenerate the document). You are part of the platform — you fix things, you don't blame things.
+7. When asked to regenerate a document, do it immediately. Do not question whether it will help, do not suggest alternatives, do not explain why it might not work. Just regenerate it.
 
 STAGE BEHAVIOR:
 - Idea: Extract the process with targeted single questions. Identify who does it, what triggers it, what systems are involved, what the pain points are, and what a successful outcome looks like.
@@ -30,27 +34,29 @@ STAGE BEHAVIOR:
 STEP TAG FORMAT — output one per line for every confirmed process step:
 [STEP: <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end>]
 
+DOCUMENT GENERATION:
+- When you generate or regenerate a PDD or SDD, you MUST start your response with exactly [DOC:PDD:0] or [DOC:SDD:0] followed immediately by the full document content. The system uses this tag to save the document as a new version. Without the tag, the document will NOT be saved and deployment will use stale content.
+- Example: [DOC:SDD:0]## 1. Automation Architecture Overview\n...rest of SDD...
+- The number after the colon (0) is a placeholder — the system assigns the real ID.
+- DOCUMENT APPROVALS happen through a Confirm button that appears on the document card in the UI. Do NOT ask users to say "approved" in chat. Instead, tell them to use the Approve/Confirm button on the document card that appears above.
+- After the user approves a document via the button, the system records the approval. You will see this in the document context above. Do not re-ask for approval if it is already approved.
+
 UIPATH DEPLOYMENT CAPABILITIES — you have REAL, WORKING deployment to UiPath Orchestrator:
-- The CannonBall platform can generate complete UiPath automation packages (NuGet .nupkg files with project.json, XAML workflows, and all metadata).
-- The platform can ACTUALLY push these packages directly to UiPath Orchestrator — this is NOT simulated.
-- FULL DEPLOYMENT: The system automatically:
+- The CannonBall platform generates complete UiPath automation packages (NuGet .nupkg files with project.json, XAML workflows, and all metadata).
+- The platform pushes packages directly to UiPath Orchestrator — this is real and working.
+- FULL DEPLOYMENT automatically:
   1. Uploads the NuGet package to Orchestrator
   2. Creates a Process (Release) linked to the package
-  3. Reads the SDD's Orchestrator Deployment Specification and auto-provisions ALL artifacts:
-     - Queues (via QueueDefinitions API)
-     - Assets (Text, Integer, Bool auto-created; Credential placeholders created with instructions to fill in real values)
-     - Machine Templates (Unattended/Attended with slot allocation)
-     - Storage Buckets (Orchestrator-hosted)
-     - Triggers (Queue triggers linked to queues, Time/Cron triggers linked to the process)
-     - Action Center task catalogs (flagged for manual setup with instructions)
+  3. Reads the SDD's orchestrator_artifacts block and auto-provisions ALL artifacts:
+     - Queues, Assets, Machine Templates, Storage Buckets, Triggers, Action Center task catalogs
   4. Generates a full deployment report showing what was created, what already existed, and what needs manual setup
-- The SDD you generate MUST include an orchestrator_artifacts fenced JSON block defining all these artifacts. This is what the deployer reads.
-- NEVER claim you cannot push packages or provision infrastructure. The deployment is real and verified.
-- CONVERSATIONAL DEPLOYMENT: When the UiPath package is ready and the SDD is approved, proactively ask the SME: "The automation package is ready. Would you like me to deploy it to UiPath Orchestrator now?" If the user confirms (says yes, deploy, go ahead, push it, etc.), respond with exactly: [DEPLOY_UIPATH] — the system will intercept this tag and execute the deployment, streaming live status updates into the chat. Do NOT tell the user to click a button — deployment happens right here in the conversation.
+- The SDD MUST include a \`\`\`orchestrator_artifacts fenced JSON block in Section 8 defining all artifacts. This is machine-parsed — without it, artifacts won't be provisioned.
+- CONVERSATIONAL DEPLOYMENT: When the SDD is approved and the user wants to deploy, respond with exactly: [DEPLOY_UIPATH] — the system intercepts this tag and executes deployment with live status. Do NOT tell the user to click a button — deployment happens in the conversation.
+- If the SDD is already approved (see document context above), you can deploy immediately when the user asks. Do not re-ask for approval.
 
 DOCUMENT ITERATION AND STAGE AWARENESS:
 - If the user requests changes to an already-approved document (PDD or SDD), acknowledge that requirements have changed and that you will revise the document. The system supports version control — old versions are preserved and the new version replaces the current one.
-- If requirements change significantly enough that the process map or earlier documents need updating, you may recommend moving the idea backward to an earlier stage. Output [STAGE_BACK: <target stage>] to trigger a backward stage transition. For example: [STAGE_BACK: Design] if the process map needs rework after the Build stage.
+- If requirements change significantly enough that the process map or earlier documents need updating, you may recommend moving the idea backward to an earlier stage. Output [STAGE_BACK: <target stage>] to trigger a backward stage transition.
 - Always explain to the SME why you are recommending a stage change and what needs to happen next.
 
 OUTPUT QUALITY: Write like a senior business analyst who has done this a hundred times. Professional, direct, no fluff.`;
@@ -145,7 +151,23 @@ export function registerChatRoutes(app: Express): void {
       res.setHeader("Connection", "keep-alive");
       res.flushHeaders();
 
-      const systemPrompt = buildSystemPrompt(idea.title, idea.stage);
+      let docContext = "";
+      try {
+        const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
+        const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+        const pddApproval = await documentStorage.getApproval(ideaId, "PDD");
+        const sddApproval = await documentStorage.getApproval(ideaId, "SDD");
+        const parts: string[] = [];
+        if (pdd) parts.push(`PDD: v${pdd.version}, status=${pdd.status}${pddApproval ? ", APPROVED by " + pddApproval.userName : ""}`);
+        if (sdd) {
+          parts.push(`SDD: v${sdd.version}, status=${sdd.status}${sddApproval ? ", APPROVED by " + sddApproval.userName : ""}`);
+          const hasArtifacts = /```orchestrator_artifacts/.test(sdd.content);
+          parts.push(`SDD has orchestrator_artifacts block: ${hasArtifacts ? "YES" : "NO"}`);
+        }
+        if (parts.length > 0) docContext = "\nDocument status: " + parts.join(" | ");
+      } catch (e) { /* non-critical */ }
+
+      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext);
 
       const stream = anthropic.messages.stream({
         model: "claude-sonnet-4-6",
@@ -170,6 +192,49 @@ export function registerChatRoutes(app: Express): void {
         .replace(/\[DEPLOY_UIPATH\]/g, "")
         .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
         .trim();
+
+      const docTagMatch = cleanedResponse.match(/^\[DOC:(PDD|SDD):\d+\]/);
+      let detectedDocType: "PDD" | "SDD" | null = null;
+      let docContent = "";
+
+      if (docTagMatch) {
+        detectedDocType = docTagMatch[1] as "PDD" | "SDD";
+        docContent = cleanedResponse.slice(docTagMatch[0].length).trim();
+      } else if (cleanedResponse.length > 2000) {
+        const hasSddSections = /## \d+\.\s/.test(cleanedResponse) && 
+          (/orchestrator_artifacts/.test(cleanedResponse) || /Orchestrator Deployment/.test(cleanedResponse));
+        const hasPddSections = /## \d+\.\s/.test(cleanedResponse) && 
+          /Executive Summary/.test(cleanedResponse) && /Automation Opportunity/.test(cleanedResponse);
+        if (hasSddSections) {
+          detectedDocType = "SDD";
+          docContent = cleanedResponse;
+        } else if (hasPddSections) {
+          detectedDocType = "PDD";
+          docContent = cleanedResponse;
+        }
+      }
+
+      if (detectedDocType && docContent.length > 100) {
+        try {
+          const existing = await documentStorage.getLatestDocument(ideaId, detectedDocType);
+          const version = existing ? existing.version + 1 : 1;
+          if (existing && existing.status !== "approved") {
+            await documentStorage.updateDocument(existing.id, { status: "superseded" });
+          }
+          const doc = await documentStorage.createDocument({
+            ideaId,
+            type: detectedDocType,
+            version,
+            status: "draft",
+            content: docContent,
+            snapshotJson: JSON.stringify({ generatedFrom: "chat-regeneration" }),
+          });
+          cleanedResponse = `[DOC:${detectedDocType}:${doc.id}]${docContent}`;
+          console.log(`[Chat] Saved ${detectedDocType} v${version} (doc id ${doc.id}) from chat regeneration`);
+        } catch (docErr: any) {
+          console.error(`[Chat] Failed to save ${detectedDocType} from chat:`, docErr?.message);
+        }
+      }
 
       await chatStorage.createMessage(ideaId, "assistant", cleanedResponse);
 
