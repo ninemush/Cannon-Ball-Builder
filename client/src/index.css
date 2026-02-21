@@ -419,6 +419,8 @@
   border-radius: 3px;
   font-size: 0.7rem;
   font-family: ui-monospace, monospace;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 .prose-chat pre {
   background: hsl(var(--muted));
@@ -444,6 +446,9 @@
   border-collapse: collapse;
   margin: 0.5rem 0;
   font-size: 0.7rem;
+  table-layout: fixed;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .prose-chat thead th {
   background: hsl(var(--muted));
@@ -452,10 +457,14 @@
   padding: 0.35rem 0.5rem;
   border: 1px solid hsl(var(--border));
   color: hsl(var(--foreground));
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .prose-chat tbody td {
   padding: 0.3rem 0.5rem;
   border: 1px solid hsl(var(--border));
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .prose-chat tbody tr:nth-child(even) {
   background: hsl(var(--muted) / 0.3);

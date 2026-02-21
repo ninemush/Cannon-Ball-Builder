@@ -213,8 +213,9 @@ export function registerChatRoutes(app: Express): void {
           const deployData = await deployRes.json();
           if (deployData.success) {
             const d = deployData.details;
-            const statusMsg = `Deployment complete. Package "${d?.packageId}" v${d?.version} uploaded to Orchestrator.${d?.processName ? ` Process "${d.processName}" created.` : ""}${d?.provisioningReport ? `\n\nProvisioning report:\n${JSON.stringify(d.provisioningReport, null, 2)}` : ""}`;
-            await chatStorage.createMessage(ideaId, "assistant", statusMsg);
+            let statusMsg = `Deployment complete. Package "${d?.packageId}" v${d?.version} uploaded to Orchestrator.`;
+            if (d?.processName) statusMsg += ` Process "${d.processName}" created.`;
+            if (d?.deploymentSummary) statusMsg += ` ${d.deploymentSummary}`;
             res.write(`data: ${JSON.stringify({ deployStatus: statusMsg, deployComplete: true })}\n\n`);
           } else {
             const errMsg = `Deployment failed: ${deployData.message}`;

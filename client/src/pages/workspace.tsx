@@ -736,14 +736,14 @@ function ChatPanel({ idea }: { idea: Idea }) {
               data-testid={`chat-message-${msg.id}`}
             >
               <div
-                className={`max-w-[85%] rounded-lg px-3 py-2.5 ${
+                className={`max-w-[85%] rounded-lg px-3 py-2.5 overflow-hidden ${
                   msg.role === "user"
                     ? "bg-primary text-primary-foreground rounded-br-sm"
                     : "bg-card border border-card-border rounded-bl-sm"
                 }`}
               >
                 {msg.role === "assistant" ? (
-                  <div className="text-xs leading-relaxed prose-chat">
+                  <div className="text-xs leading-relaxed prose-chat overflow-hidden break-words">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {msg.content}
                     </ReactMarkdown>
