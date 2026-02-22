@@ -555,13 +555,22 @@ function ChatPanel({ idea }: { idea: Idea }) {
       if (finalContent) {
         const steps = parseStepsFromText(finalContent);
         if (steps.length > 0) {
-          const existingNodes = await fetch(`/api/ideas/${idea.id}/process-map?view=as-is`, { credentials: "include" })
-            .then((r) => r.json())
-            .then((d) => d.nodes || []);
+          const existingMap = await fetch(`/api/ideas/${idea.id}/process-map?view=as-is`, { credentials: "include" })
+            .then((r) => r.json());
+          const existingNodes = existingMap.nodes || [];
+
+          const normalizeName = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+
+          const nameToId: Record<string, number> = {};
+          for (const n of existingNodes) {
+            nameToId[normalizeName(n.name)] = n.id;
+          }
+
+          const createdNodes: { name: string; id: number; from?: string; edgeLabel?: string }[] = [];
 
           for (let i = 0; i < steps.length; i++) {
             const step = steps[i];
-            await fetch(`/api/ideas/${idea.id}/process-nodes`, {
+            const res = await fetch(`/api/ideas/${idea.id}/process-nodes`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               credentials: "include",
@@ -574,26 +583,64 @@ function ChatPanel({ idea }: { idea: Idea }) {
                 orderIndex: existingNodes.length + i,
               }),
             });
+            const created = await res.json();
+            createdNodes.push({
+              name: step.name,
+              id: created.id,
+              from: step.from,
+              edgeLabel: step.edgeLabel,
+            });
+            nameToId[normalizeName(step.name)] = created.id;
           }
 
           const updatedMap = await fetch(`/api/ideas/${idea.id}/process-map?view=as-is`, { credentials: "include" }).then((r) => r.json());
-          const allNodes = updatedMap.nodes || [];
+          const existingEdges = updatedMap.edges || [];
 
-          for (let i = 1; i < allNodes.length; i++) {
-            const existingEdges = updatedMap.edges || [];
-            const edgeExists = existingEdges.some((e: any) => e.sourceNodeId === allNodes[i - 1].id && e.targetNodeId === allNodes[i].id);
-            if (!edgeExists) {
-              await fetch(`/api/ideas/${idea.id}/process-edges`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({
-                  viewType: "as-is",
-                  sourceNodeId: allNodes[i - 1].id,
-                  targetNodeId: allNodes[i].id,
-                  label: "",
-                }),
-              });
+          const resolveFrom = (fromName: string): number | null => {
+            const normalized = normalizeName(fromName);
+            if (nameToId[normalized]) return nameToId[normalized];
+            const keys = Object.keys(nameToId);
+            const partial = keys.find(k => k.includes(normalized) || normalized.includes(k));
+            if (partial) return nameToId[partial];
+            return null;
+          };
+
+          for (let i = 0; i < createdNodes.length; i++) {
+            const node = createdNodes[i];
+            let sourceId: number | null = null;
+            let label = node.edgeLabel || "";
+
+            if (node.from) {
+              sourceId = resolveFrom(node.from);
+              if (!sourceId) {
+                console.warn(`[ProcessMap] FROM "${node.from}" not found for step "${node.name}", skipping edge`);
+                continue;
+              }
+            } else {
+              if (i > 0) {
+                sourceId = createdNodes[i - 1].id;
+              } else if (existingNodes.length > 0) {
+                sourceId = existingNodes[existingNodes.length - 1].id;
+              }
+            }
+
+            if (sourceId) {
+              const edgeExists = existingEdges.some(
+                (e: any) => e.sourceNodeId === sourceId && e.targetNodeId === node.id
+              );
+              if (!edgeExists) {
+                await fetch(`/api/ideas/${idea.id}/process-edges`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "include",
+                  body: JSON.stringify({
+                    viewType: "as-is",
+                    sourceNodeId: sourceId,
+                    targetNodeId: node.id,
+                    label,
+                  }),
+                });
+              }
             }
           }
 

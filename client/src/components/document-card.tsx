@@ -93,6 +93,8 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
   const activeVersion = viewingVersion ? viewingVersion.version : (version || 1);
   const sections = parseDocumentSections(activeContent);
 
+  const { toast } = useToast();
+
   const approveMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/ideas/${ideaId}/documents/${docId}/approve`, {
@@ -108,9 +110,14 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
     },
     onSuccess: () => {
       setShowApproveConfirm(false);
+      toast({ title: `${docType} Approved`, description: `${docType} has been approved successfully.` });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "documents"] });
       onApproved?.();
+    },
+    onError: (error: Error) => {
+      setShowApproveConfirm(false);
+      toast({ title: "Approval failed", description: error.message, variant: "destructive" });
     },
   });
 

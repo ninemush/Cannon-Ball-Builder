@@ -352,7 +352,14 @@ export function registerDocumentRoutes(app: Express): void {
 
     const existingApproval = await documentStorage.getApproval(ideaId, doc.type);
     if (existingApproval) {
-      return res.status(400).json({ message: "Already approved" });
+      if (existingApproval.documentId === docId) {
+        return res.status(400).json({ message: "Already approved" });
+      }
+      await documentStorage.deleteApproval(ideaId, doc.type);
+      const oldDoc = await documentStorage.getDocument(existingApproval.documentId);
+      if (oldDoc && oldDoc.status === "approved") {
+        await documentStorage.updateDocument(oldDoc.id, { status: "superseded" });
+      }
     }
 
     const user = await storage.getUser(req.session.userId!);

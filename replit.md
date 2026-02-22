@@ -17,9 +17,9 @@ The application employs a modern web stack:
 **Key Features and Design Choices:**
 - **UI/UX**: Features a dark mode default with a light mode toggle, a distinct color palette (orange accent, teal, gold, magenta, purple), Inter font, and custom scrollbar styling. The layout includes a responsive sidebar and a top navigation bar.
 - **Workspace**: A three-panel layout (resizable) for stage progress tracking, a live React Flow process map, and an AI chat interface.
-- **Process Map Engine**: Custom node types (Start/End, Task, Decision), confidence scoring for nodes, a map completeness bar, inline editing, a right-click context menu, edge labeling, and an approval workflow. It dynamically updates based on AI's `[STEP:]` tags.
+- **Process Map Engine**: Custom node types (Start/End, Task, Decision), dagre-based DAG layout for intelligent branching, confidence scoring, completeness bar, inline editing, context menu, edge labeling with branch conditions (Yes/No/Approved/Rejected), and an approval workflow. It dynamically updates based on AI's `[STEP:]` tags with FROM/LABEL fields for branching.
 - **Automated Stage Transitions**: An engine that evaluates and automatically transitions ideas between 10 defined pipeline stages based on specific criteria (e.g., number of steps, messages, document approvals), with audit logging.
-- **Document Generation**: Automated generation of PDD (Process Design Document) and SDD (Solution Design Document) after process map and PDD approvals, respectively. Includes document version control.
+- **Document Generation**: Automated generation of PDD (Process Design Document) and SDD (Solution Design Document) after process map and PDD approvals, respectively. Includes document version control. Chat-regenerated documents are auto-saved via [DOC:] tag interception.
 - **UiPath Package Generation & Deployment**: After SDD approval, the system generates a UiPath compatible ZIP package (project.json, XAML stubs, README). It supports conversational deployment, where the AI triggers deployment to UiPath Orchestrator with live status streaming.
 - **Admin & Review Panels**: Includes a CoE review page for idea approval/rejection and an Admin panel for user management, audit logs, and system configuration.
 - **Role-Based Access**: Authorization is enforced on process map and document routes based on user ownership and roles (Admin/CoE).
@@ -30,8 +30,34 @@ The application employs a modern web stack:
 - **ORM**: Drizzle ORM for database interaction.
 - **Frontend Libraries**:
     - React Flow (@xyflow/react) for interactive process mapping.
+    - @dagrejs/dagre for directed-graph layout (branching process maps).
     - shadcn/ui for UI components.
     - wouter for client-side routing.
 - **Backend Framework**: Express.js for the server-side application.
 - **Session Management**: express-session and connect-pg-simple for session-based authentication.
 - **UiPath Orchestrator**: For deploying automation packages, including API integrations for provisioning assets, queues, and processes.
+
+## Step Tag Format
+```
+[STEP: <name> | ROLE: <who> | SYSTEM: <system> | TYPE: <task/decision/start/end> | FROM: <parent step name> | LABEL: <edge label>]
+```
+- FROM field connects to parent step by name for branching
+- LABEL field provides edge condition text (Yes/No/Approved/Rejected)
+- Decision nodes must have multiple children with different labels
+- Steps without FROM fall back to sequential connection
+
+## Recent Changes
+- 2026-02-22: Intelligent branching process maps: dagre DAG layout, FROM/LABEL fields in [STEP:] tags, decision node forking with labeled Yes/No edges, smooth-step edge paths, color-coded branch labels (green=Yes, red=No)
+- 2026-02-22: Fixed SDD/PDD Confirm button: backend now allows re-approval of newer document versions (deletes old approval, supersedes old doc); frontend shows error toast on failure
+- 2026-02-22: Fixed UiPath trigger provisioning: StartStrategy now uses proper object format { Type: 0 } instead of raw integer
+- 2026-02-21: Fixed critical bug: chat-regenerated documents (PDD/SDD) now saved to database via [DOC:] tag interception in chat route
+- 2026-02-21: Added document/approval context to AI chat system prompt
+- 2026-02-21: Pipeline layout: all 10 stage columns fit within viewport width on desktop (flex-1 min-w-0)
+- 2026-02-21: Mobile-responsive/adaptive UI: all pages adapt to mobile viewports
+- 2026-02-21: Document version control: version history dropdown in DocumentCard
+- 2026-02-21: Conversational deployment: AI asks if ready to push, [DEPLOY_UIPATH] tag triggers deployment
+- 2026-02-20: Full Orchestrator deployment pipeline with artifact provisioning
+- 2026-02-20: Fixed NuGet package structure for proper UiPath Orchestrator indexing
+- 2026-02-20: Built live process map engine, CoE review page, Admin panel, User Guide
+- 2026-02-20: AI-first behavioral model with streaming chat, [STEP:] tag parsing
+- 2026-02-20: Initial app shell with auth, role switching, navigation, dark/light mode

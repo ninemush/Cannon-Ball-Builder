@@ -16,10 +16,12 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  getSmoothStepPath,
   useReactFlow,
   ReactFlowProvider,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import dagre from "@dagrejs/dagre";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import type { ProcessNode, ProcessApproval } from "@shared/schema";
@@ -55,18 +57,61 @@ interface ProcessMapPanelProps {
   onCompletenessChange?: (pct: number) => void;
 }
 
-const NODE_SPACING_X = 300;
-const NODE_SPACING_Y = 0;
-const START_X = 80;
-const START_Y = 200;
+function getNodeDimensions(nodeType: string): { width: number; height: number } {
+  if (nodeType === "start" || nodeType === "end") return { width: 160, height: 50 };
+  if (nodeType === "decision") return { width: 180, height: 130 };
+  return { width: 240, height: 90 };
+}
+
+function applyDagreLayout(
+  nodes: Node[],
+  edges: Edge[],
+  direction: "LR" | "TB" = "LR"
+): Node[] {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({
+    rankdir: direction,
+    nodesep: 80,
+    ranksep: 180,
+    edgesep: 40,
+    marginx: 60,
+    marginy: 60,
+  });
+
+  nodes.forEach((node) => {
+    const nodeType = (node.data as any)?.nodeType || "task";
+    const dims = getNodeDimensions(nodeType);
+    g.setNode(node.id, { width: dims.width, height: dims.height });
+  });
+
+  edges.forEach((edge) => {
+    g.setEdge(edge.source, edge.target);
+  });
+
+  dagre.layout(g);
+
+  return nodes.map((node) => {
+    const pos = g.node(node.id);
+    const nodeType = (node.data as any)?.nodeType || "task";
+    const dims = getNodeDimensions(nodeType);
+    return {
+      ...node,
+      position: {
+        x: pos.x - dims.width / 2,
+        y: pos.y - dims.height / 2,
+      },
+    };
+  });
+}
 
 function getNodePosition(index: number, total: number) {
   const cols = Math.min(total, 4);
   const col = index % cols;
   const row = Math.floor(index / cols);
   return {
-    x: START_X + col * NODE_SPACING_X,
-    y: START_Y + row * 160,
+    x: 80 + col * 300,
+    y: 200 + row * 160,
   };
 }
 
@@ -153,19 +198,21 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
       <div
         className={`${baseClasses} px-5 py-3 rounded-full border-2 cursor-pointer`}
         style={{
-          backgroundColor: "#008b9b",
+          backgroundColor: nodeType === "end" ? "#008b9b" : "#008b9b",
           borderColor: "#00a5b8",
           borderStyle: confStyle.borderStyle,
           opacity: confStyle.opacity,
-          minWidth: 120,
+          minWidth: 130,
           textAlign: "center",
         }}
         data-testid={`node-${id}`}
       >
-        <Handle type="target" position={Position.Left} className="!bg-[#008b9b] !border-[#00a5b8] !w-2 !h-2" />
+        <Handle type="target" position={Position.Left} className="!bg-[#008b9b] !border-[#00a5b8] !w-2.5 !h-2.5" />
+        <Handle type="target" position={Position.Top} id="top-target" className="!bg-[#008b9b] !border-[#00a5b8] !w-2.5 !h-2.5" />
         <div className="text-white text-xs font-semibold">{data.label}</div>
         {data.role && <div className="text-white/60 text-[10px] mt-0.5">{data.role}</div>}
-        <Handle type="source" position={Position.Right} className="!bg-[#008b9b] !border-[#00a5b8] !w-2 !h-2" />
+        <Handle type="source" position={Position.Right} className="!bg-[#008b9b] !border-[#00a5b8] !w-2.5 !h-2.5" />
+        <Handle type="source" position={Position.Bottom} id="bottom-source" className="!bg-[#008b9b] !border-[#00a5b8] !w-2.5 !h-2.5" />
         {isPainPoint && <Flag className="absolute -top-2 -right-2 h-3.5 w-3.5 text-red-500 fill-red-500" />}
       </div>
     );
@@ -175,10 +222,11 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
     return (
       <div
         className={`${baseClasses} cursor-pointer`}
-        style={{ width: 160, height: 120, opacity: confStyle.opacity }}
+        style={{ width: 180, height: 130, opacity: confStyle.opacity }}
         data-testid={`node-${id}`}
       >
-        <Handle type="target" position={Position.Left} className="!bg-[#c8940a] !border-[#daa520] !w-2 !h-2" style={{ top: "50%" }} />
+        <Handle type="target" position={Position.Left} className="!bg-[#c8940a] !border-[#daa520] !w-2.5 !h-2.5" style={{ top: "50%" }} />
+        <Handle type="target" position={Position.Top} id="top-target" className="!bg-[#c8940a] !border-[#daa520] !w-2.5 !h-2.5" />
         <div
           className="absolute flex flex-col items-center justify-center"
           style={{
@@ -186,27 +234,28 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
             backgroundColor: isToBeView && isAutomated ? "#166534" : confStyle.level === "low" ? "#555" : "#c8940a",
             borderRadius: 8,
             border: `2px ${confStyle.borderStyle} ${isToBeView && isAutomated ? "#22c55e" : "#daa520"}`,
-            width: "65%",
-            height: "65%",
-            top: "10%",
-            left: "17.5%",
+            width: "60%",
+            height: "60%",
+            top: "8%",
+            left: "20%",
           }}
         >
           <div style={{ transform: "rotate(-45deg)" }} className="text-center px-1">
             <div className="text-white text-[10px] font-semibold leading-tight">{data.label}</div>
-            {data.role && <div className="text-white/60 text-[7px] mt-0.5">{data.role}</div>}
           </div>
         </div>
         <div className="absolute bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 whitespace-nowrap">
           <PerformerBadge performer={performer} size="small" />
+          {data.role && <span className="text-[7px] text-white/40 ml-0.5">{data.role}</span>}
           {isToBeView && isAutomated && (
             <span className="inline-flex items-center gap-0.5 px-1 rounded-full bg-green-500/20 border border-green-500/30 text-[7px] text-green-300 font-medium" data-testid="badge-automated">
               <Zap className="h-2 w-2" />
             </span>
           )}
         </div>
-        <Handle type="source" position={Position.Right} className="!bg-[#c8940a] !border-[#daa520] !w-2 !h-2" style={{ top: "50%" }} />
-        <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-[#c8940a] !border-[#daa520] !w-2 !h-2" />
+        <Handle type="source" position={Position.Right} id="right" className="!bg-[#c8940a] !border-[#daa520] !w-2.5 !h-2.5" style={{ top: "50%" }} />
+        <Handle type="source" position={Position.Bottom} id="bottom" className="!bg-[#c8940a] !border-[#daa520] !w-2.5 !h-2.5" />
+        <Handle type="source" position={Position.Top} id="top" className="!bg-[#c8940a] !border-[#daa520] !w-2.5 !h-2.5" />
         {isPainPoint && <Flag className="absolute -top-2 -right-2 h-3.5 w-3.5 text-red-500 fill-red-500 z-10" />}
       </div>
     );
@@ -229,7 +278,8 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
       }}
       data-testid={`node-${id}`}
     >
-      <Handle type="target" position={Position.Left} className={automatedBorder ? "!bg-green-500 !border-green-400 !w-2 !h-2" : "!bg-[#e8450a] !border-[#ff5722] !w-2 !h-2"} />
+      <Handle type="target" position={Position.Left} className={automatedBorder ? "!bg-green-500 !border-green-400 !w-2.5 !h-2.5" : "!bg-[#e8450a] !border-[#ff5722] !w-2.5 !h-2.5"} />
+      <Handle type="target" position={Position.Top} id="top-target" className={automatedBorder ? "!bg-green-500 !border-green-400 !w-2.5 !h-2.5" : "!bg-[#e8450a] !border-[#ff5722] !w-2.5 !h-2.5"} />
       <div className="px-3 py-2.5">
         <div className="text-white text-xs font-medium leading-tight">{data.label}</div>
         {data.role && <div className="text-gray-400 text-[10px] mt-1">{data.role}</div>}
@@ -246,7 +296,8 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
           )}
         </div>
       </div>
-      <Handle type="source" position={Position.Right} className={automatedBorder ? "!bg-green-500 !border-green-400 !w-2 !h-2" : "!bg-[#e8450a] !border-[#ff5722] !w-2 !h-2"} />
+      <Handle type="source" position={Position.Right} className={automatedBorder ? "!bg-green-500 !border-green-400 !w-2.5 !h-2.5" : "!bg-[#e8450a] !border-[#ff5722] !w-2.5 !h-2.5"} />
+      <Handle type="source" position={Position.Bottom} id="bottom-source" className={automatedBorder ? "!bg-green-500 !border-green-400 !w-2.5 !h-2.5" : "!bg-[#e8450a] !border-[#ff5722] !w-2.5 !h-2.5"} />
       {isPainPoint && <Flag className="absolute -top-2 -right-2 h-3.5 w-3.5 text-red-500 fill-red-500" />}
     </div>
   );
@@ -263,14 +314,20 @@ function CustomEdge({
   data,
   style,
 }: any) {
-  const [edgePath, labelX, labelY] = getBezierPath({
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourceX,
     sourceY,
     sourcePosition,
     targetX,
     targetY,
     targetPosition,
+    borderRadius: 16,
   });
+
+  const label = data?.label || "";
+  const isYes = /^(yes|approved|pass|valid|complete|true)$/i.test(label);
+  const isNo = /^(no|rejected|fail|invalid|incomplete|false)$/i.test(label);
+  const edgeColor = data?.viewType === "to-be" ? "#22c55e" : isYes ? "#22c55e" : isNo ? "#ef4444" : "#555";
 
   return (
     <>
@@ -279,12 +336,12 @@ function CustomEdge({
         path={edgePath}
         style={{
           ...style,
-          stroke: data?.viewType === "to-be" ? "#22c55e" : "#555",
-          strokeWidth: 2,
+          stroke: edgeColor,
+          strokeWidth: label ? 2.5 : 2,
           animation: data?.isNew ? "edgeDraw 0.4s ease-out" : undefined,
         }}
       />
-      {data?.label && (
+      {label && (
         <EdgeLabelRenderer>
           <div
             style={{
@@ -292,10 +349,16 @@ function CustomEdge({
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               pointerEvents: "all",
             }}
-            className="px-2 py-0.5 rounded bg-[#1a1a1a] border border-[#333] text-[10px] text-gray-300 cursor-pointer hover:border-[#e8450a] transition-colors"
+            className={`px-2 py-0.5 rounded-md text-[10px] font-semibold cursor-pointer transition-colors shadow-md ${
+              isYes
+                ? "bg-green-900/80 border border-green-500/50 text-green-300"
+                : isNo
+                ? "bg-red-900/80 border border-red-500/50 text-red-300"
+                : "bg-[#1a1a1a] border border-[#444] text-gray-300 hover:border-[#e8450a]"
+            }`}
             data-testid={`edge-label-${id}`}
           >
-            {data.label}
+            {label}
           </div>
         </EdgeLabelRenderer>
       )}
@@ -523,16 +586,12 @@ function ProcessMapFlow({ ideaId, activeView }: { ideaId: string; activeView: "a
     const dbNodes = mapData.nodes;
     const dbEdges = mapData.edges;
 
-    const newNodes: Node[] = dbNodes.map((n, i) => {
-      const pos = n.positionX !== 0 || n.positionY !== 0
-        ? { x: n.positionX, y: n.positionY }
-        : getNodePosition(i, dbNodes.length);
+    const rawNodes: Node[] = dbNodes.map((n, i) => {
       const isNew = i >= prevNodeCountRef.current;
-
       return {
         id: String(n.id),
         type: "processNode",
-        position: pos,
+        position: { x: 0, y: 0 },
         data: {
           label: n.name,
           role: n.role,
@@ -548,7 +607,7 @@ function ProcessMapFlow({ ideaId, activeView }: { ideaId: string; activeView: "a
       };
     });
 
-    const newEdges: Edge[] = dbEdges.map((e) => ({
+    const rawEdges: Edge[] = dbEdges.map((e) => ({
       id: String(e.id),
       source: String(e.sourceNodeId),
       target: String(e.targetNodeId),
@@ -557,8 +616,30 @@ function ProcessMapFlow({ ideaId, activeView }: { ideaId: string; activeView: "a
       animated: activeView === "to-be",
     }));
 
-    setNodes(newNodes);
-    setEdges(newEdges);
+    const hasManualPositions = dbNodes.some(n => n.positionX !== 0 || n.positionY !== 0);
+    let layoutNodes: Node[];
+
+    if (hasManualPositions && dbEdges.length > 0) {
+      layoutNodes = rawNodes.map((node, i) => {
+        const dbNode = dbNodes[i];
+        if (dbNode.positionX !== 0 || dbNode.positionY !== 0) {
+          return { ...node, position: { x: dbNode.positionX, y: dbNode.positionY } };
+        }
+        return node;
+      });
+    } else if (rawEdges.length > 0) {
+      layoutNodes = applyDagreLayout(rawNodes, rawEdges, "LR");
+    } else if (rawNodes.length > 0) {
+      layoutNodes = rawNodes.map((node, i) => ({
+        ...node,
+        position: getNodePosition(i, rawNodes.length),
+      }));
+    } else {
+      layoutNodes = rawNodes;
+    }
+
+    setNodes(layoutNodes);
+    setEdges(rawEdges);
     prevNodeCountRef.current = dbNodes.length;
 
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);

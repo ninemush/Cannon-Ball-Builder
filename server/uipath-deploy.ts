@@ -532,7 +532,8 @@ async function provisionTriggers(
           StartProcessCronSummary: t.description || "Scheduled trigger",
           TimeZoneId: "UTC",
           TimeZoneIana: "Etc/UTC",
-          StartStrategy: 0,
+          StartStrategy: { Type: 0, RobotCount: 0, JobsCountPerRobot: 0 },
+          InputArguments: "{}",
         };
 
         const res = await fetch(`${base}/odata/ProcessSchedules`, {

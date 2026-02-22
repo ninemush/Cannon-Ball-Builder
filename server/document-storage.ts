@@ -11,6 +11,7 @@ export interface IDocumentStorage {
   updateDocument(id: number, updates: Partial<InsertDocument>): Promise<Document>;
   getApproval(ideaId: string, docType: string): Promise<DocumentApproval | undefined>;
   createApproval(approval: InsertDocumentApproval): Promise<DocumentApproval>;
+  deleteApproval(ideaId: string, docType: string): Promise<void>;
 }
 
 export const documentStorage: IDocumentStorage = {
@@ -61,5 +62,10 @@ export const documentStorage: IDocumentStorage = {
   async createApproval(approval: InsertDocumentApproval) {
     const [created] = await db.insert(documentApprovals).values(approval).returning();
     return created;
+  },
+
+  async deleteApproval(ideaId: string, docType: string) {
+    await db.delete(documentApprovals)
+      .where(and(eq(documentApprovals.ideaId, ideaId), eq(documentApprovals.docType, docType)));
   },
 };
