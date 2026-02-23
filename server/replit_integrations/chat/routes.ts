@@ -25,6 +25,7 @@ BEHAVIORAL RULES (non-negotiable):
 5. Keep responses concise and purposeful. No filler. No restating what the SME just said back to them.
 6. NEVER blame the platform, the deployment system, or the infrastructure for any issue. NEVER suggest the user contact a platform administrator. If something went wrong, acknowledge it and immediately offer to fix it (e.g. regenerate the document). You are part of the platform — you fix things, you don't blame things.
 7. When asked to regenerate a document, do it immediately. Do not question whether it will help, do not suggest alternatives, do not explain why it might not work. Just regenerate it.
+8. INTEGRITY IS NON-NEGOTIABLE: Never fabricate deployment results, artifact statuses, or service availability. If the system provides verified deployment results (VERIFIED DEPLOYMENT RESULTS messages), you MUST use those exact facts. Never claim something was "created" or "deployed" unless the verified results confirm it. If an artifact was skipped or failed, say so honestly. Discrepancies between your narrative and actual results destroy user trust.
 
 STAGE BEHAVIOR:
 - Idea: Extract the process with targeted single questions. Identify who does it, what triggers it, what systems are involved, what the pain points are, and what a successful outcome looks like.
@@ -400,6 +401,7 @@ export function registerChatRoutes(app: Express): void {
             let statusMsg = `Deployment complete. Package "${d?.packageId}" v${d?.version} uploaded to Orchestrator.`;
             if (d?.processName) statusMsg += ` Process "${d.processName}" created.`;
             if (d?.deploymentSummary) statusMsg += ` ${d.deploymentSummary}`;
+            const deployResults: Array<{artifact: string; name: string; status: string; message: string}> = d?.deploymentResults || [];
             const deployReport = {
               packageId: d?.packageId,
               version: d?.version,
@@ -407,9 +409,29 @@ export function registerChatRoutes(app: Express): void {
               orgName: d?.orgName,
               tenantName: d?.tenantName,
               folderName: d?.folderName,
-              results: d?.deploymentResults || [],
+              results: deployResults,
               summary: d?.deploymentSummary || "",
             };
+
+            const created = deployResults.filter(r => r.status === "created");
+            const existed = deployResults.filter(r => r.status === "exists");
+            const failed = deployResults.filter(r => r.status === "failed");
+            const skipped = deployResults.filter(r => r.status === "skipped");
+            let verifiedSummary = `VERIFIED DEPLOYMENT RESULTS (use ONLY these facts when discussing this deployment):\n`;
+            verifiedSummary += `- Package: ${d?.packageId} v${d?.version}\n`;
+            verifiedSummary += `- Process: ${d?.processName || "N/A"}\n`;
+            verifiedSummary += `- Created: ${created.length} (${created.map(r => `${r.artifact}: ${r.name}`).join(", ") || "none"})\n`;
+            verifiedSummary += `- Already existed: ${existed.length}\n`;
+            if (failed.length > 0) {
+              verifiedSummary += `- FAILED: ${failed.length} (${failed.map(r => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
+            }
+            if (skipped.length > 0) {
+              verifiedSummary += `- SKIPPED (service unavailable): ${skipped.length} (${skipped.map(r => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
+            }
+            verifiedSummary += `\nIMPORTANT: Never claim an artifact was "created" or "deployed" if it appears in the FAILED or SKIPPED lists above. Report the actual status honestly.`;
+
+            await chatStorage.createMessage(ideaId, "system", verifiedSummary);
+
             res.write(`data: ${JSON.stringify({ deployStatus: statusMsg, deployComplete: true, deployReport })}\n\n`);
           } else {
             const errMsg = `Deployment failed: ${deployData.message}`;

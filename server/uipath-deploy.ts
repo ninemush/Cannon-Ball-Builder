@@ -211,6 +211,83 @@ function parseOrchestratorResponse(text: string): { data: any; error: string | n
   }
 }
 
+/**
+ * Validates a service probe response to ensure the service is genuinely available.
+ * Returns true only if the response body is valid JSON with an expected structure.
+ * Catches false positives from UiPath cloud gateway returning 200 for unregistered services.
+ */
+function isGenuineServiceResponse(responseText: string): { genuine: boolean; reason?: string } {
+  if (!responseText || responseText.trim().length === 0) {
+    return { genuine: false, reason: "Empty response body" };
+  }
+  const trimmed = responseText.trim();
+  if (trimmed.startsWith("<!") || trimmed.startsWith("<html") || trimmed.startsWith("<HTML") || trimmed.startsWith("<head")) {
+    return { genuine: false, reason: "HTML response — gateway or error page, not a real service" };
+  }
+  try {
+    const data = JSON.parse(trimmed);
+    if (data.errorCode || data.ErrorCode) {
+      return { genuine: false, reason: `Error in response: ${data.errorCode || data.ErrorCode}: ${data.message || data.Message || ""}` };
+    }
+    if (data["odata.error"]) {
+      return { genuine: false, reason: `OData error: ${data["odata.error"].message?.value || data["odata.error"].code || ""}` };
+    }
+    if (typeof data.message === "string" && (data.message.includes("not onboarded") || data.message.includes("ServiceType"))) {
+      return { genuine: false, reason: `Service not onboarded: ${data.message}` };
+    }
+    if (data.error && typeof data.error === "string") {
+      return { genuine: false, reason: `Error: ${data.error}` };
+    }
+    if (data.error && typeof data.error === "object") {
+      return { genuine: false, reason: `Error object: ${JSON.stringify(data.error).slice(0, 200)}` };
+    }
+    if (Array.isArray(data.value) || Array.isArray(data.items) || Array.isArray(data) || data.Id || data.id || data.totalCount !== undefined || data["@odata.count"] !== undefined) {
+      return { genuine: true };
+    }
+    if (typeof data === "object" && Object.keys(data).length === 0) {
+      return { genuine: false, reason: "Empty JSON object — service may not be available" };
+    }
+    return { genuine: true };
+  } catch {
+    return { genuine: false, reason: `Non-JSON response: ${trimmed.slice(0, 100)}` };
+  }
+}
+
+/**
+ * Validates that a creation response actually represents a successfully created resource.
+ * Checks for valid ID, hidden error codes, and ensures the response isn't a gateway artifact.
+ */
+function validateCreationResponse(responseText: string): { valid: boolean; data: any; error?: string } {
+  try {
+    const data = JSON.parse(responseText);
+    if (data.errorCode || data.ErrorCode) {
+      return { valid: false, data, error: `Hidden error: ${data.errorCode || data.ErrorCode}: ${data.message || data.Message || ""}` };
+    }
+    if (data["odata.error"]) {
+      return { valid: false, data, error: `OData error in 200 response: ${data["odata.error"].message?.value || ""}` };
+    }
+    if (data.Response?.ErrorCode || data.Response?.errorCode) {
+      const r = data.Response;
+      return { valid: false, data, error: `Nested error: ${r.ErrorCode || r.errorCode}: ${r.Message || r.message || ""}` };
+    }
+    if (data.error && typeof data.error === "string") {
+      return { valid: false, data, error: data.error };
+    }
+    if (data.error && typeof data.error === "object") {
+      return { valid: false, data, error: JSON.stringify(data.error).slice(0, 200) };
+    }
+    if (typeof data.message === "string" && (data.message.includes("not onboarded") || data.message.includes("not available"))) {
+      return { valid: false, data, error: data.message };
+    }
+    if (!data.Id && !data.id && !data.Name && !data.name && !data.Key) {
+      return { valid: false, data, error: "Response missing expected fields (Id, Name, Key) — creation may not have succeeded" };
+    }
+    return { valid: true, data };
+  } catch {
+    return { valid: false, data: null, error: `Non-JSON creation response: ${responseText.slice(0, 200)}` };
+  }
+}
+
 async function verifyArtifactExists(
   base: string, hdrs: Record<string, string>,
   endpoint: string, filterField: string, name: string, label: string,
@@ -921,24 +998,35 @@ async function provisionActionCenter(
   ];
 
   let serviceAvailable = false;
+  let activeAcEndpoint: typeof endpoints[0] | null = null;
   for (const ep of endpoints) {
     try {
       const probeUrl = ep.isOdata ? `${ep.url}?$top=1` : `${ep.url}?top=1`;
       const probeRes = await fetch(probeUrl, { headers: hdrs });
-      if (probeRes.ok || probeRes.status === 200) {
+      const probeText = await probeRes.text();
+      console.log(`[UiPath Deploy] Action Center probe ${ep.label} -> ${probeRes.status}: ${probeText.slice(0, 200)}`);
+
+      if (probeRes.ok) {
+        const genuineCheck = isGenuineServiceResponse(probeText);
+        if (!genuineCheck.genuine) {
+          console.log(`[UiPath Deploy] Action Center probe ${ep.label} returned 200 but not genuine: ${genuineCheck.reason}`);
+          continue;
+        }
         serviceAvailable = true;
+        activeAcEndpoint = ep;
         break;
       }
       if (probeRes.status === 400) {
-        const probeText = await probeRes.text();
         if (probeText.includes("ServiceType is not onboarded") || probeText.includes("not onboarded")) {
           continue;
         }
         serviceAvailable = true;
+        activeAcEndpoint = ep;
         break;
       }
       if (probeRes.status === 401 || probeRes.status === 403) {
         serviceAvailable = true;
+        activeAcEndpoint = ep;
         break;
       }
     } catch { continue; }
@@ -953,17 +1041,22 @@ async function provisionActionCenter(
     }));
   }
 
+  const tryEndpoints = activeAcEndpoint ? [activeAcEndpoint, ...endpoints.filter(e => e !== activeAcEndpoint)] : endpoints;
+
   for (const ac of actionCenter) {
     try {
       let found = false;
-      for (const ep of endpoints) {
+      for (const ep of tryEndpoints) {
         try {
           const filterUrl = ep.isOdata
             ? `${ep.url}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`
             : `${ep.url}?name=${encodeURIComponent(ac.taskCatalog)}&top=1`;
           const checkRes = await fetch(filterUrl, { headers: hdrs });
           if (checkRes.ok) {
-            const checkData = await checkRes.json();
+            const checkText = await checkRes.text();
+            const genuineCheck = isGenuineServiceResponse(checkText);
+            if (!genuineCheck.genuine) continue;
+            const checkData = JSON.parse(checkText);
             const items = checkData.value || checkData.items || (Array.isArray(checkData) ? checkData : []);
             if (items.length > 0) {
               results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: `Already exists (ID: ${items[0].Id || items[0].id})`, id: items[0].Id || items[0].id });
@@ -977,19 +1070,51 @@ async function provisionActionCenter(
 
       const body: Record<string, any> = { Name: ac.taskCatalog, Description: ac.description || "" };
       let acCreated = false;
-      for (const ep of endpoints) {
+      for (const ep of tryEndpoints) {
         try {
           const res = await fetch(ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
           const text = await res.text();
           console.log(`[UiPath Deploy] Action Center "${ac.taskCatalog}" via ${ep.label} -> ${res.status}: ${text.slice(0, 300)}`);
 
           if (res.ok || res.status === 201) {
-            let data: any;
-            try { data = JSON.parse(text); } catch { data = {}; }
-            let msg = `Created (ID: ${data.Id || data.id || "N/A"})`;
-            if (ac.assignedRole) msg += `. Assign to role: ${ac.assignedRole}`;
-            if (ac.sla) msg += `. SLA: ${ac.sla}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: data.Id || data.id });
+            const creation = validateCreationResponse(text);
+            if (!creation.valid) {
+              console.warn(`[UiPath Deploy] Action Center "${ac.taskCatalog}" got ${res.status} but body invalid: ${creation.error}`);
+              results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `API returned ${res.status} but response invalid: ${creation.error}` });
+              acCreated = true;
+              break;
+            }
+            const createdId = creation.data?.Id || creation.data?.id;
+
+            let verified = false;
+            if (createdId) {
+              try {
+                const filterUrl = ep.isOdata
+                  ? `${ep.url}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`
+                  : `${ep.url}?name=${encodeURIComponent(ac.taskCatalog)}&top=1`;
+                const verifyRes = await fetch(filterUrl, { headers: hdrs });
+                if (verifyRes.ok) {
+                  const verifyText = await verifyRes.text();
+                  const verifyCheck = isGenuineServiceResponse(verifyText);
+                  if (verifyCheck.genuine) {
+                    const verifyData = JSON.parse(verifyText);
+                    const items = verifyData.value || verifyData.items || (Array.isArray(verifyData) ? verifyData : []);
+                    if (items.length > 0) {
+                      verified = true;
+                    }
+                  }
+                }
+              } catch { /* verification failed */ }
+            }
+
+            if (verified) {
+              let msg = `Created and verified (ID: ${createdId})`;
+              if (ac.assignedRole) msg += `. Assign to role: ${ac.assignedRole}`;
+              if (ac.sla) msg += `. SLA: ${ac.sla}`;
+              results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: createdId });
+            } else {
+              results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `API returned ${res.status} but post-creation verification failed — catalog may not actually exist` });
+            }
             acCreated = true;
             break;
           } else if (res.status === 409 || text.includes("already exists")) {
@@ -1044,8 +1169,15 @@ async function provisionDocUnderstanding(
   for (const ep of endpoints) {
     try {
       const probeRes = await fetch(`${ep.url}?$top=1`, { headers: hdrs });
-      console.log(`[UiPath Deploy] DU probe ${ep.label} -> ${probeRes.status}`);
+      const probeText = await probeRes.text();
+      console.log(`[UiPath Deploy] DU probe ${ep.label} -> ${probeRes.status}: ${probeText.slice(0, 200)}`);
+
       if (probeRes.ok) {
+        const genuineCheck = isGenuineServiceResponse(probeText);
+        if (!genuineCheck.genuine) {
+          console.log(`[UiPath Deploy] DU probe ${ep.label} returned 200 but not genuine: ${genuineCheck.reason}`);
+          continue;
+        }
         serviceAvailable = true;
         activeEndpoint = ep;
         break;
@@ -1074,12 +1206,16 @@ async function provisionDocUnderstanding(
         try {
           const checkRes = await fetch(`${activeEndpoint.url}?$top=50`, { headers: hdrs });
           if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            const items = checkData.value || checkData.items || (Array.isArray(checkData) ? checkData : []);
-            const existing = items.find((p: any) => (p.Name || p.name) === project.name);
-            if (existing) {
-              results.push({ artifact: "Document Understanding", name: project.name, status: "exists", message: `Already exists (ID: ${existing.Id || existing.id}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: existing.Id || existing.id });
-              found = true;
+            const checkText = await checkRes.text();
+            const genuineCheck = isGenuineServiceResponse(checkText);
+            if (genuineCheck.genuine) {
+              const checkData = JSON.parse(checkText);
+              const items = checkData.value || checkData.items || (Array.isArray(checkData) ? checkData : []);
+              const existing = items.find((p: any) => (p.Name || p.name) === project.name);
+              if (existing) {
+                results.push({ artifact: "Document Understanding", name: project.name, status: "exists", message: `Already exists (ID: ${existing.Id || existing.id}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: existing.Id || existing.id });
+                found = true;
+              }
             }
           }
         } catch { /* continue to create */ }
@@ -1100,9 +1236,37 @@ async function provisionDocUnderstanding(
           console.log(`[UiPath Deploy] DU project "${project.name}" via ${ep.label} -> ${res.status}: ${text.slice(0, 300)}`);
 
           if (res.ok || res.status === 201) {
-            let data: any;
-            try { data = JSON.parse(text); } catch { data = {}; }
-            results.push({ artifact: "Document Understanding", name: project.name, status: "created", message: `Created via ${ep.label} (ID: ${data.Id || data.id || "N/A"}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: data.Id || data.id });
+            const creation = validateCreationResponse(text);
+            if (!creation.valid) {
+              console.warn(`[UiPath Deploy] DU "${project.name}" got ${res.status} but body invalid: ${creation.error}`);
+              results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `API returned ${res.status} but response invalid: ${creation.error}` });
+              created = true;
+              break;
+            }
+            const createdId = creation.data?.Id || creation.data?.id;
+
+            let verified = false;
+            try {
+              const verifyRes = await fetch(`${ep.url}?$top=50`, { headers: hdrs });
+              if (verifyRes.ok) {
+                const verifyText = await verifyRes.text();
+                const verifyCheck = isGenuineServiceResponse(verifyText);
+                if (verifyCheck.genuine) {
+                  const verifyData = JSON.parse(verifyText);
+                  const items = verifyData.value || verifyData.items || (Array.isArray(verifyData) ? verifyData : []);
+                  const match = items.find((p: any) => (p.Name || p.name) === project.name || (p.Id || p.id) === createdId);
+                  if (match) {
+                    verified = true;
+                  }
+                }
+              }
+            } catch { /* verification failed */ }
+
+            if (verified) {
+              results.push({ artifact: "Document Understanding", name: project.name, status: "created", message: `Created and verified via ${ep.label} (ID: ${createdId}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: createdId });
+            } else {
+              results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `API returned ${res.status} but post-creation verification failed — DU project may not actually exist. Doc types needed: ${project.documentTypes?.join(", ") || "N/A"}` });
+            }
             created = true;
             break;
           } else if (res.status === 409 || text.includes("already exists")) {
@@ -1154,18 +1318,27 @@ async function provisionTestCases(
   for (const tmBase of tmBases) {
     try {
       const projRes = await fetch(`${tmBase}/api/v2/projects?$top=10`, { headers: hdrs });
-      console.log(`[UiPath Deploy] Test Manager probe ${tmBase} -> ${projRes.status}`);
-      if (projRes.ok) {
-        activeTmBase = tmBase;
-        const projData = await projRes.json();
+      const probeText = await projRes.text();
+      console.log(`[UiPath Deploy] Test Manager probe ${tmBase} -> ${projRes.status}: ${probeText.slice(0, 200)}`);
 
-        if (projData.value?.length > 0) {
-          const match = projData.value.find((p: any) =>
-            p.Name?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
-            processName.toLowerCase().includes(p.Name?.toLowerCase())
-          );
-          projectId = match?.Id || projData.value[0].Id;
+      if (projRes.ok) {
+        const genuineCheck = isGenuineServiceResponse(probeText);
+        if (!genuineCheck.genuine) {
+          console.log(`[UiPath Deploy] Test Manager probe returned 200 but is not genuine: ${genuineCheck.reason}`);
+          continue;
         }
+
+        activeTmBase = tmBase;
+        try {
+          const projData = JSON.parse(probeText);
+          if (projData.value?.length > 0) {
+            const match = projData.value.find((p: any) =>
+              p.Name?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
+              processName.toLowerCase().includes(p.Name?.toLowerCase())
+            );
+            projectId = match?.Id || projData.value[0].Id;
+          }
+        } catch { /* valid service but empty/unparseable list — continue to create project */ }
         break;
       }
     } catch { continue; }
@@ -1190,10 +1363,15 @@ async function provisionTestCases(
           Description: `Test project for ${processName}`,
         }),
       });
+      const createText = await createProjRes.text();
       if (createProjRes.ok || createProjRes.status === 201) {
-        const newProj = await createProjRes.json();
-        projectId = newProj.Id;
-        results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
+        const creation = validateCreationResponse(createText);
+        if (creation.valid && creation.data?.Id) {
+          projectId = creation.data.Id;
+          results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
+        } else {
+          console.warn(`[UiPath Deploy] Test project creation returned ${createProjRes.status} but validation failed: ${creation.error}`);
+        }
       }
     } catch { /* fall through */ }
   }
@@ -1235,8 +1413,53 @@ async function provisionTestCases(
       console.log(`[UiPath Deploy] Test Case "${tc.name}" -> ${res.status}: ${text.slice(0, 300)}`);
 
       if (res.ok || res.status === 201) {
-        const data = JSON.parse(text);
-        results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created (ID: ${data.Id})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: data.Id });
+        const creation = validateCreationResponse(text);
+        if (!creation.valid) {
+          console.warn(`[UiPath Deploy] Test Case "${tc.name}" got ${res.status} but body validation failed: ${creation.error}`);
+          results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `API returned ${res.status} but response invalid: ${creation.error}` });
+          continue;
+        }
+        const createdId = creation.data?.Id || creation.data?.id;
+
+        let verified = false;
+        if (createdId) {
+          try {
+            const verifyRes = await fetch(`${activeTmBase}/api/v2/projects/${projectId}/testcases/${createdId}`, { headers: hdrs });
+            if (verifyRes.ok) {
+              const verifyText = await verifyRes.text();
+              const verifyCheck = isGenuineServiceResponse(verifyText);
+              if (verifyCheck.genuine) {
+                verified = true;
+              } else {
+                console.warn(`[UiPath Deploy] Test Case "${tc.name}" verify returned 200 but not genuine: ${verifyCheck.reason}`);
+              }
+            }
+          } catch { /* verification failed */ }
+        }
+
+        if (verified) {
+          results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created and verified (ID: ${createdId})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: createdId });
+        } else {
+          try {
+            const listRes = await fetch(`${activeTmBase}/api/v2/projects/${projectId}/testcases?$filter=Name eq '${odataEscape(tc.name)}'&$top=1`, { headers: hdrs });
+            if (listRes.ok) {
+              const listText = await listRes.text();
+              const listCheck = isGenuineServiceResponse(listText);
+              if (listCheck.genuine) {
+                const listData = JSON.parse(listText);
+                const items = listData.value || listData.items || (Array.isArray(listData) ? listData : []);
+                if (items.length > 0) {
+                  results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created and verified by name (ID: ${items[0].Id || items[0].id})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: items[0].Id || items[0].id });
+                  verified = true;
+                }
+              }
+            }
+          } catch { /* fallback verification failed */ }
+
+          if (!verified) {
+            results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `API returned ${res.status} but post-creation verification failed — test case may not actually exist` });
+          }
+        }
       } else if (res.status === 409 || text.includes("already exists")) {
         results.push({ artifact: "Test Case", name: tc.name, status: "exists", message: "Already exists" });
       } else {
