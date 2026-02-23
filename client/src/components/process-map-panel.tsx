@@ -58,6 +58,7 @@ import {
   ChevronDown,
   ChevronRight,
   AlertCircle,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -233,6 +234,125 @@ function detectPhaseGroups(nodes: ProcessMapData["nodes"], edges: ProcessMapData
   return groups;
 }
 
+type DetailLevel = "L0" | "L1" | "L2";
+
+function filterNodesForLevel(
+  allNodes: ProcessMapData["nodes"],
+  allEdges: ProcessMapData["edges"],
+  level: DetailLevel
+): { nodes: ProcessMapData["nodes"]; edges: ProcessMapData["edges"] } {
+  if (level === "L2") return { nodes: allNodes, edges: allEdges };
+
+  const phaseGroups = detectPhaseGroups(allNodes, allEdges);
+
+  if (level === "L0") {
+    const startEnd = allNodes.filter(n => n.nodeType === "start" || n.nodeType === "end");
+    const syntheticNodes: ProcessMapData["nodes"] = [...startEnd];
+    const syntheticEdges: ProcessMapData["edges"] = [];
+
+    let syntheticId = -1;
+    const phaseNodeIds: number[] = [];
+
+    phaseGroups.forEach((group) => {
+      const actionableInGroup = group.nodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end");
+      if (actionableInGroup.length === 0) return;
+      const phaseNode = {
+        ...actionableInGroup[0],
+        id: syntheticId,
+        name: group.name,
+        nodeType: "task" as const,
+        description: `${actionableInGroup.length} steps`,
+        role: "",
+        system: "",
+        positionX: 0,
+        positionY: 0,
+      };
+      syntheticNodes.push(phaseNode);
+      phaseNodeIds.push(syntheticId);
+      syntheticId--;
+    });
+
+    const startNode = startEnd.find(n => n.nodeType === "start");
+    const endNode = startEnd.find(n => n.nodeType === "end");
+    let edgeId = -1;
+
+    if (startNode && phaseNodeIds.length > 0) {
+      syntheticEdges.push({
+        id: edgeId--, ideaId: allEdges[0]?.ideaId || "", viewType: allEdges[0]?.viewType || "as-is",
+        sourceNodeId: startNode.id, targetNodeId: phaseNodeIds[0], label: "", createdAt: new Date().toISOString(),
+      });
+    }
+
+    for (let i = 0; i < phaseNodeIds.length - 1; i++) {
+      syntheticEdges.push({
+        id: edgeId--, ideaId: allEdges[0]?.ideaId || "", viewType: allEdges[0]?.viewType || "as-is",
+        sourceNodeId: phaseNodeIds[i], targetNodeId: phaseNodeIds[i + 1], label: "", createdAt: new Date().toISOString(),
+      });
+    }
+
+    if (endNode && phaseNodeIds.length > 0) {
+      syntheticEdges.push({
+        id: edgeId--, ideaId: allEdges[0]?.ideaId || "", viewType: allEdges[0]?.viewType || "as-is",
+        sourceNodeId: phaseNodeIds[phaseNodeIds.length - 1], targetNodeId: endNode.id, label: "", createdAt: new Date().toISOString(),
+      });
+    }
+
+    return { nodes: syntheticNodes, edges: syntheticEdges };
+  }
+
+  const keepIds = new Set<number>();
+  allNodes.forEach(n => {
+    if (n.nodeType === "start" || n.nodeType === "end" || n.nodeType === "decision") {
+      keepIds.add(n.id);
+    }
+  });
+
+  phaseGroups.forEach((group) => {
+    const tasks = group.nodes.filter(n => n.nodeType === "task");
+    if (tasks.length > 0) {
+      keepIds.add(tasks[0].id);
+      if (tasks.length > 1) keepIds.add(tasks[tasks.length - 1].id);
+    }
+  });
+
+  const filteredNodes = allNodes.filter(n => keepIds.has(n.id));
+
+  const adjacency: Record<number, { target: number; edgeLabel: string }[]> = {};
+  allEdges.forEach(e => {
+    if (!adjacency[e.sourceNodeId]) adjacency[e.sourceNodeId] = [];
+    adjacency[e.sourceNodeId].push({ target: e.targetNodeId, edgeLabel: e.label });
+  });
+
+  const bridgeEdges: ProcessMapData["edges"] = [];
+  let bridgeEdgeId = -1;
+
+  keepIds.forEach(sourceId => {
+    const visited = new Set<number>();
+    const queue = adjacency[sourceId] || [];
+    const toVisit = [...queue];
+
+    while (toVisit.length > 0) {
+      const { target, edgeLabel } = toVisit.shift()!;
+      if (visited.has(target)) continue;
+      visited.add(target);
+
+      if (keepIds.has(target)) {
+        bridgeEdges.push({
+          id: bridgeEdgeId--, ideaId: allEdges[0]?.ideaId || "", viewType: allEdges[0]?.viewType || "as-is",
+          sourceNodeId: sourceId, targetNodeId: target, label: edgeLabel, createdAt: new Date().toISOString(),
+        });
+      } else {
+        const nextEdges = adjacency[target] || [];
+        nextEdges.forEach(ne => {
+          if (!visited.has(ne.target)) toVisit.push(ne);
+        });
+      }
+    }
+  });
+
+  return { nodes: filteredNodes, edges: bridgeEdges };
+}
+
 interface ProcessMapPanelProps {
   ideaId: string;
   onStepsChange?: (count: number) => void;
@@ -242,10 +362,10 @@ interface ProcessMapPanelProps {
 }
 
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
-  if (nodeType === "start") return { width: 56, height: 56 };
-  if (nodeType === "end") return { width: 56, height: 56 };
-  if (nodeType === "decision") return { width: 64, height: 64 };
-  return { width: 220, height: 72 };
+  if (nodeType === "start") return { width: 72, height: 72 };
+  if (nodeType === "end") return { width: 72, height: 72 };
+  if (nodeType === "decision") return { width: 100, height: 100 };
+  return { width: 280, height: 80 };
 }
 
 function applyDagreLayout(
@@ -257,11 +377,11 @@ function applyDagreLayout(
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: direction,
-    nodesep: 60,
-    ranksep: 80,
-    edgesep: 30,
-    marginx: 40,
-    marginy: 40,
+    nodesep: 100,
+    ranksep: 120,
+    edgesep: 40,
+    marginx: 60,
+    marginy: 60,
   });
 
   nodes.forEach((node) => {
@@ -330,18 +450,18 @@ function StartNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className="flex items-center justify-center"
-      style={{ width: 56, height: 56 }}
+      style={{ width: 72, height: 72 }}
       data-testid={`node-${id}`}
     >
       <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
       <div
-        className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg shadow-emerald-500/20 transition-all hover:shadow-xl hover:shadow-emerald-500/30"
+        className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-emerald-500/20 transition-all hover:shadow-xl hover:shadow-emerald-500/30"
         style={{
           background: "linear-gradient(135deg, #10b981, #059669)",
           border: "3px solid #34d399",
         }}
       >
-        <Play className="h-4 w-4 text-white ml-0.5" fill="white" />
+        <Play className="h-5 w-5 text-white ml-0.5" fill="white" />
       </div>
       <Handle type="source" position={Position.Bottom} className="!opacity-0 !w-3 !h-3" />
       <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-3 !h-3" />
@@ -354,20 +474,20 @@ function EndNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className="flex items-center justify-center"
-      style={{ width: 56, height: 56 }}
+      style={{ width: 72, height: 72 }}
       data-testid={`node-${id}`}
     >
       <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
       <Handle type="target" position={Position.Left} id="left-target" className="!opacity-0 !w-3 !h-3" />
       <Handle type="target" position={Position.Right} id="right-target" className="!opacity-0 !w-3 !h-3" />
       <div
-        className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg shadow-red-500/20 transition-all hover:shadow-xl hover:shadow-red-500/30"
+        className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-red-500/20 transition-all hover:shadow-xl hover:shadow-red-500/30"
         style={{
           background: "linear-gradient(135deg, #ef4444, #dc2626)",
           border: "3px solid #f87171",
         }}
       >
-        <Square className="h-3.5 w-3.5 text-white" fill="white" />
+        <Square className="h-4 w-4 text-white" fill="white" />
       </div>
       <Handle type="source" position={Position.Bottom} className="!opacity-0 !w-3 !h-3" />
     </div>
@@ -385,7 +505,7 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className="relative flex items-center justify-center cursor-pointer"
-      style={{ width: 64, height: 64 }}
+      style={{ width: 100, height: 100 }}
       data-testid={`node-${id}`}
     >
       <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
@@ -393,18 +513,18 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
       <div
         className="absolute transition-all hover:brightness-110"
         style={{
-          width: 46,
-          height: 46,
+          width: 70,
+          height: 70,
           transform: "rotate(45deg)",
           background: `linear-gradient(135deg, ${bgColor}, ${bgColor}dd)`,
           border: `2.5px solid ${borderColor}`,
-          borderRadius: 6,
+          borderRadius: 8,
           boxShadow: `0 4px 20px ${glowColor}`,
         }}
       />
-      <div className="relative z-10 text-center" style={{ maxWidth: 52 }}>
-        <div className="text-white text-[8px] font-bold leading-tight truncate px-0.5">
-          {data.label?.length > 12 ? data.label.slice(0, 12) + "…" : data.label}
+      <div className="relative z-10 text-center" style={{ maxWidth: 80 }}>
+        <div className="text-white text-[10px] font-bold leading-tight truncate px-0.5">
+          {data.label?.length > 20 ? data.label.slice(0, 20) + "…" : data.label}
         </div>
       </div>
       <Handle type="source" position={Position.Bottom} id="bottom" className="!opacity-0 !w-3 !h-3" />
@@ -432,7 +552,7 @@ function TaskNode({ data, id }: { data: any; id: string }) {
     <div
       className="relative cursor-pointer group"
       style={{
-        width: 220,
+        width: 280,
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -449,36 +569,36 @@ function TaskNode({ data, id }: { data: any; id: string }) {
         }}
       >
         <div
-          className="h-1 w-full"
+          className="h-1.5 w-full"
           style={{ background: `linear-gradient(90deg, ${accentColor}, ${accentColor}88)` }}
         />
-        <div className="px-3 py-2.5">
+        <div className="px-4 py-3">
           <div className="flex items-start gap-2">
             <div
-              className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center mt-0.5"
+              className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5"
               style={{ background: `${accentColor}20`, border: `1px solid ${accentColor}30` }}
             >
-              <PerformerIcon className="h-3 w-3" style={{ color: accentColor }} />
+              <PerformerIcon className="h-3.5 w-3.5" style={{ color: accentColor }} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-[11px] font-semibold text-white/90 leading-tight truncate">
+              <div className="text-[13px] font-semibold text-white/90 leading-tight truncate">
                 {data.label}
               </div>
               {data.role && (
-                <div className="text-[9px] text-white/40 mt-0.5 truncate">{data.role}</div>
+                <div className="text-[10px] text-white/40 mt-0.5 truncate">{data.role}</div>
               )}
             </div>
           </div>
           {data.system && data.system !== "manual" && data.system !== "Manual" && (
             <div className="mt-1.5 flex items-center gap-1">
-              <Monitor className="h-2.5 w-2.5 text-white/25" />
-              <span className="text-[8px] text-white/30 truncate">{data.system}</span>
+              <Monitor className="h-3 w-3 text-white/25" />
+              <span className="text-[9px] text-white/30 truncate">{data.system}</span>
             </div>
           )}
           {isAutomated && (
             <div className="mt-1.5 flex items-center gap-1">
               <Zap className="h-2.5 w-2.5 text-green-400" />
-              <span className="text-[8px] text-green-400/80 font-medium">Automated</span>
+              <span className="text-[9px] text-green-400/80 font-medium">Automated</span>
             </div>
           )}
         </div>
@@ -550,7 +670,7 @@ function CustomEdge({
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               pointerEvents: "all",
             }}
-            className={`px-2 py-0.5 rounded-full text-[9px] font-semibold cursor-pointer transition-all shadow-sm ${
+            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-pointer transition-all shadow-sm ${
               isYes
                 ? "bg-emerald-950/90 border border-emerald-500/40 text-emerald-300"
                 : isNo
@@ -813,7 +933,7 @@ function NodeContextMenu({
   );
 }
 
-function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { ideaId: string; activeView: ProcessView; onRelayout?: (fn: () => void) => void; onUndoRedoReady?: (controls: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean }) => void; }) {
+function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRedoReady }: { ideaId: string; activeView: ProcessView; detailLevel: DetailLevel; onRelayout?: (fn: () => void) => void; onUndoRedoReady?: (controls: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean }) => void; }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [editingNode, setEditingNode] = useState<NodeEditData | null>(null);
@@ -883,10 +1003,13 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
     staleTime: 0,
   });
 
+  useEffect(() => {
+    hasInitialFitRef.current = false;
+  }, [detailLevel]);
+
   const doRelayout = useCallback(() => {
     if (!mapData) return;
-    const dbNodes = mapData.nodes;
-    const dbEdges = mapData.edges;
+    const { nodes: dbNodes, edges: dbEdges } = filterNodesForLevel(mapData.nodes, mapData.edges, detailLevel);
     const rawNodes: Node[] = dbNodes.map((n) => ({
       id: String(n.id),
       type: "processNode",
@@ -910,12 +1033,12 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
     setNodes(layoutNodes);
     layoutNodes.forEach((n) => {
       const d = n.data as any;
-      if (d.dbId) {
+      if (d.dbId && d.dbId > 0) {
         updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
       }
     });
     setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
-  }, [mapData, activeView, setNodes, fitView]);
+  }, [mapData, activeView, detailLevel, setNodes, fitView]);
 
   useEffect(() => {
     if (onRelayout) onRelayout(doRelayout);
@@ -923,8 +1046,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
 
   useEffect(() => {
     if (!mapData) return;
-    const dbNodes = mapData.nodes;
-    const dbEdges = mapData.edges;
+    const { nodes: dbNodes, edges: dbEdges } = filterNodesForLevel(mapData.nodes, mapData.edges, detailLevel);
 
     const savedCount = dbNodes.filter((n) => n.positionX !== 0 || n.positionY !== 0).length;
     const hasSavedPositions = savedCount > 0;
@@ -979,7 +1101,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
       }
       layoutNodes.forEach((n) => {
         const d = n.data as any;
-        if (d.dbId) {
+        if (d.dbId && d.dbId > 0) {
           updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
         }
       });
@@ -993,7 +1115,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
               const laid = layoutAll.find((l) => l.id === n.id);
               const pos = laid ? laid.position : { x: 0, y: 0 };
               const d = n.data as any;
-              if (d.dbId) {
+              if (d.dbId && d.dbId > 0) {
                 updateNodeMutation.mutate({ id: d.dbId, data: { positionX: pos.x, positionY: pos.y } });
               }
               return { ...n, position: pos };
@@ -1008,7 +1130,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
           if (node.position.x === 0 && node.position.y === 0) {
             const pos = getNodePosition(i, rawNodes.length);
             const d = node.data as any;
-            if (d.dbId) {
+            if (d.dbId && d.dbId > 0) {
               updateNodeMutation.mutate({ id: d.dbId, data: { positionX: pos.x, positionY: pos.y } });
             }
             return { ...node, position: pos };
@@ -1026,7 +1148,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
       hasInitialFitRef.current = true;
       setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
     }
-  }, [mapData, setNodes, setEdges]);
+  }, [mapData, detailLevel, setNodes, setEdges]);
 
   const updateNodeMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: any }) => {
@@ -1139,6 +1261,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
 
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
     const d = node.data as any;
+    if (detailLevel !== "L2" || d.dbId < 0) return;
     setEditingNode({
       nodeId: d.dbId,
       name: d.label || "",
@@ -1151,13 +1274,15 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
     setIsNewNode(false);
     setContextMenu(null);
     setNodeContextMenu(null);
-  }, []);
+  }, [detailLevel]);
 
   const onNodeContextMenu = useCallback((event: any, node: Node) => {
     event.preventDefault();
+    if (detailLevel !== "L2") return;
     const bounds = (event.target as HTMLElement).closest('.react-flow')?.getBoundingClientRect();
     if (bounds) {
       const d = node.data as any;
+      if (d.dbId < 0) return;
       setNodeContextMenu({
         x: event.clientX - bounds.left,
         y: event.clientY - bounds.top,
@@ -1165,7 +1290,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
       });
       setContextMenu(null);
     }
-  }, []);
+  }, [detailLevel]);
 
   const onEdgeClick = useCallback((_: any, edge: Edge) => {
     setSelectedEdgeIds(new Set([edge.id]));
@@ -1494,6 +1619,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
         className={`process-map-canvas ${reconnectingEdge ? "reconnecting" : ""}`}
         minZoom={0.2}
         maxZoom={2}
+        nodesDraggable={detailLevel === "L2"}
         snapToGrid
         snapGrid={[10, 10]}
         deleteKeyCode={null}
@@ -1749,9 +1875,11 @@ function SDDInlineViewer({ ideaId }: { ideaId: string }) {
 
 export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onCompletenessChange, onViewChange }: ProcessMapPanelProps) {
   const [activeView, setActiveView] = useState<ProcessView>("as-is");
+  const [detailLevel, setDetailLevel] = useState<DetailLevel>("L2");
 
   const handleViewChange = useCallback((view: ProcessView) => {
     setActiveView(view);
+    setDetailLevel("L2");
     onViewChange?.(view);
   }, [onViewChange]);
 
@@ -1885,6 +2013,34 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 <Redo2 className="h-3.5 w-3.5" />
               </Button>
             </>
+          )}
+          {activeView !== "sdd" && nodeCount > 5 && (
+            <div className="flex items-center rounded-lg bg-zinc-900 border border-zinc-800 p-0.5" data-testid="level-selector">
+              <button
+                onClick={() => setDetailLevel("L0")}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L0" ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
+                data-testid="button-level-l0"
+                title="Overview - Phase groups only"
+              >
+                L0
+              </button>
+              <button
+                onClick={() => setDetailLevel("L1")}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L1" ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
+                data-testid="button-level-l1"
+                title="Key Steps - Decisions & milestones"
+              >
+                L1
+              </button>
+              <button
+                onClick={() => setDetailLevel("L2")}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L2" ? "bg-zinc-700 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-300"}`}
+                data-testid="button-level-l2"
+                title="Full Detail - All steps"
+              >
+                L2
+              </button>
+            </div>
           )}
           {activeView !== "sdd" && nodeCount > 0 && (
             <Button
@@ -2177,7 +2333,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
         <SDDInlineViewer ideaId={ideaId} />
       ) : (
         <ReactFlowProvider>
-          <ProcessMapFlow ideaId={ideaId} activeView={activeView} onRelayout={(fn) => { relayoutRef.current = fn; }} onUndoRedoReady={setUndoRedoControls} />
+          <ProcessMapFlow ideaId={ideaId} activeView={activeView} detailLevel={detailLevel} onRelayout={(fn) => { relayoutRef.current = fn; }} onUndoRedoReady={setUndoRedoControls} />
         </ReactFlowProvider>
       )}
 
