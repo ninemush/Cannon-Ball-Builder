@@ -723,6 +723,15 @@ function IntegrationsTab() {
   } | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
+  const [scopeProbe, setScopeProbe] = useState<{
+    status: "ok" | "mismatch" | "auth_failed" | "not_configured";
+    requestedScopes: string[];
+    grantedScopes: string[];
+    missingInApp: string[];
+    extraInApp: string[];
+    message: string;
+  } | null>(null);
+  const [scopeProbeLoading, setScopeProbeLoading] = useState(false);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -775,6 +784,17 @@ function IntegrationsTab() {
       setStep(3);
     }
   }, [config]);
+
+  useEffect(() => {
+    if (step === 3 && config?.configured && !scopeProbe && !scopeProbeLoading) {
+      setScopeProbeLoading(true);
+      fetch("/api/settings/uipath/probe-scopes", { credentials: "include" })
+        .then(r => r.json())
+        .then(data => setScopeProbe(data))
+        .catch(() => {})
+        .finally(() => setScopeProbeLoading(false));
+    }
+  }, [step, config?.configured]);
 
   const toggleScope = (scopeId: string) => {
     setSelectedScopes((prev) => {
@@ -839,6 +859,7 @@ function IntegrationsTab() {
     onSuccess: (data: { success: boolean; message: string; testResult?: { success: boolean; message: string } }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/settings/uipath"] });
       setClientSecret("");
+      setScopeProbe(null);
       if (data.testResult) {
         setTestResultMsg(data.testResult);
         if (data.testResult.success) {
@@ -1160,6 +1181,76 @@ function IntegrationsTab() {
                   <button onClick={() => { setErrors({}); setStep(2); }} className="text-[#e8450a] hover:text-[#e8450a]/80 p-1 rounded transition-colors" data-testid="edit-scopes" title="Edit scopes"><Pencil className="h-3 w-3" /></button>
                 </div>
               </div>
+
+              {scopeProbeLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground p-2 rounded border border-border bg-muted/30" data-testid="scope-probe-loading">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Checking scope sync with UiPath Cloud...
+                </div>
+              )}
+
+              {scopeProbe && scopeProbe.status === "ok" && (
+                <div className="flex items-center gap-2 text-xs text-green-400 p-2 rounded border border-green-600/30 bg-green-500/10" data-testid="scope-probe-ok">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>{scopeProbe.message}</span>
+                </div>
+              )}
+
+              {scopeProbe && scopeProbe.status === "mismatch" && (
+                <div className="p-3 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-400 text-xs space-y-2" data-testid="scope-probe-mismatch">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div className="space-y-1">
+                      <p className="font-medium">Scope mismatch detected</p>
+                      <p>{scopeProbe.message}</p>
+                      {scopeProbe.missingInApp.length > 0 && (
+                        <div>
+                          <span className="text-muted-foreground">New in UiPath (not in app): </span>
+                          {scopeProbe.missingInApp.map(s => (
+                            <span key={s} className="inline-block px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-mono mr-1 mb-1">{s}</span>
+                          ))}
+                        </div>
+                      )}
+                      {scopeProbe.extraInApp.length > 0 && (
+                        <div>
+                          <span className="text-muted-foreground">In app but not in UiPath: </span>
+                          {scopeProbe.extraInApp.map(s => (
+                            <span key={s} className="inline-block px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 text-[10px] font-mono mr-1 mb-1">{s}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setErrors({}); setScopeProbe(null); setStep(2); }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#e8450a] text-white text-xs font-medium hover:bg-[#e8450a]/90 transition-colors"
+                    data-testid="button-fix-scopes-mismatch"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Edit Scopes to Fix
+                  </button>
+                </div>
+              )}
+
+              {scopeProbe && scopeProbe.status === "auth_failed" && (
+                <div className="p-3 rounded-md border border-destructive/30 bg-destructive/10 text-destructive text-xs space-y-2" data-testid="scope-probe-failed">
+                  <div className="flex items-start gap-2">
+                    <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">Scope validation failed</p>
+                      <p>{scopeProbe.message}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setErrors({}); setScopeProbe(null); setStep(2); }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#e8450a] text-white text-xs font-medium hover:bg-[#e8450a]/90 transition-colors"
+                    data-testid="button-fix-scopes-auth-failed"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Edit Scopes
+                  </button>
+                </div>
+              )}
 
               {config?.lastTestedAt && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground pt-1" data-testid="last-tested">

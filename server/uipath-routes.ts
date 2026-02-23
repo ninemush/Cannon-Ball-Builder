@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { getUiPathConfig, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, runHealthCheck, verifyUiPathScopes } from "./uipath-integration";
+import { getUiPathConfig, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, runHealthCheck, verifyUiPathScopes, probeUiPathScopes } from "./uipath-integration";
 import { parseArtifactsFromSDD, extractArtifactsWithLLM, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
 import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
@@ -81,6 +81,12 @@ export function registerUiPathRoutes(app: Express): void {
   app.get("/api/settings/uipath/verify-scopes", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const result = await verifyUiPathScopes();
+    return res.json(result);
+  });
+
+  app.get("/api/settings/uipath/probe-scopes", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await probeUiPathScopes();
     return res.json(result);
   });
 

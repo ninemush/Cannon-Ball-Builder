@@ -1144,6 +1144,59 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
   }
 }
 
+export async function probeUiPathScopes(): Promise<{
+  status: "ok" | "mismatch" | "auth_failed" | "not_configured";
+  requestedScopes: string[];
+  grantedScopes: string[];
+  missingInApp: string[];
+  extraInApp: string[];
+  message: string;
+}> {
+  const config = await getUiPathConfig();
+  if (!config) {
+    return { status: "not_configured", requestedScopes: [], grantedScopes: [], missingInApp: [], extraInApp: [], message: "UiPath is not configured." };
+  }
+
+  const requestedScopes = config.scopes.split(/\s+/).filter(Boolean);
+
+  try {
+    const token = await getAccessToken(config);
+    let grantedScopes: string[] = [];
+    try {
+      const parts = token.split(".");
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
+        const scopeVal = payload.scope || payload.scp;
+        if (scopeVal) grantedScopes = Array.isArray(scopeVal) ? scopeVal : scopeVal.split(/\s+/);
+      }
+    } catch { grantedScopes = []; }
+
+    if (grantedScopes.length === 0) {
+      return { status: "ok", requestedScopes, grantedScopes: requestedScopes, missingInApp: [], extraInApp: [], message: "Token obtained. Could not decode granted scopes from JWT — assuming scopes are correct." };
+    }
+
+    const grantedSet = new Set(grantedScopes);
+    const requestedSet = new Set(requestedScopes);
+    const missingInApp = grantedScopes.filter(s => !requestedSet.has(s));
+    const extraInApp = requestedScopes.filter(s => !grantedSet.has(s));
+
+    if (missingInApp.length === 0 && extraInApp.length === 0) {
+      return { status: "ok", requestedScopes, grantedScopes, missingInApp: [], extraInApp: [], message: "Scopes are in sync." };
+    }
+
+    const parts: string[] = [];
+    if (missingInApp.length > 0) parts.push(`${missingInApp.length} scope(s) granted in UiPath but not selected in the app: ${missingInApp.join(", ")}`);
+    if (extraInApp.length > 0) parts.push(`${extraInApp.length} scope(s) selected in the app but not granted in UiPath: ${extraInApp.join(", ")}`);
+    return { status: "mismatch", requestedScopes, grantedScopes, missingInApp, extraInApp, message: parts.join(". ") };
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    if (msg.includes("invalid_scope")) {
+      return { status: "auth_failed", requestedScopes, grantedScopes: [], missingInApp: [], extraInApp: requestedScopes, message: "Authentication failed due to invalid scopes. Update your selected scopes to match what's granted in UiPath Cloud." };
+    }
+    return { status: "auth_failed", requestedScopes, grantedScopes: [], missingInApp: [], extraInApp: [], message: `Authentication failed: ${msg}` };
+  }
+}
+
 export async function verifyUiPathScopes(): Promise<{ success: boolean; requestedScopes: string[]; grantedScopes: string[]; message: string; services?: Record<string, { available: boolean; message: string }> }> {
   const config = await getUiPathConfig();
   if (!config) {
