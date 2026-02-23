@@ -266,12 +266,13 @@ export function registerUiPathRoutes(app: Express): void {
           )) {
             const releaseId = result.details?.processId || null;
             const releaseKey = result.details?.releaseKey || null;
+            const releaseName = result.details?.processName || null;
             const totalArtifacts = (artifacts.queues?.length || 0) + (artifacts.assets?.length || 0) +
               (artifacts.machines?.length || 0) + (artifacts.triggers?.length || 0) +
               (artifacts.storageBuckets?.length || 0) + (artifacts.actionCenter?.length || 0);
-            console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId})`);
+            console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId}, releaseName=${releaseName})`);
 
-            const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey);
+            const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName);
             deploymentReport = formatDeploymentReport(deployResult.results);
 
             result.details = {

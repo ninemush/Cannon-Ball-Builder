@@ -22,6 +22,7 @@ import {
   MarkerType,
   BackgroundVariant,
   ConnectionLineType,
+  type OnReconnect,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
@@ -49,9 +50,67 @@ import {
   GitBranch,
   CircleDot,
   LayoutGrid,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+
+interface HistorySnapshot {
+  nodes: Node[];
+  edges: Edge[];
+}
+
+const MAX_HISTORY = 50;
+
+function useUndoRedo() {
+  const pastRef = useRef<HistorySnapshot[]>([]);
+  const futureRef = useRef<HistorySnapshot[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const pushSnapshot = useCallback((snapshot: HistorySnapshot) => {
+    pastRef.current = [...pastRef.current.slice(-(MAX_HISTORY - 1)), snapshot];
+    futureRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
+
+  const undo = useCallback(
+    (currentSnapshot: HistorySnapshot): HistorySnapshot | null => {
+      if (pastRef.current.length === 0) return null;
+      const prev = pastRef.current[pastRef.current.length - 1];
+      pastRef.current = pastRef.current.slice(0, -1);
+      futureRef.current = [...futureRef.current, currentSnapshot];
+      setCanUndo(pastRef.current.length > 0);
+      setCanRedo(true);
+      return prev;
+    },
+    []
+  );
+
+  const redo = useCallback(
+    (currentSnapshot: HistorySnapshot): HistorySnapshot | null => {
+      if (futureRef.current.length === 0) return null;
+      const next = futureRef.current[futureRef.current.length - 1];
+      futureRef.current = futureRef.current.slice(0, -1);
+      pastRef.current = [...pastRef.current, currentSnapshot];
+      setCanUndo(true);
+      setCanRedo(futureRef.current.length > 0);
+      return next;
+    },
+    []
+  );
+
+  const reset = useCallback(() => {
+    pastRef.current = [];
+    futureRef.current = [];
+    setCanUndo(false);
+    setCanRedo(false);
+  }, []);
+
+  return { pushSnapshot, undo, redo, reset, canUndo, canRedo };
+}
 
 interface ProcessMapData {
   nodes: ProcessNode[];
@@ -638,7 +697,7 @@ function NodeContextMenu({
   );
 }
 
-function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; activeView: "as-is" | "to-be"; onRelayout?: (fn: () => void) => void; }) {
+function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { ideaId: string; activeView: "as-is" | "to-be"; onRelayout?: (fn: () => void) => void; onUndoRedoReady?: (controls: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean }) => void; }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [editingNode, setEditingNode] = useState<NodeEditData | null>(null);
@@ -650,10 +709,52 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
   const [newNodeFlowPos, setNewNodeFlowPos] = useState<{ x: number; y: number } | null>(null);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [parentNodeIdForChild, setParentNodeIdForChild] = useState<number | null>(null);
+  const [reconnectingEdge, setReconnectingEdge] = useState(false);
   const hasInitialFitRef = useRef(false);
   const dataVersionRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const skipNextHistoryRef = useRef(false);
   const { fitView, screenToFlowPosition } = useReactFlow();
+  const { pushSnapshot, undo, redo, reset: resetHistory, canUndo, canRedo } = useUndoRedo();
+  const nodesRef = useRef<Node[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  const takeSnapshot = useCallback(() => {
+    if (skipNextHistoryRef.current) { skipNextHistoryRef.current = false; return; }
+    pushSnapshot({
+      nodes: nodesRef.current.map(n => ({ ...n, position: { ...n.position }, data: { ...n.data } })),
+      edges: edgesRef.current.map(e => ({ ...e, data: e.data ? { ...e.data } : {} })),
+    });
+  }, [pushSnapshot]);
+
+  const applySnapshot = useCallback((snapshot: HistorySnapshot) => {
+    skipNextHistoryRef.current = true;
+    setNodes(snapshot.nodes);
+    setEdges(snapshot.edges);
+    snapshot.nodes.forEach((n) => {
+      const d = n.data as any;
+      if (d.dbId) {
+        updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
+      }
+    });
+  }, [setNodes, setEdges]);
+
+  const handleUndo = useCallback(() => {
+    const snapshot = undo({ nodes: nodesRef.current, edges: edgesRef.current });
+    if (snapshot) applySnapshot(snapshot);
+  }, [undo, applySnapshot]);
+
+  const handleRedo = useCallback(() => {
+    const snapshot = redo({ nodes: nodesRef.current, edges: edgesRef.current });
+    if (snapshot) applySnapshot(snapshot);
+  }, [redo, applySnapshot]);
+
+  useEffect(() => {
+    onUndoRedoReady?.({ undo: handleUndo, redo: handleRedo, canUndo, canRedo });
+  }, [onUndoRedoReady, handleUndo, handleRedo, canUndo, canRedo]);
 
   const { data: mapData, isLoading } = useQuery<ProcessMapData>({
     queryKey: ["/api/ideas", ideaId, "process-map", activeView],
@@ -908,6 +1009,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
   const onConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
+        takeSnapshot();
         createEdgeMutation.mutate({
           viewType: activeView,
           sourceNodeId: parseInt(connection.source),
@@ -916,7 +1018,7 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
         });
       }
     },
-    [createEdgeMutation, activeView]
+    [createEdgeMutation, activeView, takeSnapshot]
   );
 
   const onNodeDoubleClick = useCallback((_: any, node: Node) => {
@@ -985,11 +1087,29 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "Z" || (e.key === "z" && e.shiftKey)) ) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+
       if (e.key === "Delete" || e.key === "Backspace") {
         if (editingNode || editingEdge) return;
-        if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
 
         if (selectedEdgeIds.size > 0) {
+          takeSnapshot();
           selectedEdgeIds.forEach((edgeId) => {
             const edge = edges.find((ed) => ed.id === edgeId);
             if (edge) {
@@ -1006,10 +1126,11 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedEdgeIds, edges, editingNode, editingEdge, deleteEdgeMutation]);
+  }, [selectedEdgeIds, edges, editingNode, editingEdge, deleteEdgeMutation, handleUndo, handleRedo, takeSnapshot]);
 
   function handleSaveNode() {
     if (!editingNode) return;
+    takeSnapshot();
     if (isNewNode) {
       const existingNodes = mapData?.nodes || [];
       createNodeMutation.mutate({
@@ -1044,12 +1165,14 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
 
   function handleDeleteNode() {
     if (!editingNode || isNewNode) return;
+    takeSnapshot();
     deleteNodeMutation.mutate(editingNode.nodeId);
     setEditingNode(null);
   }
 
   function handleSaveEdgeLabel() {
     if (!editingEdge) return;
+    takeSnapshot();
     updateEdgeMutation.mutate({
       id: editingEdge.edgeId,
       data: { label: editingEdge.label },
@@ -1114,9 +1237,14 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
 
   function handleNodeContextDelete() {
     if (!nodeContextMenu) return;
+    takeSnapshot();
     deleteNodeMutation.mutate(nodeContextMenu.nodeData.dbId);
     setNodeContextMenu(null);
   }
+
+  const onNodeDragStart = useCallback(() => {
+    takeSnapshot();
+  }, [takeSnapshot]);
 
   const onNodeDragStop = useCallback((_: any, node: Node) => {
     const d = node.data as any;
@@ -1127,6 +1255,37 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
       });
     }
   }, [updateNodeMutation]);
+
+  const onReconnectStart = useCallback(() => {
+    setReconnectingEdge(true);
+  }, []);
+
+  const onReconnect: OnReconnect = useCallback(
+    (oldEdge, newConnection) => {
+      if (!newConnection.source || !newConnection.target) return;
+      if (oldEdge.source === newConnection.source && oldEdge.target === newConnection.target) {
+        setReconnectingEdge(false);
+        return;
+      }
+      takeSnapshot();
+      const d = oldEdge.data as any;
+      if (d?.dbId) {
+        updateEdgeMutation.mutate({
+          id: d.dbId,
+          data: {
+            sourceNodeId: parseInt(newConnection.source),
+            targetNodeId: parseInt(newConnection.target),
+          },
+        });
+      }
+      setReconnectingEdge(false);
+    },
+    [takeSnapshot, updateEdgeMutation]
+  );
+
+  const onReconnectEnd = useCallback((_: any, oldEdge: Edge) => {
+    setReconnectingEdge(false);
+  }, []);
 
   const styledEdges = useMemo(() => {
     return edges.map((e) => ({
@@ -1187,10 +1346,14 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onReconnect={onReconnect}
+        onReconnectStart={onReconnectStart}
+        onReconnectEnd={onReconnectEnd}
         onNodeDoubleClick={onNodeDoubleClick}
         onNodeContextMenu={onNodeContextMenu}
         onEdgeClick={onEdgeClick}
         onEdgeDoubleClick={onEdgeDoubleClick}
+        onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
         onPaneClick={onPaneClick}
         onPaneContextMenu={onPaneContextMenu}
@@ -1206,8 +1369,9 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout }: { ideaId: string; ac
         }}
         connectionLineStyle={{ stroke: "rgba(251,146,60,0.6)", strokeWidth: 2 }}
         connectionLineType={ConnectionLineType.SmoothStep}
+        edgesReconnectable
         proOptions={{ hideAttribution: true }}
-        className="process-map-canvas"
+        className={`process-map-canvas ${reconnectingEdge ? "reconnecting" : ""}`}
         minZoom={0.2}
         maxZoom={2}
         snapToGrid
@@ -1387,6 +1551,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
 
   const [showApprovalConfirm, setShowApprovalConfirm] = useState(false);
   const relayoutRef = useRef<(() => void) | null>(null);
+  const [undoRedoControls, setUndoRedoControls] = useState<{ undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean } | null>(null);
 
   return (
     <div className="flex flex-col h-full" data-testid="panel-process-map">
@@ -1405,6 +1570,32 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
           )}
         </div>
         <div className="flex items-center gap-2">
+          {nodeCount > 0 && undoRedoControls && (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-white border border-zinc-800 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                onClick={undoRedoControls.undo}
+                disabled={!undoRedoControls.canUndo}
+                title="Undo (Ctrl+Z)"
+                data-testid="button-undo"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-white border border-zinc-800 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                onClick={undoRedoControls.redo}
+                disabled={!undoRedoControls.canRedo}
+                title="Redo (Ctrl+Shift+Z)"
+                data-testid="button-redo"
+              >
+                <Redo2 className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )}
           {nodeCount > 0 && (
             <Button
               size="sm"
@@ -1489,7 +1680,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       <ReactFlowProvider>
-        <ProcessMapFlow ideaId={ideaId} activeView={activeView} onRelayout={(fn) => { relayoutRef.current = fn; }} />
+        <ProcessMapFlow ideaId={ideaId} activeView={activeView} onRelayout={(fn) => { relayoutRef.current = fn; }} onUndoRedoReady={setUndoRedoControls} />
       </ReactFlowProvider>
 
       {nodeCount >= 3 && !approval && (

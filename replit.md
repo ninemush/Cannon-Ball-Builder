@@ -47,6 +47,10 @@ The application employs a modern web stack:
 - Steps without FROM fall back to sequential connection
 
 ## Recent Changes
+- 2026-02-23: Process map undo/redo: in-memory history stack (50 snapshots), Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y keyboard shortcuts, toolbar undo/redo buttons, snapshots on every meaningful change (node add/edit/delete, edge add/edit/delete, drag, reconnect)
+- 2026-02-23: Edge reconnection: drag edge endpoints to different nodes via ReactFlow onReconnect, DB sync on reconnect, visual feedback during reconnection (pulsing orange handles, dashed edge animation)
+- 2026-02-23: Enhanced visual handles: glowing blue handles on node hover, scale-up on handle hover, orange pulsing handles during reconnection mode, connection line glow effect
+- 2026-02-23: Fixed UiPath QueueTrigger payload: corrected field names (ReleaseName, JobsCount, RuntimeType), removed invalid fields (ProcessKey, NoOfRobots, Priority, Strategy), fixed queue trigger existence check to use QueueTriggers endpoint instead of ProcessSchedules, added ReleaseName parameter passthrough, fixed time trigger StartStrategy to use numeric value
 - 2026-02-22: Interactive process map editor: positions persist to DB, dagre only runs on first load or explicit re-layout, no auto-reset on data changes. Right-click node context menu (Edit/Add Child/Delete), edge selection with Delete key, double-click to edit nodes/edge labels, Re-layout toolbar button, connection handles visible on hover, edge selection action bar
 - 2026-02-22: Intelligent branching process maps: dagre DAG layout, FROM/LABEL fields in [STEP:] tags, decision node forking with labeled Yes/No edges, smooth-step edge paths, color-coded branch labels (green=Yes, red=No)
 - 2026-02-22: Fixed SDD/PDD Confirm button: backend now allows re-approval of newer document versions (deletes old approval, supersedes old doc); frontend shows error toast on failure

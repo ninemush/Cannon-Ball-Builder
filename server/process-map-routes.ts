@@ -41,7 +41,9 @@ const createEdgeSchema = z.object({
 });
 
 const updateEdgeSchema = z.object({
-  label: z.string(),
+  label: z.string().optional(),
+  sourceNodeId: z.number().optional(),
+  targetNodeId: z.number().optional(),
 });
 
 async function verifyIdeaAccess(req: Request, res: Response): Promise<string | null> {

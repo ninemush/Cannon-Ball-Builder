@@ -434,10 +434,11 @@ async function provisionTriggers(
   triggers: OrchestratorArtifacts["triggers"],
   releaseId: number | null,
   releaseKey: string | null,
+  releaseName: string | null,
   queueResults: DeploymentResult[]
 ): Promise<DeploymentResult[]> {
   if (!triggers?.length) return [];
-  if (!releaseId || !releaseKey) {
+  if (!releaseId) {
     return triggers.map(t => ({
       artifact: "Trigger",
       name: t.name,
@@ -450,21 +451,21 @@ async function provisionTriggers(
 
   for (const t of triggers) {
     try {
-      const checkRes = await fetch(
-        `${base}/odata/ProcessSchedules?$filter=Name eq '${odataEscape(t.name)}'&$top=1`,
-        { headers: hdrs }
-      );
-      if (checkRes.ok) {
-        const checkData = await checkRes.json();
-        if (checkData.value?.length > 0) {
-          results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
-          continue;
-        }
-      }
-
       const triggerType = (t.type || "Time").toLowerCase();
 
       if (triggerType === "queue") {
+        const checkRes = await fetch(
+          `${base}/odata/QueueTriggers?$filter=Name eq '${odataEscape(t.name)}'&$top=1`,
+          { headers: hdrs }
+        );
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.value?.length > 0) {
+            results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+            continue;
+          }
+        }
+
         let queueId: number | null = null;
         const qr = queueResults.find(q => q.name === t.queueName);
         if (qr?.id) {
@@ -486,17 +487,19 @@ async function provisionTriggers(
         }
 
         const body: Record<string, any> = {
-          Enabled: true,
           Name: t.name,
-          ProcessKey: releaseKey,
+          Enabled: true,
           ReleaseId: releaseId,
+          ReleaseName: releaseName || "",
           QueueDefinitionId: queueId,
-          MinimumNumberOfItems: 1,
-          MaximumNumberOfItems: 100,
-          Strategy: "ModernJobsCount",
-          NoOfRobots: 1,
-          Priority: "Normal",
+          MinNumberOfItems: 1,
+          MaxNumberOfItems: 100,
+          JobsCount: 1,
+          RuntimeType: "Unattended",
+          InputArguments: "{}",
         };
+
+        console.log(`[UiPath Deploy] Queue Trigger "${t.name}" payload: ${JSON.stringify(body)}`);
 
         const res = await fetch(`${base}/odata/QueueTriggers`, {
           method: "POST",
@@ -504,7 +507,7 @@ async function provisionTriggers(
           body: JSON.stringify(body),
         });
         const text = await res.text();
-        console.log(`[UiPath Deploy] Queue Trigger "${t.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+        console.log(`[UiPath Deploy] Queue Trigger "${t.name}" -> ${res.status}: ${text.slice(0, 500)}`);
 
         if (res.ok || res.status === 201) {
           const data = JSON.parse(text);
@@ -515,6 +518,18 @@ async function provisionTriggers(
           results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
         }
       } else {
+        const checkRes = await fetch(
+          `${base}/odata/ProcessSchedules?$filter=Name eq '${odataEscape(t.name)}'&$top=1`,
+          { headers: hdrs }
+        );
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.value?.length > 0) {
+            results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+            continue;
+          }
+        }
+
         const cron = t.cron || "0 0 9 ? * MON-FRI *";
         const cronDetails = JSON.stringify({
           type: 5,
@@ -530,13 +545,15 @@ async function provisionTriggers(
           Enabled: true,
           Name: t.name,
           ReleaseId: releaseId,
-          ReleaseKey: releaseKey,
+          ReleaseName: releaseName || "",
+          ReleaseKey: releaseKey || "",
           StartProcessCron: cron,
           StartProcessCronDetails: cronDetails,
           StartProcessCronSummary: t.description || "Scheduled trigger",
           TimeZoneId: "UTC",
           TimeZoneIana: "Etc/UTC",
-          StartStrategy: { Type: 0, RobotCount: 0, JobsCountPerRobot: 0 },
+          StartStrategy: 0,
+          RuntimeType: "Unattended",
           InputArguments: "{}",
         };
 
@@ -579,7 +596,8 @@ function generateActionCenterInstructions(
 export async function deployAllArtifacts(
   artifacts: OrchestratorArtifacts,
   releaseId: number | null,
-  releaseKey: string | null
+  releaseKey: string | null,
+  releaseName: string | null = null
 ): Promise<{ results: DeploymentResult[]; summary: string }> {
   const config = await getUiPathConfig();
   if (!config) {
@@ -607,7 +625,7 @@ export async function deployAllArtifacts(
     const machineResults = await provisionMachines(base, hdrs, artifacts.machines);
     allResults.push(...machineResults);
 
-    const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, queueResults);
+    const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults);
     allResults.push(...triggerResults);
 
     const actionCenterResults = generateActionCenterInstructions(artifacts.actionCenter);
