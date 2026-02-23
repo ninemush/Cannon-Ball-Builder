@@ -562,7 +562,7 @@ async function provisionStorageBuckets(
   return results;
 }
 
-async function detectAvailableRuntimeType(base: string, hdrs: Record<string, string>): Promise<string | null> {
+async function detectAvailableRuntimeType(base: string, hdrs: Record<string, string>): Promise<string> {
   try {
     const sessRes = await fetch(`${base}/odata/Sessions?$top=5&$select=RuntimeType`, { headers: hdrs });
     if (sessRes.ok) {
@@ -592,7 +592,7 @@ async function detectAvailableRuntimeType(base: string, hdrs: Record<string, str
     }
   } catch { /* ignore */ }
 
-  return null;
+  return "Unattended";
 }
 
 async function provisionTriggers(
@@ -614,16 +614,7 @@ async function provisionTriggers(
   }
 
   const runtimeType = await detectAvailableRuntimeType(base, hdrs);
-  console.log(`[UiPath Deploy] Detected available RuntimeType: ${runtimeType || "NONE"}`);
-
-  if (!runtimeType) {
-    return triggers.map(t => ({
-      artifact: "Trigger",
-      name: t.name,
-      status: "skipped" as const,
-      message: "No runtimes (robots) configured in this folder. Triggers require at least one Unattended or Production runtime to be assigned to a machine template. Add a runtime in UiPath Orchestrator → Machines → assign a robot, then re-deploy.",
-    }));
-  }
+  console.log(`[UiPath Deploy] Using RuntimeType: ${runtimeType}`);
 
   const results: DeploymentResult[] = [];
 

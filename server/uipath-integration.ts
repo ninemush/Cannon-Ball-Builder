@@ -1035,6 +1035,115 @@ export async function runHealthCheck(packageId?: string): Promise<{
   return { checks, summary };
 }
 
+export type PlatformCapabilityProfile = {
+  configured: boolean;
+  available: {
+    orchestrator: boolean;
+    actionCenter: boolean;
+    documentUnderstanding: boolean;
+    testManager: boolean;
+    storageBuckets: boolean;
+    aiCenter: boolean;
+  };
+  grantedScopes: string[];
+  summary: string;
+  availableDescription: string;
+  unavailableRecommendations: string;
+};
+
+export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfile> {
+  const empty: PlatformCapabilityProfile = {
+    configured: false,
+    available: { orchestrator: false, actionCenter: false, documentUnderstanding: false, testManager: false, storageBuckets: false, aiCenter: false },
+    grantedScopes: [],
+    summary: "UiPath is not configured. The SDD will be generated with general best practices.",
+    availableDescription: "",
+    unavailableRecommendations: "",
+  };
+
+  const config = await getUiPathConfig();
+  if (!config) return empty;
+
+  try {
+    const token = await getAccessToken(config);
+    let grantedScopes: string[] = [];
+    try {
+      const parts = token.split(".");
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
+        const scopeVal = payload.scope || payload.scp;
+        if (scopeVal) grantedScopes = Array.isArray(scopeVal) ? scopeVal : scopeVal.split(/\s+/);
+      }
+    } catch { grantedScopes = config.scopes.split(/\s+/); }
+
+    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+    const orchBase = `${base}/orchestrator_`;
+    const hdrs: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+
+    const probe = async (url: string): Promise<boolean> => {
+      try { const r = await fetch(url, { headers: hdrs }); return r.ok; } catch { return false; }
+    };
+
+    const [orchOk, bucketOk, taskOk, tm1Ok, tm2Ok, duOk, aiOk] = await Promise.all([
+      probe(`${orchBase}/odata/Folders?$top=1`),
+      probe(`${orchBase}/odata/Buckets?$top=1`),
+      probe(`${orchBase}/odata/TaskCatalogs?$top=1`),
+      probe(`${base}/testmanager_/api/v2/projects?$top=1`),
+      probe(`${base}/tmapi_/api/v2/projects?$top=1`),
+      probe(`${base}/du_/api/framework/projects?$top=1`),
+      probe(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`),
+    ]);
+
+    const avail = {
+      orchestrator: orchOk,
+      actionCenter: taskOk,
+      documentUnderstanding: duOk || aiOk,
+      testManager: tm1Ok || tm2Ok,
+      storageBuckets: bucketOk,
+      aiCenter: aiOk,
+    };
+
+    const availNames: string[] = [];
+    const unavailRecs: string[] = [];
+
+    if (avail.orchestrator) availNames.push("UiPath Orchestrator (queues, assets, triggers, machines, environments, processes, jobs)");
+    else unavailRecs.push("- **Orchestrator**: Core service not accessible. Verify connection credentials.");
+
+    if (avail.actionCenter) availNames.push("Action Center (human-in-the-loop tasks, approvals, escalations, SLA management)");
+    else unavailRecs.push("- **Action Center**: Not available. If enabled, it would allow human-in-the-loop steps — approvals, validations, exception handling escalations — directly within the automation workflow instead of external email/chat processes.");
+
+    if (avail.documentUnderstanding) availNames.push("Document Understanding (intelligent document processing, OCR, ML classification, data extraction)");
+    else unavailRecs.push("- **Document Understanding**: Not available. If enabled, it could automate document classification, data extraction from invoices/forms/contracts using ML models instead of manual data entry or rigid template-based parsing.");
+
+    if (avail.testManager) availNames.push("Test Manager (automated test projects, test cases, test execution, regression suites)");
+    else unavailRecs.push("- **Test Manager**: Not available. If enabled, it would allow automated test case management and regression testing for the automation, ensuring quality across updates.");
+
+    if (avail.storageBuckets) availNames.push("Storage Buckets (file storage for input/output documents, templates, logs)");
+    else unavailRecs.push("- **Storage Buckets**: Not available. If enabled, it could provide centralized cloud storage for automation input files, output documents, templates, and audit logs.");
+
+    if (avail.aiCenter) availNames.push("AI Center (custom ML models, model training, AI skill deployment)");
+    else unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, or NLP tasks within the automation.");
+
+    const profile: PlatformCapabilityProfile = {
+      configured: true,
+      available: avail,
+      grantedScopes,
+      summary: `Connected to ${config.orgName}/${config.tenantName}. ${availNames.length} services available.`,
+      availableDescription: availNames.length > 0
+        ? `The following UiPath platform services are AVAILABLE and should be used in the solution design:\n${availNames.map(n => `- ${n}`).join("\n")}`
+        : "No UiPath services detected.",
+      unavailableRecommendations: unavailRecs.length > 0
+        ? `The following services are NOT currently available on this tenant. Include a "Platform Recommendations" section explaining how each would enhance the solution if enabled:\n${unavailRecs.join("\n")}`
+        : "All major UiPath platform services are available.",
+    };
+
+    return profile;
+  } catch (err: any) {
+    return { ...empty, summary: `Could not probe UiPath platform: ${err.message}. SDD will use general best practices.` };
+  }
+}
+
 export async function verifyUiPathScopes(): Promise<{ success: boolean; requestedScopes: string[]; grantedScopes: string[]; message: string; services?: Record<string, { available: boolean; message: string }> }> {
   const config = await getUiPathConfig();
   if (!config) {

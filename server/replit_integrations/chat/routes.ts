@@ -126,7 +126,7 @@ UIPATH DEPLOYMENT CAPABILITIES — you have REAL, WORKING deployment to UiPath O
   3. Reads the SDD's orchestrator_artifacts block and auto-provisions ALL artifacts:
      - Queues, Assets, Machine Templates, Storage Buckets, Triggers (Queue + Time), Environments, Action Center task catalogs
   4. Generates a full deployment report showing what was created, what already existed, and what needs manual setup
-- The SDD MUST include a \`\`\`orchestrator_artifacts fenced JSON block in Section 8 defining ALL artifacts. This is machine-parsed — without it, artifacts won't be provisioned.
+- The SDD MUST include a \`\`\`orchestrator_artifacts fenced JSON block in Section 9 defining ALL deployable artifacts. This is machine-parsed — without it, artifacts won't be provisioned.
 
 ORCHESTRATOR ARTIFACTS BLOCK — MANDATORY FORMAT (include ALL artifact types):
 The orchestrator_artifacts JSON block MUST include ALL of the following — the deployment engine auto-provisions every item. NEVER list triggers, environments, or any artifact as a "Manual Post-Deployment Step." Everything goes in this block:

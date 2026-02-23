@@ -268,14 +268,19 @@ export function registerUiPathRoutes(app: Express): void {
             (artifacts.machines?.length || 0) > 0 ||
             (artifacts.triggers?.length || 0) > 0 ||
             (artifacts.storageBuckets?.length || 0) > 0 ||
-            (artifacts.actionCenter?.length || 0) > 0
+            (artifacts.environments?.length || 0) > 0 ||
+            (artifacts.actionCenter?.length || 0) > 0 ||
+            (artifacts.documentUnderstanding?.length || 0) > 0 ||
+            (artifacts.testCases?.length || 0) > 0
           )) {
             const releaseId = result.details?.processId || null;
             const releaseKey = result.details?.releaseKey || null;
             const releaseName = result.details?.processName || null;
             const totalArtifacts = (artifacts.queues?.length || 0) + (artifacts.assets?.length || 0) +
               (artifacts.machines?.length || 0) + (artifacts.triggers?.length || 0) +
-              (artifacts.storageBuckets?.length || 0) + (artifacts.actionCenter?.length || 0);
+              (artifacts.storageBuckets?.length || 0) + (artifacts.environments?.length || 0) +
+              (artifacts.actionCenter?.length || 0) + (artifacts.documentUnderstanding?.length || 0) +
+              (artifacts.testCases?.length || 0);
             console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId}, releaseName=${releaseName})`);
 
             const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName);

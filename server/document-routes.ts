@@ -4,6 +4,7 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
+import { getPlatformCapabilities } from "./uipath-integration";
 import { z } from "zod";
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
@@ -20,53 +21,7 @@ const PDD_PROMPT = `The SME has approved the As-Is process map. Now generate a P
 
 Format your response as sections separated by "## " headings. Each section should start with "## 1. Executive Summary", "## 2. Process Scope", etc.`;
 
-const SDD_PROMPT = `The SME has approved the PDD. Now generate a Solution Design Document for UiPath automation. Include these sections:
-
-1) Automation Architecture Overview
-2) Process Components and Workflow Breakdown
-3) UiPath Activities and Packages Required
-4) Integration Points and API/System Connections
-5) Exception Handling Strategy
-6) Security Considerations
-7) Test Strategy
-8) Orchestrator Deployment Specification
-
-CRITICAL REQUIREMENT — Section 8 MUST contain a fenced code block tagged \`\`\`orchestrator_artifacts with a complete JSON object defining EVERY Orchestrator artifact needed. This block is machine-parsed and used to auto-provision artifacts in UiPath Orchestrator. Without it, deployment will fail. Do NOT skip this block. Do NOT describe artifacts in prose only — you MUST include the fenced JSON block.
-
-Here is the EXACT format you must use in Section 8. Copy this structure and fill in real values based on the automation:
-
-\`\`\`orchestrator_artifacts
-{
-  "queues": [
-    { "name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true }
-  ],
-  "assets": [
-    { "name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default value or empty", "description": "Purpose" }
-  ],
-  "machines": [
-    { "name": "TemplateName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose" }
-  ],
-  "triggers": [
-    { "name": "TriggerName", "type": "Queue|Time", "queueName": "if queue trigger", "cron": "if time trigger e.g. 0 0 9 ? * MON-FRI *", "description": "Purpose" }
-  ],
-  "storageBuckets": [
-    { "name": "BucketName", "description": "Purpose" }
-  ],
-  "actionCenter": [
-    { "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }
-  ]
-}
-\`\`\`
-
-Rules for the artifacts block:
-- Include ALL artifacts. Every automation needs at least one queue, credentials, and a machine template.
-- For credential assets, set value to "" (empty).
-- For text/integer/bool assets, provide sensible defaults.
-- For queue triggers, reference the queue name defined above.
-- For time triggers, use UiPath 7-field cron expressions.
-- This specification will be used to auto-provision everything in Orchestrator so be comprehensive.
-
-Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc.`;
+const SDD_PROMPT = `(Legacy fallback — see SDD_PROSE_PROMPT and SDD_ARTIFACTS_PROMPT for active prompts)`;
 
 const UIPATH_PROMPT = `Based on the approved SDD, generate a UiPath automation package structure. Output a JSON object with this shape: { "projectName": "string", "description": "string", "dependencies": ["array of UiPath package names"], "workflows": [{ "name": "string", "description": "string", "steps": [{ "activity": "string", "properties": {}, "notes": "string" }] }] }. Be as specific as possible. Return ONLY the JSON object, no other text.`;
 
@@ -136,21 +91,36 @@ function trimChatForDocGen(messages: { role: string; content: string }[]): { rol
   return result;
 }
 
-const SDD_PROSE_PROMPT = `The SME has approved the PDD. Generate sections 1-7 of the Solution Design Document for UiPath automation. Include these sections:
+function buildSddProsePrompt(platformCapabilities?: string): string {
+  const platformContext = platformCapabilities
+    ? `\n\nIMPORTANT — PLATFORM-AWARE DESIGN:\n${platformCapabilities}\n\nYou MUST design the solution to leverage the available services optimally. Consider the full breadth of the UiPath platform:\n- **Unattended vs Attended automation**: Use unattended bots for back-office tasks, attended for human-assisted work\n- **Agentic automation / AI Agents**: For processes needing intelligent decision-making, context understanding, or natural language processing\n- **Action Center**: For human-in-the-loop steps — approvals, validations, exception review, escalations\n- **Document Understanding**: For intelligent document processing — classification, extraction, validation of invoices, forms, contracts\n- **Integration Service**: For pre-built API connectors to enterprise systems (SAP, Salesforce, ServiceNow, etc.) instead of custom HTTP calls\n- **Storage Buckets**: For centralized file storage — input documents, output reports, templates, audit logs\n- **AI Center**: For custom ML models — classification, prediction, NLP, anomaly detection\n- **Test Manager**: For automated test suites to validate the automation\n- **Communications Mining**: For email/message triage and intelligent routing\n- **Apps**: For citizen developer interfaces where manual input or oversight is needed\n\nFor each available service, explain HOW it will be used in the solution. For unavailable services, include a "## 8. Platform Recommendations" section explaining what each missing service would unlock and the concrete benefits it would provide for this specific automation.`
+    : "";
 
-1) Automation Architecture Overview
-2) Process Components and Workflow Breakdown
-3) UiPath Activities and Packages Required
-4) Integration Points and API/System Connections
-5) Exception Handling Strategy
-6) Security Considerations
-7) Test Strategy
+  return `The SME has approved the PDD. Generate the Solution Design Document for this UiPath automation. You are designing a solution that will be FULLY DEPLOYED — every artifact you specify will be automatically provisioned on the connected UiPath platform.
 
-Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include section 8 (Orchestrator Deployment Specification) — that will be generated separately.`;
+Think holistically about the optimal combination of UiPath platform capabilities to deliver this automation. Don't default to a simple bot — evaluate whether the process benefits from agents, human-in-the-loop steps, document processing, ML models, or other advanced capabilities.${platformContext}
 
-const SDD_ARTIFACTS_PROMPT = `Based on the approved PDD and conversation, generate ONLY the Orchestrator Deployment Specification (Section 8) for a UiPath automation SDD.
+Include these sections:
 
-You MUST output a fenced code block tagged \`\`\`orchestrator_artifacts with a complete JSON object defining EVERY Orchestrator artifact needed. This is machine-parsed and used to auto-provision artifacts.
+1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.)
+2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses
+3) UiPath Activities and Packages Required — list specific UiPath packages and activities. Include Integration Service connectors if applicable
+4) Integration Points and API/System Connections — all external systems, APIs, databases, and how they connect (Integration Service connectors, custom HTTP, direct DB, etc.)
+5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling
+6) Security Considerations — credential management via Orchestrator assets, role-based access, data encryption, audit trail
+7) Test Strategy — unit tests, integration tests, UAT approach. Reference Test Manager if available
+
+Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.`;
+}
+
+function buildSddArtifactsPrompt(platformCapabilities?: string): string {
+  const platformContext = platformCapabilities
+    ? `\n\nPLATFORM AVAILABILITY:\n${platformCapabilities}\n\nOnly generate artifacts for services that are AVAILABLE. For unavailable services, do NOT include their artifact arrays.`
+    : "";
+
+  return `Based on the approved PDD and conversation, generate ONLY the Orchestrator & Platform Deployment Specification (Section 9) for a UiPath automation SDD.${platformContext}
+
+You MUST output a fenced code block tagged \`\`\`orchestrator_artifacts with a complete JSON object defining EVERY deployable artifact needed. This is machine-parsed and used to AUTO-PROVISION all artifacts on the connected UiPath platform. Every artifact you include WILL be created automatically.
 
 Here is the EXACT format:
 
@@ -171,21 +141,36 @@ Here is the EXACT format:
   "storageBuckets": [
     { "name": "BucketName", "description": "Purpose" }
   ],
+  "environments": [
+    { "name": "EnvironmentName", "type": "Production|Development|Testing", "description": "Purpose" }
+  ],
   "actionCenter": [
     { "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }
+  ],
+  "documentUnderstanding": [
+    { "name": "ProjectName", "documentTypes": ["Invoice", "Receipt"], "description": "Purpose" }
+  ],
+  "testCases": [
+    { "name": "Test case name", "description": "What this tests", "steps": [{ "action": "Step action", "expected": "Expected result" }] }
   ]
 }
 \`\`\`
 
 Rules:
-- Include ALL artifacts. Every automation needs at least one queue, credentials, and a machine template.
-- For credential assets, set value to "".
+- Include ALL artifacts needed for a fully deployed, production-ready automation.
+- Every automation needs at least one queue, credentials, a machine template, and a trigger.
+- For credential assets, set value to "" (empty).
 - For text/integer/bool assets, provide sensible defaults.
 - For queue triggers, reference the queue name defined above.
 - For time triggers, use UiPath 7-field cron expressions.
-- Be comprehensive — this specification is used to auto-provision everything in Orchestrator.
+- Include environments (Production at minimum).
+- Include Action Center task catalogs if the solution uses human-in-the-loop.
+- Include Document Understanding projects if the solution processes documents.
+- Include test cases covering key automation scenarios.
+- Be comprehensive — this specification drives full automated deployment.
 
-Output ONLY "## 8. Orchestrator Deployment Specification" followed by the fenced artifacts block and any brief supporting prose. Nothing else.`;
+Output ONLY "## 9. Orchestrator & Platform Deployment Specification" followed by the fenced artifacts block and any brief supporting prose. Nothing else.`;
+}
 
 function parseArtifactBlock(text: string): string | null {
   const exactMatch = text.match(/```orchestrator_artifacts\s*\n([\s\S]*?)\n```/);
@@ -243,22 +228,32 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
   }
 
   if (docType === "SDD") {
+    console.log("[SDD] Fetching platform capabilities for platform-aware SDD...");
+    const platformProfile = await getPlatformCapabilities();
+    const platformCapabilitiesText = platformProfile.configured
+      ? `${platformProfile.availableDescription}\n\n${platformProfile.unavailableRecommendations}`
+      : undefined;
+    console.log(`[SDD] Platform profile: ${platformProfile.summary}`);
+
     console.log("[SDD] Starting parallel generation (prose + artifacts)...");
     const startTime = Date.now();
     const systemPrompt = `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`;
+
+    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText);
+    const sddArtifactsPrompt = buildSddArtifactsPrompt(platformCapabilitiesText);
 
     const [proseResponse, artifactsResponse] = await Promise.all([
       anthropic.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 6144,
         system: systemPrompt,
-        messages: [...chatMessages, { role: "user", content: SDD_PROSE_PROMPT }],
+        messages: [...chatMessages, { role: "user", content: sddProsePrompt }],
       }),
       anthropic.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 3072,
         system: systemPrompt,
-        messages: [...chatMessages, { role: "user", content: SDD_ARTIFACTS_PROMPT }],
+        messages: [...chatMessages, { role: "user", content: sddArtifactsPrompt }],
       }),
     ]);
 
@@ -285,7 +280,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
           system: "You are a UiPath automation consultant. Extract the Orchestrator artifact definitions and output ONLY a fenced JSON block. Output nothing else.",
           messages: [{
             role: "user",
-            content: `From this document, extract ALL Orchestrator artifacts and output them as a single fenced block:\n\n\`\`\`orchestrator_artifacts\n{ "queues": [...], "assets": [...], "machines": [...], "triggers": [...], "storageBuckets": [...], "actionCenter": [...] }\n\`\`\`\n\nDocument:\n${combinedText.slice(0, 8000)}`
+            content: `From this document, extract ALL Orchestrator and platform artifacts and output them as a single fenced block:\n\n\`\`\`orchestrator_artifacts\n{ "queues": [...], "assets": [...], "machines": [...], "triggers": [...], "storageBuckets": [...], "environments": [...], "actionCenter": [...], "documentUnderstanding": [...], "testCases": [...] }\n\`\`\`\n\nDocument:\n${combinedText.slice(0, 8000)}`
           }],
         });
         const recoveryText = recoveryResponse.content.find((b) => b.type === "text")?.text || "";
@@ -300,20 +295,20 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
       }
     }
 
-    let section8Content: string;
+    let deploySpecContent: string;
     if (artifactBlock) {
-      section8Content = `## 8. Orchestrator Deployment Specification\n\n${artifactBlock}`;
+      deploySpecContent = `## 9. Orchestrator & Platform Deployment Specification\n\n${artifactBlock}`;
     } else {
-      section8Content = "";
+      deploySpecContent = "";
     }
 
     let content = proseText;
-    const existingSection8 = /## 8[\.\s][^\n]*/i.test(content);
-    if (section8Content) {
-      if (existingSection8) {
-        content = content.replace(/## 8[\.\s][\s\S]*$/, section8Content.trim());
+    const existingDeploySpec = /## (?:8|9)[\.\s].*(?:Orchestrator|Deployment)/i.test(content);
+    if (deploySpecContent) {
+      if (existingDeploySpec) {
+        content = content.replace(/## (?:8|9)[\.\s].*(?:Orchestrator|Deployment)[\s\S]*$/, deploySpecContent.trim());
       } else {
-        content = content.trimEnd() + "\n\n" + section8Content.trim();
+        content = content.trimEnd() + "\n\n" + deploySpecContent.trim();
       }
     }
 
@@ -583,13 +578,13 @@ ${content}`
               }
             }
             if (artifactBlock) {
-              const section8Regex = /## 8[\.\s][^\n]*/i;
+              const section8Regex = /## (?:8|9)[\.\s][^\n]*/i;
               const section8Match = content.match(section8Regex);
               if (section8Match) {
                 const insertPos = content.indexOf(section8Match[0]) + section8Match[0].length;
                 content = content.slice(0, insertPos) + `\n\n${artifactBlock}` + content.slice(insertPos);
               } else {
-                content += `\n\n## 8. Orchestrator Deployment Specification\n\n${artifactBlock}`;
+                content += `\n\n## 9. Orchestrator & Platform Deployment Specification\n\n${artifactBlock}`;
               }
               console.log("[SDD Revision] Successfully appended orchestrator_artifacts block");
             } else {
