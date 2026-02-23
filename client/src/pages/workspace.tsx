@@ -612,18 +612,60 @@ function ChatPanel({ idea }: { idea: Idea }) {
           const existingNodes = existingMap.nodes || [];
 
           const normalizeName = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+          const stripPrefixes = (s: string) =>
+            s.replace(/^(record|send|initiate|close|auto[-\s]?|re[-\s]?check)\s+/i, "")
+             .replace(/\s+(in erp|in app|notification|end|start)$/i, "")
+             .replace(/[?\-]/g, " ")
+             .replace(/\s+/g, " ")
+             .trim();
+          const tokenize = (s: string) => new Set(stripPrefixes(normalizeName(s)).split(" ").filter(w => w.length > 2));
+
+          const similarity = (a: string, b: string): number => {
+            const na = normalizeName(a);
+            const nb = normalizeName(b);
+            if (na === nb) return 1;
+            const shorter = na.length < nb.length ? na : nb;
+            const longer = na.length < nb.length ? nb : na;
+            if (shorter.length >= 6 && longer.includes(shorter)) return 0.85;
+            const tokA = tokenize(a);
+            const tokB = tokenize(b);
+            if (tokA.size === 0 || tokB.size === 0) return 0;
+            let shared = 0;
+            tokA.forEach(t => { if (tokB.has(t)) shared++; });
+            const minTokens = Math.min(tokA.size, tokB.size);
+            if (minTokens < 2) return shared >= 1 ? 0.5 : 0;
+            return shared / Math.max(tokA.size, tokB.size);
+          };
 
           const nameToId: Record<string, number> = {};
+          const existingNamesList: string[] = [];
           for (const n of existingNodes) {
-            nameToId[normalizeName(n.name)] = n.id;
+            const norm = normalizeName(n.name);
+            nameToId[norm] = n.id;
+            existingNamesList.push(norm);
           }
+
+          const findMatch = (stepName: string, stepType: string): number | null => {
+            const norm = normalizeName(stepName);
+            if (nameToId[norm]) return nameToId[norm];
+            let bestScore = 0;
+            let bestId: number | null = null;
+            for (const n of existingNodes) {
+              if (n.nodeType !== stepType) continue;
+              const score = similarity(stepName, n.name);
+              if (score > bestScore && score >= 0.8) {
+                bestScore = score;
+                bestId = n.id;
+              }
+            }
+            return bestId;
+          };
 
           const createdNodes: { name: string; id: number; from?: string; edgeLabel?: string }[] = [];
 
           for (let i = 0; i < steps.length; i++) {
             const step = steps[i];
-            const normalizedStepName = normalizeName(step.name);
-            const existingId = nameToId[normalizedStepName];
+            const existingId = findMatch(step.name, step.nodeType);
 
             if (existingId) {
               await fetch(`/api/process-nodes/${existingId}`, {

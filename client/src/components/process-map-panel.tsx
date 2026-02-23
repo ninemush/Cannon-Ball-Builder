@@ -409,15 +409,26 @@ function applyDagreLayout(
   edges: Edge[],
   direction: "LR" | "TB" = "TB"
 ): Node[] {
+  const nodeCount = nodes.length;
+  const edgeCount = edges.length;
+
+  const density = edgeCount / Math.max(nodeCount, 1);
+  const scaleFactor = nodeCount > 60 ? 1.8 : nodeCount > 30 ? 1.4 : nodeCount > 15 ? 1.2 : 1;
+  const densityBonus = density > 2 ? 1.2 : density > 1.5 ? 1.1 : 1;
+
+  const nodesep = Math.min(Math.round(140 * scaleFactor * densityBonus), 280);
+  const ranksep = Math.min(Math.round(180 * scaleFactor * densityBonus), 340);
+  const edgesep = Math.min(Math.round(60 * scaleFactor * densityBonus), 120);
+
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: direction,
-    nodesep: 120,
-    ranksep: 150,
-    edgesep: 40,
-    marginx: 60,
-    marginy: 60,
+    nodesep,
+    ranksep,
+    edgesep,
+    marginx: 80,
+    marginy: 80,
   });
 
   nodes.forEach((node) => {
@@ -426,8 +437,17 @@ function applyDagreLayout(
     g.setNode(node.id, { width: dims.width, height: dims.height });
   });
 
+  const outDegree: Record<string, number> = {};
   edges.forEach((edge) => {
-    g.setEdge(edge.source, edge.target);
+    outDegree[edge.source] = (outDegree[edge.source] || 0) + 1;
+  });
+
+  edges.forEach((edge) => {
+    const fanout = outDegree[edge.source] || 1;
+    g.setEdge(edge.source, edge.target, {
+      minlen: fanout > 2 ? 2 : 1,
+      weight: fanout > 2 ? 0.5 : 1,
+    });
   });
 
   dagre.layout(g);
@@ -666,26 +686,41 @@ function CustomEdge({
   data,
   style,
 }: any) {
+  const sourceIndex = data?.sourceIndex || 0;
+  const sourceSiblings = data?.sourceSiblings || 1;
+  const targetIndex = data?.targetIndex || 0;
+  const targetSiblings = data?.targetSiblings || 1;
+
+  const sourceOffset = sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * 20 : 0;
+  const targetOffset = targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * 20 : 0;
+
   const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX,
+    sourceX: sourceX + sourceOffset,
     sourceY,
     sourcePosition,
-    targetX,
+    targetX: targetX + targetOffset,
     targetY,
     targetPosition,
-    borderRadius: 20,
+    borderRadius: 16,
+    offset: (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0) ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) : 20,
   });
 
   const label = data?.label || "";
-  const isYes = /^(yes|approved|pass|valid|complete|true)$/i.test(label);
-  const isNo = /^(no|rejected|fail|invalid|incomplete|false)$/i.test(label);
+  const isYes = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(label);
+  const isNo = /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(label);
+  const isPartial = /^(partial|medium|check)/i.test(label);
   const isToBeView = data?.viewType === "to-be";
+  const isSddView = data?.viewType === "sdd";
 
-  let edgeColor = "rgba(100,100,120,0.5)";
-  if (isToBeView) edgeColor = "rgba(34,197,94,0.6)";
-  else if (isYes) edgeColor = "#22c55e";
-  else if (isNo) edgeColor = "#ef4444";
-  else if (label) edgeColor = "rgba(140,140,160,0.6)";
+  let edgeColor = "rgba(120,120,145,0.35)";
+  if (isSddView) edgeColor = "rgba(249,115,22,0.5)";
+  else if (isToBeView) edgeColor = "rgba(34,197,94,0.5)";
+  else if (isYes) edgeColor = "rgba(34,197,94,0.7)";
+  else if (isNo) edgeColor = "rgba(239,68,68,0.7)";
+  else if (isPartial) edgeColor = "rgba(245,158,11,0.7)";
+  else if (label) edgeColor = "rgba(148,163,184,0.5)";
+
+  const strokeWidth = label ? 1.5 : 1;
 
   return (
     <>
@@ -695,8 +730,10 @@ function CustomEdge({
         style={{
           ...style,
           stroke: edgeColor,
-          strokeWidth: label ? 2 : 1.5,
+          strokeWidth,
+          strokeLinecap: "round" as const,
         }}
+        className="transition-all duration-200 hover:!stroke-[3px] hover:!opacity-100"
       />
       {label && (
         <EdgeLabelRenderer>
@@ -705,13 +742,16 @@ function CustomEdge({
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               pointerEvents: "all",
+              zIndex: 10,
             }}
-            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold cursor-pointer transition-all shadow-sm ${
+            className={`px-2 py-0.5 rounded text-[9px] font-medium cursor-pointer transition-all max-w-[140px] truncate ${
               isYes
-                ? "bg-emerald-950/90 border border-emerald-500/40 text-emerald-300"
+                ? "bg-emerald-950/95 border border-emerald-500/30 text-emerald-300 shadow-sm shadow-emerald-900/30"
                 : isNo
-                ? "bg-red-950/90 border border-red-500/40 text-red-300"
-                : "bg-zinc-900/90 border border-zinc-600/40 text-zinc-300"
+                ? "bg-red-950/95 border border-red-500/30 text-red-300 shadow-sm shadow-red-900/30"
+                : isPartial
+                ? "bg-amber-950/95 border border-amber-500/30 text-amber-300 shadow-sm shadow-amber-900/30"
+                : "bg-zinc-900/95 border border-zinc-600/30 text-zinc-400 shadow-sm shadow-zinc-900/30"
             }`}
             data-testid={`edge-label-${id}`}
           >
@@ -1057,10 +1097,28 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
         dbId: n.id, viewType: activeView,
       },
     }));
-    const rawEdges: Edge[] = dbEdges.map((e) => ({
-      id: String(e.id), source: String(e.sourceNodeId), target: String(e.targetNodeId),
-      type: "custom", data: { label: e.label, dbId: e.id, viewType: activeView },
-    }));
+    const relSrcGrp: Record<string, typeof dbEdges> = {};
+    const relTgtGrp: Record<string, typeof dbEdges> = {};
+    dbEdges.forEach(e => {
+      const sk = String(e.sourceNodeId);
+      const tk = String(e.targetNodeId);
+      if (!relSrcGrp[sk]) relSrcGrp[sk] = [];
+      relSrcGrp[sk].push(e);
+      if (!relTgtGrp[tk]) relTgtGrp[tk] = [];
+      relTgtGrp[tk].push(e);
+    });
+    const rawEdges: Edge[] = dbEdges.map((e) => {
+      const srcS = relSrcGrp[String(e.sourceNodeId)] || [e];
+      const tgtS = relTgtGrp[String(e.targetNodeId)] || [e];
+      return {
+        id: String(e.id), source: String(e.sourceNodeId), target: String(e.targetNodeId),
+        type: "custom", data: {
+          label: e.label, dbId: e.id, viewType: activeView,
+          sourceIndex: srcS.indexOf(e), sourceSiblings: srcS.length,
+          targetIndex: tgtS.indexOf(e), targetSiblings: tgtS.length,
+        },
+      };
+    });
     let layoutNodes: Node[];
     if (rawEdges.length > 0) {
       layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB");
@@ -1102,20 +1160,41 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       },
     }));
 
-    const rawEdges: Edge[] = dbEdges.map((e) => ({
-      id: String(e.id),
-      source: String(e.sourceNodeId),
-      target: String(e.targetNodeId),
-      type: "custom",
-      data: { label: e.label, dbId: e.id, viewType: activeView },
-      animated: activeView === "to-be" || activeView === "sdd",
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: 16,
-        height: 16,
-        color: activeView === "sdd" ? "rgba(249,115,22,0.6)" : activeView === "to-be" ? "rgba(34,197,94,0.6)" : "rgba(100,100,120,0.5)",
-      },
-    }));
+    const sourceGroups: Record<string, typeof dbEdges> = {};
+    const targetGroups: Record<string, typeof dbEdges> = {};
+    dbEdges.forEach(e => {
+      const sk = String(e.sourceNodeId);
+      const tk = String(e.targetNodeId);
+      if (!sourceGroups[sk]) sourceGroups[sk] = [];
+      sourceGroups[sk].push(e);
+      if (!targetGroups[tk]) targetGroups[tk] = [];
+      targetGroups[tk].push(e);
+    });
+
+    const rawEdges: Edge[] = dbEdges.map((e) => {
+      const srcSiblings = sourceGroups[String(e.sourceNodeId)] || [e];
+      const tgtSiblings = targetGroups[String(e.targetNodeId)] || [e];
+      const markerColor = activeView === "sdd" ? "rgba(249,115,22,0.5)" : activeView === "to-be" ? "rgba(34,197,94,0.5)" : "rgba(120,120,145,0.4)";
+
+      return {
+        id: String(e.id),
+        source: String(e.sourceNodeId),
+        target: String(e.targetNodeId),
+        type: "custom",
+        data: {
+          label: e.label, dbId: e.id, viewType: activeView,
+          sourceIndex: srcSiblings.indexOf(e), sourceSiblings: srcSiblings.length,
+          targetIndex: tgtSiblings.indexOf(e), targetSiblings: tgtSiblings.length,
+        },
+        animated: activeView === "to-be" || activeView === "sdd",
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color: markerColor,
+        },
+      };
+    });
 
     let layoutNodes: Node[];
     const levelChanged = prevDetailLevelRef.current !== detailLevel;
