@@ -456,21 +456,104 @@ function SystemTab() {
   );
 }
 
-const UIPATH_SCOPES = [
-  { id: "OR.Default", label: "Default", description: "General Orchestrator access (package upload, folder listing)" },
-  { id: "OR.Folders", label: "Folders", description: "List and manage Orchestrator folders" },
-  { id: "OR.Execution", label: "Execution", description: "Start and manage process executions" },
-  { id: "OR.Assets", label: "Assets", description: "Read and manage Orchestrator assets" },
-  { id: "OR.Queues", label: "Queues", description: "Manage transaction queues and items" },
-  { id: "OR.Jobs", label: "Jobs", description: "Monitor and manage running jobs" },
-  { id: "OR.Robots", label: "Robots", description: "View and manage robots" },
-  { id: "OR.Machines", label: "Machines", description: "View and manage machines" },
-  { id: "OR.Settings", label: "Settings", description: "Read and update Orchestrator settings" },
-  { id: "OR.Users", label: "Users", description: "Manage Orchestrator users" },
-  { id: "OR.Monitoring", label: "Monitoring", description: "Access monitoring and alerting" },
-  { id: "OR.Administration", label: "Administration", description: "Full administrative access" },
-  { id: "OR.BackgroundTasks", label: "Background Tasks", description: "Manage background task processing" },
-] as const;
+const UIPATH_SCOPE_CATEGORIES = [
+  { category: "Core", scopes: [
+    { id: "OR.Default", description: "General Orchestrator access" },
+    { id: "OR.Administration", description: "Administration" },
+    { id: "OR.Administration.Read", description: "Read administration data" },
+    { id: "OR.Administration.Write", description: "Write administration data" },
+  ]},
+  { category: "Folders & Execution", scopes: [
+    { id: "OR.Folders", description: "Full folder access" },
+    { id: "OR.Folders.Read", description: "Read folders" },
+    { id: "OR.Folders.Write", description: "Write folders" },
+    { id: "OR.Execution", description: "Full execution access" },
+    { id: "OR.Execution.Read", description: "Read executions" },
+    { id: "OR.Execution.Write", description: "Write executions" },
+  ]},
+  { category: "Assets & Queues", scopes: [
+    { id: "OR.Assets", description: "Full asset access" },
+    { id: "OR.Assets.Read", description: "Read assets" },
+    { id: "OR.Assets.Write", description: "Write assets" },
+    { id: "OR.Queues", description: "Full queue access" },
+    { id: "OR.Queues.Read", description: "Read queues" },
+    { id: "OR.Queues.Write", description: "Write queues" },
+  ]},
+  { category: "Jobs & Robots", scopes: [
+    { id: "OR.Jobs", description: "Full job access" },
+    { id: "OR.Jobs.Read", description: "Read jobs" },
+    { id: "OR.Jobs.Write", description: "Write jobs" },
+    { id: "OR.Robots", description: "Full robot access" },
+    { id: "OR.Robots.Read", description: "Read robots" },
+    { id: "OR.Robots.Write", description: "Write robots" },
+  ]},
+  { category: "Machines & Hypervisor", scopes: [
+    { id: "OR.Machines", description: "Full machine access" },
+    { id: "OR.Machines.Read", description: "Read machines" },
+    { id: "OR.Machines.Write", description: "Write machines" },
+    { id: "OR.Hypervisor", description: "Full hypervisor access" },
+    { id: "OR.Hypervisor.Read", description: "Read hypervisor" },
+    { id: "OR.Hypervisor.Write", description: "Write hypervisor" },
+  ]},
+  { category: "Settings & Users", scopes: [
+    { id: "OR.Settings", description: "Full settings access" },
+    { id: "OR.Settings.Read", description: "Read settings" },
+    { id: "OR.Settings.Write", description: "Write settings" },
+    { id: "OR.Users", description: "Full user access" },
+    { id: "OR.Users.Read", description: "Read users" },
+    { id: "OR.Users.Write", description: "Write users" },
+    { id: "OR.License", description: "Full license access" },
+    { id: "OR.License.Read", description: "Read licenses" },
+    { id: "OR.License.Write", description: "Write licenses" },
+  ]},
+  { category: "Monitoring & Analytics", scopes: [
+    { id: "OR.Monitoring", description: "Full monitoring access" },
+    { id: "OR.Monitoring.Read", description: "Read monitoring" },
+    { id: "OR.Monitoring.Write", description: "Write monitoring" },
+    { id: "OR.Analytics", description: "Full analytics access" },
+    { id: "OR.Analytics.Read", description: "Read analytics" },
+    { id: "OR.Analytics.Write", description: "Write analytics" },
+    { id: "OR.Audit", description: "Full audit access" },
+    { id: "OR.Audit.Read", description: "Read audit logs" },
+    { id: "OR.Audit.Write", description: "Write audit logs" },
+  ]},
+  { category: "Storage & Tasks", scopes: [
+    { id: "OR.Buckets", description: "Full storage bucket access" },
+    { id: "OR.Buckets.Read", description: "Read storage buckets" },
+    { id: "OR.Buckets.Write", description: "Write storage buckets" },
+    { id: "OR.Tasks", description: "Full task access (Action Center)" },
+    { id: "OR.Tasks.Read", description: "Read tasks" },
+    { id: "OR.Tasks.Write", description: "Write tasks" },
+    { id: "OR.BackgroundTasks", description: "Full background task access" },
+    { id: "OR.BackgroundTasks.Read", description: "Read background tasks" },
+    { id: "OR.BackgroundTasks.Write", description: "Write background tasks" },
+  ]},
+  { category: "Testing", scopes: [
+    { id: "OR.TestSets", description: "Full test set access" },
+    { id: "OR.TestSets.Read", description: "Read test sets" },
+    { id: "OR.TestSets.Write", description: "Write test sets" },
+    { id: "OR.TestSetExecutions", description: "Full test execution access" },
+    { id: "OR.TestSetExecutions.Read", description: "Read test executions" },
+    { id: "OR.TestSetExecutions.Write", description: "Write test executions" },
+    { id: "OR.TestSetSchedules", description: "Full test schedule access" },
+    { id: "OR.TestSetSchedules.Read", description: "Read test schedules" },
+    { id: "OR.TestSetSchedules.Write", description: "Write test schedules" },
+    { id: "OR.TestDataQueues", description: "Full test data queue access" },
+    { id: "OR.TestDataQueues.Read", description: "Read test data queues" },
+    { id: "OR.TestDataQueues.Write", description: "Write test data queues" },
+  ]},
+  { category: "AI & ML", scopes: [
+    { id: "OR.ML", description: "Full ML access" },
+    { id: "OR.ML.Read", description: "Read ML models" },
+    { id: "OR.ML.Write", description: "Write ML models" },
+    { id: "OR.AutomationSolutions.Access", description: "Automation Solutions access" },
+  ]},
+  { category: "Webhooks", scopes: [
+    { id: "OR.Webhooks", description: "Full webhook access" },
+    { id: "OR.Webhooks.Read", description: "Read webhooks" },
+    { id: "OR.Webhooks.Write", description: "Write webhooks" },
+  ]},
+];
 
 function extractOrgSlug(input: string): string {
   let val = input.trim();
@@ -1094,40 +1177,139 @@ function IntegrationsTab() {
             <div className="p-3 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground space-y-1">
               <p className="font-medium text-foreground text-sm">Step 3: Select Scopes</p>
               <p>Choose the permissions your app needs. These must match the scopes you granted when creating the External Application in UiPath Cloud.</p>
-              <p className="text-[#e8450a]">Mismatched scopes will cause "invalid_scope" errors.</p>
+              <p className="text-[#e8450a]">Tip: Paste your scope list from UiPath below to auto-select matching scopes.</p>
             </div>
             {errors.scopes && <p className="text-xs text-destructive" data-testid="error-scopes">{errors.scopes}</p>}
-            <div className="grid grid-cols-1 gap-2 max-h-[340px] overflow-y-auto pr-1" data-testid="scope-list">
-              {UIPATH_SCOPES.map((scope) => {
-                const checked = selectedScopes.has(scope.id);
+
+            <div className="space-y-2">
+              <Label htmlFor="paste-scopes" className="text-xs">Paste scopes from UiPath (space or newline separated)</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="paste-scopes"
+                  placeholder="e.g. OR.Default OR.Folders.Read OR.Execution.Write ..."
+                  data-testid="input-paste-scopes"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      if (val) {
+                        const parsed = val.split(/[\s,]+/).filter(s => s.startsWith("OR."));
+                        if (parsed.length > 0) {
+                          const scopeSet = new Set(parsed);
+                          scopeSet.add("OR.Default");
+                          setSelectedScopes(scopeSet);
+                          (e.target as HTMLInputElement).value = "";
+                          toast({ title: `${scopeSet.size} scopes loaded`, description: parsed.slice(0, 5).join(", ") + (parsed.length > 5 ? ` + ${parsed.length - 5} more` : "") });
+                        }
+                      }
+                    }
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="button-apply-pasted-scopes"
+                  onClick={() => {
+                    const input = document.getElementById("paste-scopes") as HTMLInputElement;
+                    const val = input?.value?.trim();
+                    if (val) {
+                      const parsed = val.split(/[\s,]+/).filter(s => s.startsWith("OR."));
+                      if (parsed.length > 0) {
+                        const scopeSet = new Set(parsed);
+                        scopeSet.add("OR.Default");
+                        setSelectedScopes(scopeSet);
+                        input.value = "";
+                        toast({ title: `${scopeSet.size} scopes loaded`, description: parsed.slice(0, 5).join(", ") + (parsed.length > 5 ? ` + ${parsed.length - 5} more` : "") });
+                      }
+                    }
+                  }}
+                >
+                  Apply
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="button-select-all-scopes"
+                onClick={() => {
+                  const allIds = UIPATH_SCOPE_CATEGORIES.flatMap(c => c.scopes.map(s => s.id));
+                  setSelectedScopes(new Set(allIds));
+                }}
+              >
+                Select All
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="button-clear-scopes"
+                onClick={() => setSelectedScopes(new Set(["OR.Default"]))}
+              >
+                Clear
+              </Button>
+              <span className="text-xs text-muted-foreground ml-auto">{selectedScopes.size} selected</span>
+            </div>
+
+            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1" data-testid="scope-list">
+              {UIPATH_SCOPE_CATEGORIES.map((cat) => {
+                const catScopeIds = cat.scopes.map(s => s.id);
+                const allChecked = catScopeIds.every(id => selectedScopes.has(id));
+                const someChecked = catScopeIds.some(id => selectedScopes.has(id));
                 return (
-                  <label
-                    key={scope.id}
-                    className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
-                      checked ? "border-[#e8450a]/50 bg-[#e8450a]/5" : "border-border hover:border-muted-foreground/30"
-                    }`}
-                    data-testid={`scope-item-${scope.id}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleScope(scope.id)}
-                      className="mt-0.5 accent-[#e8450a] h-4 w-4"
-                      data-testid={`scope-checkbox-${scope.id}`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground">{scope.label}</span>
-                        <code className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">{scope.id}</code>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">{scope.description}</p>
+                  <div key={cat.category} className="border border-border rounded-md" data-testid={`scope-category-${cat.category.toLowerCase().replace(/\s+/g, "-")}`}>
+                    <label className="flex items-center gap-2 px-3 py-2 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors rounded-t-md">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                        onChange={() => {
+                          setSelectedScopes(prev => {
+                            const next = new Set(prev);
+                            if (allChecked) {
+                              catScopeIds.forEach(id => { if (id !== "OR.Default") next.delete(id); });
+                            } else {
+                              catScopeIds.forEach(id => next.add(id));
+                            }
+                            return next;
+                          });
+                        }}
+                        className="accent-[#e8450a] h-3.5 w-3.5"
+                        data-testid={`scope-category-toggle-${cat.category.toLowerCase().replace(/\s+/g, "-")}`}
+                      />
+                      <span className="text-xs font-semibold text-foreground">{cat.category}</span>
+                      <span className="text-[10px] text-muted-foreground ml-auto">{catScopeIds.filter(id => selectedScopes.has(id)).length}/{catScopeIds.length}</span>
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-0.5 px-2 py-1.5">
+                      {cat.scopes.map(scope => {
+                        const checked = selectedScopes.has(scope.id);
+                        return (
+                          <label
+                            key={scope.id}
+                            className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer transition-colors text-xs ${
+                              checked ? "bg-[#e8450a]/5 text-foreground" : "text-muted-foreground hover:text-foreground"
+                            }`}
+                            data-testid={`scope-item-${scope.id}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleScope(scope.id)}
+                              className="accent-[#e8450a] h-3 w-3"
+                              data-testid={`scope-checkbox-${scope.id}`}
+                            />
+                            <code className="text-[10px] font-mono">{scope.id}</code>
+                          </label>
+                        );
+                      })}
                     </div>
-                  </label>
+                  </div>
                 );
               })}
             </div>
             <p className="text-xs text-muted-foreground">
-              Selected: <strong>{Array.from(selectedScopes).join(", ")}</strong>
+              Selected ({selectedScopes.size}): <strong className="break-all">{Array.from(selectedScopes).join(", ")}</strong>
             </p>
           </div>
         )}
