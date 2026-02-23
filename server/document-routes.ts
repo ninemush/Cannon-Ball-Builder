@@ -5,6 +5,7 @@ import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 import { getPlatformCapabilities } from "./uipath-integration";
+import { evaluateTransition } from "./stage-transition";
 import { z } from "zod";
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
@@ -478,6 +479,21 @@ export function registerDocumentRoutes(app: Express): void {
         console.error("[Document Routes] Failed to build SDD deploy prompt:", promptErr.message);
       }
       await chatStorage.createMessage(ideaId, "assistant", deployPrompt);
+    }
+
+    try {
+      const user2 = await storage.getUser(req.session.userId!);
+      const transitionResult = await evaluateTransition(
+        ideaId,
+        req.session.userId!,
+        user2?.displayName || "Unknown",
+        req.session.activeRole || "Process SME"
+      );
+      if (transitionResult.transitioned) {
+        return res.json({ approval, document: { ...doc, status: "approved" }, transition: transitionResult });
+      }
+    } catch (transErr: any) {
+      console.error("[Document Routes] Transition evaluation failed:", transErr?.message);
     }
 
     return res.json({ approval, document: { ...doc, status: "approved" } });

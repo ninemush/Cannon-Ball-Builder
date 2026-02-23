@@ -11,6 +11,7 @@ export interface IStorage {
   getIdea(id: string): Promise<Idea | undefined>;
   getAllIdeas(): Promise<Idea[]>;
   createIdea(idea: InsertIdea): Promise<Idea>;
+  deleteIdea(id: string): Promise<boolean>;
   getIdeasByOwnerEmail(email: string): Promise<Idea[]>;
   updateIdeaStage(id: string, stage: string): Promise<Idea | undefined>;
   updateIdea(id: string, updates: Partial<Pick<Idea, "title" | "description" | "tag">>): Promise<Idea | undefined>;
@@ -50,6 +51,11 @@ export class DatabaseStorage implements IStorage {
   async createIdea(insertIdea: InsertIdea): Promise<Idea> {
     const [idea] = await db.insert(ideas).values(insertIdea).returning();
     return idea;
+  }
+
+  async deleteIdea(id: string): Promise<boolean> {
+    const [deleted] = await db.delete(ideas).where(eq(ideas.id, id)).returning();
+    return !!deleted;
   }
 
   async getIdeasByOwnerEmail(email: string): Promise<Idea[]> {

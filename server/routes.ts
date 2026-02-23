@@ -125,6 +125,46 @@ export async function registerRoutes(
     return res.json(idea);
   });
 
+  app.post("/api/ideas/check-similar", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { title, description } = req.body;
+    if (!title) {
+      return res.status(400).json({ message: "Title is required" });
+    }
+    const allIdeas = await storage.getAllIdeas();
+    const titleWords = (title as string).toLowerCase().split(/\s+/).filter((w: string) => w.length > 2);
+    const descWords = ((description as string) || "").toLowerCase().split(/\s+/).filter((w: string) => w.length > 2);
+    const inputWords = Array.from(new Set([...titleWords, ...descWords]));
+
+    const similar = allIdeas
+      .map((idea) => {
+        const ideaTitle = idea.title.toLowerCase();
+        const ideaDesc = (idea.description || "").toLowerCase();
+        const ideaWords = Array.from(new Set([
+          ...ideaTitle.split(/\s+/).filter(w => w.length > 2),
+          ...ideaDesc.split(/\s+/).filter(w => w.length > 2),
+        ]));
+        const overlap = inputWords.filter(w => ideaWords.includes(w));
+        const score = inputWords.length > 0 ? overlap.length / inputWords.length : 0;
+        return { idea, score };
+      })
+      .filter(({ score }) => score >= 0.3)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map(({ idea, score }) => ({
+        id: idea.id,
+        title: idea.title,
+        description: idea.description,
+        stage: idea.stage,
+        owner: idea.owner,
+        score: Math.round(score * 100),
+      }));
+
+    return res.json({ similar });
+  });
+
   app.post("/api/ideas", async (req: Request, res: Response) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
@@ -162,6 +202,37 @@ export async function registerRoutes(
     }
     const updated = await storage.updateIdea(idea.id, updates);
     return res.json(updated);
+  });
+
+  app.delete("/api/ideas/:id", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const activeRole = req.session.activeRole;
+    if (activeRole !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const ideaId = req.params.id as string;
+    const idea = await storage.getIdea(ideaId);
+    if (!idea) {
+      return res.status(404).json({ message: "Idea not found" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    await storage.createAuditLog({
+      ideaId,
+      userId: req.session.userId,
+      userName: user?.displayName || "Unknown",
+      userRole: activeRole,
+      action: "idea_deleted",
+      fromStage: idea.stage,
+      toStage: null,
+      details: `Deleted idea "${idea.title}" (owned by ${idea.owner})`,
+    });
+    const deleted = await storage.deleteIdea(ideaId);
+    if (!deleted) {
+      return res.status(500).json({ message: "Failed to delete idea" });
+    }
+    return res.json({ success: true, message: "Idea deleted" });
   });
 
   app.post("/api/ideas/:id/evaluate-transition", async (req: Request, res: Response) => {

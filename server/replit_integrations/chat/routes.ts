@@ -11,6 +11,30 @@ const anthropic = new Anthropic({
   baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
 });
 
+function detectApprovalIntent(userMessage: string): "PDD" | "SDD" | null {
+  const msg = userMessage.toLowerCase().trim();
+  const approvePatterns = [
+    /\bapprove\b/,
+    /\bapproved\b/,
+    /\bi\s+approve\b/,
+    /\blooks?\s+good\b.*\bapprove\b/,
+    /\bgo\s+ahead\b/,
+    /\bconfirm\b/,
+    /\bsign\s*off\b/,
+    /\blgtm\b/,
+  ];
+  const hasApprovalIntent = approvePatterns.some(p => p.test(msg));
+  if (!hasApprovalIntent) return null;
+
+  if (/\bsdd\b/.test(msg) || /\bsolution\s+design\b/.test(msg)) return "SDD";
+  if (/\bpdd\b/.test(msg) || /\bprocess\s+design\b/.test(msg)) return "PDD";
+
+  if (/\bpdd\b/i.test(userMessage)) return "PDD";
+  if (/\bsdd\b/i.test(userMessage)) return "SDD";
+
+  return "PDD";
+}
+
 function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string): string {
   return `You are the CannonBall automation design assistant. Your job is to guide Process SMEs through designing business process automations. You are AI-first — you lead, you draft, you build. The SME's job is to give you information, refine your output, and approve it. They should never have to figure out what to do next — you always tell them.
 
@@ -259,6 +283,41 @@ export function registerChatRoutes(app: Express): void {
       }
 
       await chatStorage.createMessage(ideaId, "user", content);
+
+      const approvalIntent = detectApprovalIntent(content);
+      let chatApprovalDone = false;
+      if (approvalIntent) {
+        try {
+          const latestDoc = await documentStorage.getLatestDocument(ideaId, approvalIntent);
+          if (latestDoc && latestDoc.status !== "approved") {
+            const existingApproval = await documentStorage.getApproval(ideaId, approvalIntent);
+            if (!existingApproval) {
+              const approveUser = await storage.getUser(req.session.userId!);
+              if (approveUser) {
+                await documentStorage.updateDocument(latestDoc.id, { status: "approved" });
+                await documentStorage.createApproval({
+                  documentId: latestDoc.id,
+                  ideaId,
+                  docType: approvalIntent,
+                  userId: approveUser.id,
+                  userRole: (req.session.activeRole || approveUser.role) as string,
+                  userName: approveUser.displayName,
+                });
+                await chatStorage.createMessage(ideaId, "system",
+                  `[CHAT_APPROVAL] ${approvalIntent} v${latestDoc.version} approved by ${approveUser.displayName} via chat confirmation.`
+                );
+                chatApprovalDone = true;
+                console.log(`[Chat] ${approvalIntent} approved via chat by ${approveUser.displayName}`);
+                try {
+                  await evaluateTransition(ideaId, req.session.userId!, approveUser.displayName, req.session.activeRole || "Process SME");
+                } catch {}
+              }
+            }
+          }
+        } catch (approvalErr: any) {
+          console.error("[Chat] Chat-based approval failed:", approvalErr?.message);
+        }
+      }
 
       const history = await chatStorage.getMessagesByIdeaId(ideaId);
       const chatMessages = history.map((m) => ({

@@ -282,8 +282,28 @@ function AuditLogTab() {
 }
 
 function SystemTab() {
+  const { toast } = useToast();
   const { data: users } = useQuery<User[]>({ queryKey: ["/api/users"] });
   const { data: ideas } = useQuery<Idea[]>({ queryKey: ["/api/ideas"] });
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const deleteMutation = useMutation({
+    mutationFn: async (ideaId: string) => {
+      const res = await apiRequest("DELETE", `/api/ideas/${ideaId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
+      toast({ title: "Idea deleted", description: "The idea and all related data have been removed." });
+      setConfirmDeleteId(null);
+      setDeletingId(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+      setDeletingId(null);
+    },
+  });
 
   const stageCounts: Record<string, number> = {};
   PIPELINE_STAGES.forEach((stage) => {
@@ -366,6 +386,70 @@ function SystemTab() {
             );
           })}
         </div>
+      </Card>
+
+      <Card className="p-4 space-y-4" data-testid="card-idea-management">
+        <h3 className="text-sm font-semibold text-foreground">Idea Management</h3>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Title</TableHead>
+              <TableHead>Owner</TableHead>
+              <TableHead>Stage</TableHead>
+              <TableHead className="w-[100px]">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {ideas?.map((idea) => (
+              <TableRow key={idea.id} data-testid={`row-idea-${idea.id}`}>
+                <TableCell className="text-sm font-medium">{idea.title}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{idea.owner}</TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-[10px]">{idea.stage}</Badge>
+                </TableCell>
+                <TableCell>
+                  {confirmDeleteId === idea.id ? (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="h-7 text-xs px-2"
+                        disabled={deleteMutation.isPending}
+                        onClick={() => {
+                          setDeletingId(idea.id);
+                          deleteMutation.mutate(idea.id);
+                        }}
+                        data-testid={`button-confirm-delete-${idea.id}`}
+                      >
+                        {deletingId === idea.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Yes"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs px-2"
+                        onClick={() => setConfirmDeleteId(null)}
+                        data-testid={`button-cancel-delete-${idea.id}`}
+                      >
+                        No
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => setConfirmDeleteId(idea.id)}
+                      data-testid={`button-delete-idea-${idea.id}`}
+                    >
+                      <XCircle className="h-3.5 w-3.5 mr-1" />
+                      Delete
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </Card>
     </div>
   );

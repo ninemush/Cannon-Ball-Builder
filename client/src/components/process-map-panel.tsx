@@ -1817,16 +1817,20 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
         <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-950/30" data-testid="automation-impact-bar">
           {(() => {
             const nodes = mapData?.nodes || [];
-            const automatedCount = nodes.filter((n) => (n.description || "").startsWith("[AUTOMATED]")).length;
-            const humanCount = nodes.filter((n) => {
-              const p = classifyPerformer(n.role || "", n.system || "");
-              return p === "human" && !(n.description || "").startsWith("[AUTOMATED]");
-            }).length;
-            const systemCount = nodes.filter((n) => classifyPerformer(n.role || "", n.system || "") === "system").length;
-            const totalAutomatable = automatedCount + systemCount;
             const startEndCount = nodes.filter((n) => n.nodeType === "start" || n.nodeType === "end").length;
-            const processSteps = nodes.length - startEndCount;
-            const automationPct = processSteps > 0 ? Math.round(totalAutomatable / processSteps * 100) : 0;
+            const actionableNodes = nodes.filter((n) => n.nodeType !== "start" && n.nodeType !== "end");
+            const processSteps = actionableNodes.length;
+            const automatedCount = actionableNodes.filter((n) => (n.description || "").startsWith("[AUTOMATED]")).length;
+            const systemCount = actionableNodes.filter((n) => {
+              if ((n.description || "").startsWith("[AUTOMATED]")) return false;
+              return classifyPerformer(n.role || "", n.system || "") === "system";
+            }).length;
+            const humanCount = actionableNodes.filter((n) => {
+              if ((n.description || "").startsWith("[AUTOMATED]")) return false;
+              return classifyPerformer(n.role || "", n.system || "") !== "system";
+            }).length;
+            const totalAutomatable = automatedCount + systemCount;
+            const automationPct = processSteps > 0 ? Math.min(100, Math.round(totalAutomatable / processSteps * 100)) : 0;
             return (
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-1.5">

@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { processMapStorage } from "./process-map-storage";
 import { storage } from "./storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
+import { evaluateTransition } from "./stage-transition";
 import { z } from "zod";
 
 const toBeGenerationLocks = new Set<string>();
@@ -356,6 +357,17 @@ export function registerProcessMapRoutes(app: Express): void {
         ? "Great \u2014 As-Is process map approved. I've generated a To-Be process map based on your current workflow. You can switch to the To-Be view to review and refine the optimized version. I'll also now prepare your Process Design Document."
         : "To-Be process map approved. The optimized workflow has been locked in."
     );
+
+    try {
+      await evaluateTransition(
+        ideaId,
+        req.session.userId!,
+        user.displayName,
+        (req.session.activeRole || user.role) as string
+      );
+    } catch (transErr: any) {
+      console.error("[ProcessMap] Transition evaluation failed:", transErr?.message);
+    }
 
     return res.status(201).json(approval);
   });

@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/resizable";
 import { PIPELINE_STAGES, type Idea, type PipelineStage, type ChatMessage as DBChatMessage } from "@shared/schema";
 import ProcessMapPanel from "@/components/process-map-panel";
-import { parseStepsFromText } from "@/lib/step-parser";
+import { parseStepsFromText, parseStepsByView } from "@/lib/step-parser";
 import { DocumentCard, UiPathPackageCard } from "@/components/document-card";
 
 let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
@@ -244,7 +244,14 @@ interface ChatMsg {
 }
 
 function stripStepTags(text: string): string {
-  return text.replace(/\[STEP:\s*[^\]]*\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return text
+    .replace(/\[STEP:\s*[^\]]*\]/g, "")
+    .replace(/\[DOC:(PDD|SDD):\d+\]/g, "")
+    .replace(/\[APPROVE:(PDD|SDD)\]/g, "")
+    .replace(/\[DEPLOY_UIPATH\]/g, "")
+    .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: number; uipathData?: any; displayContent: string } {
@@ -584,9 +591,11 @@ function ChatPanel({ idea }: { idea: Idea }) {
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
 
       if (finalContent) {
-        const steps = parseStepsFromText(finalContent);
-        if (steps.length > 0) {
-          const viewType = currentProcessView;
+        const viewStepSets = parseStepsByView(finalContent);
+
+        for (const { viewType, steps } of viewStepSets) {
+          if (steps.length === 0) continue;
+
           const existingMap = await fetch(`/api/ideas/${idea.id}/process-map?view=${viewType}`, { credentials: "include" })
             .then((r) => r.json());
           const existingNodes = existingMap.nodes || [];
