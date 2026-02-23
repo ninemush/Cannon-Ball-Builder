@@ -291,6 +291,11 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const [deployReport, setDeployReport] = useState<any>(null);
   const docAbortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const initialScrollDoneRef = useRef(false);
+
+  useEffect(() => {
+    initialScrollDoneRef.current = false;
+  }, [idea.id]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamingMsgRef = useRef<string>("");
@@ -426,7 +431,13 @@ function ChatPanel({ idea }: { idea: Idea }) {
   })();
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (displayMessages.length === 0) return;
+    if (!initialScrollDoneRef.current) {
+      initialScrollDoneRef.current = true;
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [displayMessages]);
 
   useEffect(() => {
