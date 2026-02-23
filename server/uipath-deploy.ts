@@ -772,7 +772,8 @@ async function provisionTriggers(
   releaseId: number | null,
   releaseKey: string | null,
   releaseName: string | null,
-  queueResults: DeploymentResult[]
+  queueResults: DeploymentResult[],
+  precomputedRuntime?: RuntimeDetectionResult
 ): Promise<DeploymentResult[]> {
   if (!triggers?.length) return [];
   if (!releaseId) {
@@ -784,7 +785,7 @@ async function provisionTriggers(
     }));
   }
 
-  const runtimeDetection = await detectAvailableRuntimeType(base, hdrs);
+  const runtimeDetection = precomputedRuntime || await detectAvailableRuntimeType(base, hdrs);
   const runtimeType = runtimeDetection.runtimeType;
   const createDisabled = !runtimeDetection.verified || !runtimeDetection.hasUnattendedSlots;
   console.log(`[UiPath Deploy] Using RuntimeType: ${runtimeType}, verified: ${runtimeDetection.verified}, hasUnattendedSlots: ${runtimeDetection.hasUnattendedSlots}, createDisabled: ${createDisabled}`);
@@ -1628,7 +1629,7 @@ export async function deployAllArtifacts(
       });
     }
 
-    const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults);
+    const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults, runtimeCheck);
     allResults.push(...triggerResults);
 
     const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config);
