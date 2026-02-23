@@ -20,7 +20,7 @@ export type OrchestratorArtifacts = {
 export type DeploymentResult = {
   artifact: string;
   name: string;
-  status: "created" | "exists" | "failed" | "manual_required";
+  status: "created" | "exists" | "failed";
   message: string;
   id?: number;
 };
@@ -281,7 +281,7 @@ async function provisionAssets(
         } else if (res.status === 409 || text.includes("already exists")) {
           results.push({ artifact: "Asset", name: a.name, status: "exists", message: "Already exists" });
         } else {
-          results.push({ artifact: "Asset", name: a.name, status: "manual_required", message: `Could not create credential asset (${res.status}). Create manually in Orchestrator > Assets.` });
+          results.push({ artifact: "Asset", name: a.name, status: "failed", message: `Credential asset creation failed (HTTP ${res.status}): ${text.slice(0, 150)}` });
         }
       } else if (assetType === "integer") {
         body.ValueType = "Integer";
@@ -413,31 +413,43 @@ async function provisionStorageBuckets(
         }
       }
 
-      const body = {
-        Name: b.name,
-        Description: b.description || "",
-        Provider: "Orchestrator",
-      };
+      const providers = ["Orchestrator", "Minio", "FileSystem"];
+      let bucketCreated = false;
 
-      const res = await fetch(`${base}/odata/Buckets`, {
-        method: "POST",
-        headers: hdrs,
-        body: JSON.stringify(body),
-      });
-      const text = await res.text();
-      console.log(`[UiPath Deploy] Bucket "${b.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+      for (const provider of providers) {
+        const body = {
+          Name: b.name,
+          Description: b.description || "",
+          Provider: provider,
+        };
 
-      if (res.ok || res.status === 201) {
-        const data = JSON.parse(text);
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "created", message: `Created (ID: ${data.Id})`, id: data.Id });
-      } else if (res.status === 403) {
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "manual_required", message: `Permission denied. Grant "Storage Buckets - Create" to the API user, or create "${b.name}" manually.` });
-      } else if (res.status === 405) {
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "manual_required", message: `Storage Buckets API not available. Create "${b.name}" in Orchestrator > Storage Buckets.` });
-      } else if (res.status === 409 || text.includes("already exists")) {
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: "Already exists" });
-      } else {
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "manual_required", message: `Could not create via API (HTTP ${res.status}). Create "${b.name}" manually in Orchestrator.` });
+        const res = await fetch(`${base}/odata/Buckets`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        console.log(`[UiPath Deploy] Bucket "${b.name}" (Provider=${provider}) -> ${res.status}: ${text.slice(0, 300)}`);
+
+        if (res.ok || res.status === 201) {
+          const data = JSON.parse(text);
+          results.push({ artifact: "Storage Bucket", name: b.name, status: "created", message: `Created (ID: ${data.Id}, Provider: ${provider})`, id: data.Id });
+          bucketCreated = true;
+          break;
+        } else if (res.status === 409 || text.includes("already exists")) {
+          results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: "Already exists" });
+          bucketCreated = true;
+          break;
+        } else if (text.includes("Provider") || text.includes("provider")) {
+          continue;
+        } else {
+          results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+          bucketCreated = true;
+          break;
+        }
+      }
+      if (!bucketCreated) {
+        results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `All provider types rejected. Check API permissions for Storage Buckets.` });
       }
     } catch (err: any) {
       results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: err.message });
@@ -459,8 +471,8 @@ async function provisionTriggers(
     return triggers.map(t => ({
       artifact: "Trigger",
       name: t.name,
-      status: "manual_required" as const,
-      message: "Cannot create trigger without a valid Process (Release). Create manually in Orchestrator.",
+      status: "failed" as const,
+      message: "No valid Process (Release) found — trigger requires a release to be linked to. Retry deployment after process creation succeeds.",
     }));
   }
 
@@ -499,7 +511,7 @@ async function provisionTriggers(
         }
 
         if (!queueId) {
-          results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Queue "${t.queueName}" not found. Create trigger manually after creating the queue.` });
+          results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Queue "${t.queueName}" not found in Orchestrator. Ensure queue was created successfully before trigger can be linked.` });
           continue;
         }
 
@@ -529,10 +541,33 @@ async function provisionTriggers(
         if (res.ok || res.status === 201) {
           const data = JSON.parse(text);
           results.push({ artifact: "Trigger", name: t.name, status: "created", message: `Queue trigger created (ID: ${data.Id}), linked to queue "${t.queueName}"`, id: data.Id });
-        } else if (res.status === 405) {
-          results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Queue triggers not supported via API. Create in Orchestrator: link to queue "${t.queueName}"` });
         } else if (res.status === 409 || text.includes("already exists")) {
           results.push({ artifact: "Trigger", name: t.name, status: "exists", message: "Already exists" });
+        } else if (res.status === 405) {
+          // Try creating as a ProcessSchedule with queue reference instead
+          const schedBody: Record<string, any> = {
+            Enabled: true,
+            Name: t.name,
+            ReleaseId: releaseId,
+            ReleaseName: releaseName || "",
+            StartProcessCron: "0 */5 * ? * *",
+            StartProcessCronDetails: JSON.stringify({ type: 5, minutely: {}, hourly: {}, daily: {}, weekly: { weekdays: [] }, monthly: { weekdays: [] }, advancedCronExpression: "0 */5 * ? * *" }),
+            StartProcessCronSummary: `Queue polling for ${t.queueName}`,
+            TimeZoneId: "UTC",
+            TimeZoneIana: "Etc/UTC",
+            StartStrategy: 15,
+            RuntimeType: "Unattended",
+            InputArguments: JSON.stringify({ QueueName: t.queueName }),
+          };
+          const schedRes = await fetch(`${base}/odata/ProcessSchedules`, { method: "POST", headers: hdrs, body: JSON.stringify(schedBody) });
+          const schedText = await schedRes.text();
+          console.log(`[UiPath Deploy] Queue Trigger "${t.name}" fallback to ProcessSchedule -> ${schedRes.status}: ${schedText.slice(0, 300)}`);
+          if (schedRes.ok || schedRes.status === 201) {
+            const data = JSON.parse(schedText);
+            results.push({ artifact: "Trigger", name: t.name, status: "created", message: `Created as scheduled trigger (ID: ${data.Id}) polling queue "${t.queueName}" every 5 min`, id: data.Id });
+          } else {
+            results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `QueueTriggers API returned 405, ProcessSchedule fallback also failed (${schedRes.status}): ${schedText.slice(0, 150)}` });
+          }
         } else {
           results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
         }
@@ -595,7 +630,7 @@ async function provisionTriggers(
             created = true;
             break;
           } else if (res.status === 405) {
-            results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Scheduled triggers not supported via API on this Orchestrator. Create manually: cron ${cron}` });
+            results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `ProcessSchedules API returned 405 — scheduled triggers endpoint not available on this Orchestrator version. Cron: ${cron}` });
             created = true;
             break;
           } else if (res.status === 409 || text.includes("already exists")) {
@@ -611,7 +646,7 @@ async function provisionTriggers(
           }
         }
         if (!created) {
-          results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Could not determine correct StartStrategy format. Create time trigger manually: cron ${cron}` });
+          results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `All StartStrategy formats rejected (tried 15, 0, {Type:0}). Check Orchestrator API version compatibility. Cron: ${cron}` });
         }
       }
     } catch (err: any) {
@@ -647,29 +682,40 @@ async function provisionEnvironments(
       if (envType.includes("dev")) typeValue = "Dev";
       else if (envType.includes("test")) typeValue = "Test";
 
-      const body: Record<string, any> = {
-        Name: env.name,
-        Description: env.description || "",
-        Type: typeValue,
-      };
+      const bodyVariants = [
+        { Name: env.name, Description: env.description || "", Type: typeValue },
+        { Name: env.name, Description: env.description || "" },
+      ];
 
-      const res = await fetch(`${base}/odata/Environments`, {
-        method: "POST",
-        headers: hdrs,
-        body: JSON.stringify(body),
-      });
-      const text = await res.text();
-      console.log(`[UiPath Deploy] Environment "${env.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+      let envCreated = false;
+      for (const body of bodyVariants) {
+        const res = await fetch(`${base}/odata/Environments`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        console.log(`[UiPath Deploy] Environment "${env.name}" (body keys: ${Object.keys(body).join(",")}) -> ${res.status}: ${text.slice(0, 300)}`);
 
-      if (res.ok || res.status === 201) {
-        const data = JSON.parse(text);
-        results.push({ artifact: "Environment", name: env.name, status: "created", message: `Created (ID: ${data.Id}, Type: ${typeValue})`, id: data.Id });
-      } else if (res.status === 405) {
-        results.push({ artifact: "Environment", name: env.name, status: "manual_required", message: `Environments API not available. Create "${env.name}" (${typeValue}) in Orchestrator > Machines > Environments.` });
-      } else if (res.status === 409 || text.includes("already exists")) {
-        results.push({ artifact: "Environment", name: env.name, status: "exists", message: "Already exists" });
-      } else {
-        results.push({ artifact: "Environment", name: env.name, status: "manual_required", message: `Could not create via API (HTTP ${res.status}). Create "${env.name}" (${typeValue}) manually in Orchestrator.` });
+        if (res.ok || res.status === 201) {
+          const data = JSON.parse(text);
+          results.push({ artifact: "Environment", name: env.name, status: "created", message: `Created (ID: ${data.Id}, Type: ${typeValue})`, id: data.Id });
+          envCreated = true;
+          break;
+        } else if (res.status === 409 || text.includes("already exists")) {
+          results.push({ artifact: "Environment", name: env.name, status: "exists", message: "Already exists" });
+          envCreated = true;
+          break;
+        } else if (text.includes("Type") && body.Type) {
+          continue;
+        } else {
+          results.push({ artifact: "Environment", name: env.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+          envCreated = true;
+          break;
+        }
+      }
+      if (!envCreated) {
+        results.push({ artifact: "Environment", name: env.name, status: "failed", message: `All body formats rejected by Environments API. Check API version.` });
       }
     } catch (err: any) {
       results.push({ artifact: "Environment", name: env.name, status: "failed", message: err.message });
@@ -680,80 +726,163 @@ async function provisionEnvironments(
 
 async function provisionActionCenter(
   base: string, hdrs: Record<string, string>,
-  actionCenter: OrchestratorArtifacts["actionCenter"]
+  actionCenter: OrchestratorArtifacts["actionCenter"],
+  config: UiPathConfig
 ): Promise<DeploymentResult[]> {
   if (!actionCenter?.length) return [];
   const results: DeploymentResult[] = [];
 
+  const cloudTasksBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tasks_`;
+  const endpoints = [
+    `${base}/odata/TaskCatalogs`,
+    `${cloudTasksBase}/api/tasks/v1/task-catalogs`,
+  ];
+
   for (const ac of actionCenter) {
     try {
-      const checkRes = await fetch(
-        `${base}/odata/TaskCatalogs?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-        { headers: hdrs }
-      );
-      if (checkRes.ok) {
-        const checkData = await checkRes.json();
-        if (checkData.value?.length > 0) {
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
-          continue;
-        }
+      for (const checkEndpoint of endpoints) {
+        try {
+          const filterUrl = checkEndpoint.includes("/odata/")
+            ? `${checkEndpoint}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`
+            : `${checkEndpoint}?name=${encodeURIComponent(ac.taskCatalog)}&top=1`;
+          const checkRes = await fetch(filterUrl, { headers: hdrs });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            const items = checkData.value || checkData.items || checkData;
+            if (Array.isArray(items) && items.length > 0) {
+              results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: `Already exists (ID: ${items[0].Id || items[0].id})`, id: items[0].Id || items[0].id });
+              break;
+            }
+          }
+        } catch { /* try next endpoint */ }
       }
+
+      if (results.some(r => r.name === ac.taskCatalog)) continue;
 
       const body: Record<string, any> = {
         Name: ac.taskCatalog,
         Description: ac.description || "",
       };
 
-      const res = await fetch(`${base}/odata/TaskCatalogs`, {
-        method: "POST",
-        headers: hdrs,
-        body: JSON.stringify(body),
-      });
-      const text = await res.text();
-      console.log(`[UiPath Deploy] Action Center "${ac.taskCatalog}" -> ${res.status}: ${text.slice(0, 300)}`);
-
-      if (res.ok || res.status === 201) {
-        const data = JSON.parse(text);
-        let msg = `Created (ID: ${data.Id})`;
-        if (ac.assignedRole) msg += `. Assign to role: ${ac.assignedRole}`;
-        if (ac.sla) msg += `. SLA: ${ac.sla}`;
-        if (ac.escalation) msg += `. Escalation: ${ac.escalation}`;
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: data.Id });
-      } else if (res.status === 409 || text.includes("already exists")) {
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
-      } else if (res.status === 404 || res.status === 405) {
-        results.push({
-          artifact: "Action Center",
-          name: ac.taskCatalog,
-          status: "manual_required",
-          message: `Create task catalog "${ac.taskCatalog}" in Action Center.${ac.assignedRole ? ` Assign: ${ac.assignedRole}.` : ""}${ac.sla ? ` SLA: ${ac.sla}.` : ""}`,
+      let acCreated = false;
+      for (const endpoint of endpoints) {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify(body),
         });
-      } else {
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "manual_required", message: `Could not create via API (HTTP ${res.status}). Create "${ac.taskCatalog}" manually in Action Center.${ac.assignedRole ? ` Assign: ${ac.assignedRole}.` : ""}` });
+        const text = await res.text();
+        console.log(`[UiPath Deploy] Action Center "${ac.taskCatalog}" via ${endpoint.includes("tasks_") ? "cloud tasks API" : "odata"} -> ${res.status}: ${text.slice(0, 300)}`);
+
+        if (res.ok || res.status === 201) {
+          let data: any;
+          try { data = JSON.parse(text); } catch { data = {}; }
+          let msg = `Created (ID: ${data.Id || data.id || "N/A"})`;
+          if (ac.assignedRole) msg += `. Assign to role: ${ac.assignedRole}`;
+          if (ac.sla) msg += `. SLA: ${ac.sla}`;
+          if (ac.escalation) msg += `. Escalation: ${ac.escalation}`;
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: data.Id || data.id });
+          acCreated = true;
+          break;
+        } else if (res.status === 409 || text.includes("already exists")) {
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
+          acCreated = true;
+          break;
+        } else if (res.status === 404 || res.status === 405) {
+          continue;
+        } else {
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+          acCreated = true;
+          break;
+        }
+      }
+      if (!acCreated) {
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `All API endpoints returned 404/405 — Action Center may not be enabled for this tenant.` });
       }
     } catch (err: any) {
-      results.push({
-        artifact: "Action Center",
-        name: ac.taskCatalog,
-        status: "manual_required",
-        message: `Create task catalog "${ac.taskCatalog}" manually in Action Center.${ac.assignedRole ? ` Assign: ${ac.assignedRole}.` : ""}`,
-      });
+      results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `API error: ${err.message}` });
     }
   }
   return results;
 }
 
-function generateDocUnderstandingInstructions(
+async function provisionDocUnderstanding(
   config: UiPathConfig,
+  token: string,
   du: OrchestratorArtifacts["documentUnderstanding"]
-): DeploymentResult[] {
+): Promise<DeploymentResult[]> {
   if (!du?.length) return [];
-  return du.map(project => ({
-    artifact: "Document Understanding",
-    name: project.name,
-    status: "manual_required" as const,
-    message: `Create DU project "${project.name}" in UiPath AI Center > Document Understanding. Document types: ${project.documentTypes?.join(", ") || "N/A"}. Configure taxonomy with the specified document types, then link classifiers and extractors to the automation process. ${project.description || ""}`,
-  }));
+  const results: DeploymentResult[] = [];
+
+  const duBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/du_`;
+  const aiBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/aifabric_`;
+  const hdrs: Record<string, string> = {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
+
+  for (const project of du) {
+    try {
+      const endpoints = [
+        { url: `${duBase}/api/v1/projects`, label: "DU API" },
+        { url: `${aiBase}/api/v1/projects`, label: "AI Fabric API" },
+      ];
+
+      let created = false;
+      for (const ep of endpoints) {
+        try {
+          const checkRes = await fetch(`${ep.url}?name=${encodeURIComponent(project.name)}&top=10`, { headers: hdrs });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            const items = checkData.value || checkData.items || (Array.isArray(checkData) ? checkData : []);
+            const existing = items.find((p: any) => (p.Name || p.name) === project.name);
+            if (existing) {
+              results.push({ artifact: "Document Understanding", name: project.name, status: "exists", message: `Already exists (ID: ${existing.Id || existing.id}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: existing.Id || existing.id });
+              created = true;
+              break;
+            }
+          }
+        } catch { /* try next */ }
+
+        try {
+          const body = {
+            Name: project.name,
+            Description: project.description || `Document Understanding project for ${project.name}`,
+            DocumentTypes: project.documentTypes || [],
+          };
+          const res = await fetch(ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+          const text = await res.text();
+          console.log(`[UiPath Deploy] DU project "${project.name}" via ${ep.label} -> ${res.status}: ${text.slice(0, 300)}`);
+
+          if (res.ok || res.status === 201) {
+            let data: any;
+            try { data = JSON.parse(text); } catch { data = {}; }
+            results.push({ artifact: "Document Understanding", name: project.name, status: "created", message: `Created (ID: ${data.Id || data.id || "N/A"}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: data.Id || data.id });
+            created = true;
+            break;
+          } else if (res.status === 409 || text.includes("already exists")) {
+            results.push({ artifact: "Document Understanding", name: project.name, status: "exists", message: `Already exists. Doc types: ${project.documentTypes?.join(", ") || "N/A"}` });
+            created = true;
+            break;
+          } else if (res.status === 404 || res.status === 405) {
+            continue;
+          } else {
+            results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `${ep.label} returned HTTP ${res.status}: ${text.slice(0, 150)}` });
+            created = true;
+            break;
+          }
+        } catch { continue; }
+      }
+
+      if (!created) {
+        results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `DU API not available on this tenant. Doc types: ${project.documentTypes?.join(", ") || "N/A"}` });
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `API error: ${err.message}` });
+    }
+  }
+  return results;
 }
 
 async function provisionTestCases(
@@ -765,106 +894,113 @@ async function provisionTestCases(
   if (!testCases?.length) return [];
   const results: DeploymentResult[] = [];
 
-  const tmBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`;
+  const tmBases = [
+    `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`,
+    `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tmapi_`,
+  ];
   const hdrs: Record<string, string> = {
     "Authorization": `Bearer ${token}`,
     "Content-Type": "application/json",
     "Accept": "application/json",
   };
 
-  try {
-    const projRes = await fetch(`${tmBase}/api/v2/projects?$top=10`, { headers: hdrs });
-    if (!projRes.ok) {
-      console.log(`[UiPath Deploy] Test Manager API returned ${projRes.status} — may not be available`);
-      return testCases.map(tc => ({
-        artifact: "Test Case",
-        name: tc.name,
-        status: "manual_required" as const,
-        message: `Test Manager not available. Create "${tc.name}" manually.${tc.steps?.length ? ` ${tc.steps.length} steps defined.` : ""}`,
-      }));
-    }
+  let activeTmBase: string | null = null;
+  let projectId: number | null = null;
 
-    const projData = await projRes.json();
-    let projectId: number | null = null;
+  for (const tmBase of tmBases) {
+    try {
+      const projRes = await fetch(`${tmBase}/api/v2/projects?$top=10`, { headers: hdrs });
+      console.log(`[UiPath Deploy] Test Manager probe ${tmBase} -> ${projRes.status}`);
+      if (projRes.ok) {
+        activeTmBase = tmBase;
+        const projData = await projRes.json();
 
-    if (projData.value?.length > 0) {
-      const match = projData.value.find((p: any) =>
-        p.Name?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
-        processName.toLowerCase().includes(p.Name?.toLowerCase())
-      );
-      projectId = match?.Id || projData.value[0].Id;
-    }
-
-    if (!projectId) {
-      try {
-        const createProjRes = await fetch(`${tmBase}/api/v2/projects`, {
-          method: "POST",
-          headers: hdrs,
-          body: JSON.stringify({
-            Name: processName.replace(/_/g, " "),
-            Description: `Test project for ${processName}`,
-          }),
-        });
-        if (createProjRes.ok || createProjRes.status === 201) {
-          const newProj = await createProjRes.json();
-          projectId = newProj.Id;
-          results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
+        if (projData.value?.length > 0) {
+          const match = projData.value.find((p: any) =>
+            p.Name?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
+            processName.toLowerCase().includes(p.Name?.toLowerCase())
+          );
+          projectId = match?.Id || projData.value[0].Id;
         }
-      } catch { /* fall through */ }
-    }
-
-    if (!projectId) {
-      return testCases.map(tc => ({
-        artifact: "Test Case",
-        name: tc.name,
-        status: "manual_required" as const,
-        message: `Could not find or create test project. Create "${tc.name}" manually.${tc.steps?.length ? ` ${tc.steps.length} steps defined.` : ""}`,
-      }));
-    }
-
-    for (const tc of testCases) {
-      try {
-        const body: Record<string, any> = {
-          Name: tc.name,
-          Description: tc.description || "",
-          ProjectId: projectId,
-        };
-
-        if (tc.steps?.length) {
-          body.ManualSteps = tc.steps.map((s, idx) => ({
-            StepDescription: s.action,
-            ExpectedResult: s.expected,
-            Order: idx + 1,
-          }));
-        }
-
-        const res = await fetch(`${tmBase}/api/v2/projects/${projectId}/testcases`, {
-          method: "POST",
-          headers: hdrs,
-          body: JSON.stringify(body),
-        });
-        const text = await res.text();
-        console.log(`[UiPath Deploy] Test Case "${tc.name}" -> ${res.status}: ${text.slice(0, 300)}`);
-
-        if (res.ok || res.status === 201) {
-          const data = JSON.parse(text);
-          results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created (ID: ${data.Id})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: data.Id });
-        } else if (res.status === 409 || text.includes("already exists")) {
-          results.push({ artifact: "Test Case", name: tc.name, status: "exists", message: "Already exists" });
-        } else {
-          results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
-        }
-      } catch (err: any) {
-        results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: err.message });
+        break;
       }
-    }
-  } catch (err: any) {
+    } catch { continue; }
+  }
+
+  if (!activeTmBase) {
     return testCases.map(tc => ({
       artifact: "Test Case",
       name: tc.name,
-      status: "manual_required" as const,
-      message: `Test Manager unavailable. Create "${tc.name}" manually.${tc.steps?.length ? ` ${tc.steps.length} steps defined.` : ""}`,
+      status: "failed" as const,
+      message: `Test Manager API not reachable — tried ${tmBases.length} endpoints. Check tenant has Test Manager enabled.`,
     }));
+  }
+
+  if (!projectId) {
+    try {
+      const createProjRes = await fetch(`${activeTmBase}/api/v2/projects`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify({
+          Name: processName.replace(/_/g, " "),
+          Description: `Test project for ${processName}`,
+        }),
+      });
+      if (createProjRes.ok || createProjRes.status === 201) {
+        const newProj = await createProjRes.json();
+        projectId = newProj.Id;
+        results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
+      }
+    } catch { /* fall through */ }
+  }
+
+  if (!projectId) {
+    return [
+      ...results,
+      ...testCases.map(tc => ({
+        artifact: "Test Case",
+        name: tc.name,
+        status: "failed" as const,
+        message: `Could not find or create test project in Test Manager. Check API permissions.`,
+      })),
+    ];
+  }
+
+  for (const tc of testCases) {
+    try {
+      const body: Record<string, any> = {
+        Name: tc.name,
+        Description: tc.description || "",
+        ProjectId: projectId,
+      };
+
+      if (tc.steps?.length) {
+        body.ManualSteps = tc.steps.map((s, idx) => ({
+          StepDescription: s.action,
+          ExpectedResult: s.expected,
+          Order: idx + 1,
+        }));
+      }
+
+      const res = await fetch(`${activeTmBase}/api/v2/projects/${projectId}/testcases`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      console.log(`[UiPath Deploy] Test Case "${tc.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+
+      if (res.ok || res.status === 201) {
+        const data = JSON.parse(text);
+        results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created (ID: ${data.Id})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: data.Id });
+      } else if (res.status === 409 || text.includes("already exists")) {
+        results.push({ artifact: "Test Case", name: tc.name, status: "exists", message: "Already exists" });
+      } else {
+        results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: err.message });
+    }
   }
 
   return results;
@@ -908,10 +1044,10 @@ export async function deployAllArtifacts(
     const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults);
     allResults.push(...triggerResults);
 
-    const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter);
+    const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config);
     allResults.push(...actionCenterResults);
 
-    const duResults = generateDocUnderstandingInstructions(config, artifacts.documentUnderstanding);
+    const duResults = await provisionDocUnderstanding(config, token, artifacts.documentUnderstanding);
     allResults.push(...duResults);
 
     const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation");
@@ -920,11 +1056,9 @@ export async function deployAllArtifacts(
     const created = allResults.filter(r => r.status === "created").length;
     const existed = allResults.filter(r => r.status === "exists").length;
     const failed = allResults.filter(r => r.status === "failed").length;
-    const manual = allResults.filter(r => r.status === "manual_required").length;
 
     let summary = `Deployment complete: ${created} created, ${existed} already existed`;
     if (failed > 0) summary += `, ${failed} failed`;
-    if (manual > 0) summary += `, ${manual} require manual setup`;
 
     console.log(`[UiPath Deploy] ${summary}`);
     return { results: allResults, summary };
@@ -950,7 +1084,6 @@ export function formatDeploymentReport(results: DeploymentResult[]): string {
       case "created": return "✅";
       case "exists": return "🔵";
       case "failed": return "❌";
-      case "manual_required": return "⚠️";
       default: return "•";
     }
   };
@@ -964,16 +1097,12 @@ export function formatDeploymentReport(results: DeploymentResult[]): string {
   }
 
   const created = results.filter(r => r.status === "created").length;
-  const manual = results.filter(r => r.status === "manual_required").length;
   const failed = results.filter(r => r.status === "failed").length;
 
-  if (manual > 0) {
-    lines.push(`**${manual} item(s) require manual setup** — see details above.`);
-  }
   if (failed > 0) {
     lines.push(`**${failed} item(s) failed** — check permissions and retry from Orchestrator.`);
   }
-  if (created > 0 && manual === 0 && failed === 0) {
+  if (created > 0 && failed === 0) {
     lines.push("All artifacts provisioned successfully. The automation is fully deployed.");
   }
 

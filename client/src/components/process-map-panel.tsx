@@ -54,9 +54,15 @@ import {
   Redo2,
   Maximize2,
   Minimize2,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface HistorySnapshot {
   nodes: Node[];
@@ -1498,6 +1504,144 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
   );
 }
 
+interface SDDSection {
+  title: string;
+  content: string;
+}
+
+function parseSddSections(content: string): SDDSection[] {
+  const lines = content.split("\n");
+  const sections: SDDSection[] = [];
+  let currentTitle = "";
+  let currentContent: string[] = [];
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^##\s+\d*\.?\s*(.*)/);
+    if (headingMatch) {
+      if (currentTitle) {
+        sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
+      }
+      currentTitle = headingMatch[1].trim();
+      currentContent = [];
+    } else {
+      currentContent.push(line);
+    }
+  }
+
+  if (currentTitle) {
+    sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
+  }
+
+  if (sections.length === 0 && content.trim()) {
+    sections.push({ title: "Document Content", content: content.trim() });
+  }
+
+  return sections;
+}
+
+function SDDInlineViewer({ ideaId }: { ideaId: string }) {
+  const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
+
+  const { data: sddVersions, isLoading } = useQuery<{ id: number; version: number; content: string; status: string; createdAt: string }[]>({
+    queryKey: ["/api/ideas", ideaId, "documents", "versions", "SDD"],
+  });
+
+  const latestSdd = sddVersions?.length ? sddVersions[sddVersions.length - 1] : null;
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center" data-testid="sdd-view-loading">
+        <div className="flex flex-col items-center gap-3 text-zinc-500">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span className="text-xs">Loading SDD...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!latestSdd) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6" data-testid="sdd-view-empty">
+        <div className="text-center max-w-sm space-y-3">
+          <div className="w-12 h-12 rounded-xl bg-cb-orange/10 flex items-center justify-center mx-auto">
+            <FileText className="h-6 w-6 text-cb-orange" />
+          </div>
+          <h4 className="text-sm font-semibold text-zinc-300">No SDD Generated Yet</h4>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            The Solution Design Document will appear here once it's generated. First, complete and approve your To-Be process map, then approve the PDD. The SDD is automatically created after PDD approval.
+          </p>
+          <div className="flex items-center justify-center gap-2 text-[10px] text-zinc-600">
+            <span className="flex items-center gap-1"><Check className="h-3 w-3" /> Approve To-Be Map</span>
+            <span className="text-zinc-700">&rarr;</span>
+            <span className="flex items-center gap-1"><Check className="h-3 w-3" /> Approve PDD</span>
+            <span className="text-zinc-700">&rarr;</span>
+            <span className="flex items-center gap-1 text-cb-orange"><FileText className="h-3 w-3" /> SDD Generated</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const sections = parseSddSections(latestSdd.content);
+
+  const toggleSection = (idx: number) => {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto custom-scrollbar" data-testid="sdd-view-content">
+      <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-cb-orange" />
+          <span className="text-xs font-semibold text-zinc-300">Solution Design Document</span>
+          <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">
+            v{latestSdd.version}
+          </Badge>
+          {latestSdd.status === "approved" && (
+            <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
+              <Check className="h-3 w-3" /> Approved
+            </span>
+          )}
+        </div>
+        <span className="text-[10px] text-zinc-600">
+          {new Date(latestSdd.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+        </span>
+      </div>
+
+      <div className="divide-y divide-zinc-800/40">
+        {sections.map((section, idx) => {
+          const isExpanded = expandedSections.has(idx);
+          return (
+            <div key={idx} data-testid={`sdd-section-${idx}`}>
+              <button
+                onClick={() => toggleSection(idx)}
+                className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-zinc-800/30 transition-colors text-left"
+              >
+                {isExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                )}
+                <span className="text-xs font-medium text-zinc-300">{section.title}</span>
+              </button>
+              {isExpanded && (
+                <div className="px-6 pb-4 text-xs text-zinc-400 leading-relaxed prose prose-invert prose-xs max-w-none">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{section.content}</ReactMarkdown>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onCompletenessChange, onViewChange }: ProcessMapPanelProps) {
   const [activeView, setActiveView] = useState<ProcessView>("as-is");
 
@@ -1580,20 +1724,20 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
     <div className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-50 bg-zinc-950" : "h-full"}`} data-testid="panel-process-map">
       <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center justify-between gap-2 bg-zinc-950/50">
         <div className="flex items-center gap-2.5">
-          <div className="w-6 h-6 rounded-lg bg-cb-teal/10 flex items-center justify-center">
-            <GitBranch className="h-3.5 w-3.5 text-cb-teal" />
+          <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${activeView === "sdd" ? "bg-cb-orange/10" : "bg-cb-teal/10"}`}>
+            {activeView === "sdd" ? <FileText className="h-3.5 w-3.5 text-cb-orange" /> : <GitBranch className="h-3.5 w-3.5 text-cb-teal" />}
           </div>
           <h3 className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-            {activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} Process Map
+            {activeView === "as-is" ? "As-Is Process Map" : activeView === "to-be" ? "To-Be Process Map" : "Solution Design Document"}
           </h3>
-          {nodeCount > 0 && (
+          {activeView !== "sdd" && nodeCount > 0 && (
             <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 font-medium">
               {nodeCount} steps
             </Badge>
           )}
         </div>
         <div className="flex items-center gap-2">
-          {nodeCount > 0 && undoRedoControls && (
+          {activeView !== "sdd" && nodeCount > 0 && undoRedoControls && (
             <>
               <Button
                 size="sm"
@@ -1619,7 +1763,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               </Button>
             </>
           )}
-          {nodeCount > 0 && (
+          {activeView !== "sdd" && nodeCount > 0 && (
             <Button
               size="sm"
               variant="ghost"
@@ -1669,7 +1813,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
         </div>
       </div>
 
-      {(activeView === "to-be" || activeView === "sdd") && nodeCount > 0 && (
+      {activeView === "to-be" && nodeCount > 0 && (
         <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-950/30" data-testid="automation-impact-bar">
           {(() => {
             const nodes = mapData?.nodes || [];
@@ -1719,11 +1863,15 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
         </div>
       )}
 
-      <ReactFlowProvider>
-        <ProcessMapFlow ideaId={ideaId} activeView={activeView} onRelayout={(fn) => { relayoutRef.current = fn; }} onUndoRedoReady={setUndoRedoControls} />
-      </ReactFlowProvider>
+      {activeView === "sdd" ? (
+        <SDDInlineViewer ideaId={ideaId} />
+      ) : (
+        <ReactFlowProvider>
+          <ProcessMapFlow ideaId={ideaId} activeView={activeView} onRelayout={(fn) => { relayoutRef.current = fn; }} onUndoRedoReady={setUndoRedoControls} />
+        </ReactFlowProvider>
+      )}
 
-      {nodeCount >= 3 && !approval && (
+      {activeView !== "sdd" && nodeCount >= 3 && !approval && (
         <div className="px-4 py-2.5 border-t border-zinc-800/80 flex items-center justify-between bg-zinc-950/50">
           {!showApprovalConfirm ? (
             <Button
@@ -1765,11 +1913,11 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
         </div>
       )}
 
-      {approval && (
+      {activeView !== "sdd" && approval && (
         <div className="px-4 py-2.5 border-t border-zinc-800/80 flex items-center gap-2 bg-zinc-950/50" data-testid="approval-badge">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
             <Check className="h-3 w-3 text-emerald-500" />
-            <span className="text-[11px] text-emerald-400 font-medium">{activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} Approved</span>
+            <span className="text-[11px] text-emerald-400 font-medium">{activeView === "as-is" ? "As-Is" : "To-Be"} Approved</span>
           </div>
           <span className="text-[10px] text-zinc-500">
             {new Date(approval.approvedAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
