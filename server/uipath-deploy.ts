@@ -11,7 +11,10 @@ export type OrchestratorArtifacts = {
   machines?: Array<{ name: string; type?: string; slots?: number; description?: string }>;
   triggers?: Array<{ name: string; type: string; queueName?: string; cron?: string; description?: string }>;
   storageBuckets?: Array<{ name: string; description?: string }>;
+  environments?: Array<{ name: string; type?: string; description?: string }>;
   actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string }>;
+  documentUnderstanding?: Array<{ name: string; documentTypes: string[]; description?: string }>;
+  testCases?: Array<{ name: string; description?: string; steps?: Array<{ action: string; expected: string }> }>;
 };
 
 export type DeploymentResult = {
@@ -83,10 +86,10 @@ export async function extractArtifactsWithLLM(sddContent: string): Promise<Orche
       system: "You are a UiPath automation consultant. Extract Orchestrator artifact definitions from the SDD and output ONLY valid JSON. No other text, no markdown formatting, no code fences — just the raw JSON object.",
       messages: [{
         role: "user",
-        content: `Extract ALL UiPath Orchestrator artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, actionCenter. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults.
+        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, environments, actionCenter, documentUnderstanding, testCases. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults. IMPORTANT: All triggers (Queue and Time) MUST be included — never treat them as manual steps. Generate test cases that cover the key automation scenarios described in the SDD.
 
 Expected JSON shape:
-{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}]}
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}],"documentUnderstanding":[{"name":"ProjectName","documentTypes":["Invoice","Receipt"],"description":"..."}],"testCases":[{"name":"Test case name","description":"What this tests","steps":[{"action":"Step action","expected":"Expected result"}]}]}
 
 SDD content:
 ${sddContent.slice(0, 12000)}`
@@ -120,16 +123,26 @@ ${sddContent.slice(0, 12000)}`
     if (Array.isArray(raw.storageBuckets)) {
       validated.storageBuckets = raw.storageBuckets.filter((b: any) => typeof b?.name === "string" && b.name.length > 0);
     }
+    if (Array.isArray(raw.environments)) {
+      validated.environments = raw.environments.filter((e: any) => typeof e?.name === "string" && e.name.length > 0);
+    }
     if (Array.isArray(raw.actionCenter)) {
       validated.actionCenter = raw.actionCenter.filter((a: any) => typeof a?.taskCatalog === "string" && a.taskCatalog.length > 0);
+    }
+    if (Array.isArray(raw.documentUnderstanding)) {
+      validated.documentUnderstanding = raw.documentUnderstanding.filter((d: any) => typeof d?.name === "string" && d.name.length > 0);
+    }
+    if (Array.isArray(raw.testCases)) {
+      validated.testCases = raw.testCases.filter((t: any) => typeof t?.name === "string" && t.name.length > 0);
     }
 
     const hasContent = (validated.queues?.length || 0) + (validated.assets?.length || 0) +
       (validated.triggers?.length || 0) + (validated.machines?.length || 0) +
-      (validated.storageBuckets?.length || 0) + (validated.actionCenter?.length || 0);
+      (validated.storageBuckets?.length || 0) + (validated.environments?.length || 0) + (validated.actionCenter?.length || 0) +
+      (validated.documentUnderstanding?.length || 0) + (validated.testCases?.length || 0);
 
     if (hasContent > 0) {
-      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, actionCenter:${validated.actionCenter?.length||0})`);
+      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0})`);
       return validated;
     }
     console.warn("[UiPath Deploy] LLM returned JSON but no valid artifacts after validation. Raw keys:", Object.keys(raw));
@@ -581,16 +594,251 @@ async function provisionTriggers(
   return results;
 }
 
-function generateActionCenterInstructions(
+async function provisionEnvironments(
+  base: string, hdrs: Record<string, string>,
+  environments: OrchestratorArtifacts["environments"]
+): Promise<DeploymentResult[]> {
+  if (!environments?.length) return [];
+  const results: DeploymentResult[] = [];
+
+  for (const env of environments) {
+    try {
+      const checkRes = await fetch(
+        `${base}/odata/Environments?$filter=Name eq '${odataEscape(env.name)}'&$top=1`,
+        { headers: hdrs }
+      );
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (checkData.value?.length > 0) {
+          results.push({ artifact: "Environment", name: env.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+          continue;
+        }
+      }
+
+      const envType = (env.type || "Production").toLowerCase();
+      let typeValue = "Prod";
+      if (envType.includes("dev")) typeValue = "Dev";
+      else if (envType.includes("test")) typeValue = "Test";
+
+      const body: Record<string, any> = {
+        Name: env.name,
+        Description: env.description || "",
+        Type: typeValue,
+      };
+
+      const res = await fetch(`${base}/odata/Environments`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      console.log(`[UiPath Deploy] Environment "${env.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+
+      if (res.ok || res.status === 201) {
+        const data = JSON.parse(text);
+        results.push({ artifact: "Environment", name: env.name, status: "created", message: `Created (ID: ${data.Id}, Type: ${typeValue})`, id: data.Id });
+      } else if (res.status === 409 || text.includes("already exists")) {
+        results.push({ artifact: "Environment", name: env.name, status: "exists", message: "Already exists" });
+      } else {
+        results.push({ artifact: "Environment", name: env.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Environment", name: env.name, status: "failed", message: err.message });
+    }
+  }
+  return results;
+}
+
+async function provisionActionCenter(
+  base: string, hdrs: Record<string, string>,
   actionCenter: OrchestratorArtifacts["actionCenter"]
-): DeploymentResult[] {
+): Promise<DeploymentResult[]> {
   if (!actionCenter?.length) return [];
-  return actionCenter.map(ac => ({
-    artifact: "Action Center",
-    name: ac.taskCatalog,
+  const results: DeploymentResult[] = [];
+
+  for (const ac of actionCenter) {
+    try {
+      const checkRes = await fetch(
+        `${base}/odata/TaskCatalogs?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+        { headers: hdrs }
+      );
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (checkData.value?.length > 0) {
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+          continue;
+        }
+      }
+
+      const body: Record<string, any> = {
+        Name: ac.taskCatalog,
+        Description: ac.description || "",
+      };
+
+      const res = await fetch(`${base}/odata/TaskCatalogs`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      console.log(`[UiPath Deploy] Action Center "${ac.taskCatalog}" -> ${res.status}: ${text.slice(0, 300)}`);
+
+      if (res.ok || res.status === 201) {
+        const data = JSON.parse(text);
+        let msg = `Created (ID: ${data.Id})`;
+        if (ac.assignedRole) msg += `. Assign to role: ${ac.assignedRole}`;
+        if (ac.sla) msg += `. SLA: ${ac.sla}`;
+        if (ac.escalation) msg += `. Escalation: ${ac.escalation}`;
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: data.Id });
+      } else if (res.status === 409 || text.includes("already exists")) {
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
+      } else if (res.status === 404) {
+        results.push({
+          artifact: "Action Center",
+          name: ac.taskCatalog,
+          status: "manual_required",
+          message: `Action Center API not available. Create task catalog "${ac.taskCatalog}" manually in Orchestrator > Action Center. Assign to: ${ac.assignedRole || "N/A"}, SLA: ${ac.sla || "N/A"}.`,
+        });
+      } else {
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+      }
+    } catch (err: any) {
+      results.push({
+        artifact: "Action Center",
+        name: ac.taskCatalog,
+        status: "manual_required",
+        message: `Could not provision via API: ${err.message}. Create task catalog "${ac.taskCatalog}" manually. Assign to: ${ac.assignedRole || "N/A"}, SLA: ${ac.sla || "N/A"}.`,
+      });
+    }
+  }
+  return results;
+}
+
+function generateDocUnderstandingInstructions(
+  config: UiPathConfig,
+  du: OrchestratorArtifacts["documentUnderstanding"]
+): DeploymentResult[] {
+  if (!du?.length) return [];
+  return du.map(project => ({
+    artifact: "Document Understanding",
+    name: project.name,
     status: "manual_required" as const,
-    message: `Create task catalog "${ac.taskCatalog}" in Orchestrator > Action Center > Action Catalogs. Assign to role: ${ac.assignedRole || "N/A"}. SLA: ${ac.sla || "N/A"}. Escalation: ${ac.escalation || "N/A"}.`,
+    message: `Create DU project "${project.name}" in UiPath AI Center > Document Understanding. Document types: ${project.documentTypes?.join(", ") || "N/A"}. Configure taxonomy with the specified document types, then link classifiers and extractors to the automation process. ${project.description || ""}`,
   }));
+}
+
+async function provisionTestCases(
+  config: UiPathConfig,
+  token: string,
+  testCases: OrchestratorArtifacts["testCases"],
+  processName: string
+): Promise<DeploymentResult[]> {
+  if (!testCases?.length) return [];
+  const results: DeploymentResult[] = [];
+
+  const tmBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`;
+  const hdrs: Record<string, string> = {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
+
+  try {
+    const projRes = await fetch(`${tmBase}/api/v2/projects?$top=10`, { headers: hdrs });
+    if (!projRes.ok) {
+      console.log(`[UiPath Deploy] Test Manager API returned ${projRes.status} — may not be available`);
+      return testCases.map(tc => ({
+        artifact: "Test Case",
+        name: tc.name,
+        status: "manual_required" as const,
+        message: `Create test case "${tc.name}" manually in UiPath Test Manager. ${tc.description || ""}${tc.steps?.length ? ` Steps: ${tc.steps.map((s, i) => `${i+1}. ${s.action} → Expected: ${s.expected}`).join("; ")}` : ""}`,
+      }));
+    }
+
+    const projData = await projRes.json();
+    let projectId: number | null = null;
+
+    if (projData.value?.length > 0) {
+      const match = projData.value.find((p: any) =>
+        p.Name?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
+        processName.toLowerCase().includes(p.Name?.toLowerCase())
+      );
+      projectId = match?.Id || projData.value[0].Id;
+    }
+
+    if (!projectId) {
+      try {
+        const createProjRes = await fetch(`${tmBase}/api/v2/projects`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify({
+            Name: processName.replace(/_/g, " "),
+            Description: `Test project for ${processName}`,
+          }),
+        });
+        if (createProjRes.ok || createProjRes.status === 201) {
+          const newProj = await createProjRes.json();
+          projectId = newProj.Id;
+          results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
+        }
+      } catch { /* fall through */ }
+    }
+
+    if (!projectId) {
+      return testCases.map(tc => ({
+        artifact: "Test Case",
+        name: tc.name,
+        status: "manual_required" as const,
+        message: `Could not find or create test project. Create test case "${tc.name}" manually. ${tc.description || ""}`,
+      }));
+    }
+
+    for (const tc of testCases) {
+      try {
+        const body: Record<string, any> = {
+          Name: tc.name,
+          Description: tc.description || "",
+          ProjectId: projectId,
+        };
+
+        if (tc.steps?.length) {
+          body.ManualSteps = tc.steps.map((s, idx) => ({
+            StepDescription: s.action,
+            ExpectedResult: s.expected,
+            Order: idx + 1,
+          }));
+        }
+
+        const res = await fetch(`${tmBase}/api/v2/projects/${projectId}/testcases`, {
+          method: "POST",
+          headers: hdrs,
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        console.log(`[UiPath Deploy] Test Case "${tc.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+
+        if (res.ok || res.status === 201) {
+          const data = JSON.parse(text);
+          results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created (ID: ${data.Id})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: data.Id });
+        } else if (res.status === 409 || text.includes("already exists")) {
+          results.push({ artifact: "Test Case", name: tc.name, status: "exists", message: "Already exists" });
+        } else {
+          results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+        }
+      } catch (err: any) {
+        results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: err.message });
+      }
+    }
+  } catch (err: any) {
+    return testCases.map(tc => ({
+      artifact: "Test Case",
+      name: tc.name,
+      status: "manual_required" as const,
+      message: `Test Manager API unavailable: ${err.message}. Create test case "${tc.name}" manually.`,
+    }));
+  }
+
+  return results;
 }
 
 export async function deployAllArtifacts(
@@ -625,11 +873,20 @@ export async function deployAllArtifacts(
     const machineResults = await provisionMachines(base, hdrs, artifacts.machines);
     allResults.push(...machineResults);
 
+    const envResults = await provisionEnvironments(base, hdrs, artifacts.environments);
+    allResults.push(...envResults);
+
     const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults);
     allResults.push(...triggerResults);
 
-    const actionCenterResults = generateActionCenterInstructions(artifacts.actionCenter);
+    const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter);
     allResults.push(...actionCenterResults);
+
+    const duResults = generateDocUnderstandingInstructions(config, artifacts.documentUnderstanding);
+    allResults.push(...duResults);
+
+    const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation");
+    allResults.push(...testResults);
 
     const created = allResults.filter(r => r.status === "created").length;
     const existed = allResults.filter(r => r.status === "exists").length;

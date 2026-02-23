@@ -123,6 +123,7 @@ interface ProcessMapPanelProps {
   onStepsChange?: (count: number) => void;
   onApproved?: () => void;
   onCompletenessChange?: (pct: number) => void;
+  onViewChange?: (view: "as-is" | "to-be") => void;
 }
 
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
@@ -1489,8 +1490,13 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
   );
 }
 
-export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onCompletenessChange }: ProcessMapPanelProps) {
+export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onCompletenessChange, onViewChange }: ProcessMapPanelProps) {
   const [activeView, setActiveView] = useState<"as-is" | "to-be">("as-is");
+
+  const handleViewChange = useCallback((view: "as-is" | "to-be") => {
+    setActiveView(view);
+    onViewChange?.(view);
+  }, [onViewChange]);
 
   const { data: mapData } = useQuery<ProcessMapData>({
     queryKey: ["/api/ideas", ideaId, "process-map", activeView],
@@ -1612,14 +1618,14 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             data-testid="button-toggle-view"
           >
             <button
-              onClick={() => setActiveView("as-is")}
+              onClick={() => handleViewChange("as-is")}
               className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "as-is" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-zinc-500 hover:text-zinc-300"}`}
               data-testid="button-view-as-is"
             >
               As-Is
             </button>
             <button
-              onClick={() => setActiveView("to-be")}
+              onClick={() => handleViewChange("to-be")}
               className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "to-be" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-zinc-500 hover:text-zinc-300"}`}
               data-testid="button-view-to-be"
             >

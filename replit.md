@@ -47,6 +47,9 @@ The application employs a modern web stack:
 - Steps without FROM fall back to sequential connection
 
 ## Recent Changes
+- 2026-02-23: UiPath Document Understanding integration: DU project instructions generated in deployment report with document type taxonomy
+- 2026-02-23: UiPath Test Manager integration: auto-provisions test projects and test cases via Test Manager API with manual step definitions; graceful fallback to manual instructions if API unavailable
+- 2026-02-23: Extended orchestrator_artifacts block: added documentUnderstanding and testCases arrays to SDD generation, LLM extraction, validation, and deployment pipeline
 - 2026-02-23: Process map undo/redo: in-memory history stack (50 snapshots), Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y keyboard shortcuts, toolbar undo/redo buttons, snapshots on every meaningful change (node add/edit/delete, edge add/edit/delete, drag, reconnect)
 - 2026-02-23: Edge reconnection: drag edge endpoints to different nodes via ReactFlow onReconnect, DB sync on reconnect, visual feedback during reconnection (pulsing orange handles, dashed edge animation)
 - 2026-02-23: Enhanced visual handles: glowing blue handles on node hover, scale-up on handle hover, orange pulsing handles during reconnection mode, connection line glow effect

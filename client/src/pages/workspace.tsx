@@ -37,6 +37,8 @@ import ProcessMapPanel from "@/components/process-map-panel";
 import { parseStepsFromText } from "@/lib/step-parser";
 import { DocumentCard, UiPathPackageCard } from "@/components/document-card";
 
+let currentProcessView: "as-is" | "to-be" = "as-is";
+
 function ThinkingIndicator() {
   const [elapsed, setElapsed] = useState(0);
 
@@ -583,7 +585,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
       if (finalContent) {
         const steps = parseStepsFromText(finalContent);
         if (steps.length > 0) {
-          const existingMap = await fetch(`/api/ideas/${idea.id}/process-map?view=as-is`, { credentials: "include" })
+          const viewType = currentProcessView;
+          const existingMap = await fetch(`/api/ideas/${idea.id}/process-map?view=${viewType}`, { credentials: "include" })
             .then((r) => r.json());
           const existingNodes = existingMap.nodes || [];
 
@@ -598,30 +601,53 @@ function ChatPanel({ idea }: { idea: Idea }) {
 
           for (let i = 0; i < steps.length; i++) {
             const step = steps[i];
-            const res = await fetch(`/api/ideas/${idea.id}/process-nodes`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              credentials: "include",
-              body: JSON.stringify({
-                viewType: "as-is",
+            const normalizedStepName = normalizeName(step.name);
+            const existingId = nameToId[normalizedStepName];
+
+            if (existingId) {
+              await fetch(`/api/process-nodes/${existingId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                  name: step.name,
+                  role: step.role,
+                  system: step.system,
+                  nodeType: step.nodeType,
+                }),
+              });
+              createdNodes.push({
                 name: step.name,
-                role: step.role,
-                system: step.system,
-                nodeType: step.nodeType,
-                orderIndex: existingNodes.length + i,
-              }),
-            });
-            const created = await res.json();
-            createdNodes.push({
-              name: step.name,
-              id: created.id,
-              from: step.from,
-              edgeLabel: step.edgeLabel,
-            });
-            nameToId[normalizeName(step.name)] = created.id;
+                id: existingId,
+                from: step.from,
+                edgeLabel: step.edgeLabel,
+              });
+            } else {
+              const res = await fetch(`/api/ideas/${idea.id}/process-nodes`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                  viewType,
+                  name: step.name,
+                  role: step.role,
+                  system: step.system,
+                  nodeType: step.nodeType,
+                  orderIndex: existingNodes.length + i,
+                }),
+              });
+              const created = await res.json();
+              createdNodes.push({
+                name: step.name,
+                id: created.id,
+                from: step.from,
+                edgeLabel: step.edgeLabel,
+              });
+              nameToId[normalizeName(step.name)] = created.id;
+            }
           }
 
-          const updatedMap = await fetch(`/api/ideas/${idea.id}/process-map?view=as-is`, { credentials: "include" }).then((r) => r.json());
+          const updatedMap = await fetch(`/api/ideas/${idea.id}/process-map?view=${viewType}`, { credentials: "include" }).then((r) => r.json());
           const existingEdges = updatedMap.edges || [];
 
           const resolveFrom = (fromName: string): number | null => {
@@ -662,7 +688,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
                   headers: { "Content-Type": "application/json" },
                   credentials: "include",
                   body: JSON.stringify({
-                    viewType: "as-is",
+                    viewType,
                     sourceNodeId: sourceId,
                     targetNodeId: node.id,
                     label,
@@ -672,7 +698,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
             }
           }
 
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map", "as-is"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map", viewType] });
         }
       }
     }
@@ -1137,6 +1163,7 @@ export default function Workspace() {
           queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map"] });
         }
       }}
+      onViewChange={(view) => { currentProcessView = view; }}
     />
   );
 
