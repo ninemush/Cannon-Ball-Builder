@@ -20,6 +20,7 @@ import {
   ListChecks,
   Map,
   MessageSquare,
+  ListPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import { Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { DeploymentReportCard } from "@/components/deployment-report-card";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -37,7 +39,7 @@ import ProcessMapPanel from "@/components/process-map-panel";
 import { parseStepsFromText } from "@/lib/step-parser";
 import { DocumentCard, UiPathPackageCard } from "@/components/document-card";
 
-let currentProcessView: "as-is" | "to-be" = "as-is";
+let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
 
 function ThinkingIndicator() {
   const [elapsed, setElapsed] = useState(0);
@@ -240,13 +242,17 @@ interface ChatMsg {
   uipathData?: any;
 }
 
+function stripStepTags(text: string): string {
+  return text.replace(/\[STEP:\s*[^\]]*\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: number; uipathData?: any; displayContent: string } {
   const docMatch = content.match(/^\[DOC:(PDD|SDD):(\d+)\]/);
   if (docMatch) {
     return {
       docType: docMatch[1] as "PDD" | "SDD",
       docId: parseInt(docMatch[2]),
-      displayContent: content.slice(docMatch[0].length),
+      displayContent: stripStepTags(content.slice(docMatch[0].length)),
     };
   }
   const uipathMatch = content.match(/^\[UIPATH:([\s\S]*)\]$/);
@@ -257,10 +263,10 @@ function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: n
         displayContent: "",
       };
     } catch {
-      return { displayContent: content };
+      return { displayContent: stripStepTags(content) };
     }
   }
-  return { displayContent: content };
+  return { displayContent: stripStepTags(content) };
 }
 
 function ChatPanel({ idea }: { idea: Idea }) {
@@ -273,6 +279,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
+  const [messageQueue, setMessageQueue] = useState<Array<{ id: string; text: string }>>([]);
+  const [deployReport, setDeployReport] = useState<any>(null);
   const docAbortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -461,16 +469,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
     };
   }, [savedMessages, isStreaming, isGeneratingDoc, idea.id]);
 
-  const handleSend = useCallback(async () => {
-    let text = inputValue.trim();
-    if (!text && !attachedFile) return;
-    if (isStreaming) return;
-
-    if (attachedFile) {
-      const fileNote = `(User uploaded a file: ${attachedFile.name}. Acknowledge it and ask them to describe its contents since you cannot read it directly yet.)`;
-      text = text ? `${text}\n\n${fileNote}` : fileNote;
-    }
-
+  const sendMessageDirect = useCallback(async (text: string) => {
     const userMsg: ChatMsg = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -478,8 +477,6 @@ function ChatPanel({ idea }: { idea: Idea }) {
       timestamp: new Date(),
     };
     setPendingUserMsg(userMsg);
-    setInputValue("");
-    clearAttachedFile();
     setIsStreaming(true);
 
     const streamMsg: ChatMsg = {
@@ -535,6 +532,9 @@ function ChatPanel({ idea }: { idea: Idea }) {
               }
               if (data.deployStatus) {
                 if (data.deployComplete) {
+                  if (data.deployReport) {
+                    setDeployReport(data.deployReport);
+                  }
                   setStreamingMsg(null);
                   queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
                 } else {
@@ -702,7 +702,39 @@ function ChatPanel({ idea }: { idea: Idea }) {
         }
       }
     }
-  }, [inputValue, attachedFile, isStreaming, idea.id]);
+  }, [idea.id]);
+
+  const removeFromQueue = useCallback((queueId: string) => {
+    setMessageQueue(prev => prev.filter(m => m.id !== queueId));
+  }, []);
+
+  useEffect(() => {
+    if (!isStreaming && !isGeneratingDoc && messageQueue.length > 0) {
+      const [next, ...rest] = messageQueue;
+      setMessageQueue(rest);
+      sendMessageDirect(next.text);
+    }
+  }, [isStreaming, isGeneratingDoc, messageQueue, sendMessageDirect]);
+
+  const handleSend = useCallback(() => {
+    let text = inputValue.trim();
+    if (!text && !attachedFile) return;
+
+    if (attachedFile) {
+      const fileNote = `(User uploaded a file: ${attachedFile.name}. Acknowledge it and ask them to describe its contents since you cannot read it directly yet.)`;
+      text = text ? `${text}\n\n${fileNote}` : fileNote;
+    }
+
+    setInputValue("");
+    clearAttachedFile();
+
+    if (isStreaming || isGeneratingDoc) {
+      setMessageQueue(prev => [...prev, { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text }]);
+      return;
+    }
+
+    sendMessageDirect(text);
+  }, [inputValue, attachedFile, isStreaming, isGeneratingDoc, sendMessageDirect, clearAttachedFile]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -856,7 +888,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
                     ) : (
                       <>
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {msg.content}
+                          {stripStepTags(msg.content)}
                         </ReactMarkdown>
                         {msg.isStreaming && (
                           <span className="inline-block w-1.5 h-3.5 bg-primary ml-0.5 animate-pulse rounded-sm" />
@@ -961,10 +993,36 @@ function ChatPanel({ idea }: { idea: Idea }) {
           return null;
         })()}
 
+        {deployReport && deployReport.results?.length > 0 && (
+          <DeploymentReportCard report={deployReport} onDismiss={() => setDeployReport(null)} />
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
       <div className="p-3 border-t border-border">
+        {messageQueue.length > 0 && (
+          <div className="mb-2 space-y-1" data-testid="message-queue">
+            <div className="flex items-center gap-1.5 mb-1">
+              <ListPlus className="h-3 w-3 text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground font-medium">
+                {messageQueue.length} queued message{messageQueue.length > 1 ? "s" : ""}
+              </span>
+            </div>
+            {messageQueue.map((qMsg) => (
+              <div key={qMsg.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-secondary/30 border border-border/40" data-testid={`queued-message-${qMsg.id}`}>
+                <span className="text-[10px] text-foreground/70 truncate flex-1">{qMsg.text}</span>
+                <button
+                  onClick={() => removeFromQueue(qMsg.id)}
+                  className="shrink-0 text-muted-foreground hover:text-destructive transition-colors"
+                  data-testid={`button-remove-queued-${qMsg.id}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {attachedFile && (
           <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-md bg-secondary/50 border border-border text-xs" data-testid="chip-attached-file">
             {filePreviewUrl ? (
@@ -1010,21 +1068,20 @@ function ChatPanel({ idea }: { idea: Idea }) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder="Describe your process..."
+            placeholder={isStreaming ? "Type to queue your next message..." : "Describe your process..."}
             className="min-h-[36px] max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
             rows={1}
-            disabled={isStreaming}
             data-testid="input-chat-message"
           />
           <Button
             size="icon"
             className="shrink-0"
             onClick={handleSend}
-            disabled={isStreaming || (!inputValue.trim() && !attachedFile)}
+            disabled={!inputValue.trim() && !attachedFile}
             data-testid="button-send-message"
           >
             {isStreaming ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <ListPlus className="h-3.5 w-3.5" />
             ) : (
               <Send className="h-3.5 w-3.5" />
             )}

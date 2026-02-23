@@ -52,6 +52,8 @@ import {
   LayoutGrid,
   Undo2,
   Redo2,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -118,12 +120,14 @@ interface ProcessMapData {
   approval: ProcessApproval | null;
 }
 
+type ProcessView = "as-is" | "to-be" | "sdd";
+
 interface ProcessMapPanelProps {
   ideaId: string;
   onStepsChange?: (count: number) => void;
   onApproved?: () => void;
   onCompletenessChange?: (pct: number) => void;
-  onViewChange?: (view: "as-is" | "to-be") => void;
+  onViewChange?: (view: ProcessView) => void;
 }
 
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
@@ -698,7 +702,7 @@ function NodeContextMenu({
   );
 }
 
-function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { ideaId: string; activeView: "as-is" | "to-be"; onRelayout?: (fn: () => void) => void; onUndoRedoReady?: (controls: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean }) => void; }) {
+function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { ideaId: string; activeView: ProcessView; onRelayout?: (fn: () => void) => void; onUndoRedoReady?: (controls: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean }) => void; }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [editingNode, setEditingNode] = useState<NodeEditData | null>(null);
@@ -838,12 +842,12 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
       target: String(e.targetNodeId),
       type: "custom",
       data: { label: e.label, dbId: e.id, viewType: activeView },
-      animated: activeView === "to-be",
+      animated: activeView === "to-be" || activeView === "sdd",
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 16,
         height: 16,
-        color: activeView === "to-be" ? "rgba(34,197,94,0.6)" : "rgba(100,100,120,0.5)",
+        color: activeView === "sdd" ? "rgba(249,115,22,0.6)" : activeView === "to-be" ? "rgba(34,197,94,0.6)" : "rgba(100,100,120,0.5)",
       },
     }));
 
@@ -1326,12 +1330,16 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
             <h3 className="text-sm font-medium text-zinc-300">
               {activeView === "as-is"
                 ? "Process map will appear here"
-                : "To-Be map will appear here"}
+                : activeView === "to-be"
+                ? "To-Be map will appear here"
+                : "SDD map will appear here"}
             </h3>
             <p className="text-xs text-zinc-500 leading-relaxed">
               {activeView === "as-is"
                 ? "Describe your process in the chat and the AI will build a visual flowchart with tasks, decisions, and handoffs."
-                : "Once the As-Is is mapped, the AI will generate an optimized workflow showing where automation removes manual steps."}
+                : activeView === "to-be"
+                ? "Once the As-Is is mapped, the AI will generate an optimized workflow showing where automation removes manual steps."
+                : "The SDD view shows the finalized process architecture from the approved Solution Design Document."}
             </p>
           </div>
         </div>
@@ -1491,9 +1499,9 @@ function ProcessMapFlow({ ideaId, activeView, onRelayout, onUndoRedoReady }: { i
 }
 
 export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onCompletenessChange, onViewChange }: ProcessMapPanelProps) {
-  const [activeView, setActiveView] = useState<"as-is" | "to-be">("as-is");
+  const [activeView, setActiveView] = useState<ProcessView>("as-is");
 
-  const handleViewChange = useCallback((view: "as-is" | "to-be") => {
+  const handleViewChange = useCallback((view: ProcessView) => {
     setActiveView(view);
     onViewChange?.(view);
   }, [onViewChange]);
@@ -1558,16 +1566,25 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
   const [showApprovalConfirm, setShowApprovalConfirm] = useState(false);
   const relayoutRef = useRef<(() => void) | null>(null);
   const [undoRedoControls, setUndoRedoControls] = useState<{ undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean } | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isFullscreen) setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [isFullscreen]);
 
   return (
-    <div className="flex flex-col h-full" data-testid="panel-process-map">
+    <div className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-50 bg-zinc-950" : "h-full"}`} data-testid="panel-process-map">
       <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center justify-between gap-2 bg-zinc-950/50">
         <div className="flex items-center gap-2.5">
           <div className="w-6 h-6 rounded-lg bg-cb-teal/10 flex items-center justify-center">
             <GitBranch className="h-3.5 w-3.5 text-cb-teal" />
           </div>
           <h3 className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-            {activeView === "as-is" ? "As-Is" : "To-Be"} Process Map
+            {activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} Process Map
           </h3>
           {nodeCount > 0 && (
             <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 font-medium">
@@ -1613,6 +1630,16 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <LayoutGrid className="h-3 w-3 mr-1" /> Re-layout
             </Button>
           )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-white border border-zinc-800 rounded-lg"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+            data-testid="button-fullscreen-map"
+          >
+            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </Button>
           <div
             className="flex items-center rounded-full bg-zinc-900 border border-zinc-800 p-0.5"
             data-testid="button-toggle-view"
@@ -1631,11 +1658,18 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             >
               To-Be
             </button>
+            <button
+              onClick={() => handleViewChange("sdd")}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "sdd" ? "bg-cb-orange text-white shadow-sm shadow-cb-orange/20" : "text-zinc-500 hover:text-zinc-300"}`}
+              data-testid="button-view-sdd"
+            >
+              SDD
+            </button>
           </div>
         </div>
       </div>
 
-      {activeView === "to-be" && nodeCount > 0 && (
+      {(activeView === "to-be" || activeView === "sdd") && nodeCount > 0 && (
         <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-950/30" data-testid="automation-impact-bar">
           {(() => {
             const nodes = mapData?.nodes || [];
@@ -1698,12 +1732,12 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               onClick={() => setShowApprovalConfirm(true)}
               data-testid="button-approve-map"
             >
-              <Check className="h-3 w-3 mr-1.5" /> Approve {activeView === "as-is" ? "As-Is" : "To-Be"} Map
+              <Check className="h-3 w-3 mr-1.5" /> Approve {activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} Map
             </Button>
           ) : (
             <div className="flex-1 space-y-2">
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                By approving, you formally sign off on this {activeView === "as-is" ? "As-Is" : "To-Be"} process map. This is recorded with your name, role, and timestamp.
+                By approving, you formally sign off on this {activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} process map. This is recorded with your name, role, and timestamp.
               </p>
               <div className="flex items-center gap-2">
                 <Button
@@ -1735,7 +1769,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
         <div className="px-4 py-2.5 border-t border-zinc-800/80 flex items-center gap-2 bg-zinc-950/50" data-testid="approval-badge">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
             <Check className="h-3 w-3 text-emerald-500" />
-            <span className="text-[11px] text-emerald-400 font-medium">{activeView === "as-is" ? "As-Is" : "To-Be"} Approved</span>
+            <span className="text-[11px] text-emerald-400 font-medium">{activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} Approved</span>
           </div>
           <span className="text-[10px] text-zinc-500">
             {new Date(approval.approvedAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}

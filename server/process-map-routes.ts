@@ -134,6 +134,54 @@ export function registerProcessMapRoutes(app: Express): void {
       }
     }
 
+    if (viewType === "sdd" && nodes.length === 0) {
+      const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+      if (toBeNodes.length > 0) {
+        const recheck = await processMapStorage.getNodesByIdeaId(ideaId, "sdd");
+        if (recheck.length === 0) {
+          if (!toBeGenerationLocks.has(`${ideaId}-sdd`)) {
+            toBeGenerationLocks.add(`${ideaId}-sdd`);
+            try {
+              const toBeEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
+              const idMap: Record<number, number> = {};
+              for (const node of toBeNodes) {
+                const sddNode = await processMapStorage.createNode({
+                  ideaId,
+                  name: node.name,
+                  role: node.role,
+                  system: node.system,
+                  nodeType: node.nodeType,
+                  description: node.description,
+                  isGhost: node.isGhost,
+                  isPainPoint: false,
+                  viewType: "sdd",
+                  orderIndex: node.orderIndex,
+                  positionX: node.positionX,
+                  positionY: node.positionY,
+                });
+                idMap[node.id] = sddNode.id;
+              }
+              for (const edge of toBeEdges) {
+                if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
+                  await processMapStorage.createEdge({
+                    ideaId,
+                    sourceNodeId: idMap[edge.sourceNodeId],
+                    targetNodeId: idMap[edge.targetNodeId],
+                    label: edge.label,
+                    viewType: "sdd",
+                  });
+                }
+              }
+            } finally {
+              toBeGenerationLocks.delete(`${ideaId}-sdd`);
+            }
+          }
+          nodes = await processMapStorage.getNodesByIdeaId(ideaId, "sdd");
+          edges = await processMapStorage.getEdgesByIdeaId(ideaId, "sdd");
+        }
+      }
+    }
+
     return res.json({ nodes, edges, approval });
   });
 

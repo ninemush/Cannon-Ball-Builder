@@ -400,7 +400,17 @@ export function registerChatRoutes(app: Express): void {
             let statusMsg = `Deployment complete. Package "${d?.packageId}" v${d?.version} uploaded to Orchestrator.`;
             if (d?.processName) statusMsg += ` Process "${d.processName}" created.`;
             if (d?.deploymentSummary) statusMsg += ` ${d.deploymentSummary}`;
-            res.write(`data: ${JSON.stringify({ deployStatus: statusMsg, deployComplete: true })}\n\n`);
+            const deployReport = {
+              packageId: d?.packageId,
+              version: d?.version,
+              processName: d?.processName,
+              orgName: d?.orgName,
+              tenantName: d?.tenantName,
+              folderName: d?.folderName,
+              results: d?.deploymentResults || [],
+              summary: d?.deploymentSummary || "",
+            };
+            res.write(`data: ${JSON.stringify({ deployStatus: statusMsg, deployComplete: true, deployReport })}\n\n`);
           } else {
             const errMsg = `Deployment failed: ${deployData.message}`;
             await chatStorage.createMessage(ideaId, "assistant", errMsg);

@@ -430,10 +430,14 @@ async function provisionStorageBuckets(
       if (res.ok || res.status === 201) {
         const data = JSON.parse(text);
         results.push({ artifact: "Storage Bucket", name: b.name, status: "created", message: `Created (ID: ${data.Id})`, id: data.Id });
+      } else if (res.status === 403) {
+        results.push({ artifact: "Storage Bucket", name: b.name, status: "manual_required", message: `Permission denied. Grant "Storage Buckets - Create" to the API user, or create "${b.name}" manually.` });
+      } else if (res.status === 405) {
+        results.push({ artifact: "Storage Bucket", name: b.name, status: "manual_required", message: `Storage Buckets API not available. Create "${b.name}" in Orchestrator > Storage Buckets.` });
       } else if (res.status === 409 || text.includes("already exists")) {
         results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: "Already exists" });
       } else {
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+        results.push({ artifact: "Storage Bucket", name: b.name, status: "manual_required", message: `Could not create via API (HTTP ${res.status}). Create "${b.name}" manually in Orchestrator.` });
       }
     } catch (err: any) {
       results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: err.message });
@@ -525,6 +529,8 @@ async function provisionTriggers(
         if (res.ok || res.status === 201) {
           const data = JSON.parse(text);
           results.push({ artifact: "Trigger", name: t.name, status: "created", message: `Queue trigger created (ID: ${data.Id}), linked to queue "${t.queueName}"`, id: data.Id });
+        } else if (res.status === 405) {
+          results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Queue triggers not supported via API. Create in Orchestrator: link to queue "${t.queueName}"` });
         } else if (res.status === 409 || text.includes("already exists")) {
           results.push({ artifact: "Trigger", name: t.name, status: "exists", message: "Already exists" });
         } else {
@@ -554,7 +560,7 @@ async function provisionTriggers(
           advancedCronExpression: cron,
         });
 
-        const body: Record<string, any> = {
+        const baseBody: Record<string, any> = {
           Enabled: true,
           Name: t.name,
           ReleaseId: releaseId,
@@ -565,26 +571,47 @@ async function provisionTriggers(
           StartProcessCronSummary: t.description || "Scheduled trigger",
           TimeZoneId: "UTC",
           TimeZoneIana: "Etc/UTC",
-          StartStrategy: 0,
           RuntimeType: "Unattended",
           InputArguments: "{}",
         };
 
-        const res = await fetch(`${base}/odata/ProcessSchedules`, {
-          method: "POST",
-          headers: hdrs,
-          body: JSON.stringify(body),
-        });
-        const text = await res.text();
-        console.log(`[UiPath Deploy] Time Trigger "${t.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+        const strategies = [15, 0, { Type: 0 }];
+        let created = false;
+        for (const strategy of strategies) {
+          const body = { ...baseBody, StartStrategy: strategy };
+          console.log(`[UiPath Deploy] Time Trigger "${t.name}" trying StartStrategy=${JSON.stringify(strategy)}`);
 
-        if (res.ok || res.status === 201) {
-          const data = JSON.parse(text);
-          results.push({ artifact: "Trigger", name: t.name, status: "created", message: `Time trigger created (ID: ${data.Id}), cron: ${cron}`, id: data.Id });
-        } else if (res.status === 409 || text.includes("already exists")) {
-          results.push({ artifact: "Trigger", name: t.name, status: "exists", message: "Already exists" });
-        } else {
-          results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+          const res = await fetch(`${base}/odata/ProcessSchedules`, {
+            method: "POST",
+            headers: hdrs,
+            body: JSON.stringify(body),
+          });
+          const text = await res.text();
+          console.log(`[UiPath Deploy] Time Trigger "${t.name}" -> ${res.status}: ${text.slice(0, 300)}`);
+
+          if (res.ok || res.status === 201) {
+            const data = JSON.parse(text);
+            results.push({ artifact: "Trigger", name: t.name, status: "created", message: `Time trigger created (ID: ${data.Id}), cron: ${cron}`, id: data.Id });
+            created = true;
+            break;
+          } else if (res.status === 405) {
+            results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Scheduled triggers not supported via API on this Orchestrator. Create manually: cron ${cron}` });
+            created = true;
+            break;
+          } else if (res.status === 409 || text.includes("already exists")) {
+            results.push({ artifact: "Trigger", name: t.name, status: "exists", message: "Already exists" });
+            created = true;
+            break;
+          } else if (text.includes("StartStrategy")) {
+            continue;
+          } else {
+            results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+            created = true;
+            break;
+          }
+        }
+        if (!created) {
+          results.push({ artifact: "Trigger", name: t.name, status: "manual_required", message: `Could not determine correct StartStrategy format. Create time trigger manually: cron ${cron}` });
         }
       }
     } catch (err: any) {
@@ -637,10 +664,12 @@ async function provisionEnvironments(
       if (res.ok || res.status === 201) {
         const data = JSON.parse(text);
         results.push({ artifact: "Environment", name: env.name, status: "created", message: `Created (ID: ${data.Id}, Type: ${typeValue})`, id: data.Id });
+      } else if (res.status === 405) {
+        results.push({ artifact: "Environment", name: env.name, status: "manual_required", message: `Environments API not available. Create "${env.name}" (${typeValue}) in Orchestrator > Machines > Environments.` });
       } else if (res.status === 409 || text.includes("already exists")) {
         results.push({ artifact: "Environment", name: env.name, status: "exists", message: "Already exists" });
       } else {
-        results.push({ artifact: "Environment", name: env.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+        results.push({ artifact: "Environment", name: env.name, status: "manual_required", message: `Could not create via API (HTTP ${res.status}). Create "${env.name}" (${typeValue}) manually in Orchestrator.` });
       }
     } catch (err: any) {
       results.push({ artifact: "Environment", name: env.name, status: "failed", message: err.message });
@@ -692,22 +721,22 @@ async function provisionActionCenter(
         results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: data.Id });
       } else if (res.status === 409 || text.includes("already exists")) {
         results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
-      } else if (res.status === 404) {
+      } else if (res.status === 404 || res.status === 405) {
         results.push({
           artifact: "Action Center",
           name: ac.taskCatalog,
           status: "manual_required",
-          message: `Action Center API not available. Create task catalog "${ac.taskCatalog}" manually in Orchestrator > Action Center. Assign to: ${ac.assignedRole || "N/A"}, SLA: ${ac.sla || "N/A"}.`,
+          message: `Create task catalog "${ac.taskCatalog}" in Action Center.${ac.assignedRole ? ` Assign: ${ac.assignedRole}.` : ""}${ac.sla ? ` SLA: ${ac.sla}.` : ""}`,
         });
       } else {
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "manual_required", message: `Could not create via API (HTTP ${res.status}). Create "${ac.taskCatalog}" manually in Action Center.${ac.assignedRole ? ` Assign: ${ac.assignedRole}.` : ""}` });
       }
     } catch (err: any) {
       results.push({
         artifact: "Action Center",
         name: ac.taskCatalog,
         status: "manual_required",
-        message: `Could not provision via API: ${err.message}. Create task catalog "${ac.taskCatalog}" manually. Assign to: ${ac.assignedRole || "N/A"}, SLA: ${ac.sla || "N/A"}.`,
+        message: `Create task catalog "${ac.taskCatalog}" manually in Action Center.${ac.assignedRole ? ` Assign: ${ac.assignedRole}.` : ""}`,
       });
     }
   }
@@ -751,7 +780,7 @@ async function provisionTestCases(
         artifact: "Test Case",
         name: tc.name,
         status: "manual_required" as const,
-        message: `Create test case "${tc.name}" manually in UiPath Test Manager. ${tc.description || ""}${tc.steps?.length ? ` Steps: ${tc.steps.map((s, i) => `${i+1}. ${s.action} → Expected: ${s.expected}`).join("; ")}` : ""}`,
+        message: `Test Manager not available. Create "${tc.name}" manually.${tc.steps?.length ? ` ${tc.steps.length} steps defined.` : ""}`,
       }));
     }
 
@@ -789,7 +818,7 @@ async function provisionTestCases(
         artifact: "Test Case",
         name: tc.name,
         status: "manual_required" as const,
-        message: `Could not find or create test project. Create test case "${tc.name}" manually. ${tc.description || ""}`,
+        message: `Could not find or create test project. Create "${tc.name}" manually.${tc.steps?.length ? ` ${tc.steps.length} steps defined.` : ""}`,
       }));
     }
 
@@ -834,7 +863,7 @@ async function provisionTestCases(
       artifact: "Test Case",
       name: tc.name,
       status: "manual_required" as const,
-      message: `Test Manager API unavailable: ${err.message}. Create test case "${tc.name}" manually.`,
+      message: `Test Manager unavailable. Create "${tc.name}" manually.${tc.steps?.length ? ` ${tc.steps.length} steps defined.` : ""}`,
     }));
   }
 

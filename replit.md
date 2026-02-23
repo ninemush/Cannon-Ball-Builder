@@ -47,6 +47,12 @@ The application employs a modern web stack:
 - Steps without FROM fall back to sequential connection
 
 ## Recent Changes
+- 2026-02-23: Deployment report card UI: structured collapsible card component replacing raw markdown dump, grouped by artifact type with status icons and summary counts
+- 2026-02-23: Deployment error handling: StartStrategy fallback chain (15→0→{Type:0}), 405 graceful fallback across all artifact provisioning (triggers, environments, storage buckets, action center), cleaner manual-required messages
+- 2026-02-23: Message queue system: users can type and queue messages while AI processes, queued messages shown with cancel buttons, auto-sends next message when streaming AND doc generation complete
+- 2026-02-23: Fullscreen process map mode: maximize/minimize button in toolbar, fixed overlay at z-50, Escape key to exit, preserves all editing tools
+- 2026-02-23: Three-way view toggle: SDD view added to process map panel alongside As-Is/To-Be, distinct orange styling, auto-copy from To-Be, full backend support with process-map-routes
+- 2026-02-23: Chat message cleanup: raw [STEP:] tags stripped from displayed text via stripStepTags() while still parsed for process map updates
 - 2026-02-23: UiPath Document Understanding integration: DU project instructions generated in deployment report with document type taxonomy
 - 2026-02-23: UiPath Test Manager integration: auto-provisions test projects and test cases via Test Manager API with manual step definitions; graceful fallback to manual instructions if API unavailable
 - 2026-02-23: Extended orchestrator_artifacts block: added documentUnderstanding and testCases arrays to SDD generation, LLM extraction, validation, and deployment pipeline
