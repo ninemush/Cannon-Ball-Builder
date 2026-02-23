@@ -1,0 +1,29 @@
+Package pushed to UiPath Orchestrator successfully.
+
+Insurance_Claims_Automation v1.1103.20260223 Org: uipatezkzunj / Tenant: DefaultTenant Folder: SumeetAppDefaultFeed
+
+Process created: "Insurance Claims Automation" — ready to run
+
+Orchestrator Deployment Report
+
+Queues: 🔵 MedicalClaims_ProcessingQueue — Already exists (ID: 382538) 🔵 MedicalClaims_FraudReviewQueue — Already exists (ID: 382687) 🔵 MedicalClaims_DocumentReviewQueue — Already exists (ID: 382688)
+
+Storage Buckets: ❌ MedicalClaims_DocumentStore — HTTP 403: {"message":"You are not authorized!","errorCode":0,"result":null,"targetUrl":null,"success":false,"error":{"code":0,"message":"You are not authorized!","details":"You are not allowed to perform this o
+
+Assets: 🔵 ClaimsApp_BaseURL — Already exists (ID: 1054656) 🔵 ClaimsApp_Credential — Already exists (ID: 1054657) 🔵 ERP_BaseURL — Already exists (ID: 1054658) 🔵 ERP_Credential — Already exists (ID: 1054659) 🔵 NotificationAPI_Key — Already exists (ID: 1054660) 🔵 Email_Credential — Already exists (ID: 1054661) 🔵 PolicyAPI_BaseURL — Already exists (ID: 1054802) 🔵 PolicyAPI_Credential — Already exists (ID: 1054803) 🔵 DU_APIKey — Already exists (ID: 1054804) 🔵 ResubmissionWindowDays — Already exists (ID: 1054662) 🔵 MaxResubmissionAttempts — Already exists (ID: 1054663) 🔵 ERP_RetryCount — Already exists (ID: 1054664) 🔵 ERP_RetryIntervalMinutes — Already exists (ID: 1054665) 🔵 STP_FloorAmount — Already exists (ID: 1054805) 🔵 STP_CeilingAmount — Already exists (ID: 1054806) 🔵 STP_OverageMaterialityPct — Already exists (ID: 1054807) 🔵 DU_ConfidenceThreshold — Already exists (ID: 1054808) 🔵 FraudScore_MediumThreshold — Already exists (ID: 1054809) 🔵 FraudScore_HighThreshold — Already exists (ID: 1054810) 🔵 ActionCenter_SLAHours — Already exists (ID: 1054811)
+
+Machines: 🔵 MedicalClaims_UnattendedMachine — Already exists (ID: 309929) 🔵 MedicalClaims_AttendedMachine — Already exists (ID: 309930)
+
+Triggers: ✅ MedicalClaims_MainQueueTrigger — Created as scheduled trigger and verified (ID: 243014) polling queue "MedicalClaims_ProcessingQueue" every 5 min ✅ MedicalClaims_FraudQueueTrigger — Created as scheduled trigger and verified (ID: 243015) polling queue "MedicalClaims_FraudReviewQueue" every 5 min ✅ MedicalClaims_DocumentQueueTrigger — Created as scheduled trigger and verified (ID: 243016) polling queue "MedicalClaims_DocumentReviewQueue" every 5 min ✅ MedicalClaims_DailyReportTrigger — Time trigger created and verified (ID: 243017), cron: 0 0 8 ? * MON-FRI *
+
+Action Centers: ❌ Claims_Officer_Review — HTTP 400: ServiceType is not onboarded onto decoupled standard url routing. ❌ Claims_Fraud_Review — HTTP 400: ServiceType is not onboarded onto decoupled standard url routing. ❌ Claims_Document_Review — HTTP 400: ServiceType is not onboarded onto decoupled standard url routing.
+
+Document Understandings: ❌ MedicalClaims_DU_Project — DU API not available on this tenant. Doc types: Medical Invoice, Doctor Diagnosis, Discharge Summary, Prescription
+
+Test Cases: ❌ TC001 - STP Happy Path Full Approval — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC002 - Pre-Submission Eligibility Block — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC003 - Low Confidence Document Extraction — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC004 - Fraud High Risk Routing — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC005 - Amount Overage Auto-Approval at Policy Ceiling — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC006 - Amount Overage Human Review — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC007 - ERP Disbursement Failure and Retry — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC008 - Action Center SLA Breach Escalation — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC009 - Full Rejection Path — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled. ❌ TC010 - Customer Resubmission Loop and Auto-Withdrawal — Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+15 item(s) failed — check permissions and retry from Orchestrator.
+
+The automation is now deployed and ready. You can trigger a job from this workspace or from Orchestrator directly.
+
+3:03 PM

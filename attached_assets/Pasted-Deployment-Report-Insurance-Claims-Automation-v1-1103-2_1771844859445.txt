@@ -1,0 +1,208 @@
+Deployment Report
+Insurance_Claims_Automation v1.1103.20260223
+
+uipatezkzunj/DefaultTenant
+SumeetAppDefaultFeed
+Insurance Claims Automation
+4 created
+25 existing
+15 failed
+
+Queues
+3 items
+MedicalClaims_ProcessingQueue
+Exists
+Already exists (ID: 382538)
+
+MedicalClaims_FraudReviewQueue
+Exists
+Already exists (ID: 382687)
+
+MedicalClaims_DocumentReviewQueue
+Exists
+Already exists (ID: 382688)
+
+
+Storage Buckets
+1 item1 need attention
+MedicalClaims_DocumentStore
+Failed
+HTTP 403: {"message":"You are not authorized!","errorCode":0,"result":null,"targetUrl":null,"success":false,"error":{"code":0,"message":"You are not authorized!","details":"You are not allowed to perform this o
+
+
+Assets
+20 items
+ClaimsApp_BaseURL
+Exists
+Already exists (ID: 1054656)
+
+ClaimsApp_Credential
+Exists
+Already exists (ID: 1054657)
+
+ERP_BaseURL
+Exists
+Already exists (ID: 1054658)
+
+ERP_Credential
+Exists
+Already exists (ID: 1054659)
+
+NotificationAPI_Key
+Exists
+Already exists (ID: 1054660)
+
+Email_Credential
+Exists
+Already exists (ID: 1054661)
+
+PolicyAPI_BaseURL
+Exists
+Already exists (ID: 1054802)
+
+PolicyAPI_Credential
+Exists
+Already exists (ID: 1054803)
+
+DU_APIKey
+Exists
+Already exists (ID: 1054804)
+
+ResubmissionWindowDays
+Exists
+Already exists (ID: 1054662)
+
+MaxResubmissionAttempts
+Exists
+Already exists (ID: 1054663)
+
+ERP_RetryCount
+Exists
+Already exists (ID: 1054664)
+
+ERP_RetryIntervalMinutes
+Exists
+Already exists (ID: 1054665)
+
+STP_FloorAmount
+Exists
+Already exists (ID: 1054805)
+
+STP_CeilingAmount
+Exists
+Already exists (ID: 1054806)
+
+STP_OverageMaterialityPct
+Exists
+Already exists (ID: 1054807)
+
+DU_ConfidenceThreshold
+Exists
+Already exists (ID: 1054808)
+
+FraudScore_MediumThreshold
+Exists
+Already exists (ID: 1054809)
+
+FraudScore_HighThreshold
+Exists
+Already exists (ID: 1054810)
+
+ActionCenter_SLAHours
+Exists
+Already exists (ID: 1054811)
+
+
+Machines
+2 items
+MedicalClaims_UnattendedMachine
+Exists
+Already exists (ID: 309929)
+
+MedicalClaims_AttendedMachine
+Exists
+Already exists (ID: 309930)
+
+
+Triggers
+4 items4 new
+MedicalClaims_MainQueueTrigger
+Created
+Created as scheduled trigger and verified (ID: 243014) polling queue "MedicalClaims_ProcessingQueue" every 5 min
+
+MedicalClaims_FraudQueueTrigger
+Created
+Created as scheduled trigger and verified (ID: 243015) polling queue "MedicalClaims_FraudReviewQueue" every 5 min
+
+MedicalClaims_DocumentQueueTrigger
+Created
+Created as scheduled trigger and verified (ID: 243016) polling queue "MedicalClaims_DocumentReviewQueue" every 5 min
+
+MedicalClaims_DailyReportTrigger
+Created
+Time trigger created and verified (ID: 243017), cron: 0 0 8 ? * MON-FRI *
+
+
+Action Centers
+3 items3 need attention
+Claims_Officer_Review
+Failed
+HTTP 400: ServiceType is not onboarded onto decoupled standard url routing.
+
+Claims_Fraud_Review
+Failed
+HTTP 400: ServiceType is not onboarded onto decoupled standard url routing.
+
+Claims_Document_Review
+Failed
+HTTP 400: ServiceType is not onboarded onto decoupled standard url routing.
+
+
+Document Understandings
+1 item1 need attention
+MedicalClaims_DU_Project
+Failed
+DU API not available on this tenant. Doc types: Medical Invoice, Doctor Diagnosis, Discharge Summary, Prescription
+
+
+Test Cases
+10 items10 need attention
+TC001 - STP Happy Path Full Approval
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC002 - Pre-Submission Eligibility Block
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC003 - Low Confidence Document Extraction
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC004 - Fraud High Risk Routing
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC005 - Amount Overage Auto-Approval at Policy Ceiling
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC006 - Amount Overage Human Review
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC007 - ERP Disbursement Failure and Retry
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC008 - Action Center SLA Breach Escalation
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC009 - Full Rejection Path
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
+
+TC010 - Customer Resubmission Loop and Auto-Withdrawal
+Failed
+Test Manager API not reachable — tried 2 endpoints. Check tenant has Test Manager enabled.
