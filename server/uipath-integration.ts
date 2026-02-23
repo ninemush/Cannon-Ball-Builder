@@ -27,7 +27,7 @@ export async function getUiPathConfig(): Promise<UiPathConfig | null> {
   const tenantName = map.get("uipath_tenant_name");
   const clientId = map.get("uipath_client_id");
   const clientSecret = map.get("uipath_client_secret");
-  const scopes = map.get("uipath_scopes") || "OR.Default OR.Folders OR.Execution OR.Assets OR.Queues OR.Jobs OR.Robots OR.Machines OR.BackgroundTasks OR.Blobs OR.Tasks OR.TestSets OR.TestSetExecutions OR.TestSetSchedules OR.Monitoring OR.Settings OR.ML OR.Administration OR.Audit OR.Webhooks";
+  const scopes = map.get("uipath_scopes") || "OR.Default OR.Administration";
   const folderId = map.get("uipath_folder_id") || undefined;
   const folderName = map.get("uipath_folder_name") || undefined;
 
@@ -1223,30 +1223,76 @@ export async function autoDetectUiPathScopes(): Promise<{
 
   const previousScopes = config.scopes.split(/\s+/).filter(Boolean);
 
-  const discoveryScopes = ["OR.Administration", "OR.Default"];
-  let token: string | null = null;
-  let usedScope = "";
+  const ALL_KNOWN_SCOPES = [
+    "OR.Default",
+    "OR.Administration", "OR.Administration.Read", "OR.Administration.Write",
+    "OR.Analytics", "OR.Analytics.Read", "OR.Analytics.Write",
+    "OR.Assets", "OR.Assets.Read", "OR.Assets.Write",
+    "OR.Audit", "OR.Audit.Read", "OR.Audit.Write",
+    "OR.AutomationSolutions.Access",
+    "OR.BackgroundTasks", "OR.BackgroundTasks.Read", "OR.BackgroundTasks.Write",
+    "OR.Buckets", "OR.Buckets.Read", "OR.Buckets.Write",
+    "OR.Execution", "OR.Execution.Read", "OR.Execution.Write",
+    "OR.Folders", "OR.Folders.Read", "OR.Folders.Write",
+    "OR.Hypervisor", "OR.Hypervisor.Read", "OR.Hypervisor.Write",
+    "OR.Jobs", "OR.Jobs.Read", "OR.Jobs.Write",
+    "OR.License", "OR.License.Read", "OR.License.Write",
+    "OR.Machines", "OR.Machines.Read", "OR.Machines.Write",
+    "OR.ML", "OR.ML.Read", "OR.ML.Write",
+    "OR.Monitoring", "OR.Monitoring.Read", "OR.Monitoring.Write",
+    "OR.Queues", "OR.Queues.Read", "OR.Queues.Write",
+    "OR.Robots", "OR.Robots.Read", "OR.Robots.Write",
+    "OR.Settings", "OR.Settings.Read", "OR.Settings.Write",
+    "OR.Tasks", "OR.Tasks.Read", "OR.Tasks.Write",
+    "OR.TestDataQueues", "OR.TestDataQueues.Read", "OR.TestDataQueues.Write",
+    "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
+    "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
+    "OR.TestSetSchedules", "OR.TestSetSchedules.Read", "OR.TestSetSchedules.Write",
+    "OR.Users", "OR.Users.Read", "OR.Users.Write",
+    "OR.Webhooks", "OR.Webhooks.Read", "OR.Webhooks.Write",
+  ];
 
-  for (const tryScope of discoveryScopes) {
-    try {
-      const params = new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        scope: tryScope,
-      });
-      const res = await fetch("https://cloud.uipath.com/identity_/connect/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        token = data.access_token;
-        usedScope = tryScope;
-        break;
-      }
-    } catch {}
+  let token: string | null = null;
+
+  try {
+    const params = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      scope: ALL_KNOWN_SCOPES.join(" "),
+    });
+    const res = await fetch("https://cloud.uipath.com/identity_/connect/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      token = data.access_token;
+    }
+  } catch {}
+
+  if (!token) {
+    for (const tryScope of ["OR.Administration", "OR.Default"]) {
+      try {
+        const params = new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          scope: tryScope,
+        });
+        const res = await fetch("https://cloud.uipath.com/identity_/connect/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          token = data.access_token;
+          break;
+        }
+      } catch {}
+    }
   }
 
   if (!token) {
@@ -1254,7 +1300,7 @@ export async function autoDetectUiPathScopes(): Promise<{
       status: "auth_failed",
       detectedScopes: [],
       previousScopes,
-      message: "Could not authenticate with UiPath using discovery scopes. Verify your App ID and Secret are correct.",
+      message: "Could not authenticate with UiPath. Verify your App ID and Secret are correct.",
     };
   }
 
@@ -1264,7 +1310,7 @@ export async function autoDetectUiPathScopes(): Promise<{
       status: "no_scopes_found",
       detectedScopes: [],
       previousScopes,
-      message: `Authenticated with ${usedScope} but could not extract scopes from the JWT token.`,
+      message: "Authenticated successfully but could not extract scopes from the JWT token.",
     };
   }
 
