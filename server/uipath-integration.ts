@@ -1597,13 +1597,35 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
       `${base}/testmanager_/api/v2/projects?$top=1`,
       `${base}/tmapi_/api/v2/projects?$top=1`,
     ];
+    let tmHdrs = { ...hdrs };
+    try {
+      const tmTokenRes = await fetch("https://cloud.uipath.com/identity_/connect/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          scope: "TM.Projects TM.Projects.Read TM.TestCases TM.TestCases.Read",
+        }),
+      });
+      if (tmTokenRes.ok) {
+        const tmTokenData = await tmTokenRes.json() as any;
+        if (tmTokenData.access_token) {
+          tmHdrs = { ...hdrs, Authorization: `Bearer ${tmTokenData.access_token}` };
+        }
+      }
+    } catch { /* use main token as fallback */ }
     for (const tmUrl of tmBases) {
       try {
-        const tmRes = await fetch(tmUrl, { headers: hdrs });
+        const tmRes = await fetch(tmUrl, { headers: tmHdrs });
         if (tmRes.ok) {
           const tmText = await tmRes.text();
           const isHTML = tmText.trim().startsWith("<");
           if (!isHTML) { result.testManager = true; break; }
+        } else if (tmRes.status === 401 || tmRes.status === 403) {
+          result.testManager = true;
+          break;
         }
       } catch { /* continue */ }
     }
