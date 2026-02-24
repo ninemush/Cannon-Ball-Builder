@@ -289,6 +289,7 @@ export function registerChatRoutes(app: Express): void {
       return res.status(400).json({ error: "ideaId and content are required" });
     }
 
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
     try {
       const idea = await storage.getIdea(ideaId);
       if (!idea) {
@@ -334,17 +335,44 @@ export function registerChatRoutes(app: Express): void {
 
       const history = await chatStorage.getMessagesByIdeaId(ideaId);
       const filteredHistory = history.filter((m) => m.role === "user" || m.role === "assistant");
-      const chatMessages: { role: "user" | "assistant"; content: string }[] = [];
+      const merged: { role: "user" | "assistant"; content: string }[] = [];
       for (const m of filteredHistory) {
         const role = m.role as "user" | "assistant";
-        if (chatMessages.length > 0 && chatMessages[chatMessages.length - 1].role === role) {
-          chatMessages[chatMessages.length - 1].content += "\n\n" + m.content;
+        if (merged.length > 0 && merged[merged.length - 1].role === role) {
+          merged[merged.length - 1].content += "\n\n" + m.content;
         } else {
-          chatMessages.push({ role, content: m.content });
+          merged.push({ role, content: m.content });
         }
       }
-      if (chatMessages.length > 0 && chatMessages[0].role !== "user") {
-        chatMessages.shift();
+      if (merged.length > 0 && merged[0].role !== "user") {
+        merged.shift();
+      }
+
+      const MAX_RECENT = 30;
+      let chatMessages = merged;
+      if (merged.length > MAX_RECENT) {
+        const older = merged.slice(0, merged.length - MAX_RECENT);
+        const recent = merged.slice(merged.length - MAX_RECENT);
+        const summaryParts: string[] = [];
+        for (const m of older) {
+          const truncated = m.content.length > 300 ? m.content.slice(0, 300) + "..." : m.content;
+          summaryParts.push(`[${m.role}]: ${truncated}`);
+        }
+        const summaryMsg: { role: "user" | "assistant"; content: string } = {
+          role: "user",
+          content: `[Earlier conversation summary — ${older.length} messages condensed]\n${summaryParts.join("\n")}`,
+        };
+        if (recent[0]?.role === "user") {
+          chatMessages = [summaryMsg, { role: "assistant", content: "Understood, I have the earlier context." }, ...recent];
+        } else {
+          chatMessages = [summaryMsg, ...recent];
+        }
+      }
+
+      for (const m of chatMessages) {
+        if (m.content.length > 12000) {
+          m.content = m.content.slice(0, 6000) + "\n\n[...content truncated for context window...]\n\n" + m.content.slice(-3000);
+        }
       }
 
       res.setHeader("Content-Type", "text/event-stream");
@@ -356,6 +384,12 @@ export function registerChatRoutes(app: Express): void {
       res.on("close", () => {
         clientDisconnected = true;
       });
+
+      heartbeat = setInterval(() => {
+        if (!clientDisconnected) {
+          try { res.write(`: heartbeat\n\n`); } catch {}
+        }
+      }, 5000);
 
       let docContext = "";
       try {
@@ -410,6 +444,8 @@ export function registerChatRoutes(app: Express): void {
           stopReason = (event as any).delta.stop_reason;
         }
       }
+
+      clearInterval(heartbeat);
 
       if (clientDisconnected) {
         if (fullResponse.length > 0) {
@@ -651,8 +687,9 @@ export function registerChatRoutes(app: Express): void {
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
-    } catch (error) {
-      console.error("Error in chat:", error);
+    } catch (error: any) {
+      if (heartbeat) clearInterval(heartbeat);
+      console.error("Error in chat:", error?.message || error);
       if (res.headersSent) {
         res.write(`data: ${JSON.stringify({ error: "Stream interrupted" })}\n\n`);
         res.end();
