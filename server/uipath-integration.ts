@@ -1560,23 +1560,27 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     result.orchestrator = orchRes.ok;
     if (!orchRes.ok) return result;
 
-    const [acRes, envRes, trigRes] = await Promise.all([
+    const [acRes, envRes, trigRes, schedRes] = await Promise.all([
       fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
       fetch(`${orchBase}/odata/Environments?$top=1`, { headers: hdrs }).catch(() => null),
       fetch(`${orchBase}/odata/QueueTriggers?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/ProcessSchedules?$top=1`, { headers: hdrs }).catch(() => null),
     ]);
 
     if (acRes) {
-      const acText = await acRes.text();
-      const isHTML = acText.trim().startsWith("<");
-      result.actionCenter = acRes.ok && !isHTML;
-      if (acRes.ok && !isHTML) {
-        try {
-          const data = JSON.parse(acText);
-          if (data.errorCode || data["odata.error"] || (data.message && data.message.includes("not onboarded"))) {
-            result.actionCenter = false;
-          }
-        } catch { result.actionCenter = false; }
+      if (acRes.ok) {
+        const acText = await acRes.text();
+        const isHTML = acText.trim().startsWith("<");
+        if (isHTML) {
+          result.actionCenter = false;
+        } else {
+          try {
+            const data = JSON.parse(acText);
+            result.actionCenter = !(data.errorCode || data["odata.error"] || (data.message && typeof data.message === "string" && data.message.includes("not onboarded")));
+          } catch { result.actionCenter = false; }
+        }
+      } else {
+        result.actionCenter = false;
       }
     }
 
@@ -1585,10 +1589,9 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
       if (envRes.status === 404 || envRes.status === 405) result.environments = false;
     }
 
-    if (trigRes) {
-      result.triggers = trigRes.ok || trigRes.status === 400;
-      if (trigRes.status === 404 || trigRes.status === 405) result.triggers = false;
-    }
+    const queueTriggersOk = trigRes ? (trigRes.ok || trigRes.status === 400) && trigRes.status !== 404 && trigRes.status !== 405 : false;
+    const processSchedulesOk = schedRes ? (schedRes.ok || schedRes.status === 400) && schedRes.status !== 404 && schedRes.status !== 405 : false;
+    result.triggers = queueTriggersOk || processSchedulesOk;
 
     const tmBases = [
       `${base}/testmanager_/api/v2/projects?$top=1`,
