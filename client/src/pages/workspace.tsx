@@ -71,6 +71,80 @@ function ThinkingIndicator() {
   );
 }
 
+const DOC_PROGRESS_STEPS: Record<string, string[]> = {
+  PDD: [
+    "Analyzing process steps...",
+    "Writing Executive Summary...",
+    "Writing Process Scope...",
+    "Describing As-Is Process...",
+    "Describing To-Be Process...",
+    "Documenting Pain Points...",
+    "Writing Automation Assessment...",
+    "Documenting Assumptions & Exceptions...",
+    "Writing Data & System Requirements...",
+    "Finalizing document...",
+  ],
+  SDD: [
+    "Analyzing process architecture...",
+    "Writing Technical Overview...",
+    "Defining Solution Components...",
+    "Documenting Application Interactions...",
+    "Writing Error Handling Strategy...",
+    "Defining Orchestrator Artifacts...",
+    "Writing Security & Compliance...",
+    "Documenting Testing Strategy...",
+    "Generating Artifact Definitions...",
+    "Finalizing specification...",
+  ],
+  UiPath: [
+    "Reading SDD content...",
+    "Building project structure...",
+    "Generating XAML sequences...",
+    "Writing project.json...",
+    "Creating README...",
+    "Packaging ZIP file...",
+  ],
+};
+
+function DocProgressIndicator({ docType, onCancel }: { docType: string; onCancel: () => void }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => setElapsed((p) => p + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const steps = DOC_PROGRESS_STEPS[docType] || DOC_PROGRESS_STEPS.PDD;
+  const stepDuration = docType === "UiPath" ? 10 : 6;
+  const currentStepIndex = Math.min(Math.floor(elapsed / stepDuration), steps.length - 1);
+  const currentStep = steps[currentStepIndex];
+
+  return (
+    <div className="flex justify-start" data-testid="doc-generation-loading">
+      <div className="max-w-[85%] rounded-lg px-3 py-2.5 bg-card border border-card-border rounded-bl-sm">
+        <div className="flex items-center gap-2">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-cb-teal shrink-0" />
+          <div className="flex flex-col gap-0.5">
+            <p className="text-xs text-foreground/80 font-medium">
+              Generating {docType}...
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              {currentStep} <span className="text-muted-foreground/50">({elapsed}s elapsed)</span>
+            </p>
+          </div>
+          <button
+            onClick={onCancel}
+            className="text-[10px] text-muted-foreground hover:text-foreground underline ml-2 shrink-0"
+            data-testid="button-cancel-doc-gen"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function getStageBadgeClass(stage: string): string {
   const approvalStages = ["CoE Approval", "Governance / Security Scan"];
   const actionStages = ["Idea", "Feasibility Assessment"];
@@ -124,21 +198,28 @@ const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
   },
 };
 
-function getCompletedStagesForIdea(idea: Idea) {
-  const currentIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-  const completed: Record<string, string> = {};
-  const createdDate = new Date(idea.createdAt);
-
-  for (let i = 0; i < currentIndex; i++) {
-    const stageDate = new Date(createdDate);
-    stageDate.setDate(stageDate.getDate() + (i + 1) * 2);
-    completed[PIPELINE_STAGES[i]] = stageDate.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-  return completed;
+function formatEST(date: Date): { short: string; full: string } {
+  const opts: Intl.DateTimeFormatOptions = {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  };
+  const fullOpts: Intl.DateTimeFormatOptions = {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  };
+  return {
+    short: date.toLocaleDateString("en-US", opts),
+    full: date.toLocaleString("en-US", fullOpts),
+  };
 }
 
 const STAGE_ARTIFACTS: Record<string, string[]> = {
@@ -166,7 +247,29 @@ function StageTracker({
   onStageClick: (stage: string) => void;
 }) {
   const currentIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-  const completedStages = getCompletedStagesForIdea(idea);
+
+  const { data: stageHistory } = useQuery<{ transitions: Array<{ stage: string; timestamp: string }> }>({
+    queryKey: ["/api/ideas", idea.id, "stage-history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ideas/${idea.id}/stage-history`, { credentials: "include" });
+      if (!res.ok) return { transitions: [] };
+      return res.json();
+    },
+    staleTime: 30000,
+  });
+
+  const completedStages = useMemo(() => {
+    const result: Record<string, { short: string; full: string }> = {};
+    const createdFormatted = formatEST(new Date(idea.createdAt));
+    result["Idea"] = createdFormatted;
+
+    if (stageHistory?.transitions) {
+      for (const t of stageHistory.transitions) {
+        result[t.stage] = formatEST(new Date(t.timestamp));
+      }
+    }
+    return result;
+  }, [idea.createdAt, stageHistory]);
 
   const { data: approvalSummary } = useQuery<Record<string, any>>({
     queryKey: ["/api/ideas", idea.id, "approval-summary"],
@@ -286,8 +389,11 @@ function StageTracker({
                       {stage}
                     </span>
                     {isCompleted && completedStages[stage] && (
-                      <span className="text-[10px] text-muted-foreground/60 mt-0.5 block">
-                        {completedStages[stage]}
+                      <span
+                        className="text-[10px] text-muted-foreground/60 mt-0.5 block cursor-default"
+                        title={completedStages[stage].full}
+                      >
+                        {completedStages[stage].short}
                       </span>
                     )}
                     {isCurrent && (
@@ -401,6 +507,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const streamingMsgRef = useRef<string>("");
   const chatInitializedRef = useRef(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (chatInitializedRef.current) return;
@@ -414,8 +521,15 @@ function ChatPanel({ idea }: { idea: Idea }) {
   }, [idea.id]);
 
   const cancelDocGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     setIsGeneratingDoc(false);
     setGeneratingDocType("");
+    setIsStreaming(false);
+    setStreamingMsg(null);
+    setPendingUserMsg(null);
   }, []);
 
   const pddTriggeredRef = useRef(false);
@@ -436,10 +550,13 @@ function ChatPanel({ idea }: { idea: Idea }) {
     refetchOnMount: "always",
   });
 
+  const isSystemTriggerMsg = (content: string) =>
+    /^Generate the (Process Design Document|Solution Design Document).*\[DOC:(PDD|SDD):/.test(content);
+
   const displayMessages: ChatMsg[] = (() => {
     if (savedMessages && savedMessages.length > 0) {
       const loaded: ChatMsg[] = savedMessages
-        .filter((m) => m.role !== "system")
+        .filter((m) => m.role !== "system" && !isSystemTriggerMsg(m.content))
         .map((m) => {
         const meta = parseMessageMeta(m.content);
         return {
@@ -454,13 +571,13 @@ function ChatPanel({ idea }: { idea: Idea }) {
         };
       });
       const result = [...loaded];
-      if (pendingUserMsg) result.push(pendingUserMsg);
+      if (pendingUserMsg && !isSystemTriggerMsg(pendingUserMsg.content)) result.push(pendingUserMsg);
       if (streamingMsg) result.push(streamingMsg);
       return result;
     }
     if (!loadingHistory) {
       const result: ChatMsg[] = [];
-      if (pendingUserMsg) result.push(pendingUserMsg);
+      if (pendingUserMsg && !isSystemTriggerMsg(pendingUserMsg.content)) result.push(pendingUserMsg);
       if (streamingMsg) result.push(streamingMsg);
       return result;
     }
@@ -545,10 +662,14 @@ function ChatPanel({ idea }: { idea: Idea }) {
     setStreamingMsg(streamMsg);
     streamingMsgRef.current = "";
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         credentials: "include",
         body: JSON.stringify({ ideaId: idea.id, content: text }),
       });
@@ -644,9 +765,13 @@ function ChatPanel({ idea }: { idea: Idea }) {
           }
         }
       }
-    } catch {
+    } catch (err: any) {
       streamingMsgRef.current = "";
       setStreamingMsg(null);
+      if (err?.name === "AbortError") {
+        queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+        return;
+      }
       toast({
         title: "Connection error",
         description: "Couldn't reach the server. Please try again.",
@@ -1217,27 +1342,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
           );
         })}
         {isGeneratingDoc && (
-          <div className="flex justify-start" data-testid="doc-generation-loading">
-            <div className="max-w-[85%] rounded-lg px-3 py-2.5 bg-card border border-card-border rounded-bl-sm">
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-cb-teal" />
-                <p className="text-xs text-muted-foreground">
-                  Generating {generatingDocType}...{" "}
-                  {generatingDocType === "UiPath" ? "Building package structure (~30–60s)." :
-                   generatingDocType === "SDD" ? "Writing technical spec (~30–60s)." :
-                   generatingDocType === "PDD" ? "Writing process document (~30–60s)." :
-                   "This may take a moment."}
-                </p>
-                <button
-                  onClick={cancelDocGeneration}
-                  className="text-[10px] text-muted-foreground hover:text-foreground underline ml-1"
-                  data-testid="button-cancel-doc-gen"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
+          <DocProgressIndicator docType={generatingDocType} onCancel={cancelDocGeneration} />
         )}
 
         {(() => {
@@ -1568,7 +1673,6 @@ export default function Workspace() {
   }
 
   const currentIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-  const completedStages = getCompletedStagesForIdea(idea);
 
   async function handleTitleSave() {
     const trimmed = editTitle.trim();
@@ -1614,7 +1718,7 @@ export default function Workspace() {
             <div className="flex items-center gap-2">
               <Check className="h-3 w-3 text-cb-teal" />
               <span className="text-xs text-muted-foreground">
-                Completed {completedStages[selectedCompletedStage]}
+                Completed
               </span>
             </div>
             <div className="p-3 rounded-md bg-muted/20 border border-border/40">

@@ -12,6 +12,9 @@ import {
   Package,
   ShieldCheck,
   Settings,
+  Upload,
+  Cloud,
+  Layers,
 } from "lucide-react";
 import type { UserRole } from "@shared/schema";
 
@@ -104,7 +107,7 @@ const sections: GuideSection[] = [
           As the conversation progresses, the AI emits special <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">[STEP:]</code> tags in its responses. These tags are automatically parsed by the system and used to create new nodes on the process map in the center panel. You will see the map update in real time as the AI identifies tasks, decisions, and sub-processes. This tight feedback loop lets you validate the AI&rsquo;s understanding instantly\u2014if a step looks wrong on the map, you can correct it in the chat right away.
         </p>
         <p className="text-muted-foreground leading-relaxed">
-          For best results, provide specific details when answering the AI&rsquo;s questions. Mention the applications involved (e.g., SAP, Excel, email), the data fields being manipulated, and any business rules or exceptions that apply. The more context you give, the more accurate and complete your process map will be. If the AI asks a question you are unsure about, it is perfectly fine to say so\u2014it will adapt and move on to the next area of inquiry.
+          For best results, provide specific details when answering the AI&rsquo;s questions. Mention the applications involved (e.g., SAP, Excel, email), the data fields being manipulated, and any business rules or exceptions that apply. The more context you give, the more accurate and complete your process map will be. If the AI asks a question you are unsure about, it is perfectly fine to say so\u2014it will adapt and move on to the next area of inquiry. You can also upload documents (DOCX, PDF, XLSX, TXT, CSV) directly into the chat to provide the AI with existing process documentation\u2014see the File Upload &amp; Extraction section for details.
         </p>
       </>
     ),
@@ -165,6 +168,81 @@ const sections: GuideSection[] = [
         </p>
         <p className="text-muted-foreground leading-relaxed">
           The UiPath export is triggered from the workspace after the SDD is approved and the idea reaches the Test stage. Click the export button in the process map panel header, and the system will generate the package as a downloadable ZIP file. The package is also stored on the server for future reference and can be re-downloaded at any time from the idea&rsquo;s detail view. After the export is complete, the idea advances through Governance / Security Scan, CoE Approval, Deploy, and finally to Maintenance, marking the end of the automation pipeline.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: "file-upload",
+    title: "File Upload & Extraction",
+    icon: Upload,
+    roles: "all",
+    content: () => (
+      <>
+        <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-3 sm:mb-4">File Upload &amp; Content Extraction</h2>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          CannonBall supports uploading documents directly into the AI Chat panel to accelerate the automation pipeline. Instead of manually describing a process, you can upload an existing document&mdash;such as a process description, standard operating procedure, or data spreadsheet&mdash;and the AI will automatically extract the content and use it to drive the pipeline forward.
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          Supported file types include <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">DOCX</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">PDF</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">XLSX</code>/<code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">XLS</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">TXT</code>, and <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">CSV</code>. When you upload one of these files, the system extracts the text content on the server side and injects it into the chat context. The AI then analyzes the content for process steps, business rules, decision points, roles, systems, and exceptions&mdash;and can automatically generate process map steps from the document.
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          You can also upload images (<code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">PNG</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">JPG</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">GIF</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">WEBP</code>) and videos (<code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">MP4</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">WEBM</code>, <code className="text-cb-teal bg-card px-1.5 py-0.5 rounded-md text-sm">MOV</code>). Since these cannot be parsed as text, the AI will prompt you to describe the process or steps shown in the media so it can incorporate that information.
+        </p>
+        <p className="text-muted-foreground leading-relaxed">
+          To upload a file, click the paperclip icon in the chat input area, select your file, and optionally type a message to accompany it. The system will show a loading spinner while extracting content, and then send everything to the AI in a single message. This is especially powerful for bootstrapping a new idea&mdash;upload a PDD or process description and the AI can immediately begin building the process map and generating documentation.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: "deployment",
+    title: "UiPath Deployment",
+    icon: Cloud,
+    roles: "all",
+    content: () => (
+      <>
+        <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-3 sm:mb-4">UiPath Orchestrator Deployment</h2>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          After the SDD is approved, CannonBall can deploy your automation directly to UiPath Orchestrator. The deployment process is conversational&mdash;simply tell the AI to deploy, and it will provision all necessary Orchestrator artifacts automatically. This includes queues, assets (text, integer, boolean, and credential types), machines, triggers (both queue-based and time-based), storage buckets, environments, robot accounts, Action Center task catalogs, and Document Understanding projects.
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          The system intelligently probes your Orchestrator tenant to determine which services are available before attempting deployment. If a service like Action Center or Test Manager is not enabled on your tenant, the system will skip those artifacts and report this in the deployment results rather than failing. All deployment results are displayed in an inline report card within the chat, showing the status of each artifact (created, already exists, skipped, or failed).
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          <strong>Test Manager Integration:</strong> The deployment includes full Test Manager V2 API support. A test project is created for your automation, and individual test cases are provisioned with labels (Critical, Smoke, Regression) and manual steps. Test data queues can also be created and populated with test data items for data-driven testing scenarios.
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          <strong>Connection Settings:</strong> Before deploying, configure your UiPath Orchestrator connection settings from the Settings page. You will need your Orchestrator URL, tenant name, organization name, Client ID, and Client Secret. The system uses OAuth2 client credentials to authenticate and supports both Cloud and on-premises Orchestrator instances.
+        </p>
+        <p className="text-muted-foreground leading-relaxed">
+          Deployment results are persistent&mdash;they are saved in the chat history and can be reviewed at any time by scrolling back through the conversation. The deployment report card shows a summary with counts of created, existing, skipped, and failed artifacts, along with detailed status for each individual item.
+        </p>
+      </>
+    ),
+  },
+  {
+    id: "process-map-levels",
+    title: "Process Map Levels",
+    icon: Layers,
+    roles: "all",
+    content: () => (
+      <>
+        <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-3 sm:mb-4">Process Map Detail Levels</h2>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          CannonBall supports multiple levels of process map detail, allowing you to view your automation at different granularities. The process map panel includes view tabs that let you switch between these levels:
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          <strong>As-Is Map:</strong> This is the current-state process map that documents how the process works today, before automation. It captures every manual step, decision point, role, and system interaction. The As-Is map is built collaboratively with the AI during the discovery phase and serves as the foundation for the Process Design Document (PDD).
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          <strong>To-Be Map:</strong> The future-state process map shows how the process will work after automation. It highlights which steps are automated vs. manual, where human-in-the-loop interventions occur, and how the automation interacts with systems. The To-Be map reflects the design decisions captured in the PDD and helps stakeholders visualize the automated workflow.
+        </p>
+        <p className="text-muted-foreground leading-relaxed mb-4">
+          <strong>SDD View:</strong> The technical implementation view provides a developer-oriented perspective of the automation. It maps directly to the Solution Design Document and shows the technical sequences, API calls, application interactions, and error handling paths that the RPA developer will implement in UiPath Studio.
+        </p>
+        <p className="text-muted-foreground leading-relaxed">
+          All map views share the same interactive controls: zoom in/out, fit-to-view, right-click context menus for adding or removing nodes, inline label editing, drag-and-drop repositioning, and edge label editing. Maps are automatically laid out using a directed acyclic graph (DAG) algorithm for clean visual presentation, with intelligent branching for decision nodes and parallel paths.
         </p>
       </>
     ),

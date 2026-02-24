@@ -167,6 +167,20 @@ export async function registerRoutes(
     return res.json({ similar });
   });
 
+  app.get("/api/ideas/:id/stage-history", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const logs = await storage.getAuditLogs(req.params.id as string);
+    const transitions = logs
+      .filter(l => l.action === "stage_transition" && l.toStage)
+      .map(l => ({
+        stage: l.toStage!,
+        timestamp: l.createdAt,
+      }));
+    return res.json({ transitions });
+  });
+
   app.post("/api/ideas", async (req: Request, res: Response) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
