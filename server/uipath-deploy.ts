@@ -70,7 +70,8 @@ export type OrchestratorArtifacts = {
   robotAccounts?: Array<{ name: string; type?: string; description?: string }>;
   actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string }>;
   documentUnderstanding?: Array<{ name: string; documentTypes: string[]; description?: string }>;
-  testCases?: Array<{ name: string; description?: string; steps?: Array<{ action: string; expected: string }> }>;
+  testCases?: Array<{ name: string; description?: string; labels?: string[]; steps?: Array<{ action: string; expected: string }> }>;
+  testDataQueues?: Array<{ name: string; description?: string; jsonSchema?: string; items?: Array<{ name: string; content: string }> }>;
 };
 
 export type DeploymentResult = {
@@ -142,10 +143,10 @@ export async function extractArtifactsWithLLM(sddContent: string): Promise<Orche
       system: "You are a UiPath automation consultant. Extract Orchestrator artifact definitions from the SDD and output ONLY valid JSON. No other text, no markdown formatting, no code fences — just the raw JSON object.",
       messages: [{
         role: "user",
-        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, environments, robotAccounts, actionCenter, documentUnderstanding, testCases. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults. IMPORTANT: All triggers (Queue and Time) MUST be included — never treat them as manual steps. Generate test cases that cover the key automation scenarios described in the SDD. For robotAccounts, include any unattended robot accounts needed to run the automation — if machines are defined, at least one robot account should be defined to operate them.
+        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, environments, robotAccounts, actionCenter, documentUnderstanding, testCases, testDataQueues. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults. IMPORTANT: All triggers (Queue and Time) MUST be included — never treat them as manual steps. Generate test cases that cover the key automation scenarios described in the SDD — include labels like "Critical", "Smoke", "Regression" where appropriate. For robotAccounts, include any unattended robot accounts needed to run the automation — if machines are defined, at least one robot account should be defined to operate them. For testDataQueues, include any test data queues needed to supply test data to test cases (e.g. login credentials, input data sets).
 
 Expected JSON shape:
-{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended|Attended|Development","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}],"documentUnderstanding":[{"name":"ProjectName","documentTypes":["Invoice","Receipt"],"description":"..."}],"testCases":[{"name":"Test case name","description":"What this tests","steps":[{"action":"Step action","expected":"Expected result"}]}]}
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended|Attended|Development","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}],"documentUnderstanding":[{"name":"ProjectName","documentTypes":["Invoice","Receipt"],"description":"..."}],"testCases":[{"name":"TC_001_TestName","description":"What this tests","labels":["Critical","Smoke"],"steps":[{"action":"Step action","expected":"Expected result"}]}],"testDataQueues":[{"name":"TestDataQueueName","description":"Queue for test data","jsonSchema":"{\"type\":\"object\",\"properties\":{\"field\":{\"type\":\"string\"}}}","items":[{"name":"Record_1","content":"{\"field\":\"value\"}"}]}]}
 
 SDD content:
 ${sddContent.slice(0, 12000)}`
@@ -192,17 +193,24 @@ ${sddContent.slice(0, 12000)}`
       validated.documentUnderstanding = raw.documentUnderstanding.filter((d: any) => typeof d?.name === "string" && d.name.length > 0);
     }
     if (Array.isArray(raw.testCases)) {
-      validated.testCases = raw.testCases.filter((t: any) => typeof t?.name === "string" && t.name.length > 0);
+      validated.testCases = raw.testCases.filter((t: any) => typeof t?.name === "string" && t.name.length > 0).map((t: any) => ({
+        ...t,
+        labels: Array.isArray(t.labels) ? t.labels.filter((l: any) => typeof l === "string") : undefined,
+      }));
+    }
+    if (Array.isArray(raw.testDataQueues)) {
+      validated.testDataQueues = raw.testDataQueues.filter((q: any) => typeof q?.name === "string" && q.name.length > 0);
     }
 
     const hasContent = (validated.queues?.length || 0) + (validated.assets?.length || 0) +
       (validated.triggers?.length || 0) + (validated.machines?.length || 0) +
       (validated.storageBuckets?.length || 0) + (validated.environments?.length || 0) +
       (validated.robotAccounts?.length || 0) + (validated.actionCenter?.length || 0) +
-      (validated.documentUnderstanding?.length || 0) + (validated.testCases?.length || 0);
+      (validated.documentUnderstanding?.length || 0) + (validated.testCases?.length || 0) +
+      (validated.testDataQueues?.length || 0);
 
     if (hasContent > 0) {
-      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0})`);
+      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0}, testDataQueues:${validated.testDataQueues?.length||0})`);
       return validated;
     }
     console.warn("[UiPath Deploy] LLM returned JSON but no valid artifacts after validation. Raw keys:", Object.keys(raw));
@@ -1542,20 +1550,22 @@ async function provisionDocUnderstanding(
 
 async function provisionTestCases(
   config: UiPathConfig,
-  _mainToken: string,
+  mainToken: string,
   testCases: OrchestratorArtifacts["testCases"],
-  processName: string
+  processName: string,
+  testDataQueues?: OrchestratorArtifacts["testDataQueues"],
+  folderId?: string
 ): Promise<DeploymentResult[]> {
-  if (!testCases?.length) return [];
+  if (!testCases?.length && !testDataQueues?.length) return [];
   const results: DeploymentResult[] = [];
 
   const tmToken = await getTMToken(config);
   if (!tmToken) {
     return [{
       artifact: "Test Case",
-      name: `${testCases.length} test case(s)`,
+      name: `${(testCases?.length || 0) + (testDataQueues?.length || 0)} item(s)`,
       status: "skipped" as const,
-      message: `Could not acquire TM-scoped token. Test Manager scopes (TM.Projects, TM.TestCases) may not be available for this external application. ${testCases.length} test cases were defined but cannot be provisioned.`,
+      message: `Could not acquire TM-scoped token. Test Manager scopes (TM.Projects, TM.TestCases) may not be available for this external application.`,
     }];
   }
 
@@ -1563,7 +1573,7 @@ async function provisionTestCases(
     `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`,
     `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tmapi_`,
   ];
-  const hdrs: Record<string, string> = {
+  const tmHdrs: Record<string, string> = {
     "Authorization": `Bearer ${tmToken}`,
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -1571,11 +1581,12 @@ async function provisionTestCases(
 
   let activeTmBase: string | null = null;
   let projectId: number | null = null;
+  let projectPrefix: string | null = null;
 
   for (const tmBase of tmBases) {
     try {
-      const projRes = await uipathFetch(`${tmBase}/api/v2/projects?$top=10`, {
-        headers: hdrs, label: "TM Probe Projects", maxRetries: 1,
+      const projRes = await uipathFetch(`${tmBase}/api/v2/Projects?$top=10`, {
+        headers: tmHdrs, label: "TM Probe Projects", maxRetries: 1,
       });
       console.log(`[UiPath Deploy] Test Manager probe ${tmBase} -> ${projRes.status}: ${projRes.text.slice(0, 200)}`);
 
@@ -1594,9 +1605,15 @@ async function provisionTestCases(
               (p.Name || p.name)?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
               processName.toLowerCase().includes((p.Name || p.name)?.toLowerCase())
             );
-            projectId = match?.Id || match?.id || projects[0].Id || projects[0].id;
+            if (match) {
+              projectId = match.Id || match.id;
+              projectPrefix = match.Prefix || match.prefix || match.ProjectPrefix || match.projectPrefix || null;
+            } else {
+              projectId = projects[0].Id || projects[0].id;
+              projectPrefix = projects[0].Prefix || projects[0].prefix || projects[0].ProjectPrefix || projects[0].projectPrefix || null;
+            }
           }
-        } catch { /* valid service but empty/unparseable list — continue to create project */ }
+        } catch {}
         break;
       }
       if (projRes.status === 401) {
@@ -1609,23 +1626,23 @@ async function provisionTestCases(
   if (!activeTmBase) {
     return [{
       artifact: "Test Case",
-      name: `${testCases.length} test case(s)`,
+      name: `${(testCases?.length || 0)} test case(s)`,
       status: "skipped" as const,
-      message: `Test Manager not available on this tenant. ${testCases.length} test cases were defined but cannot be provisioned. Test Manager requires an Enterprise license or the service may not be enabled.`,
+      message: `Test Manager not available on this tenant. Test Manager requires an Enterprise license or the service may not be enabled.`,
     }];
   }
 
   if (!projectId) {
     try {
       const projName = processName.replace(/_/g, " ");
-      const projPrefix = processName.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase() || "AUTO";
-      const createProjResult = await uipathFetch(`${activeTmBase}/api/v2/projects`, {
+      const prefix = processName.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase() || "AUTO";
+      const createProjResult = await uipathFetch(`${activeTmBase}/api/v2/Projects`, {
         method: "POST",
-        headers: hdrs,
+        headers: tmHdrs,
         body: JSON.stringify({
-          Name: projName,
-          ProjectPrefix: projPrefix,
-          Description: truncDesc(`Test project for ${processName}`),
+          name: projName,
+          prefix: prefix,
+          description: truncDesc(`Test project for ${processName}`),
         }),
         label: "TM Create Project",
       });
@@ -1634,21 +1651,28 @@ async function provisionTestCases(
         const creation = isValidCreation(createProjResult.text);
         if (creation.valid && (creation.data?.Id || creation.data?.id)) {
           projectId = creation.data.Id || creation.data.id;
-          results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
+          projectPrefix = creation.data.Prefix || creation.data.prefix || creation.data.ProjectPrefix || creation.data.projectPrefix || prefix;
+          results.push({ artifact: "Test Project", name: projName, status: "created", message: `Created test project "${projName}" (ID: ${projectId}, Prefix: ${projectPrefix})`, id: projectId! });
         } else {
           console.warn(`[UiPath Deploy] Test project creation returned ${createProjResult.status} but validation failed: ${creation.error}`);
         }
       } else if (createProjResult.status === 409 || createProjResult.text.includes("already exists")) {
         console.log(`[UiPath Deploy] Test project already exists, re-fetching...`);
         try {
-          const reListResult = await uipathFetch(`${activeTmBase}/api/v2/projects?$top=50`, { headers: hdrs, label: "TM Re-list Projects", maxRetries: 1 });
+          const reListResult = await uipathFetch(`${activeTmBase}/api/v2/Projects?$top=50`, { headers: tmHdrs, label: "TM Re-list Projects", maxRetries: 1 });
           if (reListResult.ok) {
             const projects = reListResult.data?.data || reListResult.data?.value || [];
             const match = projects.find((p: any) =>
               (p.Name || p.name)?.toLowerCase() === processName.replace(/_/g, " ").toLowerCase()
             );
-            if (match) projectId = match.Id || match.id;
-            else if (projects.length > 0) projectId = projects[0].Id || projects[0].id;
+            if (match) {
+              projectId = match.Id || match.id;
+              projectPrefix = match.Prefix || match.prefix || match.ProjectPrefix || match.projectPrefix || null;
+              results.push({ artifact: "Test Project", name: projName, status: "exists", message: `Project exists (ID: ${projectId}, Prefix: ${projectPrefix})`, id: projectId! });
+            } else if (projects.length > 0) {
+              projectId = projects[0].Id || projects[0].id;
+              projectPrefix = projects[0].Prefix || projects[0].prefix || projects[0].ProjectPrefix || projects[0].projectPrefix || null;
+            }
           }
         } catch {}
       } else if (createProjResult.status === 403 || createProjResult.status === 401) {
@@ -1662,8 +1686,8 @@ async function provisionTestCases(
   if (!projectId) {
     return [
       ...results,
-      ...testCases.map(tc => ({
-        artifact: "Test Case",
+      ...(testCases || []).map(tc => ({
+        artifact: "Test Case" as const,
         name: tc.name,
         status: "failed" as const,
         message: `Could not find or create test project in Test Manager. Check API permissions.`,
@@ -1671,100 +1695,135 @@ async function provisionTestCases(
     ];
   }
 
-  for (const tc of testCases) {
-    try {
-      const body: Record<string, any> = {
-        Name: tc.name,
-        Description: truncDesc(tc.description),
-        ProjectId: projectId,
-      };
+  if (testCases?.length) {
+    for (const tc of testCases) {
+      try {
+        const body: Record<string, any> = {
+          name: tc.name,
+          description: truncDesc(tc.description),
+        };
+        if (tc.labels?.length) {
+          body.labels = tc.labels;
+        }
+        if (tc.steps?.length) {
+          body.manualSteps = tc.steps.map((s, idx) => ({
+            stepDescription: s.action,
+            expectedResult: s.expected,
+            order: idx + 1,
+          }));
+        }
 
-      if (tc.steps?.length) {
-        body.ManualSteps = tc.steps.map((s, idx) => ({
-          StepDescription: s.action,
-          ExpectedResult: s.expected,
-          Order: idx + 1,
-        }));
-      }
-
-      const tcEndpoints = [
-        `${activeTmBase}/api/testcases`,
-        `${activeTmBase}/api/testcase`,
-      ];
-
-      let created = false;
-      for (const tcUrl of tcEndpoints) {
+        const tcUrl = `${activeTmBase}/api/v2/Projects/${projectId}/TestCases`;
         const tcResult = await uipathFetch(tcUrl, {
           method: "POST",
-          headers: hdrs,
+          headers: tmHdrs,
           body: JSON.stringify(body),
-          label: "TM Create TestCase",
+          label: "TM Create TestCase V2",
           maxRetries: 1,
         });
-        console.log(`[UiPath Deploy] Test Case "${tc.name}" via ${tcUrl.replace(activeTmBase!, '')} -> ${tcResult.status}: ${tcResult.text.slice(0, 300)}`);
+        console.log(`[UiPath Deploy] Test Case "${tc.name}" via V2 -> ${tcResult.status}: ${tcResult.text.slice(0, 300)}`);
 
         if (tcResult.status === 200 || tcResult.status === 201) {
           const creation = isValidCreation(tcResult.text);
           if (!creation.valid) {
             console.warn(`[UiPath Deploy] Test Case "${tc.name}" got ${tcResult.status} but validation failed: ${creation.error}`);
             results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `API returned ${tcResult.status} but response invalid: ${creation.error}` });
-            created = true;
-            break;
+            continue;
           }
           const createdId = creation.data?.Id || creation.data?.id;
-
-          let verified = false;
-          if (createdId) {
-            const verifyResult = await uipathFetch(`${activeTmBase}/api/testcases/${createdId}`, {
-              headers: hdrs,
-              label: "TM Verify TestCase",
-              maxRetries: 1,
-            });
-            if (verifyResult.ok) {
-              const genuineCheck = isGenuineApiResponse(verifyResult.text);
-              verified = genuineCheck.genuine;
-            }
-          }
-
-          if (verified) {
-            results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created and verified (ID: ${createdId})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: createdId });
-          } else {
-            const listResult = await uipathFetch(
-              `${activeTmBase}/api/testcase/project/${projectId}/search`,
-              { headers: hdrs, label: "TM Search TestCase", maxRetries: 1 }
-            );
-            if (listResult.ok && listResult.data) {
-              const items = listResult.data.value || listResult.data.items || listResult.data.data || (Array.isArray(listResult.data) ? listResult.data : []);
-              const match = items.find((item: any) => (item.Name || item.name) === tc.name);
-              if (match) {
-                results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created and verified by search (ID: ${match.Id || match.id})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""}`, id: match.Id || match.id });
-                verified = true;
-              }
-            }
-            if (!verified) {
-              results.push({ artifact: "Test Case", name: tc.name, status: "created", message: `Created (ID: ${createdId || "unknown"})${tc.steps?.length ? `, ${tc.steps.length} manual steps` : ""} — verification skipped` });
-            }
-          }
-          created = true;
-          break;
+          const key = creation.data?.Key || creation.data?.key || (projectPrefix ? `${projectPrefix}-${createdId}` : null);
+          let msg = `Created (ID: ${createdId}${key ? `, Key: ${key}` : ""})`;
+          if (tc.labels?.length) msg += `, labels: ${tc.labels.join(", ")}`;
+          if (tc.steps?.length) msg += `, ${tc.steps.length} manual steps`;
+          results.push({ artifact: "Test Case", name: tc.name, status: "created", message: msg, id: createdId });
         } else if (tcResult.status === 409 || tcResult.text.includes("already exists")) {
           results.push({ artifact: "Test Case", name: tc.name, status: "exists", message: "Already exists" });
-          created = true;
-          break;
-        } else if (tcResult.status === 404) {
-          continue;
         } else {
-          results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: tcResult.error || `HTTP ${tcResult.status}` });
-          created = true;
-          break;
+          results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: tcResult.error || `HTTP ${tcResult.status}: ${tcResult.text.slice(0, 200)}` });
         }
+      } catch (err: any) {
+        results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: err.message });
       }
+    }
+  }
 
-      if (!created) {
-        results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: `All test case endpoints returned 404. Test Manager API may not support external test case creation on this tenant.` });
+  if (testDataQueues?.length && folderId) {
+    const orchBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
+    const orchHdrs: Record<string, string> = {
+      "Authorization": `Bearer ${mainToken}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "X-UIPATH-OrganizationUnitId": folderId,
+    };
+
+    for (const tdq of testDataQueues) {
+      try {
+        const queueBody: Record<string, any> = {
+          Name: tdq.name,
+          Description: truncDesc(tdq.description),
+        };
+        if (tdq.jsonSchema) {
+          queueBody.JsonSchema = tdq.jsonSchema;
+        }
+
+        const queueResult = await uipathFetch(`${orchBase}/odata/TestDataQueues`, {
+          method: "POST",
+          headers: orchHdrs,
+          body: JSON.stringify(queueBody),
+          label: "TM Create TestDataQueue",
+          maxRetries: 1,
+        });
+        console.log(`[UiPath Deploy] TestDataQueue "${tdq.name}" -> ${queueResult.status}: ${queueResult.text.slice(0, 300)}`);
+
+        if (queueResult.status === 200 || queueResult.status === 201) {
+          const creation = isValidCreation(queueResult.text);
+          const queueId = creation.data?.Id || creation.data?.id;
+          results.push({ artifact: "Test Data Queue", name: tdq.name, status: "created", message: `Created (ID: ${queueId || "unknown"})`, id: queueId });
+
+          if (queueId && tdq.items?.length) {
+            try {
+              const uploadResult = await uipathFetch(
+                `${orchBase}/odata/TestDataQueueItems/UiPath.Server.Configuration.OData.UploadItems`,
+                {
+                  method: "POST",
+                  headers: orchHdrs,
+                  body: JSON.stringify({
+                    testDataQueueId: queueId,
+                    items: tdq.items.map(item => ({
+                      name: item.name,
+                      content: item.content,
+                    })),
+                  }),
+                  label: "TM Upload TestDataQueueItems",
+                  maxRetries: 1,
+                }
+              );
+              if (uploadResult.ok) {
+                console.log(`[UiPath Deploy] Uploaded ${tdq.items.length} items to TestDataQueue "${tdq.name}"`);
+              } else {
+                console.warn(`[UiPath Deploy] TestDataQueue item upload failed: ${uploadResult.status} ${uploadResult.text.slice(0, 200)}`);
+              }
+            } catch (uploadErr: any) {
+              console.warn(`[UiPath Deploy] TestDataQueue item upload error: ${uploadErr.message}`);
+            }
+          }
+        } else if (queueResult.status === 409 || queueResult.text.includes("already exists")) {
+          results.push({ artifact: "Test Data Queue", name: tdq.name, status: "exists", message: "Already exists" });
+        } else {
+          results.push({ artifact: "Test Data Queue", name: tdq.name, status: "failed", message: queueResult.error || `HTTP ${queueResult.status}` });
+        }
+      } catch (err: any) {
+        results.push({ artifact: "Test Data Queue", name: tdq.name, status: "failed", message: err.message });
       }
-    } catch (err: any) {
-      results.push({ artifact: "Test Case", name: tc.name, status: "failed", message: err.message });
+    }
+  } else if (testDataQueues?.length && !folderId) {
+    for (const tdq of testDataQueues) {
+      results.push({
+        artifact: "Test Data Queue",
+        name: tdq.name,
+        status: "failed",
+        message: "No folder ID available — TestDataQueues require X-UIPATH-OrganizationUnitId header. Ensure a folder is configured.",
+      });
     }
   }
 
@@ -2290,10 +2349,11 @@ export async function deployAllArtifacts(
       allResults.push(...duResults);
     }
 
-    if (svcAvail && !svcAvail.testManager && (artifacts.testCases?.length || 0) > 0) {
-      allResults.push({ artifact: "Test Case", name: `${artifacts.testCases!.length} test case(s)`, status: "skipped", message: "Test Manager is not available on this tenant. Test cases were defined in the SDD but cannot be provisioned. Test Manager requires an Enterprise license or TM scopes (TM.Projects, TM.TestCases) to be enabled." });
+    const hasTestArtifacts = (artifacts.testCases?.length || 0) > 0 || (artifacts.testDataQueues?.length || 0) > 0;
+    if (svcAvail && !svcAvail.testManager && hasTestArtifacts) {
+      allResults.push({ artifact: "Test Case", name: `${artifacts.testCases?.length || 0} test case(s), ${artifacts.testDataQueues?.length || 0} test data queue(s)`, status: "skipped", message: "Test Manager is not available on this tenant. Test artifacts were defined in the SDD but cannot be provisioned. Test Manager requires an Enterprise license or TM scopes (TM.Projects, TM.TestCases) to be enabled." });
     } else {
-      const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation");
+      const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId);
       allResults.push(...testResults);
     }
 

@@ -9,6 +9,7 @@ import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerProcessMapRoutes } from "./process-map-routes";
 import { registerDocumentRoutes } from "./document-routes";
 import { registerUiPathRoutes } from "./uipath-routes";
+import { registerFileUploadRoutes } from "./file-upload";
 import { evaluateTransition } from "./stage-transition";
 
 declare module "express-session" {
@@ -48,6 +49,7 @@ export async function registerRoutes(
   registerProcessMapRoutes(app);
   registerDocumentRoutes(app);
   registerUiPathRoutes(app);
+  registerFileUploadRoutes(app);
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     if (!req.session.userId) {

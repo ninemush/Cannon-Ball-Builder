@@ -946,13 +946,50 @@ function ChatPanel({ idea }: { idea: Idea }) {
     }
   }, [isStreaming, isGeneratingDoc, messageQueue, sendMessageDirect]);
 
-  const handleSend = useCallback(() => {
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleSend = useCallback(async () => {
     let text = inputValue.trim();
     if (!text && !attachedFile) return;
 
     if (attachedFile) {
-      const fileNote = `(User uploaded a file: ${attachedFile.name}. Acknowledge it and ask them to describe its contents since you cannot read it directly yet.)`;
-      text = text ? `${text}\n\n${fileNote}` : fileNote;
+      const extractableTypes = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/plain",
+        "text/csv",
+      ];
+
+      if (extractableTypes.includes(attachedFile.type)) {
+        setIsUploading(true);
+        try {
+          const formData = new FormData();
+          formData.append("files", attachedFile);
+          const uploadRes = await fetch("/api/upload", { method: "POST", body: formData, credentials: "include" });
+          if (uploadRes.ok) {
+            const data = await uploadRes.json();
+            if (data.files?.[0]?.text) {
+              const extracted = data.files[0];
+              const contextNote = `[UPLOADED_FILE: ${attachedFile.name} (${extracted.type})]\n\nExtracted content from "${attachedFile.name}":\n---\n${extracted.text}\n---\n\nUse this document content to help drive the automation pipeline. Analyze it for process steps, business rules, and requirements. If appropriate, suggest creating a process map or generating PDD/SDD documents based on this content.`;
+              text = text ? `${text}\n\n${contextNote}` : contextNote;
+            } else {
+              text = text ? `${text}\n\n(User uploaded "${attachedFile.name}" but content extraction returned empty.)` : `(User uploaded "${attachedFile.name}" but content extraction returned empty.)`;
+            }
+          } else {
+            text = text ? `${text}\n\n(User uploaded "${attachedFile.name}" but server-side extraction failed.)` : `(User uploaded "${attachedFile.name}" but server-side extraction failed.)`;
+          }
+        } catch (err) {
+          console.error("File upload error:", err);
+          text = text ? `${text}\n\n(User uploaded "${attachedFile.name}" but extraction encountered an error.)` : `(User uploaded "${attachedFile.name}" but extraction encountered an error.)`;
+        } finally {
+          setIsUploading(false);
+        }
+      } else {
+        const fileNote = `[UPLOADED_FILE: ${attachedFile.name} (${attachedFile.type})]\n\n(User uploaded a media file: "${attachedFile.name}". This file type cannot be parsed as text. Please ask the user to describe the process or steps shown in this file so you can create a process map and documentation.)`;
+        text = text ? `${text}\n\n${fileNote}` : fileNote;
+      }
     }
 
     setInputValue("");
@@ -1303,6 +1340,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
             type="file"
             className="hidden"
             onChange={handleFileSelect}
+            accept=".pdf,.docx,.xlsx,.xls,.txt,.csv,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov"
             data-testid="input-file-upload"
           />
           <Button
@@ -1330,10 +1368,12 @@ function ChatPanel({ idea }: { idea: Idea }) {
             size="icon"
             className="shrink-0"
             onClick={handleSend}
-            disabled={!inputValue.trim() && !attachedFile}
+            disabled={isUploading || (!inputValue.trim() && !attachedFile)}
             data-testid="button-send-message"
           >
-            {isStreaming ? (
+            {isUploading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : isStreaming ? (
               <ListPlus className="h-3.5 w-3.5" />
             ) : (
               <Send className="h-3.5 w-3.5" />

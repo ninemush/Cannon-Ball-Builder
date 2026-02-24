@@ -20,6 +20,8 @@ The application employs a modern web stack:
 - **Automated Stage Transitions**: Engine evaluates and automatically transitions ideas across 10 pipeline stages based on criteria, with audit logging.
 - **Document Generation**: Automated PDD and SDD generation after process map and PDD approvals, respectively, including version control. Chat-regenerated documents are auto-saved.
 - **UiPath Package Generation & Deployment**: Generates UiPath compatible ZIP packages (project.json, XAML stubs, README) after SDD approval. Supports conversational deployment to UiPath Orchestrator with live status streaming.
+- **Test Manager V2 API Integration**: Creates Test Manager projects via `/api/v2/Projects` (lowercase fields: `name`, `prefix`, `description`), test cases via `/api/v2/Projects/{projectId}/TestCases` (lowercase: `name`, `description`, `labels[]`, `manualSteps[]`), and test data queues via `/odata/TestDataQueues` with `X-UIPATH-OrganizationUnitId` header for folder-scoped operations.
+- **File Upload Content Extraction**: Server-side file upload (`/api/upload`) with content extraction for DOCX (mammoth), PDF (pdf-parse), XLSX (xlsx), TXT, and CSV. Extracted content is injected into AI chat context to automatically drive process mapping and document generation. Images and videos are acknowledged with prompts for user description.
 - **Admin & Review Panels**: CoE review page for idea approval/rejection and an Admin panel for user management, audit logs, and system configuration.
 - **Role-Based Access**: Authorization enforced on process map and document routes based on user ownership and roles (Admin/CoE).
 
@@ -34,4 +36,5 @@ The application employs a modern web stack:
     - wouter
 - **Backend Framework**: Express.js.
 - **Session Management**: express-session and connect-pg-simple.
+- **File Parsing**: mammoth (DOCX), pdf-parse (PDF), xlsx (XLSX/XLS), multer (file upload handling).
 - **UiPath Orchestrator**: For deploying automation packages, including API integrations for provisioning assets, queues, and processes.
