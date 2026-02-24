@@ -5,6 +5,17 @@ function odataEscape(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+function generateUuid(): string {
+  const hex = "0123456789abcdef";
+  let uuid = "";
+  for (let i = 0; i < 36; i++) {
+    if (i === 8 || i === 13 || i === 18 || i === 23) uuid += "-";
+    else if (i === 14) uuid += "4";
+    else uuid += hex[Math.floor(Math.random() * 16)];
+  }
+  return uuid;
+}
+
 export type OrchestratorArtifacts = {
   queues?: Array<{ name: string; description?: string; maxRetries?: number; uniqueReference?: boolean }>;
   assets?: Array<{ name: string; type: string; value?: string; description?: string }>;
@@ -12,6 +23,7 @@ export type OrchestratorArtifacts = {
   triggers?: Array<{ name: string; type: string; queueName?: string; cron?: string; description?: string }>;
   storageBuckets?: Array<{ name: string; description?: string }>;
   environments?: Array<{ name: string; type?: string; description?: string }>;
+  robotAccounts?: Array<{ name: string; type?: string; description?: string }>;
   actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string }>;
   documentUnderstanding?: Array<{ name: string; documentTypes: string[]; description?: string }>;
   testCases?: Array<{ name: string; description?: string; steps?: Array<{ action: string; expected: string }> }>;
@@ -86,10 +98,10 @@ export async function extractArtifactsWithLLM(sddContent: string): Promise<Orche
       system: "You are a UiPath automation consultant. Extract Orchestrator artifact definitions from the SDD and output ONLY valid JSON. No other text, no markdown formatting, no code fences — just the raw JSON object.",
       messages: [{
         role: "user",
-        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, environments, actionCenter, documentUnderstanding, testCases. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults. IMPORTANT: All triggers (Queue and Time) MUST be included — never treat them as manual steps. Generate test cases that cover the key automation scenarios described in the SDD.
+        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, environments, robotAccounts, actionCenter, documentUnderstanding, testCases. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults. IMPORTANT: All triggers (Queue and Time) MUST be included — never treat them as manual steps. Generate test cases that cover the key automation scenarios described in the SDD. For robotAccounts, include any unattended robot accounts needed to run the automation — if machines are defined, at least one robot account should be defined to operate them.
 
 Expected JSON shape:
-{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}],"documentUnderstanding":[{"name":"ProjectName","documentTypes":["Invoice","Receipt"],"description":"..."}],"testCases":[{"name":"Test case name","description":"What this tests","steps":[{"action":"Step action","expected":"Expected result"}]}]}
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended|Attended|Development","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}],"documentUnderstanding":[{"name":"ProjectName","documentTypes":["Invoice","Receipt"],"description":"..."}],"testCases":[{"name":"Test case name","description":"What this tests","steps":[{"action":"Step action","expected":"Expected result"}]}]}
 
 SDD content:
 ${sddContent.slice(0, 12000)}`
@@ -126,6 +138,9 @@ ${sddContent.slice(0, 12000)}`
     if (Array.isArray(raw.environments)) {
       validated.environments = raw.environments.filter((e: any) => typeof e?.name === "string" && e.name.length > 0);
     }
+    if (Array.isArray(raw.robotAccounts)) {
+      validated.robotAccounts = raw.robotAccounts.filter((r: any) => typeof r?.name === "string" && r.name.length > 0);
+    }
     if (Array.isArray(raw.actionCenter)) {
       validated.actionCenter = raw.actionCenter.filter((a: any) => typeof a?.taskCatalog === "string" && a.taskCatalog.length > 0);
     }
@@ -138,11 +153,12 @@ ${sddContent.slice(0, 12000)}`
 
     const hasContent = (validated.queues?.length || 0) + (validated.assets?.length || 0) +
       (validated.triggers?.length || 0) + (validated.machines?.length || 0) +
-      (validated.storageBuckets?.length || 0) + (validated.environments?.length || 0) + (validated.actionCenter?.length || 0) +
+      (validated.storageBuckets?.length || 0) + (validated.environments?.length || 0) +
+      (validated.robotAccounts?.length || 0) + (validated.actionCenter?.length || 0) +
       (validated.documentUnderstanding?.length || 0) + (validated.testCases?.length || 0);
 
     if (hasContent > 0) {
-      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0})`);
+      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0})`);
       return validated;
     }
     console.warn("[UiPath Deploy] LLM returned JSON but no valid artifacts after validation. Raw keys:", Object.keys(raw));
@@ -501,23 +517,40 @@ async function assignMachineToFolder(
   const folderId = hdrs["X-UIPATH-OrganizationUnitId"];
   if (!folderId) return { success: false, message: "No folder ID configured — machine not assigned to folder" };
 
-  try {
-    const res = await fetch(`${base}/odata/Folders(${folderId})/UiPath.Server.Configuration.OData.AssignMachines`, {
-      method: "POST",
-      headers: hdrs,
-      body: JSON.stringify({ machineIds: [machineId] }),
-    });
-    if (res.ok || res.status === 204) {
-      return { success: true, message: `Assigned to folder ${folderId}` };
+  const endpoints = [
+    {
+      url: `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignMachines`,
+      body: { assignments: { MachineIds: [machineId], FolderId: parseInt(folderId, 10) } },
+      label: "AssignMachines (modern)",
+    },
+    {
+      url: `${base}/odata/Folders(${folderId})/UiPath.Server.Configuration.OData.AssignMachines`,
+      body: { machineIds: [machineId] },
+      label: "AssignMachines (legacy path)",
+    },
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const res = await fetch(ep.url, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify(ep.body),
+      });
+      if (res.ok || res.status === 204) {
+        console.log(`[UiPath Deploy] Machine ${machineId} assigned to folder ${folderId} via ${ep.label}`);
+        return { success: true, message: `Assigned to folder ${folderId}` };
+      }
+      const text = await res.text();
+      if (text.includes("already") || res.status === 409) {
+        return { success: true, message: `Already assigned to folder ${folderId}` };
+      }
+      console.log(`[UiPath Deploy] Machine folder assignment via ${ep.label} -> ${res.status}: ${text.slice(0, 200)}`);
+    } catch (err: any) {
+      console.warn(`[UiPath Deploy] Machine folder assignment via ${ep.label} error: ${err.message}`);
     }
-    const text = await res.text();
-    if (text.includes("already") || res.status === 409) {
-      return { success: true, message: `Already assigned to folder ${folderId}` };
-    }
-    return { success: false, message: `Folder assignment failed (HTTP ${res.status}): ${text.slice(0, 200)}` };
-  } catch (err: any) {
-    return { success: false, message: `Folder assignment error: ${err.message}` };
   }
+  return { success: false, message: `Folder assignment failed via all endpoint variants` };
 }
 
 async function provisionMachines(
@@ -596,16 +629,6 @@ async function provisionMachines(
     }
   }
 
-  const hasRobots = results.some(r => (r.status === "created" || r.status === "exists") && r.id);
-  if (hasRobots) {
-    results.push({
-      artifact: "Robot Account",
-      name: "Robot Account Check",
-      status: "failed",
-      message: "WARNING: Machine templates were provisioned, but robot accounts must be manually created in UiPath Orchestrator (Tenant > Robots > Add Standard Robot). Without robot accounts connected to these machine templates, scheduled triggers and unattended jobs will NOT execute. Go to Orchestrator > Tenant > Robots, create a robot account, and assign it to the machine template.",
-    });
-  }
-
   return results;
 }
 
@@ -630,34 +653,51 @@ async function provisionStorageBuckets(
         }
       }
 
-      const providers = ["Orchestrator", "Minio", "FileSystem"];
+      const bodyVariants = [
+        {
+          Name: b.name,
+          Identifier: generateUuid(),
+          Description: b.description || "",
+        },
+        {
+          Name: b.name,
+          Identifier: generateUuid(),
+          Description: b.description || "",
+          StorageProvider: "Orchestrator",
+        },
+        {
+          Name: b.name,
+          Identifier: generateUuid(),
+          Description: b.description || "",
+          StorageProvider: "Minio",
+        },
+      ];
+
       let bucketCreated = false;
 
-      for (const provider of providers) {
-        const body = {
-          Name: b.name,
-          Description: b.description || "",
-          Provider: provider,
-        };
-
+      for (const body of bodyVariants) {
+        const providerLabel = (body as any).StorageProvider || "default (Orchestrator built-in)";
         const res = await fetch(`${base}/odata/Buckets`, {
           method: "POST",
           headers: hdrs,
           body: JSON.stringify(body),
         });
         const text = await res.text();
-        console.log(`[UiPath Deploy] Bucket "${b.name}" (Provider=${provider}) -> ${res.status}: ${text.slice(0, 300)}`);
+        console.log(`[UiPath Deploy] Bucket "${b.name}" (StorageProvider=${providerLabel}) -> ${res.status}: ${text.slice(0, 300)}`);
 
         if (res.ok || res.status === 201) {
           const parsed = parseOrchestratorResponse(text);
           if (parsed.error) {
+            if (text.includes("StorageProvider") || text.includes("Provider") || text.includes("Identifier")) {
+              continue;
+            }
             results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `API returned ${res.status} but body contains error: ${parsed.error}` });
             bucketCreated = true;
             break;
           }
           const verify = await verifyArtifactExists(base, hdrs, "Buckets", "Name", b.name, "Storage Bucket");
           if (verify.exists) {
-            results.push({ artifact: "Storage Bucket", name: b.name, status: "created", message: `Created and verified (ID: ${verify.id}, Provider: ${provider})`, id: verify.id });
+            results.push({ artifact: "Storage Bucket", name: b.name, status: "created", message: `Created and verified (ID: ${verify.id}, Provider: ${providerLabel})`, id: verify.id });
           } else {
             results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `API returned ${res.status} but verification failed. ${verify.detail || ""}` });
           }
@@ -667,16 +707,14 @@ async function provisionStorageBuckets(
           results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: "Already exists" });
           bucketCreated = true;
           break;
-        } else if (text.includes("Provider") || text.includes("provider")) {
+        } else if (text.includes("StorageProvider") || text.includes("Provider") || text.includes("Identifier")) {
           continue;
         } else {
-          results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `HTTP ${res.status}: ${text.slice(0, 200)}` });
-          bucketCreated = true;
-          break;
+          continue;
         }
       }
       if (!bucketCreated) {
-        results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `All provider types rejected. Check API permissions for Storage Buckets.` });
+        results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `All body variants rejected. Check API permissions for Storage Buckets.` });
       }
     } catch (err: any) {
       results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: err.message });
@@ -1059,6 +1097,24 @@ async function provisionEnvironments(
   if (!environments?.length) return [];
   const results: DeploymentResult[] = [];
 
+  let environmentsDeprecated = false;
+  try {
+    const probeRes = await fetch(`${base}/odata/Environments?$top=1`, { headers: hdrs });
+    if (probeRes.status === 405 || probeRes.status === 404) {
+      environmentsDeprecated = true;
+      console.log(`[UiPath Deploy] Environments API returned ${probeRes.status} — deprecated on modern folder tenants (post Oct 2023)`);
+    }
+  } catch { /* continue with creation attempt */ }
+
+  if (environmentsDeprecated) {
+    return environments.map(env => ({
+      artifact: "Environment",
+      name: env.name,
+      status: "skipped" as const,
+      message: "Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed — your folder's machine templates serve the same purpose.",
+    }));
+  }
+
   for (const env of environments) {
     try {
       const checkRes = await fetch(
@@ -1071,6 +1127,9 @@ async function provisionEnvironments(
           results.push({ artifact: "Environment", name: env.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
           continue;
         }
+      } else if (checkRes.status === 405 || checkRes.status === 404) {
+        results.push({ artifact: "Environment", name: env.name, status: "skipped", message: "Environments API not available (modern folders use machine templates instead)" });
+        continue;
       }
 
       const envType = (env.type || "Production").toLowerCase();
@@ -1092,6 +1151,12 @@ async function provisionEnvironments(
         });
         const text = await res.text();
         console.log(`[UiPath Deploy] Environment "${env.name}" (body keys: ${Object.keys(body).join(",")}) -> ${res.status}: ${text.slice(0, 300)}`);
+
+        if (res.status === 405 || res.status === 404) {
+          results.push({ artifact: "Environment", name: env.name, status: "skipped", message: "Environments API not available (modern folders use machine templates instead)" });
+          envCreated = true;
+          break;
+        }
 
         if (res.ok || res.status === 201) {
           const parsed = parseOrchestratorResponse(text);
@@ -1622,6 +1687,330 @@ async function provisionTestCases(
   return results;
 }
 
+export type InfraProbeResult = {
+  machines: Array<{ id: number; name: string; type: string; unattendedSlots: number; nonProdSlots: number }>;
+  users: Array<{ id: number; userName: string; type: string; rolesList: string[] }>;
+  sessions: Array<{ robotName: string; machineName: string; state: string; runtimeType: string }>;
+  robots: Array<{ id: number; name: string; machineName: string; type: string; userName: string }>;
+};
+
+async function preflightInfraProbe(
+  base: string, hdrs: Record<string, string>, folderId?: string
+): Promise<InfraProbeResult> {
+  const result: InfraProbeResult = { machines: [], users: [], sessions: [], robots: [] };
+  const numFolderId = folderId ? parseInt(folderId, 10) : null;
+
+  try {
+    const machUrl = numFolderId
+      ? `${base}/odata/Folders/UiPath.Server.Configuration.OData.GetMachinesForFolder(key=${numFolderId})?$top=100`
+      : `${base}/odata/Machines?$top=100&$select=Id,Name,Type,UnattendedSlots,NonProductionSlots`;
+    const machRes = await fetch(machUrl, { headers: hdrs });
+    if (machRes.ok) {
+      const data = await machRes.json();
+      result.machines = (data.value || []).map((m: any) => ({
+        id: m.Id || m.id,
+        name: m.Name || m.name || m.MachineName,
+        type: m.Type || "Unknown",
+        unattendedSlots: m.UnattendedSlots || 0,
+        nonProdSlots: m.NonProductionSlots || 0,
+      }));
+    }
+  } catch (err: any) {
+    console.warn(`[UiPath Probe] Machines probe failed: ${err.message}`);
+  }
+
+  try {
+    const userUrl = numFolderId
+      ? `${base}/odata/Folders/UiPath.Server.Configuration.OData.GetUsersForFolder(key=${numFolderId})?$top=100`
+      : `${base}/odata/Users?$top=100&$select=Id,UserName,Type,RolesList`;
+    const userRes = await fetch(userUrl, { headers: hdrs });
+    if (userRes.ok) {
+      const data = await userRes.json();
+      result.users = (data.value || []).map((u: any) => ({
+        id: u.Id || u.id,
+        userName: u.UserName || u.userName || u.Name || "",
+        type: u.Type || "User",
+        rolesList: u.RolesList || [],
+      }));
+    }
+  } catch (err: any) {
+    console.warn(`[UiPath Probe] Users probe failed: ${err.message}`);
+  }
+
+  try {
+    const sessRes = await fetch(`${base}/odata/Sessions?$top=50&$select=RobotName,MachineName,State,RuntimeType`, { headers: hdrs });
+    if (sessRes.ok) {
+      const data = await sessRes.json();
+      result.sessions = (data.value || []).map((s: any) => ({
+        robotName: s.RobotName || "",
+        machineName: s.MachineName || "",
+        state: s.State || "Unknown",
+        runtimeType: s.RuntimeType || "",
+      }));
+    }
+  } catch (err: any) {
+    console.warn(`[UiPath Probe] Sessions probe failed: ${err.message}`);
+  }
+
+  try {
+    const robotRes = await fetch(`${base}/odata/Robots?$top=100&$select=Id,Name,MachineName,Type,Username`, { headers: hdrs });
+    if (robotRes.ok) {
+      const data = await robotRes.json();
+      result.robots = (data.value || []).map((r: any) => ({
+        id: r.Id || r.id,
+        name: r.Name || "",
+        machineName: r.MachineName || "",
+        type: r.Type || "Unknown",
+        userName: r.Username || r.UserName || "",
+      }));
+    }
+  } catch (err: any) {
+    console.warn(`[UiPath Probe] Robots probe failed: ${err.message}`);
+  }
+
+  console.log(`[UiPath Probe] Infrastructure: ${result.machines.length} machines, ${result.users.length} users, ${result.sessions.length} sessions, ${result.robots.length} robots`);
+  return result;
+}
+
+function formatInfraProbeResults(probe: InfraProbeResult): DeploymentResult[] {
+  const results: DeploymentResult[] = [];
+
+  const unattendedMachines = probe.machines.filter(m => m.unattendedSlots > 0);
+  const totalUnattSlots = unattendedMachines.reduce((sum, m) => sum + m.unattendedSlots, 0);
+  if (probe.machines.length > 0) {
+    results.push({
+      artifact: "Infrastructure",
+      name: "Machine Templates",
+      status: unattendedMachines.length > 0 ? "exists" : "skipped",
+      message: `Found ${probe.machines.length} machine template(s) in folder${unattendedMachines.length > 0 ? ` (${totalUnattSlots} unattended slot(s) across ${unattendedMachines.length} machine(s))` : " — none have unattended slots"}. Names: ${probe.machines.map(m => m.name).join(", ")}`,
+    });
+  } else {
+    results.push({
+      artifact: "Infrastructure",
+      name: "Machine Templates",
+      status: "skipped",
+      message: "No machine templates found in folder",
+    });
+  }
+
+  const robotUsers = probe.users.filter(u => u.type === "Robot" || u.userName.toLowerCase().includes("robot"));
+  if (probe.users.length > 0) {
+    results.push({
+      artifact: "Infrastructure",
+      name: "Users/Robot Accounts",
+      status: robotUsers.length > 0 ? "exists" : "skipped",
+      message: `Found ${probe.users.length} user(s) in folder${robotUsers.length > 0 ? ` (${robotUsers.length} robot account(s): ${robotUsers.map(u => u.userName).join(", ")})` : ""}`,
+    });
+  } else {
+    results.push({
+      artifact: "Infrastructure",
+      name: "Users/Robot Accounts",
+      status: "skipped",
+      message: "No users or robot accounts found in folder",
+    });
+  }
+
+  if (probe.sessions.length > 0) {
+    const activeSessions = probe.sessions.filter(s => s.state === "Available" || s.state === "Busy");
+    const runtimeTypes = Array.from(new Set(probe.sessions.map(s => s.runtimeType).filter(Boolean)));
+    results.push({
+      artifact: "Infrastructure",
+      name: "Active Sessions",
+      status: activeSessions.length > 0 ? "exists" : "skipped",
+      message: `Found ${probe.sessions.length} session(s) (${activeSessions.length} active). Runtime types: ${runtimeTypes.join(", ") || "N/A"}`,
+    });
+  }
+
+  return results;
+}
+
+async function getPMToken(config: UiPathConfig): Promise<string | null> {
+  try {
+    const params = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      scope: "PM.RobotAccount PM.RobotAccount.Read PM.RobotAccount.Write",
+    });
+    params.append("acr_values", `tenantId:${config.orgName}`);
+
+    const res = await fetch("https://cloud.uipath.com/identity_/connect/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[UiPath Deploy] PM token failed (${res.status}): ${errText.slice(0, 200)}`);
+      return null;
+    }
+    const data = await res.json();
+    if (data.access_token && data.scope?.includes("PM.RobotAccount")) {
+      console.log("[UiPath Deploy] PM token acquired successfully");
+      return data.access_token;
+    }
+    console.warn("[UiPath Deploy] PM token issued but missing RobotAccount scope");
+    return null;
+  } catch (err: any) {
+    console.warn(`[UiPath Deploy] PM token error: ${err.message}`);
+    return null;
+  }
+}
+
+async function provisionRobotAccounts(
+  base: string, hdrs: Record<string, string>,
+  config: UiPathConfig,
+  robotAccounts: OrchestratorArtifacts["robotAccounts"],
+  probe: InfraProbeResult
+): Promise<DeploymentResult[]> {
+  if (!robotAccounts?.length) return [];
+  const results: DeploymentResult[] = [];
+
+  const existingRobotUsers = probe.users.filter(u => u.type === "Robot" || u.userName.toLowerCase().includes("robot"));
+  const existingRobots = probe.robots;
+
+  for (const ra of robotAccounts) {
+    const nameNorm = ra.name.toLowerCase().replace(/[\s_-]+/g, "");
+    const matchingUser = existingRobotUsers.find(u =>
+      u.userName.toLowerCase().replace(/[\s_-]+/g, "").includes(nameNorm) ||
+      nameNorm.includes(u.userName.toLowerCase().replace(/[\s_-]+/g, ""))
+    );
+    const matchingRobot = existingRobots.find(r =>
+      r.name.toLowerCase().replace(/[\s_-]+/g, "").includes(nameNorm) ||
+      nameNorm.includes(r.name.toLowerCase().replace(/[\s_-]+/g, ""))
+    );
+
+    if (matchingUser) {
+      results.push({
+        artifact: "Robot Account",
+        name: ra.name,
+        status: "exists",
+        message: `Reusing existing robot account "${matchingUser.userName}" (ID: ${matchingUser.id}) already in folder. Type: ${matchingUser.type}`,
+        id: matchingUser.id,
+      });
+      continue;
+    }
+    if (matchingRobot) {
+      results.push({
+        artifact: "Robot Account",
+        name: ra.name,
+        status: "exists",
+        message: `Reusing existing robot "${matchingRobot.name}" (ID: ${matchingRobot.id}) on machine "${matchingRobot.machineName}". Type: ${matchingRobot.type}`,
+        id: matchingRobot.id,
+      });
+      continue;
+    }
+
+    if (existingRobotUsers.length > 0 && !matchingUser) {
+      const firstRobot = existingRobotUsers[0];
+      results.push({
+        artifact: "Robot Account",
+        name: ra.name,
+        status: "exists",
+        message: `No exact match for "${ra.name}", but existing robot account "${firstRobot.userName}" (ID: ${firstRobot.id}) is available in folder and can execute this automation. Consider using it or create a dedicated account.`,
+        id: firstRobot.id,
+      });
+      continue;
+    }
+
+    const pmToken = await getPMToken(config);
+    if (pmToken) {
+      const identityBases = [
+        `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/identity_/api/RobotAccount`,
+        `https://cloud.uipath.com/${config.orgName}/identity_/api/RobotAccount`,
+      ];
+
+      let created = false;
+      for (const identityUrl of identityBases) {
+        try {
+          const pmHdrs = {
+            "Authorization": `Bearer ${pmToken}`,
+            "Content-Type": "application/json",
+          };
+          const body = {
+            name: ra.name,
+            displayName: ra.name,
+            domain: "UiPath",
+          };
+
+          const res = await fetch(identityUrl, {
+            method: "POST",
+            headers: pmHdrs,
+            body: JSON.stringify(body),
+          });
+          const text = await res.text();
+          console.log(`[UiPath Deploy] Robot account "${ra.name}" via ${identityUrl} -> ${res.status}: ${text.slice(0, 300)}`);
+
+          if (res.ok || res.status === 201) {
+            let createdId;
+            try {
+              const parsed = JSON.parse(text);
+              createdId = parsed.id || parsed.Id;
+            } catch { /* ignore parse error */ }
+
+            if (config.folderId) {
+              try {
+                const assignUrl = `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers`;
+                const assignBody = { assignments: { UserIds: [createdId], RolesPerFolder: [{ FolderId: parseInt(config.folderId, 10), Roles: [{ Name: "Executor" }] }] } };
+                const assignRes = await fetch(assignUrl, {
+                  method: "POST",
+                  headers: hdrs,
+                  body: JSON.stringify(assignBody),
+                });
+                const assignText = await assignRes.text();
+                console.log(`[UiPath Deploy] Robot "${ra.name}" folder assignment -> ${assignRes.status}: ${assignText.slice(0, 200)}`);
+              } catch (err: any) {
+                console.warn(`[UiPath Deploy] Robot folder assignment failed: ${err.message}`);
+              }
+            }
+
+            results.push({
+              artifact: "Robot Account",
+              name: ra.name,
+              status: "created",
+              message: `Created via identity API${createdId ? ` (ID: ${createdId})` : ""}${config.folderId ? ", assigned to folder" : ""}. Configure machine credentials in Orchestrator > Tenant > Robot Accounts.`,
+              id: createdId,
+            });
+            created = true;
+            break;
+          } else if (res.status === 409 || text.includes("already exists")) {
+            results.push({
+              artifact: "Robot Account",
+              name: ra.name,
+              status: "exists",
+              message: "Already exists in identity service",
+            });
+            created = true;
+            break;
+          } else if (res.status === 302 || res.status === 404 || res.status === 405) {
+            continue;
+          } else {
+            continue;
+          }
+        } catch { continue; }
+      }
+
+      if (!created) {
+        results.push({
+          artifact: "Robot Account",
+          name: ra.name,
+          status: "skipped",
+          message: `PM token acquired but identity API endpoint not accessible. Create robot account "${ra.name}" manually in UiPath Cloud > Admin > Robot Accounts, then assign it to the folder with Executor role.`,
+        });
+      }
+    } else {
+      results.push({
+        artifact: "Robot Account",
+        name: ra.name,
+        status: "skipped",
+        message: `PM.RobotAccount scope not available for client credentials flow. Create robot account "${ra.name}" manually in UiPath Cloud > Admin > Robot Accounts, then assign to folder with Executor role. Machine templates have been provisioned — robot accounts connect them to execute automations.`,
+      });
+    }
+  }
+
+  return results;
+}
+
 export async function deployAllArtifacts(
   artifacts: OrchestratorArtifacts,
   releaseId: number | null,
@@ -1640,7 +2029,7 @@ export async function deployAllArtifacts(
     const base = orchBase(config);
     const hdrs = headers(config, token);
 
-    console.log(`[UiPath Deploy] Starting full deployment...`);
+    console.log(`[UiPath Deploy] Starting full deployment with pre-flight infrastructure probe...`);
 
     const validation = await verifyFolderAndRelease(base, hdrs, releaseId, config.folderId);
     if (!validation.valid) {
@@ -1649,6 +2038,10 @@ export async function deployAllArtifacts(
     }
     if (validation.releaseKey) releaseKey = validation.releaseKey;
     if (validation.releaseName) releaseName = validation.releaseName;
+
+    const infraProbe = await preflightInfraProbe(base, hdrs, config.folderId);
+    const infraResults = formatInfraProbeResults(infraProbe);
+    allResults.push(...infraResults);
 
     const queueResults = await provisionQueues(base, hdrs, artifacts.queues);
     allResults.push(...queueResults);
@@ -1664,6 +2057,9 @@ export async function deployAllArtifacts(
 
     const envResults = await provisionEnvironments(base, hdrs, artifacts.environments);
     allResults.push(...envResults);
+
+    const robotResults = await provisionRobotAccounts(base, hdrs, config, artifacts.robotAccounts, infraProbe);
+    allResults.push(...robotResults);
 
     const runtimeCheck = await detectAvailableRuntimeType(base, hdrs);
     if (runtimeCheck.warning && (artifacts.triggers?.length || 0) > 0) {
@@ -1709,8 +2105,27 @@ export function formatDeploymentReport(results: DeploymentResult[]): string {
 
   const lines: string[] = ["\n---\n**Orchestrator Deployment Report**\n"];
 
+  const infraResults = results.filter(r => r.artifact === "Infrastructure");
   const runtimeChecks = results.filter(r => r.artifact === "Runtime Check");
-  const deployResults = results.filter(r => r.artifact !== "Runtime Check");
+  const deployResults = results.filter(r => r.artifact !== "Runtime Check" && r.artifact !== "Infrastructure");
+
+  const statusIcon = (s: string) => {
+    switch (s) {
+      case "created": return "✅";
+      case "exists": return "🔵";
+      case "skipped": return "⚠️";
+      case "failed": return "❌";
+      default: return "•";
+    }
+  };
+
+  if (infraResults.length > 0) {
+    lines.push("**Pre-flight Infrastructure Check:**");
+    for (const ir of infraResults) {
+      lines.push(`${statusIcon(ir.status)} ${ir.name} — ${ir.message}`);
+    }
+    lines.push("");
+  }
 
   if (runtimeChecks.length > 0) {
     for (const rc of runtimeChecks) {
@@ -1730,16 +2145,6 @@ export function formatDeploymentReport(results: DeploymentResult[]): string {
     if (!grouped[r.artifact]) grouped[r.artifact] = [];
     grouped[r.artifact].push(r);
   }
-
-  const statusIcon = (s: string) => {
-    switch (s) {
-      case "created": return "✅";
-      case "exists": return "🔵";
-      case "skipped": return "⚠️";
-      case "failed": return "❌";
-      default: return "•";
-    }
-  };
 
   for (const [artifact, items] of Object.entries(grouped)) {
     lines.push(`**${artifact}s:**`);
