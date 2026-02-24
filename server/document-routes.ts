@@ -654,6 +654,15 @@ ${content}`
         return res.status(400).json({ message: "SDD must be approved first" });
       }
 
+      const existingMessages = await chatStorage.getMessagesByIdeaId(ideaId);
+      const existingUiPath = [...existingMessages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+      if (existingUiPath && !req.query.force) {
+        try {
+          const existingData = JSON.parse(existingUiPath.content.slice(8, -1));
+          return res.json({ package: existingData });
+        } catch { /* fall through to regeneration */ }
+      }
+
       const idea = await storage.getIdea(ideaId);
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 

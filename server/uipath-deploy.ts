@@ -12,6 +12,31 @@ function truncDesc(desc: string | undefined | null): string {
   return s.slice(0, UIPATH_DESC_MAX - 3) + "...";
 }
 
+function sanitizeCronExpression(cron: string): string {
+  let parts = cron.trim().split(/\s+/);
+  if (parts.length === 5) {
+    parts = ["0", ...parts];
+  }
+  if (parts.length === 6) {
+    parts.push("*");
+  }
+  if (parts.length >= 7) {
+    if (parts[3] !== "?" && parts[5] !== "?") {
+      if (parts[5] === "*") {
+        parts[5] = "?";
+      } else if (parts[3] === "*") {
+        parts[3] = "?";
+      } else {
+        parts[5] = "?";
+      }
+    }
+    if (parts[3] === "?" && parts[5] === "?") {
+      parts[5] = "*";
+    }
+  }
+  return parts.slice(0, 7).join(" ");
+}
+
 function sanitizeErrorMessage(httpStatus: number, rawText: string): string {
   try {
     const parsed = JSON.parse(rawText);
@@ -1041,7 +1066,7 @@ async function provisionTriggers(
           }
         }
 
-        const cron = t.cron || "0 0 9 ? * MON-FRI *";
+        const cron = sanitizeCronExpression(t.cron || "0 0 9 ? * MON-FRI *");
         const cronDetails = JSON.stringify({
           type: 5,
           minutely: {},
@@ -1233,7 +1258,8 @@ async function provisionEnvironments(
 async function provisionActionCenter(
   base: string, hdrs: Record<string, string>,
   actionCenter: OrchestratorArtifacts["actionCenter"],
-  config: UiPathConfig
+  config: UiPathConfig,
+  preProbed?: boolean
 ): Promise<DeploymentResult[]> {
   if (!actionCenter?.length) return [];
   const results: DeploymentResult[] = [];
@@ -1246,39 +1272,41 @@ async function provisionActionCenter(
     { url: `${cloudBase}/maestro_/api/v1/task-catalogs`, label: "Maestro API", isOdata: false },
   ];
 
-  let serviceAvailable = false;
-  let activeAcEndpoint: typeof endpoints[0] | null = null;
-  for (const ep of endpoints) {
-    try {
-      const probeUrl = ep.isOdata ? `${ep.url}?$top=1` : `${ep.url}?top=1`;
-      const probeRes = await fetch(probeUrl, { headers: hdrs });
-      const probeText = await probeRes.text();
-      console.log(`[UiPath Deploy] Action Center probe ${ep.label} -> ${probeRes.status}: ${probeText.slice(0, 200)}`);
+  let serviceAvailable = preProbed || false;
+  let activeAcEndpoint: typeof endpoints[0] | null = preProbed ? endpoints[0] : null;
+  if (!serviceAvailable) {
+    for (const ep of endpoints) {
+      try {
+        const probeUrl = ep.isOdata ? `${ep.url}?$top=1` : `${ep.url}?top=1`;
+        const probeRes = await fetch(probeUrl, { headers: hdrs });
+        const probeText = await probeRes.text();
+        console.log(`[UiPath Deploy] Action Center probe ${ep.label} -> ${probeRes.status}: ${probeText.slice(0, 200)}`);
 
-      if (probeRes.ok) {
-        const genuineCheck = isGenuineServiceResponse(probeText);
-        if (!genuineCheck.genuine) {
-          console.log(`[UiPath Deploy] Action Center probe ${ep.label} returned 200 but not genuine: ${genuineCheck.reason}`);
-          continue;
+        if (probeRes.ok) {
+          const genuineCheck = isGenuineServiceResponse(probeText);
+          if (!genuineCheck.genuine) {
+            console.log(`[UiPath Deploy] Action Center probe ${ep.label} returned 200 but not genuine: ${genuineCheck.reason}`);
+            continue;
+          }
+          serviceAvailable = true;
+          activeAcEndpoint = ep;
+          break;
         }
-        serviceAvailable = true;
-        activeAcEndpoint = ep;
-        break;
-      }
-      if (probeRes.status === 400) {
-        if (probeText.includes("ServiceType is not onboarded") || probeText.includes("not onboarded")) {
-          continue;
+        if (probeRes.status === 400) {
+          if (probeText.includes("ServiceType is not onboarded") || probeText.includes("not onboarded")) {
+            continue;
+          }
+          serviceAvailable = true;
+          activeAcEndpoint = ep;
+          break;
         }
-        serviceAvailable = true;
-        activeAcEndpoint = ep;
-        break;
-      }
-      if (probeRes.status === 401 || probeRes.status === 403) {
-        serviceAvailable = true;
-        activeAcEndpoint = ep;
-        break;
-      }
-    } catch { continue; }
+        if (probeRes.status === 401 || probeRes.status === 403) {
+          serviceAvailable = true;
+          activeAcEndpoint = ep;
+          break;
+        }
+      } catch { continue; }
+    }
   }
 
   if (!serviceAvailable) {
@@ -1628,16 +1656,35 @@ async function provisionTestCases(
         }),
       });
       const createText = await createProjRes.text();
+      console.log(`[UiPath Deploy] Test project create -> ${createProjRes.status}: ${createText.slice(0, 300)}`);
       if (createProjRes.ok || createProjRes.status === 201) {
         const creation = validateCreationResponse(createText);
-        if (creation.valid && creation.data?.Id) {
-          projectId = creation.data.Id;
+        if (creation.valid && (creation.data?.Id || creation.data?.id)) {
+          projectId = creation.data.Id || creation.data.id;
           results.push({ artifact: "Test Project", name: processName, status: "created", message: `Created test project (ID: ${projectId})`, id: projectId! });
         } else {
           console.warn(`[UiPath Deploy] Test project creation returned ${createProjRes.status} but validation failed: ${creation.error}`);
         }
+      } else if (createProjRes.status === 409 || createText.includes("already exists")) {
+        console.log(`[UiPath Deploy] Test project already exists, re-fetching...`);
+        try {
+          const reListRes = await fetch(`${activeTmBase}/api/v2/projects?$top=50`, { headers: hdrs });
+          if (reListRes.ok) {
+            const reListData = JSON.parse(await reListRes.text());
+            const projects = reListData.data || reListData.value || [];
+            const match = projects.find((p: any) =>
+              (p.Name || p.name)?.toLowerCase() === processName.replace(/_/g, " ").toLowerCase()
+            );
+            if (match) projectId = match.Id || match.id;
+            else if (projects.length > 0) projectId = projects[0].Id || projects[0].id;
+          }
+        } catch {}
+      } else if (createProjRes.status === 403 || createProjRes.status === 401) {
+        console.log(`[UiPath Deploy] Test project creation failed with ${createProjRes.status} — insufficient permissions`);
       }
-    } catch { /* fall through */ }
+    } catch (err) {
+      console.error(`[UiPath Deploy] Test project creation error:`, err);
+    }
   }
 
   if (!projectId) {
@@ -2245,7 +2292,7 @@ export async function deployAllArtifacts(
     if (svcAvail && !svcAvail.actionCenter && (artifacts.actionCenter?.length || 0) > 0) {
       allResults.push({ artifact: "Action Center", name: `${artifacts.actionCenter!.length} task catalog(s)`, status: "skipped", message: "Action Center is not available on this tenant. Enable it in Admin > Tenant > Services, then assign it to the target folder." });
     } else {
-      const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config);
+      const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter);
       allResults.push(...actionCenterResults);
     }
 
