@@ -495,6 +495,31 @@ async function provisionAssets(
   return results;
 }
 
+async function assignMachineToFolder(
+  base: string, hdrs: Record<string, string>, machineId: number
+): Promise<{ success: boolean; message: string }> {
+  const folderId = hdrs["X-UIPATH-OrganizationUnitId"];
+  if (!folderId) return { success: false, message: "No folder ID configured — machine not assigned to folder" };
+
+  try {
+    const res = await fetch(`${base}/odata/Folders(${folderId})/UiPath.Server.Configuration.OData.AssignMachines`, {
+      method: "POST",
+      headers: hdrs,
+      body: JSON.stringify({ machineIds: [machineId] }),
+    });
+    if (res.ok || res.status === 204) {
+      return { success: true, message: `Assigned to folder ${folderId}` };
+    }
+    const text = await res.text();
+    if (text.includes("already") || res.status === 409) {
+      return { success: true, message: `Already assigned to folder ${folderId}` };
+    }
+    return { success: false, message: `Folder assignment failed (HTTP ${res.status}): ${text.slice(0, 200)}` };
+  } catch (err: any) {
+    return { success: false, message: `Folder assignment error: ${err.message}` };
+  }
+}
+
 async function provisionMachines(
   base: string, hdrs: Record<string, string>,
   machines: OrchestratorArtifacts["machines"]
@@ -504,6 +529,8 @@ async function provisionMachines(
 
   for (const m of machines) {
     try {
+      let machineId: number | null = null;
+
       const checkRes = await fetch(
         `${base}/odata/Machines?$filter=Name eq '${odataEscape(m.name)}'&$top=1`,
         { headers: hdrs }
@@ -511,7 +538,9 @@ async function provisionMachines(
       if (checkRes.ok) {
         const checkData = await checkRes.json();
         if (checkData.value?.length > 0) {
-          results.push({ artifact: "Machine", name: m.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+          machineId = checkData.value[0].Id;
+          const folderAssign = await assignMachineToFolder(base, hdrs, machineId!);
+          results.push({ artifact: "Machine", name: m.name, status: "exists", message: `Already exists (ID: ${machineId}). ${folderAssign.message}`, id: machineId ?? undefined });
           continue;
         }
       }
@@ -547,7 +576,13 @@ async function provisionMachines(
         }
         const verify = await verifyArtifactExists(base, hdrs, "Machines", "Name", m.name, "Machine");
         if (verify.exists) {
-          results.push({ artifact: "Machine", name: m.name, status: "created", message: `Created and verified (ID: ${verify.id}, Type: Template)`, id: verify.id });
+          machineId = verify.id ? Number(verify.id) : null;
+          let folderMsg = "";
+          if (machineId) {
+            const folderAssign = await assignMachineToFolder(base, hdrs, machineId);
+            folderMsg = ` ${folderAssign.message}`;
+          }
+          results.push({ artifact: "Machine", name: m.name, status: "created", message: `Created and verified (ID: ${verify.id}, Type: Template).${folderMsg}`, id: verify.id });
         } else {
           results.push({ artifact: "Machine", name: m.name, status: "failed", message: `API returned ${res.status} but verification failed. ${verify.detail || ""}` });
         }
@@ -560,6 +595,17 @@ async function provisionMachines(
       results.push({ artifact: "Machine", name: m.name, status: "failed", message: err.message });
     }
   }
+
+  const hasRobots = results.some(r => (r.status === "created" || r.status === "exists") && r.id);
+  if (hasRobots) {
+    results.push({
+      artifact: "Robot Account",
+      name: "Robot Account Check",
+      status: "failed",
+      message: "WARNING: Machine templates were provisioned, but robot accounts must be manually created in UiPath Orchestrator (Tenant > Robots > Add Standard Robot). Without robot accounts connected to these machine templates, scheduled triggers and unattended jobs will NOT execute. Go to Orchestrator > Tenant > Robots, create a robot account, and assign it to the machine template.",
+    });
+  }
+
   return results;
 }
 

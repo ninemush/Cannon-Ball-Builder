@@ -1035,6 +1035,108 @@ export async function runHealthCheck(packageId?: string): Promise<{
   return { checks, summary };
 }
 
+export type LicenseInfo = {
+  runtime: Array<{ type: string; allowed: number; used: number; available: number }>;
+  namedUser: Array<{ type: string; allowed: number; used: number; available: number }>;
+  summary: string;
+  recommendations: string[];
+};
+
+async function fetchLicenseInfo(orchBase: string, hdrs: Record<string, string>): Promise<LicenseInfo | null> {
+  try {
+    const [runtimeRes, namedUserRes] = await Promise.all([
+      fetch(`${orchBase}/odata/LicensesRuntime`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/LicensesNamedUser`, { headers: hdrs }).catch(() => null),
+    ]);
+
+    const runtime: LicenseInfo["runtime"] = [];
+    const namedUser: LicenseInfo["namedUser"] = [];
+
+    if (runtimeRes?.ok) {
+      try {
+        const data = await runtimeRes.json();
+        const items = data.value || (Array.isArray(data) ? data : []);
+        for (const item of items) {
+          const type = item.RuntimeType || item.Type || item.LicenseType || "Unknown";
+          const allowed = item.Allowed ?? item.Total ?? item.Count ?? 0;
+          const used = item.Used ?? item.InUse ?? 0;
+          if (allowed > 0 || used > 0) {
+            runtime.push({ type, allowed, used, available: Math.max(0, allowed - used) });
+          }
+        }
+      } catch { /* parse error */ }
+    }
+
+    if (!runtimeRes?.ok) {
+      try {
+        const settingsRes = await fetch(`${orchBase}/odata/Settings/UiPath.Server.Configuration.OData.GetLicense`, { headers: hdrs });
+        if (settingsRes.ok) {
+          const data = await settingsRes.json();
+          if (data.Attended !== undefined) runtime.push({ type: "Attended", allowed: data.Attended || 0, used: 0, available: data.Attended || 0 });
+          if (data.Unattended !== undefined) runtime.push({ type: "Unattended", allowed: data.Unattended || 0, used: 0, available: data.Unattended || 0 });
+          if (data.NonProduction !== undefined) runtime.push({ type: "NonProduction", allowed: data.NonProduction || 0, used: 0, available: data.NonProduction || 0 });
+          if (data.Development !== undefined) runtime.push({ type: "Development", allowed: data.Development || 0, used: 0, available: data.Development || 0 });
+          if (data.TestAutomation !== undefined) runtime.push({ type: "TestAutomation", allowed: data.TestAutomation || 0, used: 0, available: data.TestAutomation || 0 });
+        }
+      } catch { /* fallback also failed */ }
+    }
+
+    if (namedUserRes?.ok) {
+      try {
+        const data = await namedUserRes.json();
+        const items = data.value || (Array.isArray(data) ? data : []);
+        for (const item of items) {
+          const type = item.UserType || item.Type || item.LicenseType || "Unknown";
+          const allowed = item.Allowed ?? item.Total ?? 0;
+          const used = item.Used ?? item.InUse ?? 0;
+          if (allowed > 0 || used > 0) {
+            namedUser.push({ type, allowed, used, available: Math.max(0, allowed - used) });
+          }
+        }
+      } catch { /* parse error */ }
+    }
+
+    if (runtime.length === 0 && namedUser.length === 0) return null;
+
+    const summaryParts: string[] = [];
+    for (const r of runtime) {
+      summaryParts.push(`${r.type}: ${r.used}/${r.allowed} used (${r.available} available)`);
+    }
+    for (const n of namedUser) {
+      summaryParts.push(`${n.type} (Named User): ${n.used}/${n.allowed} used`);
+    }
+
+    const recommendations: string[] = [];
+    const hasUnattended = runtime.some(r => r.type === "Unattended" && r.allowed > 0);
+    const hasAttended = runtime.some(r => r.type === "Attended" && r.allowed > 0);
+    const hasTestAuto = runtime.some(r => r.type === "TestAutomation" && r.allowed > 0);
+    const hasNonProd = runtime.some(r => r.type === "NonProduction" && r.allowed > 0);
+
+    if (!hasUnattended) {
+      recommendations.push("**Unattended Robot License**: Not available. Adding Unattended licenses would enable fully autonomous back-office automation — scheduled processing, queue-based workloads, and 24/7 execution without human intervention.");
+    }
+    if (!hasAttended) {
+      recommendations.push("**Attended Robot License**: Not available. Adding Attended licenses would enable human-assisted automation — desktop bots that help users complete tasks faster with side-by-side guidance.");
+    }
+    if (!hasTestAuto) {
+      recommendations.push("**Test Automation License**: Not available. Adding Test Automation licenses would enable automated regression testing of the automation using UiPath Test Manager, ensuring quality across updates.");
+    }
+    if (!hasNonProd) {
+      recommendations.push("**Non-Production License**: Not available. Adding Non-Production licenses would provide a dedicated testing/staging environment for the automation before production deployment.");
+    }
+
+    return {
+      runtime,
+      namedUser,
+      summary: summaryParts.join("; "),
+      recommendations,
+    };
+  } catch (err: any) {
+    console.warn(`[UiPath] License fetch failed: ${err.message}`);
+    return null;
+  }
+}
+
 export type PlatformCapabilityProfile = {
   configured: boolean;
   available: {
@@ -1049,6 +1151,7 @@ export type PlatformCapabilityProfile = {
   summary: string;
   availableDescription: string;
   unavailableRecommendations: string;
+  licenseInfo?: LicenseInfo | null;
 };
 
 export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfile> {
@@ -1085,7 +1188,7 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       try { const r = await fetch(url, { headers: hdrs }); return r.ok; } catch { return false; }
     };
 
-    const [orchOk, bucketOk, taskOk, tm1Ok, tm2Ok, duOk, aiOk] = await Promise.all([
+    const [orchOk, bucketOk, taskOk, tm1Ok, tm2Ok, duOk, aiOk, licenseInfo] = await Promise.all([
       probe(`${orchBase}/odata/Folders?$top=1`),
       probe(`${orchBase}/odata/Buckets?$top=1`),
       probe(`${orchBase}/odata/TaskCatalogs?$top=1`),
@@ -1093,6 +1196,7 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       probe(`${base}/tmapi_/api/v2/projects?$top=1`),
       probe(`${base}/du_/api/framework/projects?$top=1`),
       probe(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`),
+      fetchLicenseInfo(orchBase, hdrs),
     ]);
 
     const avail = {
@@ -1136,6 +1240,7 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       unavailableRecommendations: unavailRecs.length > 0
         ? `The following services are NOT currently available on this tenant. Include a "Platform Recommendations" section explaining how each would enhance the solution if enabled:\n${unavailRecs.join("\n")}`
         : "All major UiPath platform services are available.",
+      licenseInfo,
     };
 
     return profile;

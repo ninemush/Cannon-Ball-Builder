@@ -231,9 +231,17 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
   if (docType === "SDD") {
     console.log("[SDD] Fetching platform capabilities for platform-aware SDD...");
     const platformProfile = await getPlatformCapabilities();
-    const platformCapabilitiesText = platformProfile.configured
+    let platformCapabilitiesText = platformProfile.configured
       ? `${platformProfile.availableDescription}\n\n${platformProfile.unavailableRecommendations}`
       : undefined;
+    if (platformProfile.licenseInfo && platformCapabilitiesText) {
+      const lic = platformProfile.licenseInfo;
+      platformCapabilitiesText += `\n\nLICENSE ANALYSIS:\nCurrent license allocation: ${lic.summary}\n`;
+      if (lic.recommendations.length > 0) {
+        platformCapabilitiesText += `\nLicense optimization recommendations:\n${lic.recommendations.join("\n")}\n`;
+      }
+      platformCapabilitiesText += `\nInclude a "## License Analysis & Optimization" section in the SDD covering:\n1. Current license utilization and whether it supports the proposed solution\n2. Recommendations for optimal license allocation (e.g., which robot types to use, how many slots needed)\n3. Any missing license types that would be needed and the business impact of not having them`;
+    }
     console.log(`[SDD] Platform profile: ${platformProfile.summary}`);
 
     console.log("[SDD] Starting parallel generation (prose + artifacts)...");

@@ -1168,8 +1168,9 @@ function ChatPanel({ idea }: { idea: Idea }) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={isStreaming ? "Type to queue your next message..." : "Describe your process..."}
+            placeholder={isGeneratingDoc ? `Generating ${generatingDocType}... please wait` : isStreaming ? "Type to queue your next message..." : "Describe your process..."}
             className="min-h-[36px] max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
+            disabled={isGeneratingDoc}
             rows={1}
             data-testid="input-chat-message"
           />
@@ -1177,7 +1178,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
             size="icon"
             className="shrink-0"
             onClick={handleSend}
-            disabled={!inputValue.trim() && !attachedFile}
+            disabled={isGeneratingDoc || (!inputValue.trim() && !attachedFile)}
             data-testid="button-send-message"
           >
             {isStreaming ? (
