@@ -53,7 +53,7 @@ const artifactIcon = (artifact: string) => {
 const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; bg: string; label: string }> = {
   created: { icon: CheckCircle2, color: "text-green-400", bg: "bg-green-500/10", label: "Created" },
   exists: { icon: Info, color: "text-blue-400", bg: "bg-blue-500/10", label: "Exists" },
-  skipped: { icon: AlertTriangle, color: "text-amber-400", bg: "bg-amber-500/10", label: "Skipped" },
+  skipped: { icon: Info, color: "text-slate-400", bg: "bg-slate-500/10", label: "Not Available" },
   failed: { icon: XCircle, color: "text-red-400", bg: "bg-red-500/10", label: "Failed" },
 };
 
@@ -62,10 +62,15 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
+    const allSkippedGroups = new Set<string>();
+    for (const r of report.results) {
+      const art = r.artifact || "Other";
+      if (r.status === "skipped") allSkippedGroups.add(art);
+    }
     for (const r of report.results) {
       const art = r.artifact || "Other";
       if (initial[art] === undefined) {
-        initial[art] = infraGroups.includes(art) ? false : true;
+        initial[art] = infraGroups.includes(art) || allSkippedGroups.has(art) ? false : true;
       }
     }
     return initial;
@@ -145,9 +150,9 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           </span>
         )}
         {counts.skipped > 0 && (
-          <span className="flex items-center gap-1 text-xs text-amber-400" data-testid="text-deploy-skipped-count">
-            <AlertTriangle className="h-3 w-3" />
-            {counts.skipped} skipped
+          <span className="flex items-center gap-1 text-xs text-slate-400" data-testid="text-deploy-skipped-count">
+            <Info className="h-3 w-3" />
+            {counts.skipped} not available
           </span>
         )}
         {counts.failed > 0 && (
@@ -228,7 +233,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
         })}
       </div>
 
-      <div className={`px-4 py-2 text-xs border-t border-border/50 ${allSuccess ? "text-green-400" : partialSuccess ? "text-amber-400" : "text-muted-foreground"}`}>
+      <div className={`px-4 py-2 text-xs border-t border-border/50 ${allSuccess ? "text-green-400" : partialSuccess ? "text-green-400" : "text-muted-foreground"}`}>
         {allSuccess ? (
           <span className="flex items-center gap-1">
             <CheckCircle2 className="h-3.5 w-3.5" />
@@ -236,13 +241,13 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           </span>
         ) : partialSuccess ? (
           <span className="flex items-center gap-1">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Core artifacts provisioned. {counts.skipped} skipped (service not available)
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Core artifacts provisioned successfully. {counts.skipped} service{counts.skipped > 1 ? "s" : ""} not available on tenant.
           </span>
         ) : (
           <span className="flex items-center gap-1">
             <AlertTriangle className="h-3.5 w-3.5" />
-            {counts.failed} failed{counts.skipped > 0 ? `, ${counts.skipped} skipped` : ""} — expand groups for details
+            {counts.failed} failed{counts.skipped > 0 ? `, ${counts.skipped} not available` : ""} — expand groups for details
           </span>
         )}
       </div>

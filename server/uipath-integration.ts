@@ -1526,6 +1526,102 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
   }
 }
 
+export type ServiceAvailabilityMap = {
+  configured: boolean;
+  orchestrator: boolean;
+  actionCenter: boolean;
+  testManager: boolean;
+  documentUnderstanding: boolean;
+  environments: boolean;
+  triggers: boolean;
+};
+
+export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
+  const result: ServiceAvailabilityMap = {
+    configured: false, orchestrator: false, actionCenter: false,
+    testManager: false, documentUnderstanding: false, environments: true, triggers: true,
+  };
+
+  const config = await getUiPathConfig();
+  if (!config) return result;
+  result.configured = true;
+
+  try {
+    const token = await getAccessToken(config);
+    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+    const orchBase = `${base}/orchestrator_`;
+    const hdrs: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+    if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+
+    const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
+    result.orchestrator = orchRes.ok;
+    if (!orchRes.ok) return result;
+
+    const [acRes, envRes, trigRes] = await Promise.all([
+      fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/Environments?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/QueueTriggers?$top=1`, { headers: hdrs }).catch(() => null),
+    ]);
+
+    if (acRes) {
+      const acText = await acRes.text();
+      const isHTML = acText.trim().startsWith("<");
+      result.actionCenter = acRes.ok && !isHTML;
+      if (acRes.ok && !isHTML) {
+        try {
+          const data = JSON.parse(acText);
+          if (data.errorCode || data["odata.error"] || (data.message && data.message.includes("not onboarded"))) {
+            result.actionCenter = false;
+          }
+        } catch { result.actionCenter = false; }
+      }
+    }
+
+    if (envRes) {
+      result.environments = envRes.ok || envRes.status === 400;
+      if (envRes.status === 404 || envRes.status === 405) result.environments = false;
+    }
+
+    if (trigRes) {
+      result.triggers = trigRes.ok || trigRes.status === 400;
+      if (trigRes.status === 404 || trigRes.status === 405) result.triggers = false;
+    }
+
+    const tmBases = [
+      `${base}/testmanager_/api/v2/projects?$top=1`,
+      `${base}/tmapi_/api/v2/projects?$top=1`,
+    ];
+    for (const tmUrl of tmBases) {
+      try {
+        const tmRes = await fetch(tmUrl, { headers: hdrs });
+        if (tmRes.ok) {
+          const tmText = await tmRes.text();
+          const isHTML = tmText.trim().startsWith("<");
+          if (!isHTML) { result.testManager = true; break; }
+        }
+      } catch { /* continue */ }
+    }
+
+    const duUrls = [
+      `${base}/du_/api/framework/projects?$top=1`,
+      `${base}/aifabric_/ai-deployer/v1/projects?$top=1`,
+    ];
+    for (const duUrl of duUrls) {
+      try {
+        const duRes = await fetch(duUrl, { headers: hdrs });
+        if (duRes.ok) { result.documentUnderstanding = true; break; }
+      } catch { /* continue */ }
+    }
+
+    return result;
+  } catch {
+    return result;
+  }
+}
+
 export async function testUiPathConnection(): Promise<{ success: boolean; message: string; errorType?: string }> {
   const config = await getUiPathConfig();
   if (!config) {

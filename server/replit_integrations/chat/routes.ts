@@ -6,6 +6,7 @@ import { documentStorage } from "../../document-storage";
 import { processMapStorage } from "../../process-map-storage";
 import { evaluateTransition } from "../../stage-transition";
 import { PIPELINE_STAGES, type PipelineStage } from "@shared/schema";
+import { probeServiceAvailability, type ServiceAvailabilityMap } from "../../uipath-integration";
 
 const anthropic = new Anthropic({
   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -36,11 +37,32 @@ function detectApprovalIntent(userMessage: string): "PDD" | "SDD" | null {
   return "PDD";
 }
 
-function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string): string {
+function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null): string {
+  let serviceContext = "";
+  if (serviceAvailability && serviceAvailability.configured) {
+    const available: string[] = [];
+    const unavailable: string[] = [];
+    if (serviceAvailability.orchestrator) available.push("Orchestrator (queues, assets, machines, storage buckets)");
+    if (serviceAvailability.actionCenter) available.push("Action Center (task catalogs, human-in-the-loop)");
+    else unavailable.push("Action Center");
+    if (serviceAvailability.testManager) available.push("Test Manager (test cases, test projects)");
+    else unavailable.push("Test Manager");
+    if (serviceAvailability.documentUnderstanding) available.push("Document Understanding");
+    else unavailable.push("Document Understanding");
+    if (serviceAvailability.environments) available.push("Environments");
+    else unavailable.push("Environments (deprecated on modern folders — machine templates used instead)");
+    if (serviceAvailability.triggers) available.push("Triggers (queue and time-based)");
+    else unavailable.push("Triggers API");
+
+    serviceContext = `\n\nUIPath SERVICE AVAILABILITY (probed from the connected Orchestrator):
+- AVAILABLE: ${available.join(", ")}
+- NOT AVAILABLE: ${unavailable.length > 0 ? unavailable.join(", ") : "All services available"}`;
+  }
+
   return `You are the CannonBall automation design assistant. Your job is to guide Process SMEs through designing business process automations. You are AI-first — you lead, you draft, you build. The SME's job is to give you information, refine your output, and approve it. They should never have to figure out what to do next — you always tell them.
 
 Current idea: ${ideaTitle}. Current stage: ${currentStage}.
-${docContext || ""}
+${docContext || ""}${serviceContext}
 
 BEHAVIORAL RULES (non-negotiable):
 1. Never wait passively. After every SME message, either ask a specific targeted question, produce an output, or tell them exactly what you need next and why.
@@ -161,52 +183,50 @@ UIPATH DEPLOYMENT CAPABILITIES — you have REAL, WORKING deployment to UiPath O
 - FULL DEPLOYMENT automatically:
   1. Uploads the NuGet package to Orchestrator
   2. Creates a Process (Release) linked to the package
-  3. Reads the SDD's orchestrator_artifacts block and auto-provisions ALL artifacts:
-     - Queues, Assets, Machine Templates, Storage Buckets, Triggers (Queue + Time), Environments, Action Center task catalogs
-  4. Generates a full deployment report showing what was created, what already existed, and what needs manual setup
-- The SDD MUST include a \`\`\`orchestrator_artifacts fenced JSON block in Section 9 defining ALL deployable artifacts. This is machine-parsed — without it, artifacts won't be provisioned.
+  3. Reads the SDD's orchestrator_artifacts block and auto-provisions artifacts for AVAILABLE services only
+  4. Generates a full deployment report showing what was created, what already existed, and what was skipped
+- The SDD MUST include a \`\`\`orchestrator_artifacts fenced JSON block in Section 9 defining deployable artifacts. This is machine-parsed — without it, artifacts won't be provisioned.
 
-ORCHESTRATOR ARTIFACTS BLOCK — MANDATORY FORMAT (include ALL artifact types):
-The orchestrator_artifacts JSON block MUST include ALL of the following — the deployment engine auto-provisions every item. NEVER list triggers, environments, or any artifact as a "Manual Post-Deployment Step." Everything goes in this block:
+ORCHESTRATOR ARTIFACTS BLOCK — SERVICE-AWARE FORMAT:
+The orchestrator_artifacts JSON block must ONLY include artifact types for services that are AVAILABLE on the connected Orchestrator (see "UIPath SERVICE AVAILABILITY" above). Do NOT include artifacts for services marked as NOT AVAILABLE — they will fail during deployment.
+
+ALWAYS include these core artifact types (always available when Orchestrator is connected):
 \`\`\`orchestrator_artifacts
 {
   "queues": [
-    {"name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true}
+    {"name": "QueueName", "description": "Purpose (max 250 chars)", "maxRetries": 3, "uniqueReference": true}
   ],
   "assets": [
-    {"name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default_value", "description": "Purpose"}
+    {"name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default_value", "description": "Purpose (max 250 chars)"}
   ],
   "machines": [
-    {"name": "MachineName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose"}
-  ],
-  "triggers": [
-    {"name": "TriggerName", "type": "Queue", "queueName": "LinkedQueueName", "description": "Fires when items arrive in queue"},
-    {"name": "ScheduledTrigger", "type": "Time", "cron": "0 0 9 ? * MON-FRI *", "description": "Runs weekdays at 9 AM"}
+    {"name": "MachineName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose (max 250 chars)"}
   ],
   "storageBuckets": [
-    {"name": "BucketName", "description": "Purpose"}
-  ],
-  "environments": [
-    {"name": "Production", "type": "Production", "description": "Production environment"},
-    {"name": "Development", "type": "Development", "description": "Development/testing environment"}
-  ],
-  "actionCenter": [
-    {"taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "4 hours", "escalation": "Manager", "description": "Purpose"}
-  ],
-  "documentUnderstanding": [
-    {"name": "DU_ProjectName", "documentTypes": ["Invoice", "Receipt", "Claim Form"], "description": "Document types to classify and extract"}
-  ],
-  "testCases": [
-    {"name": "TC001 - Happy Path", "description": "Verify end-to-end process completes successfully", "steps": [{"action": "Submit valid input data", "expected": "Process starts without errors"}, {"action": "Verify queue item created", "expected": "Item appears in queue with correct data"}, {"action": "Verify output generated", "expected": "Expected output file/email produced"}]},
-    {"name": "TC002 - Error Handling", "description": "Verify process handles invalid input gracefully", "steps": [{"action": "Submit invalid/incomplete data", "expected": "Business exception thrown and logged"}, {"action": "Verify retry behavior", "expected": "Item retried up to max retries then moved to failed"}]}
+    {"name": "BucketName", "description": "Purpose (max 250 chars)"}
   ]
 }
 \`\`\`
+
+CONDITIONALLY include these — ONLY if the corresponding service is listed as AVAILABLE:
+- "triggers" — ONLY if Triggers API is available. Format: [{"name": "...", "type": "Queue|Time", "queueName": "...", "cron": "...", "description": "..."}]
+- "environments" — ONLY if Environments is available. Format: [{"name": "Production", "type": "Production", "description": "..."}]
+- "actionCenter" — ONLY if Action Center is available. Format: [{"taskCatalog": "...", "assignedRole": "...", "sla": "...", "escalation": "...", "description": "..."}]
+- "documentUnderstanding" — ONLY if Document Understanding is available. Format: [{"name": "...", "documentTypes": [...], "description": "..."}]
+- "testCases" — ONLY if Test Manager is available. Format: [{"name": "TC001 - ...", "description": "...", "steps": [{"action": "...", "expected": "..."}]}]
+
 CRITICAL RULES FOR ARTIFACTS:
-1. Triggers are FULLY AUTOMATED by the deployment engine. Queue triggers link to queues automatically. Time triggers use cron expressions. NEVER put triggers under "Manual Post-Deployment Steps" — they MUST be in the orchestrator_artifacts block above. If the process uses a queue, you MUST include a corresponding queue trigger.
-2. Test cases are auto-pushed to UiPath Test Manager. Include test cases that cover: happy path, error handling, edge cases, and boundary conditions for the automation.
-3. Document Understanding projects define what document types the automation processes. Include if the automation involves document classification or data extraction.
-4. ALL artifacts go in this JSON block. NOTHING should be listed as "Manual Post-Deployment" except truly manual tasks (like configuring third-party system access).
+1. All description fields have a maximum length of 250 characters. Keep descriptions concise.
+2. If Triggers API is available: Triggers are FULLY AUTOMATED by the deployment engine. Queue triggers link to queues automatically. Time triggers use cron expressions. If the process uses a queue, include a corresponding queue trigger.
+3. NEVER include artifact types for services that are NOT AVAILABLE. This wastes API calls and produces failed deployments.
+4. ALL artifacts for available services go in the JSON block. NOTHING should be listed as "Manual Post-Deployment" except truly manual tasks (like configuring third-party system access).
+
+SDD "FUTURE ENHANCEMENTS" SECTION:
+If any services are NOT AVAILABLE, the SDD MUST include a final section titled "## Future Enhancements — Additional Services" that:
+1. Lists each unavailable service and what it would enable for this automation
+2. Estimates the automation coverage increase (e.g., "Enabling Action Center would add human-in-the-loop escalation, increasing automation coverage from 85% to 95%")
+3. Frames this as an opportunity, not a limitation — "When X is enabled, the solution can be extended to include Y"
+If ALL services are available, omit this section entirely.
 
 - CONVERSATIONAL DEPLOYMENT: When the SDD is approved and the user wants to deploy, respond with exactly: [DEPLOY_UIPATH] — the system intercepts this tag and executes deployment with live status. Do NOT tell the user to click a button — deployment happens in the conversation.
 - If the SDD is already approved (see document context above), you can deploy immediately when the user asks. Do not re-ask for approval.
@@ -415,7 +435,18 @@ export function registerChatRoutes(app: Express): void {
         }
       } catch (e) { /* non-critical */ }
 
-      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext);
+      let serviceAvailability: ServiceAvailabilityMap | null = null;
+      const sddRelevantStages = ["Design", "Solution Design", "Build", "Test", "UAT", "Deployment"];
+      if (sddRelevantStages.some(s => idea.stage.toLowerCase().includes(s.toLowerCase()))) {
+        try {
+          serviceAvailability = await probeServiceAvailability();
+          if (serviceAvailability.configured) {
+            console.log(`[Chat] Service probe: AC=${serviceAvailability.actionCenter}, TM=${serviceAvailability.testManager}, DU=${serviceAvailability.documentUnderstanding}, Env=${serviceAvailability.environments}, Trig=${serviceAvailability.triggers}`);
+          }
+        } catch (e) { /* non-critical — proceed without probe */ }
+      }
+
+      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability);
 
       const stream = anthropic.messages.stream({
         model: "claude-sonnet-4-6",
@@ -654,7 +685,6 @@ export function registerChatRoutes(app: Express): void {
             if (skipped.length > 0) {
               verifiedSummary += `- SKIPPED (service unavailable): ${skipped.length} (${skipped.map(r => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
             }
-            verifiedSummary += `\nIMPORTANT: Never claim an artifact was "created" or "deployed" if it appears in the FAILED or SKIPPED lists above. Report the actual status honestly.`;
 
             await chatStorage.createMessage(ideaId, "system", verifiedSummary);
 

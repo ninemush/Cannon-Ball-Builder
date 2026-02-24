@@ -1,4 +1,4 @@
-import { getUiPathConfig, type UiPathConfig } from "./uipath-integration";
+import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap } from "./uipath-integration";
 import Anthropic from "@anthropic-ai/sdk";
 
 function odataEscape(value: string): string {
@@ -2180,6 +2180,12 @@ export async function deployAllArtifacts(
     const infraResults = formatInfraProbeResults(infraProbe);
     allResults.push(...infraResults);
 
+    let svcAvail: ServiceAvailabilityMap | null = null;
+    try {
+      svcAvail = await probeServiceAvailability();
+      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}`);
+    } catch { /* non-critical — proceed without filtering */ }
+
     const queueResults = await provisionQueues(base, hdrs, artifacts.queues);
     allResults.push(...queueResults);
 
@@ -2192,8 +2198,12 @@ export async function deployAllArtifacts(
     const machineResults = await provisionMachines(base, hdrs, artifacts.machines);
     allResults.push(...machineResults);
 
-    const envResults = await provisionEnvironments(base, hdrs, artifacts.environments);
-    allResults.push(...envResults);
+    if (svcAvail && !svcAvail.environments && (artifacts.environments?.length || 0) > 0) {
+      allResults.push({ artifact: "Environment", name: `${artifacts.environments!.length} environment(s)`, status: "skipped", message: "Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed." });
+    } else {
+      const envResults = await provisionEnvironments(base, hdrs, artifacts.environments);
+      allResults.push(...envResults);
+    }
 
     const robotResults = await provisionRobotAccounts(base, hdrs, config, artifacts.robotAccounts, infraProbe);
     allResults.push(...robotResults);
@@ -2208,17 +2218,33 @@ export async function deployAllArtifacts(
       });
     }
 
-    const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults, runtimeCheck);
-    allResults.push(...triggerResults);
+    if (svcAvail && !svcAvail.triggers && (artifacts.triggers?.length || 0) > 0) {
+      allResults.push({ artifact: "Trigger", name: `${artifacts.triggers!.length} trigger(s)`, status: "skipped", message: "Triggers API (QueueTriggers/ProcessSchedules) not available on this tenant. Triggers can be created manually in Orchestrator." });
+    } else {
+      const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults, runtimeCheck);
+      allResults.push(...triggerResults);
+    }
 
-    const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config);
-    allResults.push(...actionCenterResults);
+    if (svcAvail && !svcAvail.actionCenter && (artifacts.actionCenter?.length || 0) > 0) {
+      allResults.push({ artifact: "Action Center", name: `${artifacts.actionCenter!.length} task catalog(s)`, status: "skipped", message: "Action Center is not available on this tenant. Enable it in Admin > Tenant > Services, then assign it to the target folder." });
+    } else {
+      const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config);
+      allResults.push(...actionCenterResults);
+    }
 
-    const duResults = await provisionDocUnderstanding(config, token, artifacts.documentUnderstanding);
-    allResults.push(...duResults);
+    if (svcAvail && !svcAvail.documentUnderstanding && (artifacts.documentUnderstanding?.length || 0) > 0) {
+      allResults.push({ artifact: "Document Understanding", name: `${artifacts.documentUnderstanding!.length} project(s)`, status: "skipped", message: "Document Understanding is not available on this tenant. It requires an Enterprise license or the service may not be enabled." });
+    } else {
+      const duResults = await provisionDocUnderstanding(config, token, artifacts.documentUnderstanding);
+      allResults.push(...duResults);
+    }
 
-    const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation");
-    allResults.push(...testResults);
+    if (svcAvail && !svcAvail.testManager && (artifacts.testCases?.length || 0) > 0) {
+      allResults.push({ artifact: "Test Case", name: `${artifacts.testCases!.length} test case(s)`, status: "skipped", message: "Test Manager is not available on this tenant. Test cases were defined in the SDD but cannot be provisioned. Test Manager requires an Enterprise license or TM scopes (TM.Projects, TM.TestCases) to be enabled." });
+    } else {
+      const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation");
+      allResults.push(...testResults);
+    }
 
     const created = allResults.filter(r => r.status === "created").length;
     const existed = allResults.filter(r => r.status === "exists").length;

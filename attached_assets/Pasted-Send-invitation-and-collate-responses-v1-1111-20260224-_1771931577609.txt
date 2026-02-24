@@ -1,0 +1,110 @@
+Send_invitation_and_collate_responses
+v1.1111.20260224
+Send invitation and collate responses
+7 created
+8 existing
+4 skipped
+9 failed
+
+Infrastructure
+1 issue
+4
+
+Queues
+1
+DonorSolicitationQueue
+Created
+
+Storage Buckets
+1
+SophiaArtifactsBucket
+Exists
+
+Assets
+7
+ProcessedCampaignIDs
+Exists
+MonitoringWindowDays
+Created
+OpenAI_APIKey
+Created
+Stripe_SecretKey
+Created
+GraphAPI_ClientCredentials
+Created
+GPT4_Model
+Created
+DefaultCurrency
+Created
+
+Machines
+1
+UnattendedRobotMachine
+Exists
+
+Environments
+2 issues
+2
+Production
+Skipped
+Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed — your folder's machine templates serve the same purpose.
+
+Development
+Skipped
+Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed — your folder's machine templates serve the same purpose.
+
+
+Triggers
+1 issue
+3
+CampaignWatcher_TimeTrigger
+Exists
+SophiaDispatcher_QueueTrigger
+Failed
+Trigger creation failed — QueueTriggers and ProcessSchedule endpoints both unavailable.
+
+SophiaInboxMonitor_TimeTrigger
+Exists
+
+Action Centers
+1 issue
+1
+DonorEscalationTask
+Skipped
+Action Center API endpoints not responding. The service may need to be enabled for this folder in Orchestrator settings.
+
+
+Test Cases
+8 issues
+8
+TC001 - Happy Path: Pledge on First Reply
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC002 - Genuine Question Loop then Pledge
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC003 - Decline Handling
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC004 - Off-Topic Closure
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC005 - Escalation Handling
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC006 - No Response Timeout
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC007 - GPT-4 API Failure Resilience
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
+
+TC008 - Stripe API Failure
+Failed
+Could not find or create test project in Test Manager. Check API permissions.
