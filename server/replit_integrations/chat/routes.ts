@@ -688,6 +688,9 @@ export function registerChatRoutes(app: Express): void {
 
             await chatStorage.createMessage(ideaId, "system", verifiedSummary);
 
+            const deployMsgContent = `${statusMsg}\n[DEPLOY_REPORT:${JSON.stringify(deployReport)}]`;
+            await chatStorage.createMessage(ideaId, "assistant", deployMsgContent);
+
             res.write(`data: ${JSON.stringify({ deployStatus: statusMsg, deployComplete: true, deployReport })}\n\n`);
           } else {
             const errMsg = `Deployment failed: ${deployData.message}`;

@@ -57,7 +57,7 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; b
   failed: { icon: XCircle, color: "text-red-400", bg: "bg-red-500/10", label: "Failed" },
 };
 
-export function DeploymentReportCard({ report, onDismiss }: { report: DeployReport; onDismiss: () => void }) {
+export function DeploymentReportCard({ report, onDismiss }: { report: DeployReport; onDismiss?: (() => void) | undefined }) {
   const infraGroups = ["Infrastructure", "Runtime Check"];
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
@@ -114,13 +114,15 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           <Package className="h-4 w-4 text-primary shrink-0" />
           <span className="font-semibold text-sm text-foreground">Deployment Report</span>
         </div>
-        <button
-          onClick={onDismiss}
-          className="text-muted-foreground hover:text-foreground transition-colors shrink-0 ml-2"
-          data-testid="button-dismiss-deploy-report"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {onDismiss && (
+          <button
+            onClick={onDismiss}
+            className="text-muted-foreground hover:text-foreground transition-colors shrink-0 ml-2"
+            data-testid="button-dismiss-deploy-report"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {report.packageId && (

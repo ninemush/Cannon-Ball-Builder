@@ -328,6 +328,7 @@ interface ChatMsg {
   docType?: "PDD" | "SDD";
   docId?: number;
   uipathData?: any;
+  deployReport?: any;
 }
 
 function stripStepTags(text: string): string {
@@ -336,12 +337,13 @@ function stripStepTags(text: string): string {
     .replace(/\[DOC:(PDD|SDD):\d+\]/g, "")
     .replace(/\[APPROVE:(PDD|SDD)\]/g, "")
     .replace(/\[DEPLOY_UIPATH\]/g, "")
+    .replace(/\[DEPLOY_REPORT:[\s\S]*?\]/g, "")
     .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: number; uipathData?: any; displayContent: string } {
+function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: number; uipathData?: any; deployReport?: any; displayContent: string } {
   const docMatch = content.match(/^\[DOC:(PDD|SDD):(\d+)\]/);
   if (docMatch) {
     return {
@@ -361,6 +363,19 @@ function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: n
       return { displayContent: stripStepTags(content) };
     }
   }
+  const deployReportMatch = content.match(/\[DEPLOY_REPORT:([\s\S]*)\]$/);
+  if (deployReportMatch) {
+    try {
+      const report = JSON.parse(deployReportMatch[1]);
+      const displayContent = content.slice(0, deployReportMatch.index).trim();
+      return {
+        deployReport: report,
+        displayContent: stripStepTags(displayContent),
+      };
+    } catch {
+      return { displayContent: stripStepTags(content.replace(/\[DEPLOY_REPORT:[\s\S]*\]$/, "").trim()) };
+    }
+  }
   return { displayContent: stripStepTags(content) };
 }
 
@@ -375,7 +390,6 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; text: string }>>([]);
-  const [deployReport, setDeployReport] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialScrollDoneRef = useRef(false);
 
@@ -436,6 +450,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
           docType: meta.docType,
           docId: meta.docId,
           uipathData: meta.uipathData,
+          deployReport: meta.deployReport,
         };
       });
       const result = [...loaded];
@@ -574,10 +589,27 @@ function ChatPanel({ idea }: { idea: Idea }) {
               if (data.deployStatus) {
                 if (data.deployComplete) {
                   if (data.deployReport) {
-                    setDeployReport(data.deployReport);
+                    setStreamingMsg((prev) => prev ? {
+                      ...prev,
+                      content: prev.content || data.deployStatus || "Deployment complete.",
+                      isStreaming: false,
+                      deployReport: data.deployReport,
+                    } : {
+                      id: `deploy-done-${Date.now()}`,
+                      role: "assistant",
+                      content: data.deployStatus || "Deployment complete.",
+                      timestamp: new Date(),
+                      isStreaming: false,
+                      deployReport: data.deployReport,
+                    });
+                    setTimeout(() => {
+                      setStreamingMsg(null);
+                      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+                    }, 500);
+                  } else {
+                    setStreamingMsg(null);
+                    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
                   }
-                  setStreamingMsg(null);
-                  queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
                 } else {
                   setStreamingMsg({
                     id: `deploy-${Date.now()}`,
@@ -1066,6 +1098,33 @@ function ChatPanel({ idea }: { idea: Idea }) {
             );
           }
 
+          if (msg.deployReport && msg.deployReport.results?.length > 0) {
+            return (
+              <div key={msg.id} className="flex justify-start" data-testid={`chat-message-${msg.id}`}>
+                <div className="max-w-[95%] w-full space-y-2">
+                  {msg.content && (
+                    <div className="rounded-lg px-3 py-2.5 bg-card border border-card-border rounded-bl-sm">
+                      <div className="text-xs leading-relaxed prose-chat overflow-hidden break-words">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {stripStepTags(msg.content)}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+                  <DeploymentReportCard report={msg.deployReport} onDismiss={undefined} />
+                  {!msg.isStreaming && (
+                    <span className="text-[9px] text-muted-foreground/60 block">
+                      {msg.timestamp.toLocaleTimeString("en-US", {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div
               key={msg.id}
@@ -1190,10 +1249,6 @@ function ChatPanel({ idea }: { idea: Idea }) {
           }
           return null;
         })()}
-
-        {deployReport && deployReport.results?.length > 0 && (
-          <DeploymentReportCard report={deployReport} onDismiss={() => setDeployReport(null)} />
-        )}
 
         <div ref={messagesEndRef} />
       </div>
