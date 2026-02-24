@@ -902,6 +902,7 @@ async function provisionTriggers(
       const triggerType = (t.type || "Time").toLowerCase();
 
       if (triggerType === "queue") {
+        let alreadyExists = false;
         const checkRes = await fetch(
           `${base}/odata/QueueTriggers?$filter=Name eq '${odataEscape(t.name)}'&$top=1`,
           { headers: hdrs }
@@ -910,9 +911,23 @@ async function provisionTriggers(
           const checkData = await checkRes.json();
           if (checkData.value?.length > 0) {
             results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
-            continue;
+            alreadyExists = true;
           }
         }
+        if (!alreadyExists && (checkRes.status === 404 || checkRes.status === 405 || !checkRes.ok)) {
+          const schedCheckRes = await fetch(
+            `${base}/odata/ProcessSchedules?$filter=Name eq '${odataEscape(t.name)}'&$top=1`,
+            { headers: hdrs }
+          );
+          if (schedCheckRes.ok) {
+            const schedCheckData = await schedCheckRes.json();
+            if (schedCheckData.value?.length > 0) {
+              results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists as scheduled trigger (ID: ${schedCheckData.value[0].Id})`, id: schedCheckData.value[0].Id });
+              alreadyExists = true;
+            }
+          }
+        }
+        if (alreadyExists) continue;
 
         let queueId: number | null = null;
         const qr = queueResults.find(q => q.name === t.queueName);
@@ -1005,8 +1020,10 @@ async function provisionTriggers(
             } else {
               results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `ProcessSchedule fallback returned ${schedRes.status} but verification failed — trigger not found. ${verify.detail || ""}` });
             }
+          } else if (schedRes.status === 409 || schedText.includes("already exists")) {
+            results.push({ artifact: "Trigger", name: t.name, status: "exists", message: "Already exists as scheduled trigger" });
           } else {
-            results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Trigger creation failed — QueueTriggers and ProcessSchedule endpoints both unavailable.` });
+            results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Trigger creation failed — QueueTriggers returned ${res.status}, ProcessSchedules returned ${schedRes.status}: ${schedText.slice(0, 200)}` });
           }
         } else {
           results.push({ artifact: "Trigger", name: t.name, status: "failed", message: sanitizeErrorMessage(res.status, text) });
