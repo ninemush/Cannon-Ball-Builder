@@ -616,7 +616,7 @@ export async function createProcess(
       ProcessKey: packageId,
       ProcessVersion: packageVersion,
       EntryPointPath: "Main.xaml",
-      Description: description || `Created by CannonBall`,
+      Description: (description || `Created by CannonBall`).slice(0, 250),
     };
 
     const result = await tryCreateRelease(base, headers, releaseBody, config.folderName || "configured folder");

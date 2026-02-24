@@ -5,6 +5,13 @@ function odataEscape(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+const UIPATH_DESC_MAX = 250;
+function truncDesc(desc: string | undefined | null): string {
+  const s = (desc || "").trim();
+  if (s.length <= UIPATH_DESC_MAX) return s;
+  return s.slice(0, UIPATH_DESC_MAX - 3) + "...";
+}
+
 function sanitizeErrorMessage(httpStatus: number, rawText: string): string {
   try {
     const parsed = JSON.parse(rawText);
@@ -412,7 +419,7 @@ async function provisionQueues(
 
       const body: Record<string, any> = {
         Name: q.name,
-        Description: q.description || "",
+        Description: truncDesc(q.description),
         MaxNumberOfRetries: q.maxRetries ?? 3,
         AcceptAutomaticallyRetry: true,
         EnforceUniqueReference: q.uniqueReference ?? false,
@@ -475,7 +482,7 @@ async function provisionAssets(
       const body: Record<string, any> = {
         Name: a.name,
         ValueScope: "Global",
-        Description: a.description || "",
+        Description: truncDesc(a.description),
       };
 
       if (assetType === "credential") {
@@ -592,7 +599,7 @@ async function provisionMachines(
       const machineType = (m.type || "Unattended").toLowerCase();
       const body: Record<string, any> = {
         Name: m.name,
-        Description: m.description || "",
+        Description: truncDesc(m.description),
         Type: "Template",
       };
 
@@ -668,18 +675,18 @@ async function provisionStorageBuckets(
         {
           Name: b.name,
           Identifier: generateUuid(),
-          Description: b.description || "",
+          Description: truncDesc(b.description),
         },
         {
           Name: b.name,
           Identifier: generateUuid(),
-          Description: b.description || "",
+          Description: truncDesc(b.description),
           StorageProvider: "Orchestrator",
         },
         {
           Name: b.name,
           Identifier: generateUuid(),
-          Description: b.description || "",
+          Description: truncDesc(b.description),
           StorageProvider: "Minio",
         },
       ];
@@ -1149,8 +1156,8 @@ async function provisionEnvironments(
       else if (envType.includes("test")) typeValue = "Test";
 
       const bodyVariants = [
-        { Name: env.name, Description: env.description || "", Type: typeValue },
-        { Name: env.name, Description: env.description || "" },
+        { Name: env.name, Description: truncDesc(env.description), Type: typeValue },
+        { Name: env.name, Description: truncDesc(env.description) },
       ];
 
       let envCreated = false;
@@ -1293,7 +1300,7 @@ async function provisionActionCenter(
       }
       if (found) continue;
 
-      const body: Record<string, any> = { Name: ac.taskCatalog, Description: ac.description || "" };
+      const body: Record<string, any> = { Name: ac.taskCatalog, Description: truncDesc(ac.description) };
       let acCreated = false;
       for (const ep of tryEndpoints) {
         try {
@@ -1453,7 +1460,7 @@ async function provisionDocUnderstanding(
         try {
           const body = {
             Name: project.name,
-            Description: project.description || `Document Understanding project for ${project.name}`,
+            Description: truncDesc(project.description || `Document Understanding project for ${project.name}`),
             DocumentTypes: project.documentTypes || [],
           };
           const res = await fetch(ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
@@ -1600,7 +1607,7 @@ async function provisionTestCases(
         headers: hdrs,
         body: JSON.stringify({
           Name: processName.replace(/_/g, " "),
-          Description: `Test project for ${processName}`,
+          Description: truncDesc(`Test project for ${processName}`),
         }),
       });
       const createText = await createProjRes.text();
@@ -1632,7 +1639,7 @@ async function provisionTestCases(
     try {
       const body: Record<string, any> = {
         Name: tc.name,
-        Description: tc.description || "",
+        Description: truncDesc(tc.description),
         ProjectId: projectId,
       };
 
