@@ -167,8 +167,9 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
         {Object.entries(grouped).map(([artifactType, items]) => {
           const isExpanded = expandedGroups[artifactType] === true;
           const groupCreated = items.filter((i) => i.status === "created").length;
-          const groupIssues = items.filter((i) => i.status === "failed" || i.status === "skipped").length;
-          const allOk = groupIssues === 0;
+          const groupFailed = items.filter((i) => i.status === "failed").length;
+          const groupSkipped = items.filter((i) => i.status === "skipped").length;
+          const allOk = groupFailed === 0 && groupSkipped === 0;
 
           return (
             <div key={artifactType}>
@@ -189,9 +190,16 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
                 <span className="text-[10px] text-muted-foreground ml-auto flex items-center gap-1.5">
                   {allOk ? (
                     <CheckCircle2 className="h-3 w-3 text-green-400" />
-                  ) : groupIssues > 0 ? (
-                    <span className="text-amber-400">{groupIssues} issue{groupIssues > 1 ? "s" : ""}</span>
-                  ) : null}
+                  ) : (
+                    <>
+                      {groupFailed > 0 && (
+                        <span className="text-red-400">{groupFailed} failed</span>
+                      )}
+                      {groupSkipped > 0 && (
+                        <span className="text-slate-400">{groupSkipped} n/a</span>
+                      )}
+                    </>
+                  )}
                   <span>{items.length}</span>
                 </span>
               </button>
