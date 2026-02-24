@@ -376,7 +376,6 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; text: string }>>([]);
   const [deployReport, setDeployReport] = useState<any>(null);
-  const docAbortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialScrollDoneRef = useRef(false);
 
@@ -401,79 +400,13 @@ function ChatPanel({ idea }: { idea: Idea }) {
   }, [idea.id]);
 
   const cancelDocGeneration = useCallback(() => {
-    if (docAbortRef.current) {
-      docAbortRef.current.abort();
-      docAbortRef.current = null;
-    }
     setIsGeneratingDoc(false);
     setGeneratingDocType("");
   }, []);
 
-  const generateDocument = useCallback(async (type: "PDD" | "SDD") => {
-    if (isGeneratingDoc) return;
-    setIsGeneratingDoc(true);
-    setGeneratingDocType(type);
-    const controller = new AbortController();
-    docAbortRef.current = controller;
-    try {
-      const timeout = setTimeout(() => controller.abort(), 120000);
-      const res = await fetch(`/api/ideas/${idea.id}/documents/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ type }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error(`Failed to generate ${type}:`, err);
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError") {
-        console.log(`${type} generation cancelled`);
-      } else {
-        console.error(`Error generating ${type}:`, err);
-      }
-    } finally {
-      docAbortRef.current = null;
-      setIsGeneratingDoc(false);
-      setGeneratingDocType("");
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-    }
-  }, [idea.id, isGeneratingDoc]);
-
-  const generateUiPath = useCallback(async () => {
-    setIsGeneratingDoc(true);
-    setGeneratingDocType("UiPath");
-    try {
-      const res = await fetch(`/api/ideas/${idea.id}/generate-uipath`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-      });
-      if (!res.ok) {
-        console.error("Failed to generate UiPath package");
-      }
-    } catch (err) {
-      console.error("Error generating UiPath package:", err);
-    } finally {
-      setIsGeneratingDoc(false);
-      setGeneratingDocType("");
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-    }
-  }, [idea.id]);
-
   const pddTriggeredRef = useRef(false);
   const sddTriggeredRef = useRef(false);
-
-  const handleDocApproved = useCallback(async (docType: "PDD" | "SDD") => {
-    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-    if (docType === "PDD" && !sddTriggeredRef.current) {
-      sddTriggeredRef.current = true;
-      setTimeout(() => generateDocument("SDD"), 500);
-    }
-  }, [idea.id, generateDocument]);
+  const generateDocRef = useRef<((type: "PDD" | "SDD") => void) | null>(null);
 
   const guidance = STAGE_GUIDANCE[idea.stage];
 
@@ -537,7 +470,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
     );
     if (hasMapApproval && !hasPdd && !pddTriggeredRef.current && !isGeneratingDoc) {
       pddTriggeredRef.current = true;
-      generateDocument("PDD");
+      generateDocRef.current?.("PDD");
       return;
     }
 
@@ -549,9 +482,9 @@ function ChatPanel({ idea }: { idea: Idea }) {
     );
     if (hasPddApproval && !hasSdd && !sddTriggeredRef.current && !isGeneratingDoc) {
       sddTriggeredRef.current = true;
-      generateDocument("SDD");
+      generateDocRef.current?.("SDD");
     }
-  }, [savedMessages, isGeneratingDoc, generateDocument]);
+  }, [savedMessages, isGeneratingDoc]);
 
   useEffect(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -683,6 +616,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
       );
     } finally {
       setIsStreaming(false);
+      setIsGeneratingDoc(false);
+      setGeneratingDocType("");
       setPendingUserMsg(null);
       const finalContent = streamingMsgRef.current;
       setStreamingMsg(null);
@@ -888,6 +823,76 @@ function ChatPanel({ idea }: { idea: Idea }) {
           queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map", viewType] });
         }
       }
+    }
+  }, [idea.id]);
+
+  const generateDocument = useCallback((type: "PDD" | "SDD") => {
+    if (isGeneratingDoc || isStreaming) return;
+    setIsGeneratingDoc(true);
+    setGeneratingDocType(type);
+    const prompt = type === "PDD"
+      ? "Generate the Process Design Document (PDD) now. Start your response with [DOC:PDD:0] followed by the full document. Include all sections: 1) Executive Summary, 2) Process Scope, 3) As-Is Process Description, 4) To-Be Process Description, 5) Pain Points and Inefficiencies, 6) Automation Opportunity Assessment, 7) Assumptions and Exceptions, 8) Data and System Requirements. Write as a professional document using ## headings."
+      : "Generate the Solution Design Document (SDD) now. Start your response with [DOC:SDD:0] followed by the full document. Include the orchestrator_artifacts JSON block in Section 9 with all artifact definitions (queues, assets, machines, triggers, storageBuckets, environments, actionCenter, testCases). Write as a professional technical specification using ## headings.";
+    sendMessageDirect(prompt);
+  }, [isGeneratingDoc, isStreaming, sendMessageDirect]);
+
+  generateDocRef.current = generateDocument;
+
+  const generateUiPath = useCallback(async () => {
+    if (isGeneratingDoc || isStreaming) return;
+    setIsGeneratingDoc(true);
+    setGeneratingDocType("UiPath");
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      const res = await fetch(`/api/ideas/${idea.id}/generate-uipath`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("Failed to generate UiPath package:", err);
+        toast({
+          title: "Package generation failed",
+          description: err.message || "Could not generate UiPath package. Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "UiPath Package Ready",
+          description: "Package generated successfully. You can now deploy to UiPath.",
+        });
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        toast({
+          title: "Timed out",
+          description: "Package generation took too long. Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        console.error("Error generating UiPath package:", err);
+        toast({
+          title: "Error",
+          description: "Could not generate UiPath package. Please try again.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsGeneratingDoc(false);
+      setGeneratingDocType("");
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+    }
+  }, [idea.id, isGeneratingDoc, isStreaming]);
+
+  const handleDocApproved = useCallback(async (docType: "PDD" | "SDD") => {
+    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+    if (docType === "PDD" && !sddTriggeredRef.current) {
+      sddTriggeredRef.current = true;
+      setTimeout(() => generateDocRef.current?.("SDD"), 500);
     }
   }, [idea.id]);
 
@@ -1255,9 +1260,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={isGeneratingDoc ? `Generating ${generatingDocType}... please wait` : isStreaming ? "Type to queue your next message..." : "Describe your process..."}
+            placeholder={isGeneratingDoc ? `Generating ${generatingDocType}... Type to queue your next message` : isStreaming ? "Type to queue your next message..." : "Describe your process..."}
             className="min-h-[36px] max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
-            disabled={isGeneratingDoc}
             rows={1}
             data-testid="input-chat-message"
           />
@@ -1265,7 +1269,7 @@ function ChatPanel({ idea }: { idea: Idea }) {
             size="icon"
             className="shrink-0"
             onClick={handleSend}
-            disabled={isGeneratingDoc || (!inputValue.trim() && !attachedFile)}
+            disabled={!inputValue.trim() && !attachedFile}
             data-testid="button-send-message"
           >
             {isStreaming ? (

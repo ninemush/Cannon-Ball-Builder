@@ -343,6 +343,11 @@ export function registerChatRoutes(app: Express): void {
       res.setHeader("Connection", "keep-alive");
       res.flushHeaders();
 
+      let clientDisconnected = false;
+      res.on("close", () => {
+        clientDisconnected = true;
+      });
+
       let docContext = "";
       try {
         const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
@@ -380,16 +385,28 @@ export function registerChatRoutes(app: Express): void {
       let stopReason = "";
 
       for await (const event of stream) {
+        if (clientDisconnected) {
+          console.log(`[Chat] Client disconnected — aborting stream for idea ${ideaId}`);
+          stream.abort();
+          break;
+        }
         if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
           const text = event.delta.text;
           if (text) {
             fullResponse += text;
-            res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
+            try { res.write(`data: ${JSON.stringify({ token: text })}\n\n`); } catch { break; }
           }
         }
         if (event.type === "message_delta" && (event as any).delta?.stop_reason) {
           stopReason = (event as any).delta.stop_reason;
         }
+      }
+
+      if (clientDisconnected) {
+        if (fullResponse.length > 0) {
+          await chatStorage.createMessage(ideaId, "assistant", fullResponse.trim());
+        }
+        return;
       }
 
       const isDocResponse = /^\[DOC:(PDD|SDD):\d+\]/.test(fullResponse.trim()) ||
@@ -423,11 +440,16 @@ export function registerChatRoutes(app: Express): void {
             });
             let continuation = "";
             for await (const evt of contStream) {
+              if (clientDisconnected) {
+                console.log(`[Chat] Client disconnected during continuation — aborting`);
+                contStream.abort();
+                break;
+              }
               if (evt.type === "content_block_delta" && evt.delta.type === "text_delta") {
                 const text = evt.delta.text;
                 if (text) {
                   continuation += text;
-                  res.write(`data: ${JSON.stringify({ token: text })}\n\n`);
+                  try { res.write(`data: ${JSON.stringify({ token: text })}\n\n`); } catch { break; }
                 }
               }
             }
@@ -518,7 +540,36 @@ export function registerChatRoutes(app: Express): void {
 
       if (fullResponse.includes("[DEPLOY_UIPATH]")) {
         try {
-          res.write(`data: ${JSON.stringify({ deployStatus: "Starting deployment to UiPath Orchestrator..." })}\n\n`);
+          res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`);
+
+          const existingMsgs = await chatStorage.getMessagesByIdeaId(ideaId);
+          const hasPackage = existingMsgs.some(m => m.content.startsWith("[UIPATH:"));
+          if (!hasPackage) {
+            res.write(`data: ${JSON.stringify({ deployStatus: "Generating UiPath package first..." })}\n\n`);
+            try {
+              const genRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ideas/${ideaId}/generate-uipath`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Cookie": req.headers.cookie || "",
+                },
+              });
+              if (!genRes.ok) {
+                const genErr = await genRes.json().catch(() => ({}));
+                throw new Error(genErr.message || "Package generation failed");
+              }
+              res.write(`data: ${JSON.stringify({ deployStatus: "Package generated. Starting deployment..." })}\n\n`);
+            } catch (genErr: any) {
+              const errMsg = `Deployment failed: Could not generate UiPath package — ${genErr?.message || "unknown error"}`;
+              await chatStorage.createMessage(ideaId, "assistant", errMsg);
+              res.write(`data: ${JSON.stringify({ deployStatus: errMsg, deployComplete: true, deployError: true })}\n\n`);
+              res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+              res.end();
+              return;
+            }
+          }
+
+          res.write(`data: ${JSON.stringify({ deployStatus: "Deploying to UiPath Orchestrator..." })}\n\n`);
           const deployRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ideas/${ideaId}/push-uipath`, {
             method: "POST",
             headers: {
