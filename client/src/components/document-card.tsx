@@ -93,6 +93,9 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
   const activeVersion = viewingVersion ? viewingVersion.version : (version || 1);
   const sections = parseDocumentSections(activeContent);
 
+  const isDocApprovedFromHistory = versionHistory?.some(v => v.id === docId && v.status === "approved") ?? false;
+  const effectivelyApproved = isApproved || isDocApprovedFromHistory;
+
   const { toast } = useToast();
 
   const approveMutation = useMutation({
@@ -117,7 +120,13 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
     },
     onError: (error: Error) => {
       setShowApproveConfirm(false);
-      toast({ title: "Approval failed", description: error.message, variant: "destructive" });
+      if (error.message === "Already approved") {
+        toast({ title: `${docType} Already Approved`, description: "This document has already been approved." });
+        queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "documents", "versions", docType] });
+      } else {
+        toast({ title: "Approval failed", description: error.message, variant: "destructive" });
+      }
     },
   });
 
@@ -166,7 +175,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] text-muted-foreground">
               Version {activeVersion}
-              {isApproved && !viewingVersion && (
+              {effectivelyApproved && !viewingVersion && (
                 <span className="ml-2 text-cb-teal">
                   <Check className="inline h-3 w-3 mr-0.5" />Approved
                 </span>
@@ -290,7 +299,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         ))}
       </div>
 
-      {!isApproved && (
+      {!effectivelyApproved && (
         <div className="px-4 py-3 border-t border-border/30 space-y-2">
           {showApproveConfirm ? (
             <div className="flex items-center gap-2">

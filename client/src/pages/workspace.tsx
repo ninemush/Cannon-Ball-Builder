@@ -1095,8 +1095,14 @@ function ChatPanel({ idea }: { idea: Idea }) {
     }
   }, [idea.id, isGeneratingDoc, isStreaming]);
 
-  const handleDocApproved = useCallback(async (docType: "PDD" | "SDD") => {
+  const [approvedDocIds, setApprovedDocIds] = useState<Set<number>>(new Set());
+
+  const handleDocApproved = useCallback(async (docType: "PDD" | "SDD", docId?: number) => {
+    if (docId) {
+      setApprovedDocIds(prev => new Set(prev).add(docId));
+    }
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "versions", docType] });
     if (docType === "PDD" && !sddTriggeredRef.current) {
       sddTriggeredRef.current = true;
       setTimeout(() => generateDocRef.current?.("SDD"), 500);
@@ -1286,8 +1292,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
                     docId={msg.docId}
                     content={msg.content}
                     ideaId={idea.id}
-                    isApproved={!isLatest}
-                    onApproved={() => handleDocApproved(msg.docType!)}
+                    isApproved={!isLatest || approvedDocIds.has(msg.docId)}
+                    onApproved={() => handleDocApproved(msg.docType!, msg.docId)}
                   />
                 </div>
               </div>

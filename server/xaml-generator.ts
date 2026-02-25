@@ -97,14 +97,15 @@ export function makeUiPathCompliant(rawXaml: string): string {
   const className = classMatch ? classMatch[1].replace(/[^A-Za-z0-9_]/g, "") : "Workflow";
   const rootId = nextId(className);
 
-  const activityTagPattern = /<(Sequence|If|TryCatch|ForEach|Assign|State|StateMachine|Transition|Flowchart|FlowStep|FlowDecision|ui:[A-Za-z]+)\s+DisplayName="([^"]*)"([^>]*?)(\s*\/?>)/g;
-  xml = xml.replace(activityTagPattern, (match, tag, displayName, rest, closing) => {
-    if (rest.includes("WorkflowViewState.IdRef")) return match;
+  const activityTagPattern = /<(Sequence|If|TryCatch|ForEach|Assign|State|StateMachine|Transition|Flowchart|FlowStep|FlowDecision|ui:[A-Za-z]+)\s+((?:[^>]*?\s+)?)DisplayName="([^"]*)"([^>]*?)(\s*\/?>)/g;
+  xml = xml.replace(activityTagPattern, (match, tag, preAttrs, displayName, rest, closing) => {
+    if (preAttrs.includes("WorkflowViewState.IdRef") || rest.includes("WorkflowViewState.IdRef")) return match;
     const prefix = tag.replace("ui:", "").replace(/[^A-Za-z]/g, "");
     const id = nextId(prefix);
     const hint = getHintSize(tag);
     viewStateEntries.push({ id, width: hint.w, height: hint.h });
-    return `<${tag} DisplayName="${displayName}" sap2010:WorkflowViewState.IdRef="${id}" sap:VirtualizedContainerService.HintSize="${hint.w},${hint.h}"${rest}${closing}`;
+    const pre = preAttrs ? `${preAttrs}` : "";
+    return `<${tag} ${pre}DisplayName="${displayName}" sap2010:WorkflowViewState.IdRef="${id}" sap:VirtualizedContainerService.HintSize="${hint.w},${hint.h}"${rest}${closing}`;
   });
 
   const firstChildMatch = xml.match(/<(Sequence|StateMachine|Flowchart)\s+DisplayName="[^"]*"/);
