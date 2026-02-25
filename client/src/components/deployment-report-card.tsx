@@ -276,7 +276,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
         ) : partialSuccess ? (
           <span className="flex items-center gap-1">
             <CheckCircle2 className="h-3.5 w-3.5" />
-            Core artifacts provisioned.{counts.manual > 0 ? ` ${counts.manual} need manual setup.` : ""}{counts.skipped > 0 ? ` ${counts.skipped} not available.` : ""}
+            Core artifacts provisioned.{counts.failed > 0 ? ` ${counts.failed} API-limited.` : ""}{counts.manual > 0 ? ` ${counts.manual} need manual setup.` : ""}{counts.skipped > 0 ? ` ${counts.skipped} not available.` : ""}
           </span>
         ) : (
           <span className="flex items-center gap-1">

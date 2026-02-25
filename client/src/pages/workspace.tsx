@@ -643,6 +643,14 @@ function ChatPanel({ idea }: { idea: Idea }) {
   }, [savedMessages, isStreaming, isGeneratingDoc, idea.id]);
 
   const sendMessageDirect = useCallback(async (text: string) => {
+    const docRegenMatch = text.match(/(?:re)?generat(?:e|ing)?\s+(?:the\s+)?(?:a\s+)?(?:new\s+)?(SDD|PDD|solution design document|process design document)|rewrite\s+(?:the\s+)?(SDD|PDD)|redo\s+(?:the\s+)?(SDD|PDD)|update\s+(?:the\s+)?(SDD|PDD)/i);
+    if (docRegenMatch) {
+      const matchedType = (docRegenMatch[1] || docRegenMatch[2] || docRegenMatch[3] || docRegenMatch[4] || "").toUpperCase();
+      const docType = matchedType.includes("SOLUTION") || matchedType === "SDD" ? "SDD" : "PDD";
+      setIsGeneratingDoc(true);
+      setGeneratingDocType(docType);
+    }
+
     const userMsg: ChatMsg = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -698,6 +706,11 @@ function ChatPanel({ idea }: { idea: Idea }) {
               const data = JSON.parse(line.slice(6));
               if (data.token) {
                 streamingMsgRef.current += data.token;
+                const docTagMatch = streamingMsgRef.current.match(/^\[DOC:(PDD|SDD):/);
+                if (docTagMatch && !isGeneratingDoc) {
+                  setIsGeneratingDoc(true);
+                  setGeneratingDocType(docTagMatch[1]);
+                }
                 setStreamingMsg((prev) =>
                   prev ? { ...prev, content: prev.content + data.token } : prev
                 );

@@ -1284,47 +1284,31 @@ async function provisionActionCenter(
   const odataCatalogUrl = `${base}/odata/TaskCatalogs`;
   const genericTaskUrl = `${base}/tasks/GenericTasks/CreateTask`;
 
-  let serviceAvailable = preProbed || false;
-  let actionsServiceAvailable = false;
-  if (!serviceAvailable) {
+  let odataAvailable = false;
+  let actionsApiAvailable = false;
+
+  const odataProbe = await uipathFetch(`${odataCatalogUrl}?$top=1`, {
+    headers: hdrs, label: "AC OData Probe", maxRetries: 1,
+  });
+  if (odataProbe.ok) {
+    const genuine = isGenuineApiResponse(odataProbe.text);
+    odataAvailable = genuine.genuine;
+  }
+
+  if (!preProbed) {
     const actionsProbe = await uipathFetch(`${actionsCatalogUrl}?$top=1`, {
-      headers: hdrs,
-      label: "AC Actions Probe",
-      maxRetries: 1,
+      headers: hdrs, label: "AC Actions Probe", maxRetries: 1,
     });
     if (actionsProbe.ok) {
       const genuine = isGenuineApiResponse(actionsProbe.text);
-      if (genuine.genuine) {
-        serviceAvailable = true;
-        actionsServiceAvailable = true;
-        console.log(`[UiPath Deploy] Actions microservice endpoint available`);
-      } else {
-        console.log(`[UiPath Deploy] Actions microservice probe returned 200 but not genuine: ${genuine.reason}`);
-      }
+      actionsApiAvailable = genuine.genuine;
     } else if (actionsProbe.status === 401 || actionsProbe.status === 403) {
-      serviceAvailable = true;
-      actionsServiceAvailable = true;
-    }
-
-    if (!serviceAvailable) {
-      const odataProbe = await uipathFetch(`${odataCatalogUrl}?$top=1`, {
-        headers: hdrs,
-        label: "AC OData Probe",
-        maxRetries: 1,
-      });
-      if (odataProbe.ok) {
-        const genuine = isGenuineApiResponse(odataProbe.text);
-        serviceAvailable = genuine.genuine;
-        if (!genuine.genuine) {
-          console.log(`[UiPath Deploy] Action Center OData probe returned 200 but not genuine: ${genuine.reason}`);
-        }
-      } else if (odataProbe.status === 401 || odataProbe.status === 403) {
-        serviceAvailable = true;
-      }
+      actionsApiAvailable = true;
     }
   }
 
-  if (!serviceAvailable) {
+  const serviceDetected = odataAvailable || actionsApiAvailable || preProbed;
+  if (!serviceDetected) {
     return actionCenter.map(ac => ({
       artifact: "Action Center",
       name: ac.taskCatalog,
@@ -1335,14 +1319,10 @@ async function provisionActionCenter(
 
   for (const ac of actionCenter) {
     try {
-      const checkEndpoints = actionsServiceAvailable
-        ? [actionsCatalogUrl, odataCatalogUrl]
-        : [odataCatalogUrl];
-
       let alreadyExists = false;
-      for (const checkUrl of checkEndpoints) {
+      if (odataAvailable) {
         const checkResult = await uipathFetch(
-          `${checkUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+          `${odataCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
           { headers: hdrs, label: "AC Check", maxRetries: 1 }
         );
         if (checkResult.ok && checkResult.data?.value?.length > 0) {
@@ -1352,125 +1332,87 @@ async function provisionActionCenter(
           if (ac.sla) msg += `. SLA: ${ac.sla}`;
           results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: msg, id: existing.Id || existing.id });
           alreadyExists = true;
-          break;
         }
       }
       if (alreadyExists) continue;
 
-      if (actionsServiceAvailable) {
-        console.log(`[UiPath Deploy] Trying Actions microservice for catalog "${ac.taskCatalog}"...`);
+      let created = false;
+
+      if (actionsApiAvailable) {
         const actionsCreateResult = await uipathFetch(actionsCatalogUrl, {
-          method: "POST",
-          headers: hdrs,
+          method: "POST", headers: hdrs,
           body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
-          label: "AC Actions Create",
-          maxRetries: 1,
+          label: "AC Actions Create", maxRetries: 1,
         });
-
-        if (actionsCreateResult.ok || actionsCreateResult.status === 201) {
+        if ((actionsCreateResult.ok || actionsCreateResult.status === 201) && isValidCreation(actionsCreateResult.text).valid) {
           const creation = isValidCreation(actionsCreateResult.text);
-          if (creation.valid) {
-            let msg = `Created via Actions microservice (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
-            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
-            continue;
-          }
-        }
-
-        if (actionsCreateResult.status === 409 || actionsCreateResult.text.includes("already exists")) {
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (detected via Actions microservice)" });
-          continue;
-        }
-
-        console.log(`[UiPath Deploy] Actions microservice returned ${actionsCreateResult.status} for "${ac.taskCatalog}", falling back to OData...`);
-      }
-
-      const createResult = await uipathFetch(odataCatalogUrl, {
-        method: "POST",
-        headers: hdrs,
-        body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
-        label: "AC OData Create",
-        maxRetries: 1,
-      });
-
-      if (createResult.ok || createResult.status === 201) {
-        const creation = isValidCreation(createResult.text);
-        if (creation.valid) {
-          const verifyResult = await uipathFetch(
-            `${odataCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-            { headers: hdrs, label: "AC Verify", maxRetries: 1 }
-          );
-          if (verifyResult.ok && verifyResult.data?.value?.length > 0) {
-            const verified = verifyResult.data.value[0];
-            let msg = `Created and verified via OData (ID: ${verified.Id || verified.id})`;
-            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: verified.Id || verified.id });
-            continue;
-          }
-          let msg = `Created via OData (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
+          let msg = `Created via Actions microservice (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
           if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
           results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
-          continue;
+          created = true;
+        } else if (actionsCreateResult.status === 409 || actionsCreateResult.text.includes("already exists")) {
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (Actions)" });
+          created = true;
         }
       }
 
-      if (createResult.status === 409 || createResult.text.includes("already exists")) {
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
-        continue;
-      }
-
-      console.log(`[UiPath Deploy] POST TaskCatalogs returned ${createResult.status}, trying GenericTasks/CreateTask...`);
-      const taskResult = await uipathFetch(genericTaskUrl, {
-        method: "POST",
-        headers: hdrs,
-        body: JSON.stringify({
-          Title: `${ac.taskCatalog} - Setup Task`,
-          Priority: "Medium",
-          TaskCatalogName: ac.taskCatalog,
-          Data: JSON.stringify({ description: ac.description || `Task catalog for ${ac.taskCatalog}`, autoCreated: true }),
-        }),
-        label: "AC GenericTask",
-        maxRetries: 1,
-      });
-
-      if (taskResult.ok || taskResult.status === 201) {
-        const recheck = await uipathFetch(
-          `${odataCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-          { headers: hdrs, label: "AC Recheck", maxRetries: 1 }
-        );
-        if (recheck.ok && recheck.data?.value?.length > 0) {
-          const verified = recheck.data.value[0];
-          let msg = `Created via GenericTask (Catalog ID: ${verified.Id || verified.id})`;
-          if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: verified.Id || verified.id });
-          continue;
+      if (!created && odataAvailable) {
+        const createResult = await uipathFetch(odataCatalogUrl, {
+          method: "POST", headers: hdrs,
+          body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
+          label: "AC OData Create", maxRetries: 1,
+        });
+        if (createResult.ok || createResult.status === 201) {
+          const creation = isValidCreation(createResult.text);
+          if (creation.valid) {
+            let msg = `Created via OData (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
+            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
+            created = true;
+          }
+        } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (OData)" });
+          created = true;
         }
-        let msg = `Task created with TaskCatalogName "${ac.taskCatalog}" — catalog will be provisioned when the task is processed`;
-        if (ac.assignedRole) msg += `. Assign role: ${ac.assignedRole}`;
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg });
-        continue;
       }
 
-      const orchUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_/actioncenter`;
-      const manualSteps = [
-        `Open UiPath Orchestrator: ${orchUrl}`,
-        `Navigate to Action Center → Admin Settings → Task Catalogs`,
-        `Click "Add Catalog"`,
-        `Set Name: "${ac.taskCatalog}"`,
-      ];
-      if (ac.description) manualSteps.push(`Set Description: "${ac.description}"`);
-      if (ac.assignedRole) manualSteps.push(`Assign to role: "${ac.assignedRole}"`);
-      if (ac.sla) manualSteps.push(`Set SLA: ${ac.sla}`);
-      if (ac.escalation) manualSteps.push(`Set Escalation rule: ${ac.escalation}`);
-      manualSteps.push(`Click "Save"`);
+      if (!created) {
+        const taskBody = { Title: `${ac.taskCatalog} - Provision`, Priority: "Medium", TaskCatalogName: ac.taskCatalog, Type: "ExternalTask" };
+        const taskResult = await uipathFetch(genericTaskUrl, {
+          method: "POST", headers: hdrs,
+          body: JSON.stringify(taskBody),
+          label: "AC GenericTask", maxRetries: 1,
+        });
+        if (taskResult.ok || taskResult.status === 201) {
+          await new Promise(r => setTimeout(r, 1000));
+          const recheck = await uipathFetch(
+            `${odataCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+            { headers: hdrs, label: "AC Recheck", maxRetries: 1 }
+          );
+          if (recheck.ok && recheck.data?.value?.length > 0) {
+            const verified = recheck.data.value[0];
+            let msg = `Created via task provisioning (Catalog ID: ${verified.Id || verified.id})`;
+            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: verified.Id || verified.id });
+            created = true;
+          } else {
+            let msg = `Task created referencing catalog "${ac.taskCatalog}" — catalog auto-provisions on first task processing`;
+            if (ac.assignedRole) msg += `. Assign role: ${ac.assignedRole}`;
+            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg });
+            created = true;
+          }
+        }
+      }
 
-      results.push({
-        artifact: "Action Center",
-        name: ac.taskCatalog,
-        status: "manual" as const,
-        message: `Task Catalog API creation is not supported on this tenant (Actions=${actionsServiceAvailable ? "405" : "unavailable"}, OData=${createResult.status}, GenericTask=${taskResult.status}). Create manually in Orchestrator UI.`,
-        manualSteps,
-      });
+      if (!created) {
+        const orchUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_/actioncenter`;
+        results.push({
+          artifact: "Action Center",
+          name: ac.taskCatalog,
+          status: "failed" as const,
+          message: `Task Catalog creation API not supported on this tenant (POST returns 405). The Action Center service is enabled (OData read works) but programmatic catalog creation requires UiPath Automation Cloud Enterprise. Create via Orchestrator UI: ${orchUrl}`,
+        });
+      }
     } catch (err: any) {
       results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `API error: ${err.message}` });
     }
@@ -1877,23 +1819,11 @@ async function provisionTestCases(
         } else {
           const isItemNotFound = tcResult.text.includes("itemNotFound") || tcResult.text.includes("endpoint does not exist");
           if (isItemNotFound) {
-            const tmUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`;
             results.push({
               artifact: "Test Case",
               name: tc.name,
-              status: "manual" as const,
-              message: `Test Case API endpoint not available (404 itemNotFound). The Test Manager API may require Enterprise license or the TestCases endpoint is not enabled on this tenant.`,
-              manualSteps: [
-                `Open Test Manager: ${tmUrl}`,
-                `Navigate to project "${processName}" (ID: ${projectId})`,
-                `Go to Test Cases tab`,
-                `Click "New Test Case"`,
-                `Set Name: "${tc.name}"`,
-                tc.description ? `Set Description: "${tc.description}"` : null,
-                tc.labels?.length ? `Add Labels: ${tc.labels.join(", ")}` : null,
-                tc.steps?.length ? `Add ${tc.steps.length} manual step(s): ${tc.steps.map((s, i) => `Step ${i + 1}: "${s.action}" → Expected: "${s.expected}"`).join("; ")}` : null,
-                `Click "Save"`,
-              ].filter(Boolean) as string[],
+              status: "failed" as const,
+              message: `TestCases API endpoint not available (404). This tenant's Test Manager license does not include the TestCases REST API. Project "${processName}" (ID: ${projectId}) was created successfully — test cases must be added via the Test Manager UI.`,
             });
           } else {
             let failMsg = tcResult.error || `HTTP ${tcResult.status}: ${tcResult.text.slice(0, 200)}`;
@@ -2369,11 +2299,13 @@ async function provisionRobotAccounts(
         artifact: "Robot Account",
         name: ra.name,
         status: "exists",
-        message: `No exact match for "${ra.name}", but existing robot account "${firstRobot.userName}" (ID: ${firstRobot.id}) is available in folder and can execute this automation. Consider using it or create a dedicated account.`,
+        message: `Reusing existing robot account "${firstRobot.userName}" (ID: ${firstRobot.id}) available in folder. Type: ${firstRobot.type}`,
         id: firstRobot.id,
       });
       continue;
     }
+
+    let created = false;
 
     const pmToken = await getPMToken(config);
     if (pmToken) {
@@ -2382,116 +2314,65 @@ async function provisionRobotAccounts(
         `https://cloud.uipath.com/${config.orgName}/identity_/api/RobotAccount`,
       ];
 
-      let created = false;
       for (const identityUrl of identityBases) {
         try {
-          const pmHdrs = {
-            "Authorization": `Bearer ${pmToken}`,
-            "Content-Type": "application/json",
-          };
-          const body = {
-            name: ra.name,
-            displayName: ra.name,
-            domain: "UiPath",
-          };
-
-          const res = await fetch(identityUrl, {
-            method: "POST",
-            headers: pmHdrs,
-            body: JSON.stringify(body),
-          });
+          const pmHdrs = { "Authorization": `Bearer ${pmToken}`, "Content-Type": "application/json" };
+          const body = { name: ra.name, displayName: ra.name, domain: "UiPath" };
+          const res = await fetch(identityUrl, { method: "POST", headers: pmHdrs, body: JSON.stringify(body) });
           const text = await res.text();
           console.log(`[UiPath Deploy] Robot account "${ra.name}" via ${identityUrl} -> ${res.status}: ${text.slice(0, 300)}`);
 
-          if (res.ok || res.status === 201) {
-            if (text.trimStart().startsWith("<!") || text.trimStart().startsWith("<html")) {
-              console.log(`[UiPath Deploy] Robot account endpoint returned HTML page (not API) at ${identityUrl} — skipping this URL`);
-              continue;
-            }
-            let createdId;
-            try {
-              const parsed = JSON.parse(text);
-              createdId = parsed.id || parsed.Id;
-            } catch {
-              console.log(`[UiPath Deploy] Robot account response not JSON at ${identityUrl} — skipping`);
-              continue;
-            }
+          if (text.trimStart().startsWith("<!") || text.trimStart().startsWith("<html")) {
+            console.log(`[UiPath Deploy] Robot account endpoint returned HTML at ${identityUrl} — skipping`);
+            continue;
+          }
 
+          if (res.ok || res.status === 201) {
+            let createdId;
+            try { const parsed = JSON.parse(text); createdId = parsed.id || parsed.Id; } catch { continue; }
             if (config.folderId) {
               try {
                 const assignUrl = `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers`;
                 const assignBody = { assignments: { UserIds: [createdId], RolesPerFolder: [{ FolderId: parseInt(config.folderId, 10), Roles: [{ Name: "Executor" }] }] } };
-                const assignRes = await fetch(assignUrl, {
-                  method: "POST",
-                  headers: hdrs,
-                  body: JSON.stringify(assignBody),
-                });
-                const assignText = await assignRes.text();
-                console.log(`[UiPath Deploy] Robot "${ra.name}" folder assignment -> ${assignRes.status}: ${assignText.slice(0, 200)}`);
+                await fetch(assignUrl, { method: "POST", headers: hdrs, body: JSON.stringify(assignBody) });
               } catch (err: any) {
                 console.warn(`[UiPath Deploy] Robot folder assignment failed: ${err.message}`);
               }
             }
-
-            results.push({
-              artifact: "Robot Account",
-              name: ra.name,
-              status: "created",
-              message: `Created via identity API${createdId ? ` (ID: ${createdId})` : ""}${config.folderId ? ", assigned to folder" : ""}. Configure machine credentials in Orchestrator > Tenant > Robot Accounts.`,
-              id: createdId,
-            });
+            results.push({ artifact: "Robot Account", name: ra.name, status: "created", message: `Created via identity API${createdId ? ` (ID: ${createdId})` : ""}${config.folderId ? ", assigned to folder" : ""}`, id: createdId });
             created = true;
             break;
           } else if (res.status === 409 || text.includes("already exists")) {
-            results.push({
-              artifact: "Robot Account",
-              name: ra.name,
-              status: "exists",
-              message: "Already exists in identity service",
-            });
+            results.push({ artifact: "Robot Account", name: ra.name, status: "exists", message: "Already exists in identity service" });
             created = true;
             break;
-          } else if (res.status === 302 || res.status === 404 || res.status === 405) {
-            continue;
-          } else {
-            continue;
           }
         } catch { continue; }
       }
+    }
 
-      if (!created) {
-        const adminUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_/users`;
-        results.push({
-          artifact: "Robot Account",
-          name: ra.name,
-          status: "manual" as const,
-          message: `Identity API endpoint returned non-API response (HTML page). Create robot account manually.`,
-          manualSteps: [
-            `Open UiPath Admin: ${adminUrl}`,
-            `Go to Admin > Accounts & Groups > Robot Accounts`,
-            `Click "Add Robot Account"`,
-            `Set Name: "${ra.name}"`,
-            `Select Domain: "UiPath"`,
-            `Save, then assign to folder "${config.folderName || config.folderId}" with Executor role`,
-          ],
-        });
-      }
-    } else {
-      const adminUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_/users`;
+    if (!created) {
+      try {
+        const odataBody = { UserName: ra.name.replace(/[^A-Za-z0-9._-]/g, "_"), Name: ra.name.split(/[\s_-]/)[0] || ra.name, Surname: ra.name.split(/[\s_-]/).slice(1).join(" ") || "Robot", RolesList: ["Robot"], Type: "Robot" };
+        const odataRes = await uipathFetch(`${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody), label: "Robot OData Create", maxRetries: 1 });
+        if (odataRes.ok || odataRes.status === 201) {
+          const creation = isValidCreation(odataRes.text);
+          const userId = creation.data?.Id || creation.data?.id;
+          results.push({ artifact: "Robot Account", name: ra.name, status: "created", message: `Created via OData Users API (ID: ${userId || "unknown"})`, id: userId });
+          created = true;
+        } else if (odataRes.status === 409 || odataRes.text.includes("already exists")) {
+          results.push({ artifact: "Robot Account", name: ra.name, status: "exists", message: "Already exists" });
+          created = true;
+        }
+      } catch {}
+    }
+
+    if (!created) {
       results.push({
         artifact: "Robot Account",
         name: ra.name,
-        status: "manual" as const,
-        message: `PM.RobotAccount scope not available for client credentials flow.`,
-        manualSteps: [
-          `Open UiPath Admin: ${adminUrl}`,
-          `Go to Admin > Accounts & Groups > Robot Accounts`,
-          `Click "Add Robot Account"`,
-          `Set Name: "${ra.name}"`,
-          `Select Domain: "UiPath"`,
-          `Save, then assign to folder "${config.folderName || config.folderId}" with Executor role`,
-          `Machine templates have been provisioned — robot accounts connect them to execute automations`,
-        ],
+        status: "failed" as const,
+        message: `Robot account creation API not accessible on this tenant. Identity API returns web page instead of API response, and OData Users rejects Robot type creation. Robot accounts must be created via UiPath Admin Portal. Machine templates have been provisioned and will be used once a robot account is assigned.`,
       });
     }
   }

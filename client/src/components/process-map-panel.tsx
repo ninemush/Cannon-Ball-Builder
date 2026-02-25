@@ -692,6 +692,95 @@ function classifyPerformer(role: string, system: string): PerformerType {
   return "human";
 }
 
+function NodeHoverTooltip({ data, visible }: { data: any; visible: boolean }) {
+  if (!visible) return null;
+
+  const performer = classifyPerformer(data.role || "", data.system || "");
+  const isAutomated = data.viewType === "to-be" && (data.description || "").startsWith("[AUTOMATED]");
+  const performerLabel = performer === "system" ? "System" : performer === "hybrid" ? "Hybrid" : "Human";
+  const PerformerIcon = performer === "system" ? Monitor : performer === "hybrid" ? Bot : User;
+  const cleanDescription = isAutomated
+    ? (data.description || "").replace(/^\[AUTOMATED\]\s*/, "")
+    : (data.description || "");
+
+  return (
+    <div
+      className="absolute left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+      style={{ bottom: "calc(100% + 8px)" }}
+      data-testid={`tooltip-node-${data.nodeId || ""}`}
+    >
+      <div
+        className="rounded-lg px-3 py-2.5 text-left shadow-xl min-w-[200px] max-w-[300px]"
+        style={{
+          background: "rgba(15, 15, 20, 0.85)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          border: "1px solid rgba(255,255,255,0.1)",
+        }}
+      >
+        <div className="text-[12px] font-semibold text-white/90 leading-snug break-words">
+          {data.label}
+        </div>
+        {data.role && (
+          <div className="flex items-center gap-1.5 mt-1.5">
+            <PerformerIcon className="h-3 w-3 text-white/40 flex-shrink-0" />
+            <span className="text-[10px] text-white/50">{data.role}</span>
+          </div>
+        )}
+        {data.system && data.system !== "Manual" && data.system !== "manual" && (
+          <div className="flex items-center gap-1.5 mt-1">
+            <Monitor className="h-3 w-3 text-white/40 flex-shrink-0" />
+            <span className="text-[10px] text-white/50">{data.system}</span>
+          </div>
+        )}
+        {cleanDescription && (
+          <div className="mt-1.5 text-[10px] text-white/40 leading-relaxed break-words line-clamp-3">
+            {cleanDescription}
+          </div>
+        )}
+        <div className="flex items-center gap-2 mt-2 pt-1.5" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+          <span className="text-[9px] text-white/30">{performerLabel}</span>
+          {isAutomated && (
+            <span className="flex items-center gap-1">
+              <Zap className="h-2.5 w-2.5 text-green-400" />
+              <span className="text-[9px] text-green-400/80 font-medium">Automated</span>
+            </span>
+          )}
+          {data.isPainPoint && (
+            <span className="flex items-center gap-1">
+              <Flag className="h-2.5 w-2.5 text-red-400" />
+              <span className="text-[9px] text-red-400/80 font-medium">Pain Point</span>
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function useNodeHover(delay = 200) {
+  const [isHovered, setIsHovered] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onMouseEnter = useCallback(() => {
+    timerRef.current = setTimeout(() => setIsHovered(true), delay);
+  }, [delay]);
+
+  const onMouseLeave = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    setIsHovered(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return { isHovered, onMouseEnter, onMouseLeave };
+}
+
 function StartNode({ data, id }: { data: any; id: string }) {
   return (
     <div
@@ -743,6 +832,7 @@ function EndNode({ data, id }: { data: any; id: string }) {
 function DecisionNode({ data, id }: { data: any; id: string }) {
   const performer = classifyPerformer(data.role || "", data.system || "");
   const isAutomated = data.viewType === "to-be" && (data.description || "").startsWith("[AUTOMATED]");
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
 
   const bgColor = isAutomated ? "#166534" : "#92400e";
   const borderColor = isAutomated ? "#22c55e" : "#f59e0b";
@@ -753,7 +843,10 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
       className="relative flex items-center justify-center cursor-pointer"
       style={{ width: 100, height: 100 }}
       data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
+      <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
       <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
       <Handle type="target" position={Position.Left} id="left-target" className="!opacity-0 !w-3 !h-3" />
       <div
@@ -769,8 +862,8 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
         }}
       />
       <div className="relative z-10 text-center" style={{ maxWidth: 80 }}>
-        <div className="text-white text-[10px] font-bold leading-tight truncate px-0.5">
-          {data.label?.length > 20 ? data.label.slice(0, 20) + "…" : data.label}
+        <div className="text-white text-[10px] font-bold leading-tight line-clamp-2 px-0.5">
+          {data.label}
         </div>
       </div>
       <Handle type="source" position={Position.Bottom} id="bottom" className="!opacity-0 !w-3 !h-3" />
@@ -787,6 +880,7 @@ function TaskNode({ data, id }: { data: any; id: string }) {
   const isAutomated = data.viewType === "to-be" && (data.description || "").startsWith("[AUTOMATED]");
   const isLowConf = confidence < 50;
   const isGhost = data.isGhost;
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
 
   const accentColor = isAutomated ? "#22c55e" : performer === "system" ? "#8b5cf6" : performer === "hybrid" ? "#f59e0b" : "#3b82f6";
   const bgColor = isAutomated ? "rgba(22,101,52,0.3)" : "rgba(30,30,36,0.95)";
@@ -803,7 +897,10 @@ function TaskNode({ data, id }: { data: any; id: string }) {
         borderStyle: isGhost ? "dashed" : "solid",
       }}
       data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
+      <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
       <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
       <Handle type="target" position={Position.Left} id="left-target" className="!opacity-0 !w-3 !h-3" />
       <div
@@ -827,18 +924,18 @@ function TaskNode({ data, id }: { data: any; id: string }) {
               <PerformerIcon className="h-3.5 w-3.5" style={{ color: accentColor }} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold text-white/90 leading-tight truncate">
+              <div className="text-[13px] font-semibold text-white/90 leading-tight line-clamp-2">
                 {data.label}
               </div>
               {data.role && (
-                <div className="text-[10px] text-white/40 mt-0.5 truncate">{data.role}</div>
+                <div className="text-[10px] text-white/40 mt-0.5 line-clamp-2">{data.role}</div>
               )}
             </div>
           </div>
           {data.system && data.system !== "manual" && data.system !== "Manual" && (
             <div className="mt-1.5 flex items-center gap-1">
               <Monitor className="h-3 w-3 text-white/25" />
-              <span className="text-[9px] text-white/30 truncate">{data.system}</span>
+              <span className="text-[9px] text-white/30 line-clamp-2">{data.system}</span>
             </div>
           )}
           {isAutomated && (
@@ -1242,6 +1339,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [parentNodeIdForChild, setParentNodeIdForChild] = useState<number | null>(null);
   const [reconnectingEdge, setReconnectingEdge] = useState(false);
+  const [detailPopover, setDetailPopover] = useState<{ node: any; position: { x: number; y: number } } | null>(null);
   const hasInitialFitRef = useRef(false);
   const prevDetailLevelRef = useRef<string>(detailLevel);
   const dataVersionRef = useRef(0);
@@ -1632,6 +1730,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     setIsNewNode(false);
     setContextMenu(null);
     setNodeContextMenu(null);
+    setDetailPopover(null);
   }, [detailLevel]);
 
   const onNodeContextMenu = useCallback((event: any, node: Node) => {
@@ -1678,15 +1777,48 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     }
   }, []);
 
+  const onNodeClick = useCallback((_: any, node: Node) => {
+    const d = node.data as any;
+    if (d.dbId < 0) return;
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const nodeType = d.nodeType || "task";
+    const dims = getNodeDimensions(nodeType);
+    const dbNode = mapData?.nodes.find((n) => n.id === d.dbId);
+    setDetailPopover({
+      node: {
+        dbId: d.dbId,
+        label: d.label || "",
+        role: d.role || "",
+        system: d.system || "",
+        nodeType: d.nodeType || "task",
+        description: d.description || "",
+        isPainPoint: d.isPainPoint || false,
+      },
+      position: {
+        x: (node.position?.x ?? 0) + dims.width / 2,
+        y: (node.position?.y ?? 0) - 10,
+      },
+    });
+    setContextMenu(null);
+    setNodeContextMenu(null);
+  }, [mapData]);
+
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
     setNodeContextMenu(null);
+    setDetailPopover(null);
     setSelectedEdgeIds(new Set());
   }, []);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+
+      if (e.key === "Escape") {
+        setDetailPopover(null);
+        return;
+      }
 
       if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
         e.preventDefault();
@@ -1952,6 +2084,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
         onReconnect={onReconnect}
         onReconnectStart={onReconnectStart}
         onReconnectEnd={onReconnectEnd}
+        onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
         onNodeContextMenu={onNodeContextMenu}
         onEdgeClick={onEdgeClick}
@@ -2070,6 +2203,116 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           onCancel={() => setEditingEdge(null)}
           position={edgeEditPos}
         />
+      )}
+
+      {detailPopover && (
+        <div
+          className="absolute z-50 pointer-events-none"
+          style={{
+            left: 0,
+            top: 0,
+            width: "100%",
+            height: "100%",
+          }}
+        >
+          <div
+            className="pointer-events-auto absolute bg-zinc-950/95 backdrop-blur-md border border-zinc-700 rounded-xl shadow-2xl w-72"
+            style={{
+              left: `50%`,
+              top: `40px`,
+              transform: "translateX(-50%)",
+            }}
+            data-testid="popover-node-detail"
+          >
+            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center"
+                  style={{
+                    background: detailPopover.node.nodeType === "decision" ? "rgba(245,158,11,0.15)" :
+                      detailPopover.node.nodeType === "start" ? "rgba(16,185,129,0.15)" :
+                      detailPopover.node.nodeType === "end" ? "rgba(239,68,68,0.15)" : "rgba(59,130,246,0.15)",
+                    border: `1px solid ${detailPopover.node.nodeType === "decision" ? "rgba(245,158,11,0.3)" :
+                      detailPopover.node.nodeType === "start" ? "rgba(16,185,129,0.3)" :
+                      detailPopover.node.nodeType === "end" ? "rgba(239,68,68,0.3)" : "rgba(59,130,246,0.3)"}`,
+                  }}
+                >
+                  {detailPopover.node.nodeType === "decision" ? <Diamond className="h-3 w-3 text-amber-400" /> :
+                   detailPopover.node.nodeType === "start" ? <Play className="h-3 w-3 text-emerald-400" /> :
+                   detailPopover.node.nodeType === "end" ? <Square className="h-3 w-3 text-red-400" /> :
+                   <CircleDot className="h-3 w-3 text-blue-400" />}
+                </div>
+                <span className="text-xs font-semibold text-white truncate">{detailPopover.node.label || "(unnamed)"}</span>
+              </div>
+              <button
+                onClick={() => setDetailPopover(null)}
+                className="text-zinc-500 hover:text-white transition-colors flex-shrink-0"
+                data-testid="button-close-detail-popover"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="px-4 py-3 space-y-2.5">
+              <div className="flex items-start gap-2">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Type</span>
+                <Badge variant="outline" className="text-[10px] capitalize">
+                  {detailPopover.node.nodeType === "decision" ? "Decision" :
+                   detailPopover.node.nodeType === "start" ? "Start" :
+                   detailPopover.node.nodeType === "end" ? "End" : "Task"}
+                </Badge>
+              </div>
+              {detailPopover.node.role && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Role</span>
+                  <span className="text-xs text-zinc-300" data-testid="text-detail-role">{detailPopover.node.role}</span>
+                </div>
+              )}
+              {detailPopover.node.system && detailPopover.node.system !== "Manual" && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">System</span>
+                  <span className="text-xs text-zinc-300" data-testid="text-detail-system">{detailPopover.node.system}</span>
+                </div>
+              )}
+              {detailPopover.node.description && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Desc</span>
+                  <span className="text-xs text-zinc-300 leading-relaxed" data-testid="text-detail-description">{detailPopover.node.description}</span>
+                </div>
+              )}
+              {detailPopover.node.isPainPoint && (
+                <div className="flex items-center gap-1.5 mt-1">
+                  <Flag className="h-3 w-3 text-red-400 fill-red-400" />
+                  <span className="text-[10px] text-red-400 font-medium" data-testid="text-detail-pain-point">Pain Point</span>
+                </div>
+              )}
+            </div>
+            {detailLevel === "L2" && (
+              <div className="px-4 py-2.5 border-t border-zinc-800">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="w-full text-xs justify-center gap-1.5"
+                  onClick={() => {
+                    const nd = detailPopover.node;
+                    setEditingNode({
+                      nodeId: nd.dbId,
+                      name: nd.label || "",
+                      role: nd.role || "",
+                      system: nd.system || "",
+                      nodeType: nd.nodeType || "task",
+                      description: nd.description || "",
+                      isPainPoint: nd.isPainPoint || false,
+                    });
+                    setIsNewNode(false);
+                    setDetailPopover(null);
+                  }}
+                  data-testid="button-edit-from-detail"
+                >
+                  <Pencil className="h-3 w-3" /> Edit
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {editingNode && (

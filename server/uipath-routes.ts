@@ -536,9 +536,18 @@ export function registerUiPathRoutes(app: Express): void {
               break;
             }
           }
-          sec.overallStatus = robotCreated ? "working" : "pm_token_ok_but_identity_api_returns_html (manual setup needed)";
+          if (!robotCreated) {
+            const odataBody = { UserName: `CB_Diag_Robot_OData_${ts}`, Name: "CB_Diag", Surname: "Robot", RolesList: ["Robot"], Type: "Robot" };
+            const odataCreate = await safeCall("create_via_odata", `${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
+            sec.steps.push({ step: "create_via_odata_with_pm", url: `${base}/odata/Users`, requestBody: odataBody, ...odataCreate });
+            if (odataCreate.ok) {
+              robotCreated = true;
+              robotId = odataCreate.data?.Id || odataCreate.data?.id;
+            }
+          }
+          sec.overallStatus = robotCreated ? "working" : "pm_token_ok_but_all_approaches_failed";
         } else {
-          const odataBody = { UserName: `CB_Diag_Robot_${ts}`, Name: `CB_Diag_Robot_${ts}`, Surname: "DiagBot", EmailAddress: `diag_${ts}@robot.local`, RolesList: ["Robot"], Type: "Robot", Domain: "UiPath" };
+          const odataBody = { UserName: `CB_Diag_Robot_${ts}`, Name: "CB_Diag", Surname: "Robot", RolesList: ["Robot"], Type: "Robot" };
           const odataCreate = await safeCall("create_via_odata", `${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
           sec.steps.push({ step: "create_via_odata", url: `${base}/odata/Users`, requestBody: odataBody, ...odataCreate });
           sec.overallStatus = odataCreate.ok ? "working (odata fallback)" : `no_pm_token_and_odata_failed (${odataCreate.status})`;
@@ -558,19 +567,52 @@ export function registerUiPathRoutes(app: Express): void {
 
         const catalogBody = { Name: `CB_Diag_Catalog_${ts}`, Description: "CannonBall diagnostic" };
 
-        if (probeActions.ok) {
+        const isActionsGenuineApi = probeActions.ok && !probeActions.text.trimStart().startsWith("<!") && !probeActions.text.trimStart().startsWith("<html");
+        let acCreated = false;
+
+        if (isActionsGenuineApi) {
           const create = await safeCall("create_actions", `${actionsBase}/TaskCatalogs`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
           sec.steps.push({ step: "create_actions", requestBody: catalogBody, ...create });
-          sec.overallStatus = create.ok ? "working (actions microservice)" : `actions_probe_ok_but_create_failed (${create.status})`;
-        } else {
-          const createOdata = await safeCall("create_odata", `${base}/odata/TaskCatalogs`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
-          sec.steps.push({ step: "create_odata", requestBody: catalogBody, ...createOdata });
+          if (create.ok) { acCreated = true; sec.overallStatus = "working (actions microservice)"; }
+        } else if (probeActions.ok) {
+          sec.steps.push({ step: "probe_actions_note", note: "Actions probe returned 200 but with HTML (web UI, not API) — skipping Actions POST" });
+        }
 
-          const genericBody = { Title: `CB_Diag_Task_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog_${ts}`, Data: JSON.stringify({ autoCreated: true }) };
-          const createGeneric = await safeCall("create_generic", `${base}/tasks/GenericTasks/CreateTask`, { method: "POST", headers: hdrs, body: JSON.stringify(genericBody) });
-          sec.steps.push({ step: "create_generic", requestBody: genericBody, ...createGeneric });
+        if (!acCreated && probeOdata.ok && probeOdata.data?.["@odata.context"]) {
+          const catalogBody2 = { Name: `CB_Diag_Catalog_OData_${ts}`, Description: "CannonBall diagnostic via OData" };
+          const createOdata = await safeCall("create_odata", `${base}/odata/TaskCatalogs`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody2) });
+          sec.steps.push({ step: "create_odata", url: `${base}/odata/TaskCatalogs`, requestBody: catalogBody2, ...createOdata });
+          if (createOdata.ok) {
+            acCreated = true;
+            sec.overallStatus = "working (odata)";
+            if (createOdata.data?.Id) {
+              await safeCall("cleanup", `${base}/odata/TaskCatalogs(${createOdata.data.Id})`, { method: "DELETE", headers: hdrs });
+            }
+          }
+        }
 
-          sec.overallStatus = createOdata.ok ? "working (odata)" : createGeneric.ok ? "working (generic)" : `all_failed (actions=${probeActions.status}, odata=${createOdata.status}, generic=${createGeneric.status})`;
+        if (!acCreated) {
+          const genericEndpoints = [
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog_${ts}`, Type: "ExternalTask" }, label: "create_generic_external" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task2_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog2_${ts}`, Type: "ExternalAction" }, label: "create_generic_externalaction" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task3_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog3_${ts}`, TaskType: "ExternalAction" }, label: "create_generic_tasktype" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task4_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog4_${ts}` }, label: "create_generic_notype" },
+          ];
+          for (const ep of genericEndpoints) {
+            const result = await safeCall(ep.label, ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(ep.body) });
+            sec.steps.push({ step: ep.label, url: ep.url, requestBody: ep.body, ...result });
+            if (result.ok || result.status === 201) {
+              acCreated = true;
+              sec.overallStatus = `working (${ep.label})`;
+              const checkResult = await safeCall("verify_catalog", `${base}/odata/TaskCatalogs?$top=5`, { headers: hdrs });
+              sec.steps.push({ step: "verify_catalog_after_task", ...checkResult });
+              break;
+            }
+          }
+        }
+
+        if (!acCreated) {
+          sec.overallStatus = `all_approaches_failed`;
         }
         results.actionCenter = sec;
       }
