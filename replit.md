@@ -35,6 +35,7 @@ The application employs a modern web stack:
 - **File Upload Content Extraction**: Server-side file upload (`/api/upload`) with content extraction for DOCX (mammoth), PDF (pdf-parse), XLSX (xlsx), TXT, and CSV. Extracted content is injected into AI chat context to automatically drive process mapping and document generation. Images and videos are acknowledged with prompts for user description.
 - **Admin & Review Panels**: CoE review page for idea approval/rejection and an Admin panel for user management, audit logs, and system configuration.
 - **Role-Based Access**: Authorization enforced on process map and document routes based on user ownership and roles (Admin/CoE).
+- **Server Performance & Stability**: Lightweight request logging (method/path/status/duration only, no response body capture), process-level crash handlers (`unhandledRejection`, `uncaughtException`) for visibility, graceful session middleware error handling for deployment healthchecks, and DB-level LIMIT on chat history queries (`getRecentMessagesByIdeaId`) to reduce memory usage.
 
 ## External Dependencies
 - **AI Service**: Anthropic Claude (via Replit AI Integrations).

@@ -369,7 +369,7 @@ export function registerChatRoutes(app: Express): void {
         }
       }
 
-      const history = await chatStorage.getMessagesByIdeaId(ideaId);
+      const history = await chatStorage.getRecentMessagesByIdeaId(ideaId, 80);
       const filteredHistory = history.filter((m) => m.role === "user" || m.role === "assistant");
       const merged: { role: "user" | "assistant"; content: string }[] = [];
       for (const m of filteredHistory) {
