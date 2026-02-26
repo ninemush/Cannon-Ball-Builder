@@ -87,7 +87,16 @@ STAGE BEHAVIOR:
 - Design: Reconstruct the process step by step. Output each confirmed step using the [STEP] tag format below so the visual map builds in real time.
 
 STEP TAG FORMAT — output one per line for every confirmed process step:
-[STEP: <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end> | FROM: <parent step name> | LABEL: <edge label>]
+[STEP: <number> <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end> | FROM: <parent step number> | LABEL: <edge label>]
+
+STEP NUMBERING RULES:
+- Every step gets a unique number: 1.0, 2.0, 3.0, etc.
+- Decision branches use sub-numbers: if step 3.0 is a decision, its "Yes" child is 4.0 and "No" child is 4.1
+- The FROM field references a step NUMBER (e.g., FROM: 3.0), NOT a step name
+- The Start node is always 1.0 with no FROM
+- Example: [STEP: 3.0 Claim Decision | ROLE: Manager | SYSTEM: App | TYPE: decision | FROM: 2.0]
+  → [STEP: 4.0 Approve Claim | ROLE: Manager | SYSTEM: App | TYPE: task | FROM: 3.0 | LABEL: Approved]
+  → [STEP: 4.1 Reject Claim | ROLE: Manager | SYSTEM: App | TYPE: task | FROM: 3.0 | LABEL: Rejected]
 
 ===== PROCESS ANALYSIS — MANDATORY BEFORE OUTPUTTING STEPS =====
 Before you output ANY [STEP:] tags, you MUST think through the process like a senior business analyst:
@@ -116,13 +125,13 @@ Before you output ANY [STEP:] tags, you MUST think through the process like a se
 EVERY real business process has AT LEAST 2-3 decision points. If you produce a linear chain of steps with no decisions, you have failed. Go back and think harder.
 
 BRANCHING RULES (CRITICAL — real processes are NOT linear):
-- Every step (except the very first Start node) MUST have a FROM field pointing to its parent step by exact name.
-- Decision nodes MUST have 2 or more children. Each child step FROM the decision with a LABEL like "Yes", "No", "Approved", "Rejected", "Pass", "Fail", "Above Threshold", "Below Threshold", etc.
-- THREE-WAY DECISIONS are common: "Claim Decision" → Approved / Rejected / More Info Required. Output 3 child steps each with FROM pointing to the decision and different LABELs.
-- LOOPS: To create a loop, have a step's FROM point BACK to an earlier step. Example: "Customer Resubmits" FROM "Request Missing Docs", then a new check step FROM "Customer Resubmits" that loops back to the completeness decision.
-- MERGE POINTS: Branches can converge. After parallel paths complete, a single step can FROM the last step of one branch, and another edge connects from the other branch's last step.
-- PARALLEL PATHS: If two tasks happen simultaneously after a step, both FROM the same parent (no decision needed — just two children with no LABEL).
-- MULTIPLE END NODES: Use separate End nodes for each terminal outcome (e.g., "Claim Approved End", "Claim Rejected End", "Claim Withdrawn End").
+- Every step (except the very first Start node 1.0) MUST have a FROM field pointing to its parent step by step number.
+- Decision nodes MUST have 2 or more children. Each child step FROM the decision's step number with a LABEL like "Yes", "No", "Approved", "Rejected", "Pass", "Fail", "Above Threshold", "Below Threshold", etc.
+- THREE-WAY DECISIONS are common: step 5.0 "Claim Decision" → children 6.0 (Approved), 6.1 (Rejected), 6.2 (More Info Required). All three FROM: 5.0 with different LABELs.
+- LOOPS: To create a loop, have a step's FROM point BACK to an earlier step number. Example: step 4.1 FROM: 3.0 where 3.0 is an earlier step — this creates a loop edge.
+- MERGE POINTS: Branches can converge. After parallel paths complete, a single step can FROM the last step of one branch.
+- PARALLEL PATHS: If two tasks happen simultaneously after a step, both FROM the same parent step number (no decision needed — just two children with no LABEL).
+- MULTIPLE END NODES: Use separate End nodes for each terminal outcome (e.g., "Claim Approved End", "Claim Rejected End").
 - NEVER output all steps in a linear chain when the process has decisions. EVERY process has decisions — insurance claims, invoice processing, onboarding, purchase orders, IT service requests — ALL of them branch.
 
 MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
@@ -135,51 +144,51 @@ MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
 - If regenerating an existing map, output the COMPLETE set of [STEP:] tags for the full process — the system will clear and replace.
 
 DUPLICATE PREVENTION (CRITICAL):
-- EXACTLY ONE Start node per process. Never output multiple Start nodes.
-- Each step name must be unique. Never repeat the same step name or a near-identical variant (e.g., do NOT output both "Validate Documents" and "Document Validation" — pick one).
-- When adding steps to an existing map, check what already exists. Reference existing step names in FROM fields — do not recreate them.
+- EXACTLY ONE Start node per process (always step 1.0). Never output multiple Start nodes.
+- Each step number must be unique. Each step name must be unique.
+- When adding steps to an existing map, check what already exists. Reference existing step numbers in FROM fields — do not recreate them.
 - If regenerating a full process, output a single coherent graph. Do not output leftover steps from a previous version.
 - End nodes: use distinct names for genuinely different outcomes (e.g., "Approved End", "Rejected End"). Do NOT create multiple end nodes for the same outcome.
 
 EXAMPLE 1 — Insurance claim with 3-way decision and loop:
-[STEP: Customer Submits Claim | ROLE: Customer | SYSTEM: Claims Portal | TYPE: start]
-[STEP: Receive & Log Claim | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: Customer Submits Claim]
-[STEP: Document Complete? | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: decision | FROM: Receive & Log Claim]
-[STEP: Request Missing Docs | ROLE: Claims Officer | SYSTEM: Email | TYPE: task | FROM: Document Complete? | LABEL: No]
-[STEP: Customer Resubmits | ROLE: Customer | SYSTEM: Claims Portal | TYPE: task | FROM: Request Missing Docs]
-[STEP: Re-check Documents | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: Customer Resubmits]
-[STEP: Policy Validation | ROLE: System | SYSTEM: Claims App | TYPE: task | FROM: Document Complete? | LABEL: Yes]
-[STEP: Fraud Check | ROLE: System | SYSTEM: Fraud Detection | TYPE: task | FROM: Policy Validation]
-[STEP: Fraud Detected? | ROLE: System | SYSTEM: Fraud Detection | TYPE: decision | FROM: Fraud Check]
-[STEP: Flag for Investigation | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: Fraud Detected? | LABEL: Yes]
-[STEP: Claim Flagged End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: Flag for Investigation]
-[STEP: Assess Claim Value | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: Fraud Detected? | LABEL: No]
-[STEP: Claim Decision | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: decision | FROM: Assess Claim Value]
-[STEP: Full Approval | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: task | FROM: Claim Decision | LABEL: Approved]
-[STEP: Process Payment | ROLE: Finance | SYSTEM: ERP | TYPE: task | FROM: Full Approval]
-[STEP: Claim Approved End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: Process Payment]
-[STEP: Partial Approval | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: task | FROM: Claim Decision | LABEL: Partial]
-[STEP: Amended Payment | ROLE: Finance | SYSTEM: ERP | TYPE: task | FROM: Partial Approval]
-[STEP: Partial Approval End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: Amended Payment]
-[STEP: Reject Claim | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: task | FROM: Claim Decision | LABEL: Rejected]
-[STEP: Send Rejection Notice | ROLE: System | SYSTEM: Email | TYPE: task | FROM: Reject Claim]
-[STEP: Claim Rejected End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: Send Rejection Notice]
+[STEP: 1.0 Customer Submits Claim | ROLE: Customer | SYSTEM: Claims Portal | TYPE: start]
+[STEP: 2.0 Receive & Log Claim | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: 1.0]
+[STEP: 3.0 Document Complete? | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: decision | FROM: 2.0]
+[STEP: 4.0 Request Missing Docs | ROLE: Claims Officer | SYSTEM: Email | TYPE: task | FROM: 3.0 | LABEL: No]
+[STEP: 4.1 Customer Resubmits | ROLE: Customer | SYSTEM: Claims Portal | TYPE: task | FROM: 4.0]
+[STEP: 4.2 Re-check Documents | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: 4.1]
+[STEP: 5.0 Policy Validation | ROLE: System | SYSTEM: Claims App | TYPE: task | FROM: 3.0 | LABEL: Yes]
+[STEP: 6.0 Fraud Check | ROLE: System | SYSTEM: Fraud Detection | TYPE: task | FROM: 5.0]
+[STEP: 7.0 Fraud Detected? | ROLE: System | SYSTEM: Fraud Detection | TYPE: decision | FROM: 6.0]
+[STEP: 8.0 Flag for Investigation | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: 7.0 | LABEL: Yes]
+[STEP: 8.1 Claim Flagged End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: 8.0]
+[STEP: 9.0 Assess Claim Value | ROLE: Claims Officer | SYSTEM: Claims App | TYPE: task | FROM: 7.0 | LABEL: No]
+[STEP: 10.0 Claim Decision | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: decision | FROM: 9.0]
+[STEP: 11.0 Full Approval | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: task | FROM: 10.0 | LABEL: Approved]
+[STEP: 12.0 Process Payment | ROLE: Finance | SYSTEM: ERP | TYPE: task | FROM: 11.0]
+[STEP: 12.1 Claim Approved End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: 12.0]
+[STEP: 11.1 Partial Approval | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: task | FROM: 10.0 | LABEL: Partial]
+[STEP: 11.2 Amended Payment | ROLE: Finance | SYSTEM: ERP | TYPE: task | FROM: 11.1]
+[STEP: 11.3 Partial Approval End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: 11.2]
+[STEP: 11.4 Reject Claim | ROLE: Claims Manager | SYSTEM: Claims App | TYPE: task | FROM: 10.0 | LABEL: Rejected]
+[STEP: 11.5 Send Rejection Notice | ROLE: System | SYSTEM: Email | TYPE: task | FROM: 11.4]
+[STEP: 11.6 Claim Rejected End | ROLE: System | SYSTEM: Claims App | TYPE: end | FROM: 11.5]
 
 EXAMPLE 2 — Invoice processing with approval loop:
-[STEP: Invoice Received | ROLE: System | SYSTEM: Email/Portal | TYPE: start]
-[STEP: Extract Invoice Data | ROLE: System | SYSTEM: Document Understanding | TYPE: task | FROM: Invoice Received]
-[STEP: Data Valid? | ROLE: System | SYSTEM: ERP | TYPE: decision | FROM: Extract Invoice Data]
-[STEP: Flag for Manual Entry | ROLE: AP Clerk | SYSTEM: ERP | TYPE: task | FROM: Data Valid? | LABEL: No]
-[STEP: Three-Way Match | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: Data Valid? | LABEL: Yes]
-[STEP: Match OK? | ROLE: System | SYSTEM: ERP | TYPE: decision | FROM: Three-Way Match]
-[STEP: Route to Exception Queue | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: Match OK? | LABEL: No]
-[STEP: Amount Within Limit? | ROLE: System | SYSTEM: ERP | TYPE: decision | FROM: Match OK? | LABEL: Yes]
-[STEP: Auto-Approve | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: Amount Within Limit? | LABEL: Yes]
-[STEP: Manager Approval | ROLE: Manager | SYSTEM: Action Center | TYPE: task | FROM: Amount Within Limit? | LABEL: No]
-[STEP: Approved? | ROLE: Manager | SYSTEM: Action Center | TYPE: decision | FROM: Manager Approval]
-[STEP: Schedule Payment | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: Approved? | LABEL: Yes]
-[STEP: Return to Requester | ROLE: System | SYSTEM: Email | TYPE: task | FROM: Approved? | LABEL: No]
-[STEP: Payment Complete End | ROLE: System | SYSTEM: ERP | TYPE: end | FROM: Schedule Payment]
+[STEP: 1.0 Invoice Received | ROLE: System | SYSTEM: Email/Portal | TYPE: start]
+[STEP: 2.0 Extract Invoice Data | ROLE: System | SYSTEM: Document Understanding | TYPE: task | FROM: 1.0]
+[STEP: 3.0 Data Valid? | ROLE: System | SYSTEM: ERP | TYPE: decision | FROM: 2.0]
+[STEP: 4.0 Flag for Manual Entry | ROLE: AP Clerk | SYSTEM: ERP | TYPE: task | FROM: 3.0 | LABEL: No]
+[STEP: 4.1 Three-Way Match | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: 3.0 | LABEL: Yes]
+[STEP: 5.0 Match OK? | ROLE: System | SYSTEM: ERP | TYPE: decision | FROM: 4.1]
+[STEP: 6.0 Route to Exception Queue | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: 5.0 | LABEL: No]
+[STEP: 6.1 Amount Within Limit? | ROLE: System | SYSTEM: ERP | TYPE: decision | FROM: 5.0 | LABEL: Yes]
+[STEP: 7.0 Auto-Approve | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: 6.1 | LABEL: Yes]
+[STEP: 7.1 Manager Approval | ROLE: Manager | SYSTEM: Action Center | TYPE: task | FROM: 6.1 | LABEL: No]
+[STEP: 8.0 Approved? | ROLE: Manager | SYSTEM: Action Center | TYPE: decision | FROM: 7.1]
+[STEP: 9.0 Schedule Payment | ROLE: System | SYSTEM: ERP | TYPE: task | FROM: 8.0 | LABEL: Yes]
+[STEP: 9.1 Return to Requester | ROLE: System | SYSTEM: Email | TYPE: task | FROM: 8.0 | LABEL: No]
+[STEP: 10.0 Payment Complete End | ROLE: System | SYSTEM: ERP | TYPE: end | FROM: 9.0]
 
 DOCUMENT GENERATION:
 - When you generate or regenerate a PDD or SDD, you MUST start your response with exactly [DOC:PDD:0] or [DOC:SDD:0] followed immediately by the full document content. The system uses this tag to save the document as a new version. Without the tag, the document will NOT be saved and deployment will use stale content.
@@ -446,8 +455,8 @@ export function registerChatRoutes(app: Express): void {
       try {
         const existingNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
         if (existingNodes.length > 0) {
-          const stepList = existingNodes.map(n => `${n.name} (${n.nodeType})`).join(", ");
-          docContext += `\nEXISTING AS-IS MAP (${existingNodes.length} steps): ${stepList}\nDo NOT recreate these steps. Reference them by exact name in FROM fields when adding new steps.`;
+          const stepList = existingNodes.map((n, i) => `${i + 1}.0 ${n.name} (${n.nodeType})`).join(", ");
+          docContext += `\nEXISTING AS-IS MAP (${existingNodes.length} steps): ${stepList}\nDo NOT recreate these steps. Reference them by step number in FROM fields when adding new steps.`;
         }
       } catch (e) { /* non-critical */ }
 

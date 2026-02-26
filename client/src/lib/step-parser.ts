@@ -5,9 +5,14 @@ export interface ParsedStep {
   nodeType: "task" | "decision" | "start" | "end";
   from?: string;
   edgeLabel?: string;
+  stepNumber?: string;
+  fromStepNumber?: string;
 }
 
 const STEP_REGEX = /\[STEP:\s*([^|]+?)\s*\|\s*ROLE:\s*([^|]+?)\s*\|\s*SYSTEM:\s*([^|]+?)\s*\|\s*TYPE:\s*(task|decision|start|end)(?:\s*\|\s*FROM:\s*([^|]*?))?(?:\s*\|\s*LABEL:\s*([^\]]*?))?\s*\]/gi;
+
+const STEP_NUMBER_PREFIX = /^(\d+\.\d+)\s+(.+)$/;
+const IS_STEP_NUMBER = /^\d+\.\d+$/;
 
 export function parseStepsFromText(text: string): ParsedStep[] {
   const steps: ParsedStep[] = [];
@@ -15,13 +20,33 @@ export function parseStepsFromText(text: string): ParsedStep[] {
   const regex = new RegExp(STEP_REGEX.source, "gi");
 
   while ((match = regex.exec(text)) !== null) {
+    const rawName = match[1].trim();
+    const rawFrom = match[5]?.trim() || undefined;
+
+    let stepNumber: string | undefined;
+    let name = rawName;
+    const numMatch = STEP_NUMBER_PREFIX.exec(rawName);
+    if (numMatch) {
+      stepNumber = numMatch[1];
+      name = numMatch[2].trim();
+    }
+
+    let fromStepNumber: string | undefined;
+    let from = rawFrom;
+    if (rawFrom && IS_STEP_NUMBER.test(rawFrom)) {
+      fromStepNumber = rawFrom;
+      from = undefined;
+    }
+
     steps.push({
-      name: match[1].trim(),
+      name,
       role: match[2].trim(),
       system: match[3].trim(),
       nodeType: match[4].toLowerCase().trim() as ParsedStep["nodeType"],
-      from: match[5]?.trim() || undefined,
+      from,
       edgeLabel: match[6]?.trim() || undefined,
+      stepNumber,
+      fromStepNumber,
     });
   }
 

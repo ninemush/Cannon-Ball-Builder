@@ -19,6 +19,7 @@ import {
   getSmoothStepPath,
   getBezierPath,
   useReactFlow,
+  useStore,
   ReactFlowProvider,
   MarkerType,
   BackgroundVariant,
@@ -62,6 +63,7 @@ import {
   Layers,
   History,
   RefreshCw,
+  Cable,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -782,14 +784,79 @@ function useNodeHover(delay = 200) {
   return { isHovered, onMouseEnter, onMouseLeave };
 }
 
+const connectionNodeIdSelector = (state: any) => state.connectionNodeId;
+
+function useConnectionState(nodeId: string) {
+  const connectionNodeId = useStore(connectionNodeIdSelector);
+  const isConnecting = connectionNodeId !== null;
+  const isSource = connectionNodeId === nodeId;
+  return { isConnecting, isSource };
+}
+
+function NodeHandles({
+  nodeId,
+  isHovered,
+  connectModeSourceId,
+  sourceHandles,
+  targetHandles,
+}: {
+  nodeId: string;
+  isHovered: boolean;
+  connectModeSourceId?: string | null;
+  sourceHandles: { position: Position; id?: string }[];
+  targetHandles: { position: Position; id?: string }[];
+}) {
+  const { isConnecting, isSource } = useConnectionState(nodeId);
+
+  const showSources = isHovered || isSource || connectModeSourceId === nodeId;
+  const showTargets = (isConnecting && !isSource) || (!!connectModeSourceId && connectModeSourceId !== nodeId);
+
+  return (
+    <>
+      {targetHandles.map((h, i) => (
+        <Handle
+          key={`t-${h.id || i}`}
+          type="target"
+          position={h.position}
+          id={h.id}
+          className={`!w-[6px] !h-[6px] ${showTargets ? "handle-target-visible" : ""}`}
+        />
+      ))}
+      {sourceHandles.map((h, i) => (
+        <Handle
+          key={`s-${h.id || i}`}
+          type="source"
+          position={h.position}
+          id={h.id}
+          className={`!w-[6px] !h-[6px] ${showSources ? "handle-source-visible" : ""}`}
+        />
+      ))}
+    </>
+  );
+}
+
 function StartNode({ data, id }: { data: any; id: string }) {
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover(100);
+  const connectModeSourceId = data.connectModeSourceId;
   return (
     <div
-      className="flex items-center justify-center"
+      className={`flex items-center justify-center ${connectModeSourceId === id ? "connect-mode-source rounded-full" : ""}`}
       style={{ width: 72, height: 72 }}
       data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
-      <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[{ position: Position.Top }]}
+        sourceHandles={[
+          { position: Position.Bottom },
+          { position: Position.Right, id: "right" },
+          { position: Position.Left, id: "left" },
+        ]}
+      />
       <div
         className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-emerald-500/20 transition-all hover:shadow-xl hover:shadow-emerald-500/30"
         style={{
@@ -799,23 +866,32 @@ function StartNode({ data, id }: { data: any; id: string }) {
       >
         <Play className="h-5 w-5 text-white ml-0.5" fill="white" />
       </div>
-      <Handle type="source" position={Position.Bottom} className="!opacity-0 !w-3 !h-3" />
-      <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-3 !h-3" />
-      <Handle type="source" position={Position.Left} id="left" className="!opacity-0 !w-3 !h-3" />
     </div>
   );
 }
 
 function EndNode({ data, id }: { data: any; id: string }) {
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover(100);
+  const connectModeSourceId = data.connectModeSourceId;
   return (
     <div
-      className="flex items-center justify-center"
+      className={`flex items-center justify-center ${connectModeSourceId === id ? "connect-mode-source rounded-full" : ""}`}
       style={{ width: 72, height: 72 }}
       data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
-      <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
-      <Handle type="target" position={Position.Left} id="left-target" className="!opacity-0 !w-3 !h-3" />
-      <Handle type="target" position={Position.Right} id="right-target" className="!opacity-0 !w-3 !h-3" />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+          { position: Position.Right, id: "right-target" },
+        ]}
+        sourceHandles={[{ position: Position.Bottom }]}
+      />
       <div
         className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-red-500/20 transition-all hover:shadow-xl hover:shadow-red-500/30"
         style={{
@@ -825,7 +901,6 @@ function EndNode({ data, id }: { data: any; id: string }) {
       >
         <Square className="h-4 w-4 text-white" fill="white" />
       </div>
-      <Handle type="source" position={Position.Bottom} className="!opacity-0 !w-3 !h-3" />
     </div>
   );
 }
@@ -834,6 +909,7 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
   const performer = classifyPerformer(data.role || "", data.system || "");
   const isAutomated = data.viewType === "to-be" && (data.description || "").startsWith("[AUTOMATED]");
   const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
+  const connectModeSourceId = data.connectModeSourceId;
 
   const bgColor = isAutomated ? "#166534" : "#92400e";
   const borderColor = isAutomated ? "#22c55e" : "#f59e0b";
@@ -841,15 +917,27 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
 
   return (
     <div
-      className="relative flex items-center justify-center cursor-pointer"
+      className={`relative flex items-center justify-center cursor-pointer ${connectModeSourceId === id ? "connect-mode-source" : ""}`}
       style={{ width: 100, height: 100 }}
       data-testid={`node-${id}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
       <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
-      <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
-      <Handle type="target" position={Position.Left} id="left-target" className="!opacity-0 !w-3 !h-3" />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+        ]}
+        sourceHandles={[
+          { position: Position.Bottom, id: "bottom" },
+          { position: Position.Right, id: "right" },
+          { position: Position.Left, id: "left" },
+        ]}
+      />
       <div
         className="absolute transition-all hover:brightness-110"
         style={{
@@ -867,9 +955,6 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
           {data.label}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} id="bottom" className="!opacity-0 !w-3 !h-3" />
-      <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-3 !h-3" />
-      <Handle type="source" position={Position.Left} id="left" className="!opacity-0 !w-3 !h-3" />
       {data.isPainPoint && <Flag className="absolute -top-1.5 -right-1.5 h-3 w-3 text-red-500 fill-red-500 z-20" />}
     </div>
   );
@@ -882,6 +967,7 @@ function TaskNode({ data, id }: { data: any; id: string }) {
   const isLowConf = confidence < 50;
   const isGhost = data.isGhost;
   const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
+  const connectModeSourceId = data.connectModeSourceId;
 
   const accentColor = isAutomated ? "#22c55e" : performer === "system" ? "#8b5cf6" : performer === "hybrid" ? "#f59e0b" : "#3b82f6";
   const bgColor = isAutomated ? "rgba(22,101,52,0.3)" : "rgba(30,30,36,0.95)";
@@ -891,7 +977,7 @@ function TaskNode({ data, id }: { data: any; id: string }) {
 
   return (
     <div
-      className="relative cursor-pointer group"
+      className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
         opacity: isGhost || isLowConf ? 0.5 : 1,
@@ -902,8 +988,20 @@ function TaskNode({ data, id }: { data: any; id: string }) {
       onMouseLeave={onMouseLeave}
     >
       <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
-      <Handle type="target" position={Position.Top} className="!opacity-0 !w-3 !h-3" />
-      <Handle type="target" position={Position.Left} id="left-target" className="!opacity-0 !w-3 !h-3" />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+        ]}
+        sourceHandles={[
+          { position: Position.Bottom },
+          { position: Position.Right, id: "right" },
+          { position: Position.Left, id: "left" },
+        ]}
+      />
       <div
         className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
@@ -947,9 +1045,6 @@ function TaskNode({ data, id }: { data: any; id: string }) {
           )}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!opacity-0 !w-3 !h-3" />
-      <Handle type="source" position={Position.Right} id="right" className="!opacity-0 !w-3 !h-3" />
-      <Handle type="source" position={Position.Left} id="left" className="!opacity-0 !w-3 !h-3" />
       {data.isPainPoint && <Flag className="absolute -top-1.5 -right-1.5 h-3 w-3 text-red-500 fill-red-500 z-10" />}
     </div>
   );
@@ -1282,6 +1377,7 @@ function NodeContextMenu({
   nodeData,
   onEdit,
   onAddChild,
+  onConnectTo,
   onDelete,
   onClose,
 }: {
@@ -1289,6 +1385,7 @@ function NodeContextMenu({
   nodeData: { dbId: number; label: string; nodeType: string };
   onEdit: () => void;
   onAddChild: () => void;
+  onConnectTo: () => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -1312,6 +1409,13 @@ function NodeContextMenu({
       >
         <Plus className="h-3.5 w-3.5 text-cb-teal" />
         {nodeData.nodeType === "decision" ? "Add Branch" : "Add Child Step"}
+      </button>
+      <button
+        className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white flex items-center gap-2.5 transition-colors"
+        onClick={onConnectTo}
+        data-testid="button-connect-to-context"
+      >
+        <Cable className="h-3.5 w-3.5 text-emerald-400" /> Connect to...
       </button>
       <div className="h-px bg-zinc-800 my-1" />
       <button
@@ -1340,6 +1444,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [parentNodeIdForChild, setParentNodeIdForChild] = useState<number | null>(null);
   const [reconnectingEdge, setReconnectingEdge] = useState(false);
+  const [connectModeSourceId, setConnectModeSourceId] = useState<string | null>(null);
   const [detailPopover, setDetailPopover] = useState<{ node: any; position: { x: number; y: number } } | null>(null);
   const hasInitialFitRef = useRef(false);
   const prevDetailLevelRef = useRef<string>(detailLevel);
@@ -1353,6 +1458,13 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
 
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  useEffect(() => {
+    setNodes(nds => nds.map(n => ({
+      ...n,
+      data: { ...(n.data as any), connectModeSourceId },
+    })));
+  }, [connectModeSourceId]);
 
   const focusNode = useCallback((nodeId: string) => {
     const allNodes = getNodes();
@@ -1439,7 +1551,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       data: {
         label: n.name, role: n.role, system: n.system, nodeType: n.nodeType,
         isGhost: n.isGhost, isPainPoint: n.isPainPoint, description: n.description,
-        dbId: n.id, viewType: activeView,
+        dbId: n.id, viewType: activeView, connectModeSourceId,
       },
     }));
     const nodeIdSet = new Set(dbNodes.map(n => n.id));
@@ -1789,11 +1901,25 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
   const onNodeClick = useCallback((_: any, node: Node) => {
     const d = node.data as any;
     if (d.dbId < 0) return;
+
+    if (connectModeSourceId) {
+      if (node.id !== connectModeSourceId) {
+        takeSnapshot();
+        createEdgeMutation.mutate({
+          viewType: activeView,
+          sourceNodeId: parseInt(connectModeSourceId),
+          targetNodeId: parseInt(node.id),
+          label: "",
+        });
+      }
+      setConnectModeSourceId(null);
+      return;
+    }
+
     const bounds = containerRef.current?.getBoundingClientRect();
     if (!bounds) return;
     const nodeType = d.nodeType || "task";
     const dims = getNodeDimensions(nodeType);
-    const dbNode = mapData?.nodes.find((n) => n.id === d.dbId);
     setDetailPopover({
       node: {
         dbId: d.dbId,
@@ -1811,13 +1937,14 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     });
     setContextMenu(null);
     setNodeContextMenu(null);
-  }, [mapData]);
+  }, [mapData, connectModeSourceId, activeView, createEdgeMutation, takeSnapshot]);
 
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
     setNodeContextMenu(null);
     setDetailPopover(null);
     setSelectedEdgeIds(new Set());
+    setConnectModeSourceId(null);
   }, []);
 
   useEffect(() => {
@@ -1825,6 +1952,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
 
       if (e.key === "Escape") {
+        setConnectModeSourceId(null);
         setDetailPopover(null);
         return;
       }
@@ -2185,6 +2313,23 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
         </div>
       )}
 
+      {connectModeSourceId && (
+        <div
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-zinc-900/95 backdrop-blur-md border border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 shadow-lg"
+          data-testid="connect-mode-banner"
+        >
+          <Cable className="h-4 w-4 text-blue-400" />
+          <span className="text-xs text-zinc-300">Click a target node to connect, or press <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-[10px] font-mono text-zinc-400 border border-zinc-700">Esc</kbd> to cancel</span>
+          <button
+            className="text-xs text-zinc-500 hover:text-white transition-colors ml-1"
+            onClick={() => setConnectModeSourceId(null)}
+            data-testid="button-cancel-connect-mode"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {contextMenu && (
         <ContextMenu
           position={contextMenu}
@@ -2199,6 +2344,10 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           nodeData={nodeContextMenu.nodeData}
           onEdit={handleNodeContextEdit}
           onAddChild={handleNodeContextAddChild}
+          onConnectTo={() => {
+            setConnectModeSourceId(String(nodeContextMenu.nodeData.dbId));
+            setNodeContextMenu(null);
+          }}
           onDelete={handleNodeContextDelete}
           onClose={() => setNodeContextMenu(null)}
         />

@@ -398,22 +398,43 @@
 
 .react-flow__handle {
   opacity: 0;
+  width: 6px !important;
+  height: 6px !important;
   transition: opacity 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+  pointer-events: none;
 }
 
-.react-flow__node:hover .react-flow__handle {
+.react-flow__handle.handle-source-visible {
   opacity: 1;
+  width: 7px !important;
+  height: 7px !important;
   background: #3b82f6 !important;
-  border-color: #60a5fa !important;
+  border: 1px solid #93c5fd !important;
+  box-shadow: 0 0 4px rgba(59,130,246,0.4);
+  pointer-events: all;
+  transform: scale(1);
+}
+
+.react-flow__handle.handle-source-visible:hover {
+  transform: scale(1.5);
+  box-shadow: 0 0 10px rgba(59,130,246,0.7), 0 0 20px rgba(59,130,246,0.3) !important;
+  background: #60a5fa !important;
+}
+
+.react-flow__handle.handle-target-visible {
+  opacity: 1;
   width: 8px !important;
   height: 8px !important;
-  box-shadow: 0 0 8px rgba(59,130,246,0.5), 0 0 16px rgba(59,130,246,0.2);
+  background: #10b981 !important;
+  border: 1px solid #6ee7b7 !important;
+  box-shadow: 0 0 6px rgba(16,185,129,0.4);
+  pointer-events: all;
+  animation: target-handle-pulse 1.5s ease-in-out infinite;
 }
 
-.react-flow__handle:hover {
-  transform: scale(1.4);
-  box-shadow: 0 0 12px rgba(59,130,246,0.7), 0 0 24px rgba(59,130,246,0.3) !important;
-  background: #60a5fa !important;
+@keyframes target-handle-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(16,185,129,0.3); transform: scale(1); }
+  50% { box-shadow: 0 0 10px rgba(16,185,129,0.6), 0 0 20px rgba(16,185,129,0.2); transform: scale(1.15); }
 }
 
 .process-map-canvas.reconnecting .react-flow__handle {
@@ -423,7 +444,17 @@
   background: #fb923c !important;
   border-color: #fdba74 !important;
   box-shadow: 0 0 10px rgba(251,146,60,0.5);
+  pointer-events: all;
   animation: handle-pulse 1.2s ease-in-out infinite;
+}
+
+.connect-mode-source {
+  animation: connect-source-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes connect-source-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(59,130,246,0.15), 0 0 16px rgba(59,130,246,0.3); }
 }
 
 .process-map-canvas .react-flow__edge.updating .react-flow__edge-path {

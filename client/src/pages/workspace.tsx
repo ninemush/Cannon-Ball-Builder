@@ -844,71 +844,22 @@ function ChatPanel({ idea }: { idea: Idea }) {
             .then((r) => r.json());
           const existingNodes: any[] = existingMap.nodes || [];
 
-          const synonymMap: Record<string, string> = {
-            fetch: "get", retrieve: "get", obtain: "get", pull: "get", lookup: "get", "look": "get",
-            send: "send", email: "send", notify: "send", alert: "send", forward: "send",
-            log: "log", record: "log", track: "log", note: "log", write: "log",
-            calculate: "calculate", compute: "calculate", determine: "calculate", evaluate: "calculate",
-            enter: "enter", input: "enter", type: "enter", fill: "enter",
-            check: "check", verify: "check", validate: "check", confirm: "check", review: "check",
-            save: "save", store: "save", persist: "save", keep: "save",
-            create: "create", generate: "create", build: "create", make: "create", produce: "create",
-            update: "update", modify: "update", change: "update", edit: "update", revise: "update",
-            delete: "delete", remove: "delete", clear: "delete", erase: "delete",
-            open: "open", launch: "open", start: "open", begin: "open", initiate: "open",
-            close: "close", end: "close", finish: "close", complete: "close", terminate: "close",
-          };
-          const applySynonyms = (token: string): string => synonymMap[token] || token;
-
           const normalizeName = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-          const stripPrefixes = (s: string) =>
-            s.replace(/^(record|send|initiate|close|auto[-\s]?|re[-\s]?check)\s+/i, "")
-             .replace(/\s+(in erp|in app|notification|end|start)$/i, "")
-             .replace(/[?\-]/g, " ")
-             .replace(/\s+/g, " ")
-             .trim();
-          const tokenize = (s: string) => new Set(stripPrefixes(normalizeName(s)).split(" ").filter(w => w.length > 2).map(applySynonyms));
 
-          const stripLeadingVerb = (s: string): string => {
-            const words = normalizeName(s).split(" ");
-            if (words.length > 1) return words.slice(1).join(" ");
-            return s;
-          };
+          const hasStepNumbers = steps.some(s => s.stepNumber);
 
-          const similarity = (a: string, b: string): number => {
-            const na = normalizeName(a);
-            const nb = normalizeName(b);
-            if (na === nb) return 1;
-            const shorter = na.length < nb.length ? na : nb;
-            const longer = na.length < nb.length ? nb : na;
-            if (shorter.length >= 6 && longer.includes(shorter)) return 0.85;
-            const verblessA = stripLeadingVerb(a);
-            const verblessB = stripLeadingVerb(b);
-            if (verblessA.length >= 5 && verblessA === verblessB) return 0.9;
-            const tokA = tokenize(a);
-            const tokB = tokenize(b);
-            if (tokA.size === 0 || tokB.size === 0) return 0;
-            let shared = 0;
-            tokA.forEach(t => { if (tokB.has(t)) shared++; });
-            const minTokens = Math.min(tokA.size, tokB.size);
-            if (minTokens < 2) return shared >= 1 ? 0.5 : 0;
-            return shared / Math.max(tokA.size, tokB.size);
-          };
-
-          const seenStepNames = new Set<string>();
-          const dedupedSteps = steps.filter(step => {
-            const norm = normalizeName(step.name);
-            if (seenStepNames.has(norm)) return false;
-
-            let isDuplicate = false;
-            seenStepNames.forEach(existing => {
-              if (similarity(step.name, existing) >= 0.85) isDuplicate = true;
-            });
-            if (isDuplicate) return false;
-
-            seenStepNames.add(norm);
-            return true;
-          });
+          const dedupedSteps = hasStepNumbers
+            ? Array.from(
+                steps.reduce((map, step) => {
+                  const key = step.stepNumber || step.name;
+                  map.set(key, step);
+                  return map;
+                }, new Map<string, typeof steps[0]>()).values()
+              )
+            : steps.filter((step, idx, arr) => {
+                const norm = normalizeName(step.name);
+                return arr.findIndex(s => normalizeName(s.name) === norm) === idx;
+              });
 
           const dedupedHasStart = dedupedSteps.some(s => s.nodeType === "start");
           const dedupedHasEnd = dedupedSteps.some(s => s.nodeType === "end");
@@ -929,24 +880,15 @@ function ChatPanel({ idea }: { idea: Idea }) {
             nameToId[normalizeName(n.name)] = n.id;
           }
 
-          const findMatch = (stepName: string, stepType: string): number | null => {
+          const findMatch = (stepName: string, _stepType: string): number | null => {
             if (safeToRegenerate) return null;
             const norm = normalizeName(stepName);
             if (nameToId[norm]) return nameToId[norm];
-            let bestScore = 0;
-            let bestId: number | null = null;
-            for (const n of remainingNodes) {
-              if (n.nodeType !== stepType) continue;
-              const score = similarity(stepName, n.name);
-              if (score > bestScore && score >= 0.8) {
-                bestScore = score;
-                bestId = n.id;
-              }
-            }
-            return bestId;
+            return null;
           };
 
-          const createdNodes: { name: string; id: number; from?: string; edgeLabel?: string }[] = [];
+          const stepNumberToNodeId: Record<string, number> = {};
+          const createdNodes: { name: string; id: number; stepNumber?: string; from?: string; fromStepNumber?: string; edgeLabel?: string }[] = [];
 
           for (let i = 0; i < dedupedSteps.length; i++) {
             const step = dedupedSteps[i];
@@ -967,9 +909,12 @@ function ChatPanel({ idea }: { idea: Idea }) {
               createdNodes.push({
                 name: step.name,
                 id: existingId,
+                stepNumber: step.stepNumber,
                 from: step.from,
+                fromStepNumber: step.fromStepNumber,
                 edgeLabel: step.edgeLabel,
               });
+              if (step.stepNumber) stepNumberToNodeId[step.stepNumber] = existingId;
             } else {
               const res = await fetch(`/api/ideas/${idea.id}/process-nodes`, {
                 method: "POST",
@@ -988,10 +933,13 @@ function ChatPanel({ idea }: { idea: Idea }) {
               createdNodes.push({
                 name: step.name,
                 id: created.id,
+                stepNumber: step.stepNumber,
                 from: step.from,
+                fromStepNumber: step.fromStepNumber,
                 edgeLabel: step.edgeLabel,
               });
               nameToId[normalizeName(step.name)] = created.id;
+              if (step.stepNumber) stepNumberToNodeId[step.stepNumber] = created.id;
             }
           }
 
@@ -1000,16 +948,6 @@ function ChatPanel({ idea }: { idea: Idea }) {
           const resolveFrom = (fromName: string): number | null => {
             const normalized = normalizeName(fromName);
             if (nameToId[normalized]) return nameToId[normalized];
-            let bestScore = 0;
-            let bestId: number | null = null;
-            for (const [key, id] of Object.entries(nameToId)) {
-              const score = similarity(fromName, key);
-              if (score > bestScore && score >= 0.7) {
-                bestScore = score;
-                bestId = id;
-              }
-            }
-            if (bestId) return bestId;
             const keys = Object.keys(nameToId);
             const partial = keys.find(k => k.includes(normalized) || normalized.includes(k));
             if (partial) return nameToId[partial];
@@ -1021,7 +959,17 @@ function ChatPanel({ idea }: { idea: Idea }) {
             let sourceId: number | null = null;
             let label = node.edgeLabel || "";
 
-            if (node.from) {
+            if (node.fromStepNumber) {
+              sourceId = stepNumberToNodeId[node.fromStepNumber] || null;
+              if (!sourceId) {
+                const fallbackName = createdNodes.find(n => n.stepNumber === node.fromStepNumber)?.name;
+                if (fallbackName) sourceId = resolveFrom(fallbackName);
+                if (!sourceId) {
+                  console.warn(`[ProcessMap] FROM step# "${node.fromStepNumber}" not found for step "${node.name}", skipping edge`);
+                  continue;
+                }
+              }
+            } else if (node.from) {
               sourceId = resolveFrom(node.from);
               if (!sourceId) {
                 console.warn(`[ProcessMap] FROM "${node.from}" not found for step "${node.name}", skipping edge`);
