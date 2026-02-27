@@ -1851,37 +1851,14 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     result.orchestrator = orchRes.ok;
     if (!orchRes.ok) return result;
 
-    const actionsProbeUrl = `${base}/actions_/api/v1/TaskCatalogs?$top=1`;
-    const [actionsAcRes, acRes, envRes, trigRes, schedRes] = await Promise.all([
-      fetch(actionsProbeUrl, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
+    const [acRes, envRes, trigRes, schedRes] = await Promise.all([
+      fetch(`${orchBase}/tasks/taskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
       fetch(`${orchBase}/odata/Environments?$top=1`, { headers: hdrs }).catch(() => null),
       fetch(`${orchBase}/odata/QueueTriggers?$top=1`, { headers: hdrs }).catch(() => null),
       fetch(`${orchBase}/odata/ProcessSchedules?$top=1`, { headers: hdrs }).catch(() => null),
     ]);
 
-    let acDetermined = false;
-    if (actionsAcRes) {
-      if (actionsAcRes.ok) {
-        const actionsText = await actionsAcRes.text();
-        const isHTML = actionsText.trim().startsWith("<");
-        if (!isHTML) {
-          try {
-            const data = JSON.parse(actionsText);
-            const isGenuine = !(data.errorCode || data["odata.error"] || (data.message && typeof data.message === "string" && data.message.includes("not onboarded")));
-            if (isGenuine) {
-              result.actionCenter = true;
-              acDetermined = true;
-            }
-          } catch { }
-        }
-      } else if (actionsAcRes.status === 401 || actionsAcRes.status === 403) {
-        result.actionCenter = true;
-        acDetermined = true;
-      }
-    }
-
-    if (!acDetermined && acRes) {
+    if (acRes) {
       if (acRes.ok) {
         const acText = await acRes.text();
         const isHTML = acText.trim().startsWith("<");
@@ -1896,7 +1873,7 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
       } else {
         result.actionCenter = false;
       }
-    } else if (!acDetermined) {
+    } else {
       result.actionCenter = false;
     }
 

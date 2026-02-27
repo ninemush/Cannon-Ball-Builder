@@ -1,6 +1,6 @@
 import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap } from "./uipath-integration";
 import { uipathFetch, isGenuineApiResponse, isValidCreation } from "./uipath-fetch";
-import { getToken as getSharedToken, getActionsBaseUrl, getTestManagerBaseUrl, type UiPathAuthConfig } from "./uipath-auth";
+import { getToken as getSharedToken, getTestManagerBaseUrl, type UiPathAuthConfig } from "./uipath-auth";
 import Anthropic from "@anthropic-ai/sdk";
 
 function odataEscape(value: string): string {
@@ -1293,44 +1293,33 @@ async function provisionActionCenter(
     acHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
   }
 
-  const actionsBase = getActionsBaseUrl(config as UiPathAuthConfig);
-  const actionsCatalogUrl = `${actionsBase}/api/v1/TaskCatalogs`;
+  const catalogUrl = `${base}/tasks/taskCatalogs`;
   const odataCatalogUrl = `${base}/odata/TaskCatalogs`;
   const genericTaskUrl = `${base}/tasks/GenericTasks/CreateTask`;
   const odataUnboundActionUrl = `${base}/odata/Tasks/UiPathODataSvc.CreateTask`;
 
-  let odataAvailable = false;
-  let actionsApiAvailable = false;
+  let serviceAvailable = false;
 
-  const odataProbe = await uipathFetch(`${odataCatalogUrl}?$top=1`, {
-    headers: acHdrs, label: "AC OData Probe", maxRetries: 1,
+  const catalogProbe = await uipathFetch(`${catalogUrl}?$top=1`, {
+    headers: acHdrs, label: "AC Catalog Probe", maxRetries: 1,
   });
-  if (odataProbe.ok) {
-    const genuine = isGenuineApiResponse(odataProbe.text);
-    odataAvailable = genuine.genuine;
-    console.log(`[UiPath Deploy] AC OData probe: status=${odataProbe.status}, genuine=${genuine.genuine}, reason=${genuine.reason || "OK"}`);
+  if (catalogProbe.ok) {
+    const genuine = isGenuineApiResponse(catalogProbe.text);
+    serviceAvailable = genuine.genuine;
+    console.log(`[UiPath Deploy] AC probe: status=${catalogProbe.status}, genuine=${genuine.genuine}, reason=${genuine.reason || "OK"}`);
   } else {
-    console.log(`[UiPath Deploy] AC OData probe failed: status=${odataProbe.status}, body=${odataProbe.text.slice(0, 300)}`);
-  }
-
-  if (!preProbed) {
-    const actionsProbe = await uipathFetch(`${actionsCatalogUrl}?$top=1`, {
-      headers: acHdrs, label: "AC Actions Probe", maxRetries: 1,
+    console.log(`[UiPath Deploy] AC probe failed: status=${catalogProbe.status}, body=${catalogProbe.text.slice(0, 300)}`);
+    const odataProbe = await uipathFetch(`${odataCatalogUrl}?$top=1`, {
+      headers: acHdrs, label: "AC OData Probe", maxRetries: 1,
     });
-    if (actionsProbe.ok) {
-      const genuine = isGenuineApiResponse(actionsProbe.text);
-      actionsApiAvailable = genuine.genuine;
-      console.log(`[UiPath Deploy] AC Actions probe: status=${actionsProbe.status}, genuine=${genuine.genuine}, reason=${genuine.reason || "OK"}`);
-    } else if (actionsProbe.status === 401 || actionsProbe.status === 403) {
-      actionsApiAvailable = true;
-      console.log(`[UiPath Deploy] AC Actions probe: status=${actionsProbe.status} (auth issue but service exists)`);
-    } else {
-      console.log(`[UiPath Deploy] AC Actions probe failed: status=${actionsProbe.status}, body=${actionsProbe.text.slice(0, 300)}`);
+    if (odataProbe.ok) {
+      const genuine = isGenuineApiResponse(odataProbe.text);
+      serviceAvailable = genuine.genuine;
+      console.log(`[UiPath Deploy] AC OData fallback probe: status=${odataProbe.status}, genuine=${genuine.genuine}`);
     }
   }
 
-  const serviceDetected = odataAvailable || actionsApiAvailable || preProbed;
-  if (!serviceDetected) {
+  if (!serviceAvailable && !preProbed) {
     return actionCenter.map(ac => ({
       artifact: "Action Center",
       name: ac.taskCatalog,
@@ -1346,94 +1335,44 @@ async function provisionActionCenter(
     try {
       let alreadyExists = false;
 
-      if (odataAvailable) {
-        const checkResult = await uipathFetch(
-          `${odataCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-          { headers: acHdrs, label: "AC Check", maxRetries: 1 }
-        );
-        if (checkResult.ok && checkResult.data?.value?.length > 0) {
-          const existing = checkResult.data.value[0];
-          let msg = `Already exists (ID: ${existing.Id || existing.id})`;
-          if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-          if (ac.sla) msg += `. SLA: ${ac.sla}`;
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: msg, id: existing.Id || existing.id });
-          alreadyExists = true;
-        }
-      }
-
-      if (!alreadyExists && actionsApiAvailable) {
-        const actionsCheckResult = await uipathFetch(
-          `${actionsCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-          { headers: acHdrs, label: "AC Actions Check", maxRetries: 1 }
-        );
-        if (actionsCheckResult.ok && actionsCheckResult.data?.value?.length > 0) {
-          const existing = actionsCheckResult.data.value[0];
-          let msg = `Already exists via Actions API (ID: ${existing.Id || existing.id})`;
-          if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-          if (ac.sla) msg += `. SLA: ${ac.sla}`;
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: msg, id: existing.Id || existing.id });
-          alreadyExists = true;
-        }
+      const checkResult = await uipathFetch(
+        `${catalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+        { headers: acHdrs, label: "AC Check", maxRetries: 1 }
+      );
+      if (checkResult.ok && checkResult.data?.value?.length > 0) {
+        const existing = checkResult.data.value[0];
+        let msg = `Already exists (ID: ${existing.Id || existing.id})`;
+        if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+        if (ac.sla) msg += `. SLA: ${ac.sla}`;
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: msg, id: existing.Id || existing.id });
+        alreadyExists = true;
       }
 
       if (alreadyExists) continue;
 
       let created = false;
 
-      if (actionsApiAvailable) {
-        attemptedEndpoints.push(`POST ${actionsCatalogUrl}`);
-        const actionsCreateResult = await uipathFetch(actionsCatalogUrl, {
-          method: "POST", headers: acHdrs,
-          body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
-          label: "AC Actions Create", maxRetries: 1,
-        });
-        if ((actionsCreateResult.ok || actionsCreateResult.status === 201) && isValidCreation(actionsCreateResult.text).valid) {
-          const creation = isValidCreation(actionsCreateResult.text);
-          let msg = `Created via Actions microservice (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
+      attemptedEndpoints.push(`POST ${catalogUrl}`);
+      const createResult = await uipathFetch(catalogUrl, {
+        method: "POST", headers: acHdrs,
+        body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
+        label: "AC Catalog Create", maxRetries: 1,
+      });
+      if (createResult.ok || createResult.status === 201) {
+        const creation = isValidCreation(createResult.text);
+        if (creation.valid) {
+          let msg = `Created (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
           if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
           results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
           created = true;
-        } else if (actionsCreateResult.status === 409 || actionsCreateResult.text.includes("already exists")) {
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (Actions)" });
-          created = true;
-        } else {
-          const detail = `Actions API POST -> ${actionsCreateResult.status}: ${actionsCreateResult.text.slice(0, 500)}`;
-          failureDetails.push(detail);
-          if (actionsCreateResult.status === 405) {
-            console.warn(`[UiPath Deploy] AC Actions Create returned 405 (Method Not Allowed). Full response: ${actionsCreateResult.text}`);
-          } else {
-            console.warn(`[UiPath Deploy] AC Actions Create failed: ${detail}`);
-          }
         }
-      }
-
-      if (!created && odataAvailable) {
-        attemptedEndpoints.push(`POST ${odataCatalogUrl}`);
-        const createResult = await uipathFetch(odataCatalogUrl, {
-          method: "POST", headers: acHdrs,
-          body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
-          label: "AC OData Create", maxRetries: 1,
-        });
-        if (createResult.ok || createResult.status === 201) {
-          const creation = isValidCreation(createResult.text);
-          if (creation.valid) {
-            let msg = `Created via OData (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
-            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
-            created = true;
-          }
-        } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (OData)" });
-          created = true;
-        } else {
-          const detail = `OData POST -> ${createResult.status}: ${createResult.text.slice(0, 500)}`;
-          failureDetails.push(detail);
-          if (createResult.status === 405) {
-            console.warn(`[UiPath Deploy] AC OData Create returned 405 (Method Not Allowed). Full response: ${createResult.text}`);
-          } else {
-            console.warn(`[UiPath Deploy] AC OData Create failed: ${detail}`);
-          }
-        }
+      } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
+        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
+        created = true;
+      } else {
+        const detail = `POST ${catalogUrl} -> ${createResult.status}: ${createResult.text.slice(0, 500)}`;
+        failureDetails.push(detail);
+        console.warn(`[UiPath Deploy] AC Catalog Create failed: ${detail}`);
       }
 
       if (!created) {
@@ -2254,48 +2193,21 @@ async function preflightInfraProbe(
   }
 
   try {
-    let acFound = false;
-
-    if (config) {
-      const actionsProbeUrl = `${getActionsBaseUrl(config as UiPathAuthConfig)}/api/v1/TaskCatalogs?$top=1`;
-      try {
-        const actionsRes = await fetch(actionsProbeUrl, { headers: hdrs });
-        const actionsText = await actionsRes.text();
-        const actionsIsHTML = actionsText.trim().startsWith("<") || actionsText.includes("<!DOCTYPE");
-        if (actionsRes.ok && !actionsIsHTML) {
-          const genuineCheck = isGenuineServiceResponse(actionsText);
-          if (genuineCheck.genuine) {
-            result.actionCenter = { available: true, endpoint: "Actions", message: "Action Center is licensed and available (Actions microservice)" };
-            acFound = true;
-          } else {
-            console.log(`[UiPath Probe] Actions microservice probe returned 200 but not genuine: ${genuineCheck.reason}`);
-          }
-        } else if (actionsRes.status === 401 || actionsRes.status === 403) {
-          result.actionCenter = { available: true, endpoint: "Actions", message: "Action Center Actions microservice detected (auth required)" };
-          acFound = true;
-        }
-      } catch (err: any) {
-        console.log(`[UiPath Probe] Actions microservice probe error: ${err.message}`);
-      }
-    }
-
-    if (!acFound) {
-      const acProbeUrl = `${base}/odata/TaskCatalogs?$top=1`;
-      const acRes = await fetch(acProbeUrl, { headers: hdrs });
-      const acText = await acRes.text();
-      const acIsHTML = acText.trim().startsWith("<") || acText.includes("<!DOCTYPE");
-      if (acRes.ok && !acIsHTML) {
-        const genuineCheck = isGenuineServiceResponse(acText);
-        if (genuineCheck.genuine) {
-          result.actionCenter = { available: true, endpoint: "OData", message: "Action Center is licensed and available" };
-        } else {
-          result.actionCenter = { available: false, message: "Action Center endpoint returned non-genuine response" };
-        }
-      } else if (acRes.status === 401 || acRes.status === 403) {
-        result.actionCenter = { available: false, message: `Action Center returned ${acRes.status} — may need additional permissions or not licensed` };
+    const acProbeUrl = `${base}/tasks/taskCatalogs?$top=1`;
+    const acRes = await fetch(acProbeUrl, { headers: hdrs });
+    const acText = await acRes.text();
+    const acIsHTML = acText.trim().startsWith("<") || acText.includes("<!DOCTYPE");
+    if (acRes.ok && !acIsHTML) {
+      const genuineCheck = isGenuineServiceResponse(acText);
+      if (genuineCheck.genuine) {
+        result.actionCenter = { available: true, endpoint: "Orchestrator", message: "Action Center is licensed and available" };
       } else {
-        result.actionCenter = { available: false, message: `Action Center not available (HTTP ${acRes.status})` };
+        result.actionCenter = { available: false, message: "Action Center endpoint returned non-genuine response" };
       }
+    } else if (acRes.status === 401 || acRes.status === 403) {
+      result.actionCenter = { available: false, message: `Action Center returned ${acRes.status} — may need additional permissions or not licensed` };
+    } else {
+      result.actionCenter = { available: false, message: `Action Center not available (HTTP ${acRes.status})` };
     }
   } catch (err: any) {
     result.actionCenter = { available: false, message: `Action Center probe error: ${err.message}` };

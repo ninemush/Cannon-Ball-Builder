@@ -37,6 +37,7 @@ const DEFAULT_SCOPES = [
   "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
   "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
   "OR.TestDataQueues", "OR.TestDataQueues.Read",
+  "OR.Tasks", "OR.Tasks.Read", "OR.Tasks.Write",
   "TM.TestCases", "TM.TestCases.Read", "TM.TestCases.Write",
   "TM.TestSets", "TM.TestSets.Read", "TM.TestSets.Write",
   "TM.TestExecutions", "TM.TestExecutions.Read", "TM.TestExecutions.Write",
@@ -170,10 +171,6 @@ function isTokenValid(): boolean {
 
 export function getBaseUrl(config: UiPathAuthConfig): string {
   return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
-}
-
-export function getActionsBaseUrl(config: UiPathAuthConfig): string {
-  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/actions_`;
 }
 
 export function getTestManagerBaseUrl(config: UiPathAuthConfig): string {

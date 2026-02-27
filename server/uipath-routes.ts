@@ -601,35 +601,22 @@ export function registerUiPathRoutes(app: Express): void {
       // ── ACTION CENTER ──
       {
         const sec: any = { artifact: "ActionCenter", steps: [] };
-        const actionsBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/actions_/api/v1`;
-        const probeActions = await safeCall("probe_actions", `${actionsBase}/TaskCatalogs?$top=1`, { headers: hdrs });
-        sec.steps.push({ step: "probe_actions", url: `${actionsBase}/TaskCatalogs?$top=1`, ...probeActions });
-
-        const probeOdata = await safeCall("probe_odata", `${base}/odata/TaskCatalogs?$top=1`, { headers: hdrs });
-        sec.steps.push({ step: "probe_odata", url: `${base}/odata/TaskCatalogs?$top=1`, ...probeOdata });
+        const catalogsUrl = `${base}/tasks/taskCatalogs`;
+        const probeCatalogs = await safeCall("probe_catalogs", `${catalogsUrl}?$top=1`, { headers: hdrs });
+        sec.steps.push({ step: "probe_catalogs", url: `${catalogsUrl}?$top=1`, ...probeCatalogs });
 
         const catalogBody = { Name: `CB_Diag_Catalog_${ts}`, Description: "CannonBall diagnostic" };
 
-        const isActionsGenuineApi = probeActions.ok && !probeActions.text.trimStart().startsWith("<!") && !probeActions.text.trimStart().startsWith("<html");
         let acCreated = false;
 
-        if (isActionsGenuineApi) {
-          const create = await safeCall("create_actions", `${actionsBase}/TaskCatalogs`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
-          sec.steps.push({ step: "create_actions", requestBody: catalogBody, ...create });
-          if (create.ok) { acCreated = true; sec.overallStatus = "working (actions microservice)"; }
-        } else if (probeActions.ok) {
-          sec.steps.push({ step: "probe_actions_note", note: "Actions probe returned 200 but with HTML (web UI, not API) — skipping Actions POST" });
-        }
-
-        if (!acCreated && probeOdata.ok && probeOdata.data?.["@odata.context"]) {
-          const catalogBody2 = { Name: `CB_Diag_Catalog_OData_${ts}`, Description: "CannonBall diagnostic via OData" };
-          const createOdata = await safeCall("create_odata", `${base}/odata/TaskCatalogs`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody2) });
-          sec.steps.push({ step: "create_odata", url: `${base}/odata/TaskCatalogs`, requestBody: catalogBody2, ...createOdata });
-          if (createOdata.ok) {
+        if (probeCatalogs.ok) {
+          const create = await safeCall("create_catalog", catalogsUrl, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
+          sec.steps.push({ step: "create_catalog", url: catalogsUrl, requestBody: catalogBody, ...create });
+          if (create.ok || create.status === 201) {
             acCreated = true;
-            sec.overallStatus = "working (odata)";
-            if (createOdata.data?.Id) {
-              await safeCall("cleanup", `${base}/odata/TaskCatalogs(${createOdata.data.Id})`, { method: "DELETE", headers: hdrs });
+            sec.overallStatus = "working";
+            if (create.data?.Id) {
+              await safeCall("cleanup", `${base}/odata/TaskCatalogs(${create.data.Id})`, { method: "DELETE", headers: hdrs });
             }
           }
         }

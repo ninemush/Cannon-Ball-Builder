@@ -3,7 +3,6 @@ import {
   getHeaders,
   getConfig,
   getBaseUrl,
-  getActionsBaseUrl,
   getTestManagerBaseUrl,
   invalidateToken,
   UiPathAuthError,
@@ -474,24 +473,8 @@ export async function getMachines(): Promise<Machine[]> {
 
 export async function getActionCatalog(): Promise<ActionCatalog[]> {
   try {
-    const config = await getConfig();
-    if (!config) return [];
-    const actionsBase = getActionsBaseUrl(config);
-    const headers = await getHeaders();
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 15000);
-    const res = await fetch(`${actionsBase}/api/v1/TaskCatalogs?$top=50`, {
-      headers,
-      signal: controller.signal,
-    });
-    clearTimeout(tid);
-    if (res.ok) {
-      const data = await res.json();
-      return data?.value || data?.items || [];
-    }
-    if (res.status === 404 || res.status === 403) return [];
-    const fallback = await orchRequest<ODataResponse<ActionCatalog>>("/odata/TaskCatalogs?$top=50");
-    return fallback?.value || [];
+    const res = await orchRequest<ODataResponse<ActionCatalog>>("/tasks/taskCatalogs?$top=50");
+    return res?.value || [];
   } catch (err: any) {
     if (err.statusCode === 404 || err.statusCode === 403) return [];
     throw err;
