@@ -1,0 +1,766 @@
+# CannonBall – UiPath Integration Rebuild + Smart Provisioning
+## Replit Build Prompt | Version 2.0
+
+---
+
+## CONTEXT
+
+You are working on an existing application called **CannonBall** — an AI-first automation
+platform that lets Process SMEs generate and deploy UiPath automations through a
+conversational interface. The platform already pushes queue items to UiPath Orchestrator.
+
+This prompt rebuilds and hardens the entire UiPath integration layer from scratch. The
+current integration is fragile and fails on every push. That is not acceptable.
+
+**Core Principles — non-negotiable:**
+1. AI/automation first. Every integration action is initiated and managed by AI.
+2. Resilience. Failures are handled gracefully, retried intelligently, and surfaced clearly.
+3. Smart provisioning. Robots are provisioned only when needed and released when done.
+4. UX/UI quality matches the integration quality. Users should never see a raw error or a
+   spinner with no context.
+
+---
+
+## PART 1 — AUDIT FIRST, BUILD SECOND
+
+Before writing a single line of new code, do the following:
+
+1. Read every existing file related to UiPath integration. This includes any file with
+   "uipath", "orchestrator", "robot", "queue", "agent", "trigger", or "publish" in the
+   name or content.
+
+2. Identify and document every integration point that is currently broken or fragile:
+   - Authentication failures or token expiry issues
+   - Hardcoded values that should be environment variables
+   - Missing error handling around subprocess or API calls
+   - Race conditions (e.g., publish called before pack completes)
+   - Missing retry logic
+   - In-memory state that gets lost on restart
+   - Action Center or Test Manager calls that fail silently
+
+3. Output a short audit summary as a code comment block at the top of a new file called
+   `INTEGRATION_AUDIT.md` before proceeding. This is for the developer's reference.
+
+4. Then proceed with the rebuild using the audit findings as your fix list.
+
+---
+
+## PART 2 — UIPATH INTEGRATION LAYER REBUILD
+
+### 2.1 — Authentication Module (`uipath_auth.py`)
+
+Build a singleton authentication manager. This is the foundation everything else depends on.
+
+**Requirements:**
+
+- Uses Client Credentials OAuth2 flow (not browser-based)
+- Reads all credentials from environment variables:
+  ```
+  UIPATH_CLIENT_ID
+  UIPATH_CLIENT_SECRET
+  UIPATH_BASE_URL          # e.g. https://cloud.uipath.com/org/tenant/orchestrator_
+  UIPATH_TENANT_NAME
+  UIPATH_ORGANIZATION_ID
+  UIPATH_FOLDER_ID         # numeric folder ID for target folder
+  ```
+- Token endpoint: `https://cloud.uipath.com/identity_/connect/token`
+- Scopes: `OR.Execution OR.Queues OR.Processes OR.Folders.Read OR.Jobs OR.Triggers`
+- Caches the token in memory with its expiry timestamp
+- `get_token()` method: returns valid token, refreshes automatically if within 60 seconds
+  of expiry — never lets a call fail due to an expired token
+- `get_headers()` method: returns the full header dict for any Orchestrator API call:
+  ```python
+  {
+    "Authorization": f"Bearer {token}",
+    "X-UIPATH-OrganizationUnitId": UIPATH_FOLDER_ID,
+    "Content-Type": "application/json"
+  }
+  ```
+- `health_check()` method: calls `GET /odata/Folders` and returns `(bool, str)` — True if
+  reachable, False with an error message if not
+- All token failures log a structured error and raise a `UiPathAuthError` custom exception
+- Never log or expose the client secret. Log only the first 6 characters of the client ID
+  for traceability.
+
+---
+
+### 2.2 — Orchestrator API Client (`orchestrator_client.py`)
+
+A clean, typed wrapper around every Orchestrator API endpoint CannonBall needs. No raw
+`requests` calls anywhere else in the codebase — all HTTP goes through this client.
+
+**Design:**
+- Takes an instance of the auth manager in its constructor
+- Every method auto-injects headers via `auth.get_headers()`
+- Every method has a `max_retries=3` parameter with exponential backoff (1s, 2s, 4s)
+- All responses are checked for status codes. Non-2xx raises a `OrchestratorAPIError`
+  with the status code, endpoint, and response body included in the error message
+- Methods return typed Python dicts or dataclasses — never raw response objects
+
+**Required methods:**
+
+```python
+# Queue Management
+get_queues(folder_id: int = None) -> list[dict]
+get_queue_by_name(name: str) -> dict | None
+get_queue_items(queue_id: int, status: str = None, limit: int = 50) -> list[dict]
+add_queue_item(queue_name: str, reference: str, payload: dict, priority: str = "Normal") -> dict
+bulk_add_queue_items(queue_name: str, items: list[dict]) -> dict
+
+# Process Management  
+get_processes(folder_id: int = None) -> list[dict]
+get_process_by_name(name: str) -> dict | None
+upload_package(nupkg_path: str) -> dict
+create_process(package_name: str, package_version: str) -> dict
+delete_process(process_key: str) -> bool
+
+# Job Management
+start_job(process_key: str, robot_ids: list[int] = None, jobs_count: int = 1) -> dict
+get_job(job_id: int) -> dict
+get_jobs(process_name: str = None, status: str = None) -> list[dict]
+stop_job(job_id: int, strategy: str = "SoftStop") -> bool
+
+# Robot / Machine Management
+get_robots(folder_id: int = None) -> list[dict]
+get_robot(robot_id: int) -> dict
+get_sessions(robot_id: int = None) -> list[dict]
+
+# Action Center
+get_action_catalog() -> list[dict]
+get_tasks(status: str = None, assignee: str = None) -> list[dict]
+get_task(task_id: int) -> dict
+complete_task(task_id: int, action: str, data: dict = None) -> dict
+assign_task(task_id: int, assignee: str) -> dict
+
+# Test Manager
+get_test_sets(project_id: str = None) -> list[dict]
+start_test_execution(test_set_id: str) -> dict
+get_test_execution(execution_id: str) -> dict
+wait_for_test_execution(execution_id: str, timeout_seconds: int = 300) -> dict
+
+# Triggers
+get_triggers(process_name: str = None) -> list[dict]
+create_queue_trigger(
+  name: str,
+  process_key: str,
+  queue_name: str,
+  min_jobs_count: int,
+  max_jobs_count: int,
+  jobs_per_item: int = 1
+) -> dict
+update_trigger(trigger_id: int, updates: dict) -> dict
+disable_trigger(trigger_id: int) -> bool
+enable_trigger(trigger_id: int) -> bool
+
+# Monitoring
+get_queue_stats(queue_id: int) -> dict  # depth, processing rate, avg time, failed count
+get_folder_stats() -> dict
+```
+
+---
+
+### 2.3 — Smart Provisioning Module (`smart_provisioning.py`)
+
+This is the intelligence layer. It behaves like infrastructure auto-scaling but for UiPath
+robots. It decides when to spin work up and when to release it.
+
+**Design Philosophy:**
+- No robot runs unless there is a reason to run it
+- Provisioning decisions are made by AI, not static rules
+- The system learns from queue behavior over time (within a session at minimum)
+- All provisioning decisions are logged with reasoning
+
+**Class: SmartProvisioningEngine**
+
+```python
+class SmartProvisioningEngine:
+    def __init__(self, orchestrator: OrchestratorClient, config: ProvisioningConfig)
+```
+
+**ProvisioningConfig (dataclass):**
+```python
+@dataclass
+class ProvisioningConfig:
+    process_name: str
+    queue_name: str
+    min_robots: int = 0           # 0 = fully elastic, spin down to zero
+    max_robots: int = 5           # hard cap per process
+    scale_up_threshold: int = 10  # queue items per robot before adding another
+    scale_down_threshold: int = 2  # items per robot before releasing one
+    cooldown_seconds: int = 60    # min time between scaling decisions
+    sla_minutes: int = 60         # target completion time for queue
+    idle_timeout_seconds: int = 300  # release robot after this many seconds idle
+```
+
+**Methods:**
+
+```python
+def analyze_queue_and_decide(self, queue_stats: dict, active_jobs: list) -> ProvisioningDecision
+```
+- Calls Claude API with queue stats, active job count, SLA, and historical pattern
+- System prompt: "You are a provisioning intelligence engine for UiPath robot fleets.
+  Analyze the queue metrics and active jobs below. Decide whether to scale up, scale down,
+  or hold. Return JSON only: {action: 'scale_up'|'scale_down'|'hold', robots_delta: int,
+  reasoning: str, confidence: float}. Consider: queue depth trend, average processing time,
+  SLA target, and cooldown period."
+- Returns a `ProvisioningDecision` dataclass with the action, delta, and reasoning
+
+```python
+def execute_decision(self, decision: ProvisioningDecision) -> ExecutionResult
+```
+- If scale_up: calls `orchestrator.start_job()` for `decision.robots_delta` jobs
+- If scale_down: identifies idle jobs and calls `orchestrator.stop_job()` gracefully
+- If hold: logs the hold decision with reasoning, no API calls
+- Returns execution result with job IDs started or stopped
+
+```python
+def monitor_loop(self, interval_seconds: int = 30) -> None
+```
+- Runs in a background thread
+- Every `interval_seconds`, fetches queue stats and active jobs
+- Calls `analyze_queue_and_decide`
+- If cooldown has elapsed and action is not hold, calls `execute_decision`
+- Logs every cycle to the provisioning_log table
+
+```python
+def get_provisioning_status(self) -> dict
+```
+- Returns current state: active jobs, queue depth, last decision, next check timestamp
+
+```python
+def emergency_stop(self, process_name: str) -> dict
+```
+- Stops all running jobs for the given process immediately
+- Disables any active queue triggers
+- Returns count of jobs stopped
+
+---
+
+### 2.4 — Action Center Integration (`action_center.py`)
+
+**Problem being solved:** When a robot hits an exception, it currently creates an Action
+Center task that disappears into a void. CannonBall needs to surface these, route them,
+and optionally resolve them via AI.
+
+**Class: ActionCenterManager**
+
+```python
+def poll_pending_tasks(self, idea_id: str = None) -> list[ActionTask]
+```
+- Polls Orchestrator for pending Action Center tasks every 30 seconds (background thread)
+- Optionally filters by idea_id tag on the task
+- Updates the `action_tasks` table in the database
+
+```python
+def route_task(self, task: ActionTask) -> RoutingDecision
+```
+- Calls Claude API to analyze the task:
+  - If the task has enough context for AI to resolve: flag as `ai_resolvable`
+  - If it needs human input: flag as `human_required` and identify which role should handle it
+  - Reason: str explaining the routing decision
+- Returns a `RoutingDecision` dataclass
+
+```python
+def attempt_ai_resolution(self, task: ActionTask) -> ResolutionResult
+```
+- For `ai_resolvable` tasks, uses Claude to determine the correct completion action and data
+- Calls `orchestrator.complete_task()` with the AI-determined response
+- Logs the resolution with full reasoning for audit
+
+```python
+def escalate_to_ui(self, task: ActionTask, role: str = "sme") -> None
+```
+- Pushes a notification to the CannonBall UI for the specified role
+- Creates an entry in the `notifications` table
+- The UI shows an Action Center card in the SME's workspace with task details and action buttons
+
+```python
+def get_task_dashboard(self) -> dict
+```
+- Returns counts and lists: pending, ai_resolved, human_resolved, escalated, failed
+
+---
+
+### 2.5 — Test Manager Integration (`test_manager.py`)
+
+**Problem being solved:** Agents are being published without test execution. Test Manager
+must be a blocking gate in the pipeline before any publish.
+
+**Class: TestManager**
+
+```python
+def generate_test_cases(self, intent: dict, main_py: str) -> list[TestCase]
+```
+- Calls Claude API with the agent intent and generated code
+- System prompt: "Generate UiPath Test Automation test cases for this agent. Return JSON
+  array only. Each test case: {name, description, input_data, expected_output, type:
+  'happy_path'|'edge_case'|'error_handling'}"
+- Returns list of `TestCase` dataclasses
+
+```python
+def create_test_set(self, process_name: str, test_cases: list[TestCase]) -> str
+```
+- Creates a test set in UiPath Test Manager via Orchestrator API
+- Returns the test set ID
+
+```python
+def run_tests_and_wait(
+  self,
+  test_set_id: str,
+  timeout_seconds: int = 300
+) -> TestExecutionResult
+```
+- Starts test execution
+- Polls every 10 seconds for completion
+- Returns results including: passed count, failed count, failed test names, execution time
+- Raises `TestExecutionTimeout` if timeout exceeded
+
+```python
+def evaluate_results(self, results: TestExecutionResult) -> PassFailDecision
+```
+- Calls Claude API to evaluate whether the failure rate is acceptable:
+  - Input: total tests, passed, failed, failed test names and reasons
+  - Output: {decision: 'pass'|'fail', reasoning: str, remediation_suggestions: list[str]}
+- 100% pass rate is not always required — edge case failures may be acceptable
+- Returns `PassFailDecision` dataclass
+
+```python
+def generate_test_report(self, results: TestExecutionResult, decision: PassFailDecision) -> str
+```
+- Returns a human-readable markdown string for display in the CannonBall UI
+
+---
+
+### 2.6 — Agent Generation Pipeline (Updated with Resilience)
+
+Replace the existing `full_pipeline()` with this hardened version.
+
+**Key changes from the original spec:**
+- Test execution is now a blocking gate before publish (Stage 7.5)
+- Smart provisioning is configured at deploy time (Stage 9.5)
+- Action Center monitoring starts automatically after deploy
+- Every stage writes status to the database, not just memory
+- Failed stages can be retried individually from the UI without restarting the full pipeline
+- Max 2 retries on LLM generation stages with different seeds if code quality check fails
+
+**Updated 12-Stage Pipeline:**
+
+```
+Stage 1  → SME describes agent in natural language
+Stage 2  → Intent extraction + agent type validation (agent vs. robot vs. hybrid)
+Stage 3  → Template selection from CannonBall library
+Stage 4  → main.py generation via LLM
+Stage 5  → Code quality gate: check for placeholder comments, syntax errors, missing types
+           → If fails: retry up to 2x with corrected prompt. If still fails: surface to SME.
+Stage 6  → Supporting file generation (pyproject.toml, langgraph.json, uipath.json)
+Stage 7  → Generate test cases via AI
+Stage 7.5→ uipath init + uipath pack (package only, do not publish yet)
+Stage 8  → Run test execution against packed agent
+           → Evaluate results with AI
+           → BLOCKING: if AI evaluates as 'fail', pipeline stops. Surfaces report to SME.
+Stage 9  → uipath auth (headless) + uipath publish to Tenant Process Feed
+Stage 9.5→ Smart Provisioning configuration: AI suggests initial thresholds based on
+           intent complexity. Creates queue trigger. Starts monitor loop.
+Stage 10 → Validation: poll Orchestrator to confirm process exists and is active
+Stage 11 → Action Center monitoring activated for this process
+Stage 12 → Handoff report delivered to SME in CannonBall UI
+```
+
+**Database schema additions needed:**
+
+```sql
+CREATE TABLE pipeline_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  idea_id UUID REFERENCES ideas(id),
+  job_id TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL,  -- running, success, failed, retrying
+  current_stage INTEGER,
+  failed_stage TEXT,
+  intent JSONB,
+  agent_name TEXT,
+  process_link TEXT,
+  error_message TEXT,
+  stages JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE provisioning_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id TEXT REFERENCES pipeline_jobs(job_id),
+  process_name TEXT,
+  decision TEXT,
+  robots_delta INTEGER,
+  reasoning TEXT,
+  confidence FLOAT,
+  executed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE action_tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  orchestrator_task_id TEXT UNIQUE,
+  idea_id UUID REFERENCES ideas(id),
+  status TEXT,
+  routing TEXT,
+  ai_resolved BOOLEAN DEFAULT FALSE,
+  resolution_reasoning TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ
+);
+
+CREATE TABLE test_results (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id TEXT REFERENCES pipeline_jobs(job_id),
+  test_set_id TEXT,
+  passed INTEGER,
+  failed INTEGER,
+  report_markdown TEXT,
+  ai_decision TEXT,
+  ai_reasoning TEXT,
+  executed_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+## PART 3 — API LAYER
+
+### 3.1 — New and Updated Endpoints
+
+```python
+# Health and Status
+GET  /api/uipath/health
+     → calls auth.health_check() and returns connectivity status, token validity,
+       folder accessibility, and current robot count
+
+# Agent Pipeline
+POST /api/agents/generate
+     → body: { description, idea_id, job_id? }
+     → starts full 12-stage pipeline as background task
+     → returns immediately with job_id
+
+GET  /api/agents/job/{job_id}
+     → returns full job status from database (not memory)
+     → includes per-stage status, current stage, and any error details
+
+POST /api/agents/job/{job_id}/retry-stage
+     → body: { stage: int }
+     → retries a single failed stage without restarting the full pipeline
+
+DELETE /api/agents/job/{job_id}
+     → cancels a running pipeline, cleans up temp files
+
+# Smart Provisioning
+POST /api/provisioning/configure
+     → body: { process_name, queue_name, config: ProvisioningConfig }
+     → starts the monitor loop for this process
+
+GET  /api/provisioning/{process_name}/status
+     → returns current provisioning state
+
+POST /api/provisioning/{process_name}/emergency-stop
+     → stops all jobs immediately
+
+# Action Center
+GET  /api/action-center/tasks
+     → returns pending and recently resolved tasks across all processes
+
+POST /api/action-center/tasks/{task_id}/resolve
+     → body: { action, data, resolved_by: 'ai'|'human' }
+     → completes the task in Orchestrator and updates local DB
+
+# Queue Management (existing, hardened)
+GET  /api/queues
+POST /api/queues/{queue_name}/items
+POST /api/queues/{queue_name}/items/bulk
+
+# Test Results
+GET  /api/tests/job/{job_id}
+     → returns the test report markdown and AI decision for a given job
+```
+
+### 3.2 — Streaming Status Updates
+
+Every long-running operation (pipeline, test execution, provisioning cycles) must emit
+server-sent events (SSE) on the endpoint:
+
+```
+GET /api/agents/job/{job_id}/stream
+```
+
+The frontend subscribes to this stream and receives stage-by-stage updates as JSON events:
+
+```json
+{ "stage": 4, "stage_name": "Code Generation", "status": "running", "message": "Generating main.py..." }
+{ "stage": 4, "stage_name": "Code Generation", "status": "success", "message": "main.py generated. 187 lines. Quality gate passed." }
+{ "stage": 5, "stage_name": "Code Quality Gate", "status": "running", "message": "Checking for placeholders and type errors..." }
+```
+
+---
+
+## PART 4 — UX/UI REQUIREMENTS
+
+This is not a developer tool. It is used by Process SMEs who should never see a raw error,
+a stack trace, or a spinner with no explanation. Every integration moment has a UX design.
+
+### 4.1 — Integration Status Panel
+
+Add a persistent status bar at the bottom of the CannonBall shell (not a modal, not a
+drawer — always visible). This bar shows:
+
+- UiPath connection status: green dot "Connected to [Tenant Name]" or red dot "Disconnected – [reason]"
+- Active robot count: "2 robots running" or "No active robots"
+- Pending Action Center tasks: "3 tasks pending" (clickable, opens task panel)
+- Last provisioning decision: "Scaled up 1 robot – 47 items in queue" with timestamp
+
+The status bar is collapsible via a chevron. Default: expanded.
+
+### 4.2 — Pipeline Progress View
+
+When a generation job is running, the SME sees a full-screen progress experience —
+not a toast notification.
+
+Design:
+
+- 12 stages rendered as a vertical timeline
+- Current stage pulses with an animated ring in the accent color
+- Completed stages show a checkmark and a one-line summary of what happened
+  e.g. "Code generated – 187 lines, quality gate passed"
+- Failed stages show a red indicator with an expandable error card:
+  - Plain English explanation of what failed
+  - What CannonBall is going to try next (retry logic)
+  - If all retries exhausted: a "Review and Edit" button that opens the generated code
+    in an inline editor so the SME can make corrections and re-trigger from that stage
+- A live log panel on the right side of this view (collapsible) showing raw subprocess
+  output for developers who want to see it
+- An "AI Commentary" feed below the timeline: Claude narrates each stage in plain English
+  as it completes, like a sports commentator explaining what just happened
+
+### 4.3 — Smart Provisioning Dashboard
+
+Accessible from the idea workspace when a process is deployed and provisioning is active.
+
+Shows:
+
+- A real-time chart: queue depth (line) and active robots (bar) over the last 60 minutes
+- Current provisioning decision: scale status, last action, last AI reasoning
+- Provisioning history: table of every decision with timestamp, action, robots delta, reasoning
+- Config panel: current thresholds with edit controls (min/max robots, scale thresholds, SLA)
+  → Editing thresholds updates the ProvisioningConfig and takes effect on the next cycle
+- Emergency stop button — always visible, clearly labeled, requires a single confirmation click
+
+### 4.4 — Action Center Panel
+
+A slide-over panel triggered from the status bar "tasks pending" chip.
+
+Each task card shows:
+- Task title and description from Orchestrator
+- Process name and timestamp
+- AI routing decision: "AI can resolve this" (green) or "Human review required" (amber)
+- For AI-resolvable: a "Let AI Resolve" button with a preview of what action the AI will take
+  → Clicking shows the AI's proposed action and reasoning → Confirm or override
+- For human-required: input fields to complete the task directly in CannonBall without
+  opening Orchestrator
+- Resolution status: pending / resolved by AI / resolved by [user] / failed
+
+### 4.5 — Test Results View
+
+After Stage 8, before the pipeline proceeds to publish, the SME sees:
+
+- A test results card with a pass/fail breakdown:
+  - Progress bar: X of Y tests passed
+  - Color: green if AI evaluated as pass, red if fail
+- AI evaluation summary: one paragraph explaining the results in plain English
+- Expandable table of individual test results
+- If failed: AI's remediation suggestions as a numbered list with "Apply Suggestion" buttons
+  that open the relevant code section in the inline editor
+- "Proceed to Publish" button — only active if AI evaluated as pass
+- "Override and Publish" — visible but secondary, requires a typed confirmation "I accept the risk"
+
+### 4.6 — Integrations Admin Page Updates
+
+The existing Integrations tab (Organization → Credentials → Scopes → Confirm wizard) stays
+as-is. The following additions are required on top of it.
+
+**Connected badge must reflect live state, not cached state.**
+The "Connected" badge in the top right of the UiPath Orchestrator card must be driven by
+the `health_check()` polling loop running in the background, not by the last manual test
+timestamp. Poll every 60 seconds. If health_check() fails, the badge flips to red
+"Disconnected – [reason]" immediately without requiring a page reload. The "Last tested"
+timestamp updates automatically on every poll, not just on manual re-test.
+
+**Orchestrator Diagnostics — structured results, not pass/fail.**
+When "Run Diagnostics" is clicked, return a structured checklist in the UI:
+
+```
+Authentication            ✓ Token valid, expires in 47 minutes
+Folder accessible         ✓ SumeetAppDefaultFeed (ID: 12345)
+Package feed writable     ✓ Last upload: 3 hours ago
+Machines available        ✓ 2 machines registered
+Robots available          ✓ 1 unattended robot online
+Action Center reachable   ✓ 3 tasks pending
+Test Manager reachable    ✗ No license detected on this tenant
+Queue access              ✓ 4 queues visible in target folder
+```
+
+Each row has a status icon (green ✓, red ✗, amber ⚠ for warnings), a label, and a
+one-line detail string. If any row is red, show a plain-English remediation suggestion
+below it inline — not in a separate modal.
+
+**Add a fifth section: Live Operations.**
+Below Orchestrator Diagnostics, add a Live Operations section. This section is always
+visible when the integration is connected. It auto-refreshes every 30 seconds via
+polling — no refresh button, no page reload.
+
+Display:
+
+| Metric | Display |
+|---|---|
+| Connection latency | "Orchestrator API: 142ms" with a colored dot (green <200ms, amber <500ms, red 500ms+) |
+| Active jobs | "2 jobs running" — clickable, links to Smart Provisioning dashboard |
+| Pending Action Center tasks | "3 tasks pending" — clickable, opens Action Center panel |
+| Last queue item pushed | "Invoice_Q — 4 minutes ago" |
+| Test Manager license | "Licensed" (green) or "Not detected" (red) |
+| SDK version | "uipath-langchain 0.5.2 installed" |
+| Last successful publish | "invoice_processor_agent v1.0.3 — 2 hours ago" |
+
+If the integration is disconnected, this section shows a single amber banner:
+"Live Operations unavailable — CannonBall cannot reach UiPath Orchestrator.
+Check credentials or network connectivity." with a "Retry Connection" button.
+
+### 4.7 — Error States
+
+Every error in the system maps to a user-facing state. No raw error strings ever reach the UI.
+
+| Error Type | What the SME Sees |
+|---|---|
+| Auth failure | "CannonBall can't reach UiPath right now. Retrying in 30 seconds." + retry timer |
+| Pack failure | "The agent package couldn't be built. Here's what to check: [AI-generated suggestions]" |
+| Publish failure | "The agent was built successfully but couldn't be published. [Reason in plain English]" |
+| Test timeout | "Tests are taking longer than expected. You can wait or skip tests and publish manually." |
+| Queue empty | "Nothing to process right now. Robots are idle and will start when items arrive." |
+| Action Center unreachable | "Action Center couldn't be reached. Tasks will sync when the connection is restored." |
+
+---
+
+## PART 5 — ENVIRONMENT SETUP AND RESILIENCE RULES
+
+### 5.1 — Required Environment Variables
+
+All must be in Replit Secrets. Add validation on startup: if any required variable is
+missing, log a clear error and refuse to start rather than failing silently mid-operation.
+
+```
+# UiPath Core
+UIPATH_CLIENT_ID
+UIPATH_CLIENT_SECRET
+UIPATH_BASE_URL
+UIPATH_TENANT_NAME
+UIPATH_ORGANIZATION_ID
+UIPATH_FOLDER_ID
+
+# Anthropic
+ANTHROPIC_API_KEY
+
+# Database
+DATABASE_URL
+
+# App
+APP_SECRET_KEY
+ENVIRONMENT   # development | production
+```
+
+### 5.2 — Resilience Rules
+
+Every rule below is a hard requirement, not a recommendation.
+
+1. **No silent failures.** Every exception must be caught, logged with context, and
+   either retried or surfaced to the UI. `except: pass` is banned.
+
+2. **No hardcoded values.** All credentials, URLs, thresholds, and configuration are
+   environment variables or database-stored config. No exceptions.
+
+3. **No in-memory state for anything that matters.** Pipeline job status, provisioning
+   config, action tasks, and test results are all written to the database immediately.
+   A server restart should not lose any user data or job state.
+
+4. **All subprocess calls must:**
+   - Use list format, not shell strings
+   - Have `timeout=120` set
+   - Capture stdout and stderr separately
+   - Log the command being run (without credentials)
+   - Return a structured result, never raise unhandled exceptions
+
+5. **All HTTP calls must:**
+   - Use the auth manager's `get_headers()` — never build auth headers manually
+   - Have retry logic with exponential backoff (max 3 retries)
+   - Have a request timeout of 30 seconds
+   - Log the endpoint and status code on every response
+
+6. **Token refresh must be proactive.** Refresh 60 seconds before expiry, not after it
+   fails. A 401 on an Orchestrator call should be treated as a signal to refresh and retry
+   once — not to surface an error to the user.
+
+7. **Background threads must be managed.** The provisioning monitor loop and action
+   center polling thread must be registered in an app-level thread registry. On shutdown,
+   all threads are stopped cleanly. No orphaned threads.
+
+8. **Database writes are synchronous for status updates.** Do not fire-and-forget status
+   writes. If the DB write fails, log it and surface a warning — but do not fail the
+   pipeline because of a log write.
+
+9. **The `.nupkg` is validated before publish.** After `uipath pack`, check that the file
+   exists, is non-zero bytes, and is less than 100MB. If any check fails, surface a clear
+   error before attempting publish.
+
+10. **Cleanup on failure.** Temp directories are kept on failure for debugging. Successful
+    jobs clean up after 24 hours. Add a cron job or scheduled task to handle this.
+
+---
+
+## PART 6 — TESTING
+
+Write tests in `tests/` covering:
+
+- `test_auth.py`: token caching, refresh logic, health check
+- `test_orchestrator_client.py`: retry behavior on 500s, 401 refresh-and-retry, correct
+  header injection, queue item creation payload format
+- `test_smart_provisioning.py`: scale_up decision triggers, scale_down decision triggers,
+  cooldown respected, emergency_stop halts jobs, AI decision parsing
+- `test_action_center.py`: task routing logic, AI resolution flow, human escalation
+- `test_pipeline.py`: full pipeline with mocked subprocesses and mocked Claude API,
+  stage retry behavior, DB writes at each stage
+- `test_test_manager.py`: test case generation, result evaluation, pass/fail gate logic
+
+All tests use `pytest`. All external calls (Anthropic API, Orchestrator, subprocess) are
+mocked. Tests must run in under 60 seconds total.
+
+---
+
+## FINAL DELIVERABLE CHECK
+
+Before marking this complete, verify:
+
+- [ ] `INTEGRATION_AUDIT.md` exists with findings from the pre-build audit
+- [ ] `uipath_auth.py` handles token refresh, never exposes secrets in logs
+- [ ] `orchestrator_client.py` has all listed methods with retry logic
+- [ ] `smart_provisioning.py` runs as a background thread and logs every decision
+- [ ] `action_center.py` polls and routes tasks automatically
+- [ ] `test_manager.py` blocks pipeline publish on AI-evaluated failure
+- [ ] All pipeline state is in the database, nothing critical is in memory only
+- [ ] Status bar is visible in the UI at all times
+- [ ] Pipeline progress view streams stage updates via SSE
+- [ ] Smart Provisioning dashboard shows real-time chart
+- [ ] Action Center panel is accessible from the status bar
+- [ ] Test results view gates publish behind AI evaluation
+- [ ] All error states have plain-English UI representations
+- [ ] All environment variables are validated on startup
+- [ ] All 10 resilience rules are implemented
+- [ ] Test suite passes with mocked externals
+- [ ] README updated with new module architecture, env var list, and thread management notes
+- [ ] Connected badge on Integrations page is driven by live health_check() polling, not cached timestamp
+- [ ] Diagnostics returns structured checklist with per-row remediation suggestions
+- [ ] Live Operations section auto-refreshes every 30 seconds with no user action required
+- [ ] Live Operations gracefully degrades to a disconnected banner when Orchestrator is unreachable
+- [ ] Test Manager license status is surfaced in both Diagnostics and Live Operations
+```
