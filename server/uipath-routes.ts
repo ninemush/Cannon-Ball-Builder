@@ -359,7 +359,7 @@ export function registerUiPathRoutes(app: Express): void {
         statusLine = deploymentReport.replace(/^\n+/, "");
       }
 
-      const chatMsg = [
+      const chatLines = [
         `Package deployed to UiPath Orchestrator.`,
         ``,
         `**${packageId}** v${packageVersion}`,
@@ -370,6 +370,21 @@ export function registerUiPathRoutes(app: Express): void {
           ? `The automation is ready. You can trigger a job from this workspace or from Orchestrator.`
           : `Create a Process from this package in Orchestrator to make it runnable.`,
       ].filter(Boolean).join("\n");
+
+      const deployReportData = deployResults.length > 0 ? {
+        packageId,
+        version: packageVersion,
+        processName: result.details?.processName,
+        orgName: result.details?.orgName,
+        tenantName: result.details?.tenantName,
+        folderName: result.details?.folderName,
+        results: deployResults,
+        summary: result.details?.deploymentSummary || "",
+      } : null;
+
+      const chatMsg = deployReportData
+        ? `${chatLines}\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
+        : chatLines;
 
       await chatStorage.createMessage(ideaId, "assistant", chatMsg);
     } else {

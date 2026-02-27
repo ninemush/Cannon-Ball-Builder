@@ -33,6 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DeploymentReportCard } from "@/components/deployment-report-card";
+import { CannonballSpinner } from "@/components/cannonball-spinner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -153,7 +154,7 @@ function DocProgressIndicator({ docType, onCancel }: { docType: string; onCancel
     <div className="flex justify-start" data-testid="doc-generation-loading">
       <div className="max-w-[85%] rounded-lg px-3 py-2.5 bg-card border border-card-border rounded-bl-sm">
         <div className="flex items-center gap-2">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-cb-teal shrink-0" />
+          <CannonballSpinner />
           <div className="flex flex-col gap-0.5">
             <p className="text-xs text-foreground/80 font-medium">
               Generating {docType}...

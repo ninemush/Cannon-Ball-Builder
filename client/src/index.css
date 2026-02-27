@@ -665,3 +665,22 @@
   color: hsl(var(--primary));
   text-decoration: underline;
 }
+
+@keyframes cannonball-roll {
+  0% { transform: translateX(-2px) rotate(0deg); }
+  50% { transform: translateX(2px) rotate(180deg); }
+  100% { transform: translateX(-2px) rotate(360deg); }
+}
+@keyframes cannonball-spark-flicker {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.15; }
+}
+.cannonball-roll {
+  animation: cannonball-roll 1.2s ease-in-out infinite;
+}
+.cannonball-spark {
+  animation: cannonball-spark-flicker 0.8s ease-in-out infinite alternate;
+}
+.cannonball-trail {
+  animation: cannonball-spark-flicker 0.6s ease-in-out infinite alternate;
+}
