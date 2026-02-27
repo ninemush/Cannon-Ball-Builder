@@ -1,0 +1,60 @@
+Fix two integration failures in CannonBall.
+
+FAILURE 1 — Action Center
+
+The current code is calling Action Center endpoints against the 
+Orchestrator base URL. This is wrong.
+
+Action Center in UiPath Cloud uses a separate base URL:
+https://cloud.uipath.com/{org}/{tenant}/actions_/
+
+The correct endpoint to create a task catalog is:
+POST https://cloud.uipath.com/{org}/{tenant}/actions_/
+     tasks/taskCatalogs
+
+Add UIPATH_ACTIONS_BASE_URL as a new environment variable:
+https://cloud.uipath.com/{org}/{tenant}/actions_/
+
+Add the following scopes to the token request if not already present:
+AC.Tasks AC.Tasks.Read AC.Tasks.Write AC.Actions
+
+Update action_center.py to use UIPATH_ACTIONS_BASE_URL for all 
+Action Center API calls. Never use the Orchestrator base URL for 
+Action Center operations.
+
+FAILURE 2 — Test Manager
+
+The current code is calling Test Manager endpoints against the 
+Orchestrator base URL. This is wrong.
+
+Test Manager in UiPath Cloud uses a separate base URL:
+https://cloud.uipath.com/{org}/{tenant}/testmanager_/
+
+Add UIPATH_TESTMANAGER_BASE_URL as a new environment variable:
+https://cloud.uipath.com/{org}/{tenant}/testmanager_/
+
+Add the following scopes to the token request if not already present:
+TM.Projects TM.TestCases TM.TestSets TM.TestExecutions
+
+Update test_manager.py to use UIPATH_TESTMANAGER_BASE_URL for all 
+Test Manager API calls. Never use the Orchestrator base URL for 
+Test Manager operations.
+
+ADDITIONAL FIX — uipath_auth.py
+
+The token request currently uses a single scope list. Split service 
+URLs and scopes so each service requests only what it needs, but keep 
+a single cached token that covers all scopes in one request. The 
+combined scope string for the token request should include:
+OR.Execution OR.Queues OR.Processes OR.Folders.Read OR.Jobs 
+OR.Triggers AC.Tasks AC.Tasks.Write TM.Projects TM.TestCases 
+TM.TestSets TM.TestExecutions
+
+Add UIPATH_ACTIONS_BASE_URL and UIPATH_TESTMANAGER_BASE_URL to:
+- .env.example
+- The startup environment variable validation check
+- The README
+
+After making these changes, re-run the diagnostic against the 
+Monitor mailbox idea and confirm Action Center task catalog creation 
+succeeds and all 5 test cases no longer show endpoint errors.
