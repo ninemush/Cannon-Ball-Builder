@@ -1,5 +1,6 @@
 import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap } from "./uipath-integration";
 import { uipathFetch, isGenuineApiResponse, isValidCreation } from "./uipath-fetch";
+import { getToken as getSharedToken, getActionsBaseUrl, getTestManagerBaseUrl, type UiPathAuthConfig } from "./uipath-auth";
 import Anthropic from "@anthropic-ai/sdk";
 
 function odataEscape(value: string): string {
@@ -1292,8 +1293,8 @@ async function provisionActionCenter(
     acHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
   }
 
-  const actionsBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/actions_/api/v1`;
-  const actionsCatalogUrl = `${actionsBase}/TaskCatalogs`;
+  const actionsBase = getActionsBaseUrl(config as UiPathAuthConfig);
+  const actionsCatalogUrl = `${actionsBase}/api/v1/TaskCatalogs`;
   const odataCatalogUrl = `${base}/odata/TaskCatalogs`;
   const genericTaskUrl = `${base}/tasks/GenericTasks/CreateTask`;
   const odataUnboundActionUrl = `${base}/odata/Tasks/UiPathODataSvc.CreateTask`;
@@ -1698,20 +1699,22 @@ async function provisionTestCases(
   if (!testCases?.length && !testDataQueues?.length) return [];
   const results: DeploymentResult[] = [];
 
-  const tmToken = await getTMToken(config);
-  if (!tmToken) {
+  let tmToken: string;
+  try {
+    tmToken = await getSharedToken();
+  } catch (err: any) {
     return [{
       artifact: "Test Case",
       name: `${(testCases?.length || 0) + (testDataQueues?.length || 0)} item(s)`,
       status: "skipped" as const,
-      message: `Could not acquire TM-scoped token. Test Manager scopes (TM.Projects, TM.TestCases) may not be available for this external application.`,
+      message: `Could not acquire token with TM scopes: ${err.message}`,
     }];
   }
 
+  const primaryTmBase = getTestManagerBaseUrl(config as UiPathAuthConfig);
   const tmBases = [
-    `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`,
+    primaryTmBase,
     `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tmapi_`,
-    `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager`,
   ];
   const tmHdrs: Record<string, string> = {
     "Authorization": `Bearer ${tmToken}`,
@@ -2254,7 +2257,7 @@ async function preflightInfraProbe(
     let acFound = false;
 
     if (config) {
-      const actionsProbeUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/actions_/api/v1/TaskCatalogs?$top=1`;
+      const actionsProbeUrl = `${getActionsBaseUrl(config as UiPathAuthConfig)}/api/v1/TaskCatalogs?$top=1`;
       try {
         const actionsRes = await fetch(actionsProbeUrl, { headers: hdrs });
         const actionsText = await actionsRes.text();
@@ -2299,12 +2302,17 @@ async function preflightInfraProbe(
   }
 
   if (config) {
-    const tmToken = await getTMToken(config);
+    let tmToken: string | null = null;
+    try {
+      tmToken = await getSharedToken();
+    } catch (err: any) {
+      console.warn(`[UiPath Probe] Could not acquire token for TM probe: ${err.message}`);
+    }
     if (tmToken) {
+      const primaryTmBase = getTestManagerBaseUrl(config as UiPathAuthConfig);
       const tmProbeBases = [
-        `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`,
+        primaryTmBase,
         `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tmapi_`,
-        `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager`,
       ];
       let tmFound = false;
       for (const tmBase of tmProbeBases) {
@@ -2320,7 +2328,7 @@ async function preflightInfraProbe(
           if (tmRes.ok && !tmIsHTML) {
             const genuineCheck = isGenuineServiceResponse(tmText);
             if (genuineCheck.genuine) {
-              result.testManager = { available: true, endpoint: tmBase, message: `Test Manager is licensed and available at ${tmBase} (separate TM token)` };
+              result.testManager = { available: true, endpoint: tmBase, message: `Test Manager is licensed and available at ${tmBase}` };
               tmFound = true;
               break;
             } else {
@@ -2341,7 +2349,7 @@ async function preflightInfraProbe(
         result.testManager = { available: false, message: `Test Manager not available — tried ${tmProbeBases.length} base URL patterns, none returned a genuine API response` };
       }
     } else {
-      result.testManager = { available: false, message: "Could not acquire TM-scoped token — Test Manager scopes may not be available" };
+      result.testManager = { available: false, message: "Could not acquire token for TM probe — check UiPath credentials" };
     }
   }
 
@@ -2448,38 +2456,6 @@ async function getPMToken(config: UiPathConfig): Promise<string | null> {
   }
 }
 
-async function getTMToken(config: UiPathConfig): Promise<string | null> {
-  try {
-    const tmScopes = "TM.Projects TM.Projects.Read TM.Projects.Write TM.TestCases TM.TestCases.Read TM.TestCases.Write TM.TestSets TM.TestSets.Read TM.TestSets.Write";
-    const params = new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
-      scope: tmScopes,
-    });
-
-    const res = await fetch("https://cloud.uipath.com/identity_/connect/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString(),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`[UiPath Deploy] TM token failed (${res.status}): ${errText.slice(0, 200)}`);
-      return null;
-    }
-    const data = await res.json();
-    if (data.access_token && data.scope?.includes("TM.")) {
-      console.log("[UiPath Deploy] TM token acquired successfully");
-      return data.access_token;
-    }
-    console.warn("[UiPath Deploy] TM token issued but missing TM scopes");
-    return null;
-  } catch (err: any) {
-    console.warn(`[UiPath Deploy] TM token error: ${err.message}`);
-    return null;
-  }
-}
 
 async function provisionRobotAccounts(
   base: string, hdrs: Record<string, string>,

@@ -3,6 +3,8 @@ import {
   getHeaders,
   getConfig,
   getBaseUrl,
+  getActionsBaseUrl,
+  getTestManagerBaseUrl,
   invalidateToken,
   UiPathAuthError,
   type UiPathAuthConfig,
@@ -472,8 +474,24 @@ export async function getMachines(): Promise<Machine[]> {
 
 export async function getActionCatalog(): Promise<ActionCatalog[]> {
   try {
-    const res = await orchRequest<ODataResponse<ActionCatalog>>("/odata/TaskCatalogs?$top=50");
-    return res?.value || [];
+    const config = await getConfig();
+    if (!config) return [];
+    const actionsBase = getActionsBaseUrl(config);
+    const headers = await getHeaders();
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 15000);
+    const res = await fetch(`${actionsBase}/api/v1/TaskCatalogs?$top=50`, {
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(tid);
+    if (res.ok) {
+      const data = await res.json();
+      return data?.value || data?.items || [];
+    }
+    if (res.status === 404 || res.status === 403) return [];
+    const fallback = await orchRequest<ODataResponse<ActionCatalog>>("/odata/TaskCatalogs?$top=50");
+    return fallback?.value || [];
   } catch (err: any) {
     if (err.statusCode === 404 || err.statusCode === 403) return [];
     throw err;
@@ -517,12 +535,12 @@ export async function getTestSets(projectId?: string): Promise<TestSet[]> {
   try {
     const config = await getConfig();
     if (!config) return [];
-    const baseUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_/api`;
+    const tmBase = getTestManagerBaseUrl(config);
     const filter = projectId ? `?projectId=${projectId}` : "";
     const headers = await getHeaders();
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 15000);
-    const res = await fetch(`${baseUrl}/TestSets${filter}`, { headers, signal: controller.signal });
+    const res = await fetch(`${tmBase}/api/TestSets${filter}`, { headers, signal: controller.signal });
     clearTimeout(tid);
     if (!res.ok) return [];
     const data = await res.json();
@@ -535,12 +553,12 @@ export async function getTestSets(projectId?: string): Promise<TestSet[]> {
 export async function startTestExecution(testSetId: string): Promise<TestExecution> {
   const config = await getConfig();
   if (!config) throw new UiPathAuthError("UiPath is not configured.");
-  const baseUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_/api`;
+  const tmBase = getTestManagerBaseUrl(config);
   const headers = await getHeaders();
 
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 30000);
-  const res = await fetch(`${baseUrl}/TestSetExecutions`, {
+  const res = await fetch(`${tmBase}/api/TestSetExecutions`, {
     method: "POST",
     headers,
     body: JSON.stringify({ TestSetId: testSetId }),
@@ -558,12 +576,12 @@ export async function startTestExecution(testSetId: string): Promise<TestExecuti
 export async function getTestExecution(executionId: string): Promise<TestExecution> {
   const config = await getConfig();
   if (!config) throw new UiPathAuthError("UiPath is not configured.");
-  const baseUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_/api`;
+  const tmBase = getTestManagerBaseUrl(config);
   const headers = await getHeaders();
 
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 15000);
-  const res = await fetch(`${baseUrl}/TestSetExecutions/${executionId}`, { headers, signal: controller.signal });
+  const res = await fetch(`${tmBase}/api/TestSetExecutions/${executionId}`, { headers, signal: controller.signal });
   clearTimeout(tid);
 
   const text = await res.text();

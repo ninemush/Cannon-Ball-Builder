@@ -26,6 +26,7 @@ type CachedToken = {
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 const TOKEN_ENDPOINT = "https://cloud.uipath.com/identity_/connect/token";
+const DEFAULT_SCOPES = "OR.Default OR.Administration OR.Execution OR.Queues OR.Processes OR.Folders.Read OR.Jobs OR.Triggers AC.Tasks AC.Tasks.Read AC.Tasks.Write AC.Actions TM.Projects TM.TestCases TM.TestSets TM.TestExecutions";
 
 let cachedConfig: UiPathAuthConfig | null = null;
 let cachedToken: CachedToken | null = null;
@@ -50,7 +51,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   const tenantName = map.get("uipath_tenant_name");
   const clientId = map.get("uipath_client_id");
   const clientSecret = map.get("uipath_client_secret");
-  const scopes = map.get("uipath_scopes") || "OR.Default OR.Administration";
+  const scopes = map.get("uipath_scopes") || DEFAULT_SCOPES;
   const folderId = map.get("uipath_folder_id") || undefined;
   const folderName = map.get("uipath_folder_name") || undefined;
 
@@ -67,7 +68,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
         tenantName: envTenantName,
         clientId: envClientId,
         clientSecret: envClientSecret,
-        scopes: process.env.UIPATH_SCOPES || "OR.Default OR.Administration",
+        scopes: process.env.UIPATH_SCOPES || DEFAULT_SCOPES,
         folderId: envFolderId,
       };
       configLoadedAt = now;
@@ -137,6 +138,14 @@ function isTokenValid(): boolean {
 
 export function getBaseUrl(config: UiPathAuthConfig): string {
   return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
+}
+
+export function getActionsBaseUrl(config: UiPathAuthConfig): string {
+  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/actions_`;
+}
+
+export function getTestManagerBaseUrl(config: UiPathAuthConfig): string {
+  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`;
 }
 
 export function invalidateToken(): void {
