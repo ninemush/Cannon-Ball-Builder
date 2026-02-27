@@ -26,7 +26,23 @@ type CachedToken = {
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 const TOKEN_ENDPOINT = "https://cloud.uipath.com/identity_/connect/token";
-const DEFAULT_SCOPES = "OR.Default OR.Administration OR.Execution OR.Queues OR.Processes OR.Folders.Read OR.Jobs OR.Triggers AC.Tasks AC.Tasks.Read AC.Tasks.Write AC.Actions TM.Projects TM.TestCases TM.TestSets TM.TestExecutions";
+const DEFAULT_SCOPES = [
+  "OR.Default", "OR.Administration", "OR.Execution",
+  "OR.Queues", "OR.Queues.Read", "OR.Queues.Write",
+  "OR.Processes", "OR.Folders", "OR.Folders.Read",
+  "OR.Jobs", "OR.Jobs.Read", "OR.Jobs.Write",
+  "OR.Triggers", "OR.Triggers.Read", "OR.Triggers.Write",
+  "OR.Robots", "OR.Robots.Read", "OR.Machines",
+  "OR.Assets", "OR.Assets.Read", "OR.Assets.Write",
+  "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
+  "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
+  "OR.TestDataQueues", "OR.TestDataQueues.Read",
+  "TM.TestCases", "TM.TestCases.Read", "TM.TestCases.Write",
+  "TM.TestSets", "TM.TestSets.Read", "TM.TestSets.Write",
+  "TM.TestExecutions", "TM.TestExecutions.Read", "TM.TestExecutions.Write",
+  "TM.Projects", "TM.Projects.Read", "TM.Projects.Write", "TM.Users.Read",
+  "AC.Tasks", "AC.Tasks.Read", "AC.Tasks.Write", "AC.Actions",
+].join(" ");
 
 let cachedConfig: UiPathAuthConfig | null = null;
 let cachedToken: CachedToken | null = null;
@@ -127,6 +143,22 @@ async function fetchNewToken(config: UiPathAuthConfig): Promise<CachedToken> {
   const expiresAt = Date.now() + expiresIn * 1000;
 
   console.log(`[UiPath Auth] Token acquired for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
+
+  try {
+    const jwtParts = data.access_token.split(".");
+    if (jwtParts.length === 3) {
+      const payload = JSON.parse(Buffer.from(jwtParts[1], "base64url").toString("utf8"));
+      const tokenScopes: string[] = typeof payload.scope === "string"
+        ? payload.scope.split(" ")
+        : Array.isArray(payload.scope) ? payload.scope : [];
+      const orScopes = tokenScopes.filter((s: string) => s.startsWith("OR."));
+      const tmScopes = tokenScopes.filter((s: string) => s.startsWith("TM."));
+      const acScopes = tokenScopes.filter((s: string) => s.startsWith("AC."));
+      console.log(`[UiPath Auth] Token scopes: OR=${orScopes.length} [${orScopes.join(", ")}], TM=${tmScopes.length} [${tmScopes.join(", ")}], AC=${acScopes.length} [${acScopes.join(", ")}]`);
+    }
+  } catch (decodeErr: any) {
+    console.log(`[UiPath Auth] Could not decode JWT payload: ${decodeErr.message}`);
+  }
 
   return { accessToken: data.access_token, expiresAt };
 }
