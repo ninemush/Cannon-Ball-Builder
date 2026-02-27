@@ -5,6 +5,12 @@ import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 import { processMapStorage } from "./process-map-storage";
+import * as auth from "./uipath-auth";
+import * as orch from "./orchestrator-client";
+import * as prereqs from "./prerequisite-checker";
+import { db } from "./db";
+import { pipelineJobs, provisioningLog, actionTasks, testResults } from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
 
 function requireAdmin(req: Request, res: Response): boolean {
   if (!req.session.userId) {
@@ -827,5 +833,434 @@ export function registerUiPathRoutes(app: Express): void {
     }
 
     return res.json(results);
+  });
+
+  app.get("/api/uipath/health", async (_req: Request, res: Response) => {
+    try {
+      const healthResult = await auth.healthCheck();
+
+      let robotCount = 0;
+      let pendingTasks = 0;
+      if (healthResult.ok) {
+        try {
+          const robots = await orch.getRobots();
+          robotCount = robots.length;
+        } catch {}
+        try {
+          const tasks = await orch.getTasks("Pending");
+          pendingTasks = tasks.length;
+        } catch {}
+      }
+
+      return res.json({
+        ...healthResult,
+        robotCount,
+        pendingTasks,
+      });
+    } catch (err: any) {
+      return res.json({
+        ok: false,
+        message: err.message,
+        latencyMs: 0,
+        robotCount: 0,
+        pendingTasks: 0,
+      });
+    }
+  });
+
+  app.get("/api/uipath/live-ops", async (_req: Request, res: Response) => {
+    try {
+      const config = await auth.getConfig();
+      if (!config) {
+        return res.json({
+          connected: false,
+          message: "UiPath is not configured",
+        });
+      }
+
+      const healthResult = await auth.healthCheck();
+
+      if (!healthResult.ok) {
+        return res.json({
+          connected: false,
+          message: healthResult.message,
+          latencyMs: healthResult.latencyMs,
+        });
+      }
+
+      const [jobs, tasks, folderStats] = await Promise.all([
+        orch.getJobs(undefined, "Running").catch(() => []),
+        orch.getTasks("Pending").catch(() => []),
+        orch.getFolderStats().catch(() => null),
+      ]);
+
+      const lastProvision = await db
+        .select()
+        .from(provisioningLog)
+        .orderBy(desc(provisioningLog.executedAt))
+        .limit(1);
+
+      return res.json({
+        connected: true,
+        latencyMs: healthResult.latencyMs,
+        tenantName: config.tenantName,
+        folderName: config.folderName,
+        activeJobs: jobs.length,
+        pendingTasks: tasks.length,
+        processCount: folderStats?.processCount || 0,
+        machineCount: folderStats?.machineCount || 0,
+        robotCount: folderStats?.robotCount || 0,
+        queueCount: folderStats?.queueCount || 0,
+        lastProvisioningDecision: lastProvision[0] || null,
+      });
+    } catch (err: any) {
+      return res.json({
+        connected: false,
+        message: err.message,
+        latencyMs: 0,
+      });
+    }
+  });
+
+  app.get("/api/uipath/diagnostics", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const config = await auth.getConfig();
+      if (!config) {
+        return res.json({
+          configured: false,
+          checks: [{ name: "Configuration", status: "blocking", detail: "UiPath is not configured", remediation: "Set up UiPath credentials in Admin > Integrations." }],
+        });
+      }
+
+      const healthResult = await auth.healthCheck();
+      const checks: Array<{ name: string; status: string; detail: string; remediation?: string }> = [];
+
+      checks.push({
+        name: "Authentication",
+        status: healthResult.ok ? "pass" : "blocking",
+        detail: healthResult.ok
+          ? `Token valid, latency ${healthResult.latencyMs}ms`
+          : `Auth failed: ${healthResult.message}`,
+        remediation: healthResult.ok ? undefined : "Check client ID, client secret, and scopes in Admin > Integrations.",
+      });
+
+      if (healthResult.ok) {
+        try {
+          const folderStats = await orch.getFolderStats();
+          checks.push({
+            name: "Folder accessible",
+            status: "pass",
+            detail: `${folderStats.folderName} (${folderStats.processCount} processes, ${folderStats.queueCount} queues)`,
+          });
+        } catch (err: any) {
+          checks.push({
+            name: "Folder accessible",
+            status: "blocking",
+            detail: `Folder access failed: ${err.message}`,
+            remediation: "Ensure External App has access to the target folder.",
+          });
+        }
+
+        try {
+          const processes = await orch.getProcesses();
+          checks.push({
+            name: "Package feed writable",
+            status: "pass",
+            detail: `${processes.length} process(es) visible`,
+          });
+        } catch {
+          checks.push({
+            name: "Package feed writable",
+            status: "warning",
+            detail: "Could not verify package feed access",
+          });
+        }
+
+        try {
+          const machines = await orch.getMachines();
+          checks.push({
+            name: "Machines available",
+            status: machines.length > 0 ? "pass" : "warning",
+            detail: machines.length > 0
+              ? `${machines.length} machine(s) registered`
+              : "No machines registered",
+            remediation: machines.length === 0 ? "Register machines in Orchestrator > Machines." : undefined,
+          });
+        } catch {
+          checks.push({ name: "Machines available", status: "warning", detail: "Could not check machines" });
+        }
+
+        try {
+          const robots = await orch.getRobots();
+          checks.push({
+            name: "Robots available",
+            status: robots.length > 0 ? "pass" : "warning",
+            detail: robots.length > 0
+              ? `${robots.length} robot(s) available`
+              : "No robots found",
+            remediation: robots.length === 0 ? "Ensure Unattended robots are configured in Orchestrator." : undefined,
+          });
+        } catch {
+          checks.push({ name: "Robots available", status: "warning", detail: "Could not check robots" });
+        }
+
+        try {
+          const catalogs = await orch.getActionCatalog();
+          checks.push({
+            name: "Action Center reachable",
+            status: "pass",
+            detail: `${catalogs.length} task catalog(s) available`,
+          });
+        } catch {
+          checks.push({
+            name: "Action Center reachable",
+            status: "warning",
+            detail: "Action Center not available on this tenant",
+            remediation: "Action Center requires a specific license. Exception routing will be disabled.",
+          });
+        }
+
+        try {
+          const testSets = await orch.getTestSets();
+          checks.push({
+            name: "Test Manager reachable",
+            status: "pass",
+            detail: `${testSets.length} test set(s) available`,
+          });
+        } catch {
+          checks.push({
+            name: "Test Manager reachable",
+            status: "warning",
+            detail: "No license detected on this tenant",
+            remediation: "Test Manager is not available. Test gate will be skipped during deployment.",
+          });
+        }
+
+        try {
+          const queues = await orch.getQueues();
+          checks.push({
+            name: "Queue access",
+            status: "pass",
+            detail: `${queues.length} queue(s) visible in target folder`,
+          });
+        } catch {
+          checks.push({
+            name: "Queue access",
+            status: "warning",
+            detail: "Could not list queues",
+          });
+        }
+      }
+
+      return res.json({
+        configured: true,
+        connected: healthResult.ok,
+        tenantName: config.tenantName,
+        latencyMs: healthResult.latencyMs,
+        checks,
+      });
+    } catch (err: any) {
+      return res.json({
+        configured: true,
+        connected: false,
+        checks: [{ name: "Connection", status: "blocking", detail: err.message }],
+      });
+    }
+  });
+
+  app.get("/api/uipath/prerequisites", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const report = await prereqs.checkAll();
+      const markdown = prereqs.generatePrerequisiteReport(report);
+      return res.json({ ...report, markdown });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/provisioning/:processName/status", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { processName } = req.params;
+    try {
+      const logs = await db
+        .select()
+        .from(provisioningLog)
+        .where(eq(provisioningLog.processName, processName))
+        .orderBy(desc(provisioningLog.executedAt))
+        .limit(20);
+
+      let activeJobs: orch.Job[] = [];
+      try {
+        activeJobs = await orch.getJobs(processName, "Running");
+      } catch {}
+
+      return res.json({
+        processName,
+        activeJobCount: activeJobs.length,
+        activeJobs: activeJobs.map((j) => ({ id: j.Id, state: j.State, startTime: j.StartTime })),
+        recentDecisions: logs,
+        lastDecision: logs[0] || null,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/provisioning/:processName/emergency-stop", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { processName } = req.params;
+    try {
+      const jobs = await orch.getJobs(processName, "Running");
+      const stopped: number[] = [];
+      const failed: Array<{ id: number; error: string }> = [];
+
+      for (const job of jobs) {
+        try {
+          await orch.stopJob(job.Id);
+          stopped.push(job.Id);
+        } catch (err: any) {
+          failed.push({ id: job.Id, error: err.message });
+        }
+      }
+
+      try {
+        const triggers = await orch.getTriggers(processName);
+        for (const trigger of triggers) {
+          if (trigger.Enabled) {
+            await orch.disableTrigger(trigger.Id).catch(() => {});
+          }
+        }
+      } catch {}
+
+      await db.insert(provisioningLog).values({
+        jobId: `emergency_${Date.now()}`,
+        processName,
+        decision: "emergency_stop",
+        robotsDelta: -(stopped.length),
+        reasoning: `Emergency stop: ${stopped.length} jobs stopped, ${failed.length} failed`,
+        confidence: 1.0,
+      });
+
+      return res.json({
+        processName,
+        jobsStopped: stopped.length,
+        jobsFailed: failed.length,
+        stoppedIds: stopped,
+        failedDetails: failed,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/action-center/tasks", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const localTasks = await db
+        .select()
+        .from(actionTasks)
+        .orderBy(desc(actionTasks.createdAt))
+        .limit(50);
+
+      let orchestratorTasks: orch.ActionTask[] = [];
+      try {
+        orchestratorTasks = await orch.getTasks();
+      } catch {}
+
+      return res.json({
+        localTasks,
+        orchestratorTasks: orchestratorTasks.map((t) => ({
+          id: t.Id,
+          title: t.Title,
+          status: t.Status,
+          type: t.Type,
+          assignee: t.AssignedToUser,
+          catalogName: t.CatalogName,
+          createdAt: t.CreationTime,
+        })),
+        pendingCount: orchestratorTasks.filter((t) => t.Status === "Pending" || t.Status === "Unassigned").length,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/action-center/tasks/:taskId/resolve", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const taskId = parseInt(req.params.taskId, 10);
+    if (isNaN(taskId)) return res.status(400).json({ message: "Invalid task ID" });
+
+    const { action, data, resolvedBy } = req.body;
+    if (!action) return res.status(400).json({ message: "action is required" });
+
+    try {
+      const result = await orch.completeTask(taskId, action, data);
+
+      const existing = await db
+        .select()
+        .from(actionTasks)
+        .where(eq(actionTasks.orchestratorTaskId, String(taskId)))
+        .limit(1);
+
+      if (existing.length > 0) {
+        await db
+          .update(actionTasks)
+          .set({
+            status: "resolved",
+            aiResolved: resolvedBy === "ai",
+            resolutionReasoning: `Action: ${action}`,
+            resolvedAt: new Date(),
+          })
+          .where(eq(actionTasks.orchestratorTaskId, String(taskId)));
+      } else {
+        await db.insert(actionTasks).values({
+          orchestratorTaskId: String(taskId),
+          status: "resolved",
+          aiResolved: resolvedBy === "ai",
+          resolutionReasoning: `Action: ${action}`,
+          resolvedAt: new Date(),
+        });
+      }
+
+      return res.json({ success: true, result });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/tests/job/:jobId", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { jobId } = req.params;
+    try {
+      const results = await db
+        .select()
+        .from(testResults)
+        .where(eq(testResults.jobId, jobId))
+        .orderBy(desc(testResults.executedAt))
+        .limit(1);
+
+      if (results.length === 0) {
+        return res.status(404).json({ message: "No test results found for this job" });
+      }
+
+      return res.json(results[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
   });
 }

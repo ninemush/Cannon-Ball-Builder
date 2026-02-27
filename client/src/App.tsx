@@ -8,6 +8,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { TopNav } from "@/components/top-nav";
+import { IntegrationStatusBar } from "@/components/integration-status-bar";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import Ideas from "@/pages/ideas";
@@ -64,6 +65,7 @@ function AppShell() {
           <main className="flex-1 overflow-auto">
             <Router />
           </main>
+          <IntegrationStatusBar />
         </div>
       </div>
     </SidebarProvider>

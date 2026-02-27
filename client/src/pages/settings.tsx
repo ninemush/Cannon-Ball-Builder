@@ -565,23 +565,55 @@ function extractOrgSlug(input: string): string {
 }
 
 function OrchestratorHealthPanel() {
-  const [expanded, setExpanded] = useState(false);
+  const [diagExpanded, setDiagExpanded] = useState(false);
   const [machinesOpen, setMachinesOpen] = useState(false);
   const [robotsOpen, setRobotsOpen] = useState(false);
   const [processesOpen, setProcessesOpen] = useState(false);
 
-  const { data: healthData, isLoading: healthLoading, refetch: refetchHealth } = useQuery<{
-    checks: Array<{ name: string; status: "pass" | "fail" | "warn"; message: string; details?: any }>;
-    summary: string;
+  const { data: diagnostics, isLoading: diagLoading, refetch: refetchDiag } = useQuery<{
+    configured: boolean;
+    connected: boolean;
+    tenantName?: string;
+    latencyMs?: number;
+    checks: Array<{ name: string; status: string; detail: string; remediation?: string }>;
   }>({
-    queryKey: ["/api/settings/uipath/health-check"],
+    queryKey: ["/api/uipath/diagnostics"],
     enabled: false,
+  });
+
+  const { data: liveOps } = useQuery<{
+    connected: boolean;
+    message?: string;
+    latencyMs?: number;
+    tenantName?: string;
+    folderName?: string;
+    activeJobs?: number;
+    pendingTasks?: number;
+    processCount?: number;
+    machineCount?: number;
+    robotCount?: number;
+    queueCount?: number;
+    lastProvisioningDecision?: any;
+  }>({
+    queryKey: ["/api/uipath/live-ops"],
+    refetchInterval: 30000,
+    staleTime: 25000,
+  });
+
+  const { data: healthData } = useQuery<{
+    ok: boolean;
+    message: string;
+    latencyMs: number;
+    tenantName?: string;
+  }>({
+    queryKey: ["/api/uipath/health"],
+    refetchInterval: 60000,
+    staleTime: 50000,
   });
 
   const { data: machinesData, isLoading: machinesLoading, refetch: refetchMachines } = useQuery<{
     success: boolean;
     machines?: Array<{ id: number; name: string; type: string; status: string; description: string }>;
-    message?: string;
   }>({
     queryKey: ["/api/settings/uipath/machines"],
     enabled: false,
@@ -590,7 +622,6 @@ function OrchestratorHealthPanel() {
   const { data: robotsData, isLoading: robotsLoading, refetch: refetchRobots } = useQuery<{
     success: boolean;
     robots?: Array<{ id: number; robotId: number; robotName: string; machineName: string; status: string; type: string; isUnresponsive: boolean }>;
-    message?: string;
   }>({
     queryKey: ["/api/settings/uipath/robots"],
     enabled: false,
@@ -599,15 +630,14 @@ function OrchestratorHealthPanel() {
   const { data: processesData, isLoading: processesLoading, refetch: refetchProcesses } = useQuery<{
     success: boolean;
     processes?: Array<{ id: number; name: string; processKey: string; processVersion: string; description: string }>;
-    message?: string;
   }>({
     queryKey: ["/api/settings/uipath/processes"],
     enabled: false,
   });
 
   const runDiagnostics = () => {
-    setExpanded(true);
-    refetchHealth();
+    setDiagExpanded(true);
+    refetchDiag();
     refetchMachines();
     refetchRobots();
     refetchProcesses();
@@ -615,20 +645,47 @@ function OrchestratorHealthPanel() {
 
   const statusIcon = (status: string) => {
     if (status === "pass") return <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />;
-    if (status === "fail") return <XCircle className="h-4 w-4 text-red-500 shrink-0" />;
+    if (status === "blocking") return <XCircle className="h-4 w-4 text-red-500 shrink-0" />;
     return <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />;
   };
 
   const statusColor = (status: string) => {
     if (status === "pass") return "border-green-600/30 bg-green-500/10";
-    if (status === "fail") return "border-red-600/30 bg-red-500/10";
+    if (status === "blocking") return "border-red-600/30 bg-red-500/10";
     return "border-amber-500/30 bg-amber-500/10";
   };
 
-  const isLoading = healthLoading || machinesLoading || robotsLoading || processesLoading;
+  const latencyDot = (ms: number) => {
+    if (ms < 200) return "bg-green-500";
+    if (ms < 500) return "bg-amber-500";
+    return "bg-red-500";
+  };
+
+  const isConnected = healthData?.ok ?? liveOps?.connected ?? false;
 
   return (
-    <div className="border-t border-border pt-4 mt-4 space-y-3" data-testid="health-check-section">
+    <div className="border-t border-border pt-4 mt-4 space-y-4" data-testid="health-check-section">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className={`h-2.5 w-2.5 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
+          <h4 className="text-sm font-semibold text-foreground">
+            {isConnected ? `Connected to ${healthData?.tenantName || liveOps?.tenantName || "Orchestrator"}` : "Disconnected"}
+          </h4>
+          {healthData && (
+            <span className="text-[10px] text-muted-foreground">
+              {healthData.latencyMs}ms
+            </span>
+          )}
+        </div>
+        <Badge
+          variant={isConnected ? "default" : "destructive"}
+          className="text-[10px]"
+          data-testid="badge-connection-status"
+        >
+          {isConnected ? "Connected" : "Disconnected"}
+        </Badge>
+      </div>
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Stethoscope className="h-4 w-4 text-[#e8450a]" />
@@ -638,10 +695,10 @@ function OrchestratorHealthPanel() {
           size="sm"
           variant="outline"
           onClick={runDiagnostics}
-          disabled={isLoading}
+          disabled={diagLoading}
           data-testid="button-run-diagnostics"
         >
-          {isLoading ? (
+          {diagLoading ? (
             <>
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               Checking...
@@ -654,135 +711,195 @@ function OrchestratorHealthPanel() {
           )}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Check if everything is set up correctly to run automations: authentication, folder, packages, processes, machines, and robots.
-      </p>
 
-      {expanded && (
-        <div className="space-y-3 mt-2">
-          {healthData && (
-            <div className="space-y-2" data-testid="health-check-results">
-              <div className={`p-3 rounded-md border text-sm font-medium ${
-                healthData.checks.some(c => c.status === "fail")
-                  ? "border-red-600/30 bg-red-500/10 text-red-400"
-                  : healthData.checks.some(c => c.status === "warn")
-                    ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
-                    : "border-green-600/30 bg-green-500/10 text-green-400"
-              }`} data-testid="health-summary">
-                {healthData.summary}
+      {diagExpanded && diagnostics && (
+        <div className="space-y-2" data-testid="diagnostics-checklist">
+          {diagnostics.checks.map((check, i) => (
+            <div
+              key={i}
+              className={`flex items-start gap-2.5 p-2.5 rounded-md border ${statusColor(check.status)}`}
+              data-testid={`diag-check-${check.name.toLowerCase().replace(/\s/g, "-")}`}
+            >
+              {statusIcon(check.status)}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-semibold text-foreground">{check.name}</p>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>
+                {check.remediation && check.status !== "pass" && (
+                  <p className="text-xs text-amber-400 mt-1">→ {check.remediation}</p>
+                )}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
 
-              <div className="space-y-1.5">
-                {healthData.checks.map((check, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-start gap-2.5 p-2.5 rounded-md border ${statusColor(check.status)}`}
-                    data-testid={`health-check-${check.name.toLowerCase().replace(/\s/g, "-")}`}
-                  >
-                    {statusIcon(check.status)}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-foreground">{check.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">{check.message}</p>
-                    </div>
+      {diagExpanded && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+            onClick={() => { setProcessesOpen(!processesOpen); if (!processesData) refetchProcesses(); }}
+            aria-expanded={processesOpen}
+            aria-controls="processes-list-panel"
+            data-testid="toggle-processes-list"
+          >
+            {processesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <Play className="h-3.5 w-3.5 text-[#e8450a]" />
+            Processes ({processesData?.processes?.length ?? "..."})
+          </button>
+          {processesOpen && (
+            <div id="processes-list-panel" className="ml-6 space-y-1" data-testid="processes-list">
+              {processesLoading && <Skeleton className="h-8 w-full" />}
+              {processesData?.processes?.length === 0 && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  No processes found in this folder.
+                </p>
+              )}
+              {processesData?.processes?.map((proc) => (
+                <div key={proc.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-process-${proc.id}`}>
+                  <div>
+                    <span className="font-medium text-foreground">{proc.name}</span>
+                    <span className="ml-2 text-muted-foreground">v{proc.processVersion}</span>
                   </div>
-                ))}
-              </div>
+                  <code className="text-[10px] text-muted-foreground">{proc.processKey}</code>
+                </div>
+              ))}
             </div>
           )}
 
-          <div className="space-y-2">
-            <button
-              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
-              onClick={() => { setProcessesOpen(!processesOpen); if (!processesData) refetchProcesses(); }}
-              data-testid="toggle-processes-list"
-            >
-              {processesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              <Play className="h-3.5 w-3.5 text-[#e8450a]" />
-              Processes ({processesData?.processes?.length ?? "..."})
-            </button>
-            {processesOpen && (
-              <div className="ml-6 space-y-1" data-testid="processes-list">
-                {processesLoading && <Skeleton className="h-8 w-full" />}
-                {processesData?.processes?.length === 0 && (
-                  <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                    No processes found in this folder. Push a package and a process will be created automatically.
-                  </p>
-                )}
-                {processesData?.processes?.map((proc) => (
-                  <div key={proc.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                    <div>
-                      <span className="font-medium text-foreground">{proc.name}</span>
-                      <span className="ml-2 text-muted-foreground">v{proc.processVersion}</span>
-                    </div>
-                    <code className="text-[10px] text-muted-foreground">{proc.processKey}</code>
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+            onClick={() => { setRobotsOpen(!robotsOpen); if (!robotsData) refetchRobots(); }}
+            aria-expanded={robotsOpen}
+            aria-controls="robots-list-panel"
+            data-testid="toggle-robots-list"
+          >
+            {robotsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <Bot className="h-3.5 w-3.5 text-[#008b9b]" />
+            Robots ({robotsData?.robots?.length ?? "..."})
+          </button>
+          {robotsOpen && (
+            <div id="robots-list-panel" className="ml-6 space-y-1" data-testid="robots-list">
+              {robotsLoading && <Skeleton className="h-8 w-full" />}
+              {robotsData?.robots?.length === 0 && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  No robot sessions found.
+                </p>
+              )}
+              {robotsData?.robots?.map((robot) => (
+                <div key={robot.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-robot-${robot.id}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground">{robot.robotName}</span>
+                    <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
+                      {robot.status}
+                    </Badge>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  <span className="text-muted-foreground">{robot.machineName}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
-          <div className="space-y-2">
-            <button
-              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
-              onClick={() => { setRobotsOpen(!robotsOpen); if (!robotsData) refetchRobots(); }}
-              data-testid="toggle-robots-list"
-            >
-              {robotsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              <Bot className="h-3.5 w-3.5 text-[#008b9b]" />
-              Robots ({robotsData?.robots?.length ?? "..."})
-            </button>
-            {robotsOpen && (
-              <div className="ml-6 space-y-1" data-testid="robots-list">
-                {robotsLoading && <Skeleton className="h-8 w-full" />}
-                {robotsData?.robots?.length === 0 && (
-                  <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                    No robot sessions found. Assign robots to this folder in Orchestrator &gt; Folder Settings.
-                  </p>
-                )}
-                {robotsData?.robots?.map((robot) => (
-                  <div key={robot.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground">{robot.robotName}</span>
-                      <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
-                        {robot.status}
-                      </Badge>
-                    </div>
-                    <span className="text-muted-foreground">{robot.machineName}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <button
-              className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
-              onClick={() => { setMachinesOpen(!machinesOpen); if (!machinesData) refetchMachines(); }}
-              data-testid="toggle-machines-list"
-            >
-              {machinesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              <Server className="h-3.5 w-3.5 text-[#7b1fa2]" />
-              Machines ({machinesData?.machines?.length ?? "..."})
-            </button>
-            {machinesOpen && (
-              <div className="ml-6 space-y-1" data-testid="machines-list">
-                {machinesLoading && <Skeleton className="h-8 w-full" />}
-                {machinesData?.machines?.length === 0 && (
-                  <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                    No machine templates found. Create them in Orchestrator &gt; Tenant &gt; Machines.
-                  </p>
-                )}
-                {machinesData?.machines?.map((machine) => (
-                  <div key={machine.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                    <span className="font-medium text-foreground">{machine.name}</span>
-                    <span className="text-muted-foreground">{machine.type || "Standard"}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+            onClick={() => { setMachinesOpen(!machinesOpen); if (!machinesData) refetchMachines(); }}
+            aria-expanded={machinesOpen}
+            aria-controls="machines-list-panel"
+            data-testid="toggle-machines-list"
+          >
+            {machinesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <Server className="h-3.5 w-3.5 text-[#7b1fa2]" />
+            Machines ({machinesData?.machines?.length ?? "..."})
+          </button>
+          {machinesOpen && (
+            <div id="machines-list-panel" className="ml-6 space-y-1" data-testid="machines-list">
+              {machinesLoading && <Skeleton className="h-8 w-full" />}
+              {machinesData?.machines?.length === 0 && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  No machine templates found.
+                </p>
+              )}
+              {machinesData?.machines?.map((machine) => (
+                <div key={machine.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-machine-${machine.id}`}>
+                  <span className="font-medium text-foreground">{machine.name}</span>
+                  <span className="text-muted-foreground">{machine.type || "Standard"}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
+      <div className="border-t border-border pt-3 mt-3" data-testid="live-ops-section">
+        <div className="flex items-center gap-2 mb-3">
+          <Activity className="h-4 w-4 text-[#008b9b]" />
+          <h4 className="text-sm font-semibold text-foreground">Live Operations</h4>
+          <span className="text-[10px] text-muted-foreground">Auto-refreshes every 30s</span>
+        </div>
+
+        {!isConnected ? (
+          <div className="p-3 rounded-md border border-amber-500/30 bg-amber-500/10 text-xs text-amber-400" data-testid="live-ops-disconnected">
+            <p className="font-medium">Live Operations unavailable</p>
+            <p className="mt-1 text-amber-400/80">
+              CannonBall cannot reach UiPath Orchestrator. Check credentials or network connectivity.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              onClick={() => refetchDiag()}
+              data-testid="button-retry-connection"
+            >
+              <RefreshCw className="mr-1.5 h-3 w-3" />
+              Retry Connection
+            </Button>
+          </div>
+        ) : liveOps ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" data-testid="live-ops-metrics">
+            <div className="p-2.5 rounded-md border border-border bg-card text-xs" data-testid="metric-latency">
+              <p className="text-muted-foreground mb-1">Connection Latency</p>
+              <div className="flex items-center gap-1.5">
+                <span className={`h-2 w-2 rounded-full ${latencyDot(liveOps.latencyMs || 0)}`} />
+                <span className="font-semibold text-foreground">{liveOps.latencyMs || 0}ms</span>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-md border border-border bg-card text-xs" data-testid="metric-active-jobs">
+              <p className="text-muted-foreground mb-1">Active Jobs</p>
+              <span className="font-semibold text-foreground">{liveOps.activeJobs ?? 0} running</span>
+            </div>
+
+            <div className="p-2.5 rounded-md border border-border bg-card text-xs" data-testid="metric-pending-tasks">
+              <p className="text-muted-foreground mb-1">Action Center</p>
+              <span className="font-semibold text-foreground">{liveOps.pendingTasks ?? 0} pending</span>
+            </div>
+
+            <div className="p-2.5 rounded-md border border-border bg-card text-xs" data-testid="metric-processes">
+              <p className="text-muted-foreground mb-1">Processes</p>
+              <span className="font-semibold text-foreground">{liveOps.processCount ?? 0}</span>
+            </div>
+
+            <div className="p-2.5 rounded-md border border-border bg-card text-xs" data-testid="metric-machines">
+              <p className="text-muted-foreground mb-1">Machines</p>
+              <span className="font-semibold text-foreground">{liveOps.machineCount ?? 0}</span>
+            </div>
+
+            <div className="p-2.5 rounded-md border border-border bg-card text-xs" data-testid="metric-queues">
+              <p className="text-muted-foreground mb-1">Queues</p>
+              <span className="font-semibold text-foreground">{liveOps.queueCount ?? 0}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground p-3">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading live operations data...
+          </div>
+        )}
+      </div>
     </div>
   );
 }
