@@ -1740,17 +1740,18 @@ async function provisionTestCases(
         activeTmBase = tmBase;
         try {
           const projects = projRes.data?.data || projRes.data?.value || [];
+          const normalizedProcessName = processName.replace(/_/g, " ").toLowerCase().trim();
           if (projects.length > 0) {
             const match = projects.find((p: any) =>
-              (p.Name || p.name)?.toLowerCase().includes(processName.toLowerCase().replace(/_/g, " ")) ||
-              processName.toLowerCase().includes((p.Name || p.name)?.toLowerCase())
+              (p.Name || p.name)?.toLowerCase().trim() === normalizedProcessName
             );
             if (match) {
               projectId = match.Id || match.id;
               projectPrefix = match.Prefix || match.prefix || match.ProjectPrefix || match.projectPrefix || null;
+              console.log(`[UiPath Deploy] Exact match found: project "${match.Name || match.name}" (ID: ${projectId}) — reusing existing project`);
+              results.push({ artifact: "Test Project", name: match.Name || match.name, status: "exists", message: `Using existing project "${match.Name || match.name}" (ID: ${projectId}, Prefix: ${projectPrefix})`, id: projectId! });
             } else {
-              projectId = projects[0].Id || projects[0].id;
-              projectPrefix = projects[0].Prefix || projects[0].prefix || projects[0].ProjectPrefix || projects[0].projectPrefix || null;
+              console.log(`[UiPath Deploy] No exact project match for "${normalizedProcessName}" among ${projects.length} project(s) — will create new project`);
             }
           }
         } catch {}
@@ -1845,9 +1846,9 @@ async function provisionTestCases(
               projectId = match.Id || match.id;
               projectPrefix = match.Prefix || match.prefix || match.ProjectPrefix || match.projectPrefix || null;
               results.push({ artifact: "Test Project", name: projName, status: "exists", message: `Project exists (ID: ${projectId}, Prefix: ${projectPrefix})`, id: projectId! });
-            } else if (projects.length > 0) {
-              projectId = projects[0].Id || projects[0].id;
-              projectPrefix = projects[0].Prefix || projects[0].prefix || projects[0].ProjectPrefix || projects[0].projectPrefix || null;
+            } else {
+              console.log(`[UiPath Deploy] 409 re-list: no exact match for "${projName}" among ${projects.length} project(s) — project creation conflict but name mismatch`);
+              results.push({ artifact: "Test Project", name: projName, status: "failed", message: `Project creation returned 409 but no exact name match found among ${projects.length} existing project(s)` });
             }
           }
         } catch {}
@@ -1926,11 +1927,13 @@ async function provisionTestCases(
           camelBody.labels = tc.labels;
         }
         if (tc.steps?.length) {
-          camelBody.manualSteps = tc.steps.map((s, idx) => ({
+          const camelSteps = tc.steps.map((s, idx) => ({
             stepDescription: s.action,
             expectedResult: s.expected,
             order: idx + 1,
           }));
+          camelBody.testSteps = camelSteps;
+          camelBody.manualSteps = camelSteps;
         }
 
         const pascalBody: Record<string, any> = {
@@ -1942,11 +1945,13 @@ async function provisionTestCases(
           pascalBody.Labels = tc.labels;
         }
         if (tc.steps?.length) {
-          pascalBody.ManualSteps = tc.steps.map((s, idx) => ({
+          const pascalSteps = tc.steps.map((s, idx) => ({
             StepDescription: s.action,
             ExpectedResult: s.expected,
             Order: idx + 1,
           }));
+          pascalBody.TestSteps = pascalSteps;
+          pascalBody.ManualSteps = pascalSteps;
         }
 
         const endpointAttempts: Array<{
@@ -2026,30 +2031,42 @@ async function provisionTestCases(
               if (tc.labels?.length) msg += `, labels: ${tc.labels.join(", ")}`;
 
               if (tc.steps?.length && createdId) {
-                try {
-                  const stepsBody = tc.steps.map((s, idx) => ({
-                    stepDescription: s.action,
-                    expectedResult: s.expected,
-                    order: idx + 1,
-                  }));
-                  const stepsRes = await uipathFetch(`${activeTmBase}/api/v2/${projectId}/teststeps/testcase/${createdId}`, {
-                    method: "PUT",
-                    headers: tmHdrsWithTenant,
-                    body: JSON.stringify(stepsBody),
-                    label: `TM TestSteps for ${tc.name}`,
-                    maxRetries: 1,
-                    redirect: "manual" as any,
-                  });
-                  if (stepsRes.ok) {
-                    msg += `, ${tc.steps.length} manual steps attached`;
-                    console.log(`[UiPath Deploy] Test steps for "${tc.name}" attached successfully via PUT teststeps`);
-                  } else {
-                    msg += `, ${tc.steps.length} manual steps (inline)`;
-                    console.log(`[UiPath Deploy] Test steps PUT for "${tc.name}" returned ${stepsRes.status}: ${stepsRes.text.slice(0, 200)} — steps may have been included inline`);
+                const stepsBody = tc.steps.map((s, idx) => ({
+                  stepDescription: s.action,
+                  expectedResult: s.expected,
+                  order: idx + 1,
+                }));
+                let stepsAttached = false;
+                const stepsAttempts = [
+                  { method: "PUT" as const, url: `${activeTmBase}/api/v2/${projectId}/teststeps/testcase/${createdId}`, body: stepsBody },
+                  { method: "POST" as const, url: `${activeTmBase}/api/v2/${projectId}/teststeps/testcase/${createdId}`, body: stepsBody },
+                  { method: "PUT" as const, url: `${activeTmBase}/api/v2/${projectId}/teststeps/testcase/${createdId}`, body: { testSteps: stepsBody } },
+                  { method: "POST" as const, url: `${activeTmBase}/api/v2/${projectId}/teststeps/testcase/${createdId}`, body: { testSteps: stepsBody } },
+                ];
+                for (const sa of stepsAttempts) {
+                  try {
+                    const stepsRes = await uipathFetch(sa.url, {
+                      method: sa.method,
+                      headers: tmHdrsWithTenant,
+                      body: JSON.stringify(sa.body),
+                      label: `TM TestSteps ${sa.method} for ${tc.name}`,
+                      maxRetries: 1,
+                      redirect: "manual" as any,
+                    });
+                    if (stepsRes.ok) {
+                      msg += `, ${tc.steps.length} manual steps attached via ${sa.method}`;
+                      console.log(`[UiPath Deploy] Test steps for "${tc.name}" attached successfully via ${sa.method}`);
+                      stepsAttached = true;
+                      break;
+                    } else {
+                      console.log(`[UiPath Deploy] Test steps ${sa.method} for "${tc.name}" returned ${stepsRes.status}: ${stepsRes.text.slice(0, 200)}`);
+                    }
+                  } catch (stepsErr: any) {
+                    console.log(`[UiPath Deploy] Test steps ${sa.method} for "${tc.name}" failed: ${stepsErr.message}`);
                   }
-                } catch (stepsErr: any) {
-                  msg += `, ${tc.steps.length} manual steps (inline)`;
-                  console.log(`[UiPath Deploy] Test steps PUT for "${tc.name}" failed: ${stepsErr.message} — steps may have been included inline`);
+                }
+                if (!stepsAttached) {
+                  msg += `, ${tc.steps.length} steps included in creation body`;
                 }
               } else if (tc.steps?.length) {
                 msg += `, ${tc.steps.length} manual steps (inline)`;
