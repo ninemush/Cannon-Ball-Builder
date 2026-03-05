@@ -2524,12 +2524,13 @@ function parseSddSections(content: string): SDDSection[] {
 
 function SDDInlineViewer({ ideaId }: { ideaId: string }) {
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
+  const [selectedVersionIdx, setSelectedVersionIdx] = useState<number>(0);
 
   const { data: sddVersions, isLoading } = useQuery<{ id: number; version: number; content: string; status: string; createdAt: string }[]>({
     queryKey: ["/api/ideas", ideaId, "documents", "versions", "SDD"],
   });
 
-  const latestSdd = sddVersions?.length ? sddVersions[sddVersions.length - 1] : null;
+  const currentSdd = sddVersions?.length ? sddVersions[selectedVersionIdx] || sddVersions[0] : null;
 
   if (isLoading) {
     return (
@@ -2542,7 +2543,7 @@ function SDDInlineViewer({ ideaId }: { ideaId: string }) {
     );
   }
 
-  if (!latestSdd) {
+  if (!currentSdd) {
     return (
       <div className="flex-1 flex items-center justify-center p-6" data-testid="sdd-view-empty">
         <div className="text-center max-w-sm space-y-3">
@@ -2565,7 +2566,7 @@ function SDDInlineViewer({ ideaId }: { ideaId: string }) {
     );
   }
 
-  const sections = parseSddSections(latestSdd.content);
+  const sections = parseSddSections(currentSdd.content);
 
   const toggleSection = (idx: number) => {
     setExpandedSections((prev) => {
@@ -2583,16 +2584,53 @@ function SDDInlineViewer({ ideaId }: { ideaId: string }) {
           <FileText className="h-4 w-4 text-cb-orange" />
           <span className="text-xs font-semibold text-zinc-300">Solution Design Document</span>
           <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">
-            v{latestSdd.version}
+            v{currentSdd.version}
           </Badge>
-          {latestSdd.status === "approved" && (
+          {currentSdd.status === "approved" && (
             <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
               <Check className="h-3 w-3" /> Approved
             </span>
           )}
+          {sddVersions && sddVersions.length > 1 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="p-1 rounded hover:bg-zinc-800/50 transition-colors" data-testid="sdd-version-dropdown">
+                  <History className="h-3.5 w-3.5 text-zinc-500" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="bg-zinc-900 border-zinc-700 min-w-[200px]">
+                {sddVersions.map((v, idx) => (
+                  <DropdownMenuItem
+                    key={v.id}
+                    onClick={() => {
+                      setSelectedVersionIdx(idx);
+                      setExpandedSections(new Set([0]));
+                    }}
+                    className={`text-xs cursor-pointer ${idx === selectedVersionIdx ? "bg-zinc-800 text-zinc-200" : "text-zinc-400"}`}
+                    data-testid={`sdd-version-option-${v.version}`}
+                  >
+                    <div className="flex items-center justify-between w-full gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">v{v.version}</span>
+                        {v.status === "approved" && (
+                          <Check className="h-3 w-3 text-emerald-400" />
+                        )}
+                        {idx === 0 && (
+                          <span className="text-[9px] text-cb-orange font-medium">Latest</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-zinc-600">
+                        {new Date(v.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
         <span className="text-[10px] text-zinc-600">
-          {new Date(latestSdd.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+          {new Date(currentSdd.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
         </span>
       </div>
 
