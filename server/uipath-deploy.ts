@@ -1305,6 +1305,7 @@ async function provisionActionCenter(
     acHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
   }
 
+  const apiCatalogUrl = `${base}/api/TaskCatalogs`;
   const catalogUrl = `${base}/odata/TaskCatalogs`;
   const odataCatalogUrl = catalogUrl;
   const genericTaskUrl = `${base}/tasks/GenericTasks/CreateTask`;
@@ -1363,28 +1364,37 @@ async function provisionActionCenter(
       if (alreadyExists) continue;
 
       let created = false;
+      const catalogBody = { Name: ac.taskCatalog, Description: truncDesc(ac.description) };
 
-      attemptedEndpoints.push(`POST ${catalogUrl}`);
-      const createResult = await uipathFetch(catalogUrl, {
-        method: "POST", headers: acHdrs,
-        body: JSON.stringify({ Name: ac.taskCatalog, Description: truncDesc(ac.description) }),
-        label: "AC Catalog Create", maxRetries: 1,
-      });
-      if (createResult.ok || createResult.status === 201) {
-        const creation = isValidCreation(createResult.text);
-        if (creation.valid) {
-          let msg = `Created (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
-          if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
+      const catalogCreateAttempts = [
+        { url: apiCatalogUrl, label: "AC REST API Catalog Create" },
+        { url: catalogUrl, label: "AC OData Catalog Create" },
+      ];
+
+      for (const attempt of catalogCreateAttempts) {
+        if (created) break;
+        attemptedEndpoints.push(`POST ${attempt.url}`);
+        const createResult = await uipathFetch(attempt.url, {
+          method: "POST", headers: acHdrs,
+          body: JSON.stringify(catalogBody),
+          label: attempt.label, maxRetries: 1,
+        });
+        console.log(`[UiPath Deploy] ${attempt.label} "${ac.taskCatalog}" -> ${createResult.status}: ${createResult.text.slice(0, 300)}`);
+        if (createResult.ok || createResult.status === 201) {
+          const creation = isValidCreation(createResult.text);
+          if (creation.valid) {
+            let msg = `Created via ${attempt.label} (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
+            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
+            created = true;
+          }
+        } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
+          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
           created = true;
+        } else {
+          const detail = `POST ${attempt.url} -> ${createResult.status}: ${createResult.text.slice(0, 500)}`;
+          failureDetails.push(detail);
         }
-      } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
-        results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
-        created = true;
-      } else {
-        const detail = `POST ${catalogUrl} -> ${createResult.status}: ${createResult.text.slice(0, 500)}`;
-        failureDetails.push(detail);
-        console.warn(`[UiPath Deploy] AC Catalog Create failed: ${detail}`);
       }
 
       if (!created) {
@@ -1783,17 +1793,24 @@ async function provisionTestCases(
     try {
       const projName = processName.replace(/_/g, " ");
       const prefix = processName.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).toUpperCase() || "AUTO";
-      const createProjResult = await uipathFetch(`${activeTmBase}/api/v2/Projects`, {
+      const projBody = { name: projName, projectPrefix: prefix, description: truncDesc(`Test project for ${processName}`) };
+      let createProjResult = await uipathFetch(`${activeTmBase}/api/v2/Projects`, {
         method: "POST",
         headers: tmHdrs,
-        body: JSON.stringify({
-          name: projName,
-          prefix: prefix,
-          description: truncDesc(`Test project for ${processName}`),
-        }),
-        label: "TM Create Project",
+        body: JSON.stringify(projBody),
+        label: "TM Create Project (camelCase)",
         redirect: "manual" as any,
       });
+      if (createProjResult.status === 400 && createProjResult.text.includes("ProjectPrefix")) {
+        const pascalBody = { Name: projName, ProjectPrefix: prefix, Description: truncDesc(`Test project for ${processName}`) };
+        createProjResult = await uipathFetch(`${activeTmBase}/api/v2/Projects`, {
+          method: "POST",
+          headers: tmHdrs,
+          body: JSON.stringify(pascalBody),
+          label: "TM Create Project (PascalCase)",
+          redirect: "manual" as any,
+        });
+      }
       console.log(`[UiPath Deploy] Test project create -> ${createProjResult.status}: ${createProjResult.text.slice(0, 300)}`);
       if (createProjResult.status === 200 || createProjResult.status === 201) {
         const creation = isValidCreation(createProjResult.text);

@@ -1490,10 +1490,39 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       fetchLicenseInfo(orchBase, hdrs),
     ]);
 
+    let duAvailable = duOk || aiOk;
+    if (!duAvailable) {
+      try {
+        const { tryAcquireResourceToken, getDuToken } = await import("./uipath-auth");
+        const duTokenResult = await tryAcquireResourceToken("DU");
+        if (duTokenResult.ok) {
+          const duTok = await getDuToken();
+          const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
+          if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+          for (const ep of [
+            `${base}/du_/api/framework/projects?api-version=1`,
+            `${base}/du_/api/framework/projects?api-version=2`,
+            `${base}/du_/api/framework/projects?$top=1`,
+          ]) {
+            try {
+              const duRes = await fetch(ep, { headers: duHdrs });
+              if (duRes.ok || duRes.status === 403 || duRes.status === 400) {
+                duAvailable = true;
+                console.log(`[Platform Capabilities] DU detected via DU token probe: ${ep} -> ${duRes.status}`);
+                break;
+              }
+            } catch {}
+          }
+        }
+      } catch (duErr: any) {
+        console.log(`[Platform Capabilities] DU token probe failed: ${duErr.message}`);
+      }
+    }
+
     const avail = {
       orchestrator: orchOk,
       actionCenter: taskOk,
-      documentUnderstanding: duOk || aiOk,
+      documentUnderstanding: duAvailable,
       testManager: tm1Ok || tm2Ok,
       storageBuckets: bucketOk,
       aiCenter: aiOk,
