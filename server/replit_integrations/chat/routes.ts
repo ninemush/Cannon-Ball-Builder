@@ -49,6 +49,10 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     else unavailable.push("Test Manager");
     if (serviceAvailability.documentUnderstanding) available.push("Document Understanding");
     else unavailable.push("Document Understanding");
+    if (serviceAvailability.dataService) available.push("Data Service (Data Fabric)");
+    else unavailable.push("Data Service");
+    if (serviceAvailability.platformManagement) available.push("Platform Management (robot accounts, security)");
+    else unavailable.push("Platform Management");
     if (serviceAvailability.environments) available.push("Environments");
     else unavailable.push("Environments (deprecated on modern folders — machine templates used instead)");
     if (serviceAvailability.triggers) available.push("Triggers (queue and time-based)");

@@ -1485,24 +1485,38 @@ async function provisionDocUnderstanding(
   const results: DeploymentResult[] = [];
 
   const cloudBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+
+  let duToken: string;
+  let usingDedicatedToken = false;
+  try {
+    const { getDuToken } = await import("./uipath-auth");
+    duToken = await getDuToken();
+    usingDedicatedToken = true;
+    console.log("[UiPath Deploy] Using DU-scoped token for Document Understanding provisioning");
+  } catch (err: any) {
+    console.warn(`[UiPath Deploy] DU token unavailable (${err.message}), falling back to OR token — DU operations may fail`);
+    duToken = token;
+  }
+
   const hdrs: Record<string, string> = {
-    "Authorization": `Bearer ${token}`,
+    "Authorization": `Bearer ${duToken}`,
     "Content-Type": "application/json",
     "Accept": "application/json",
   };
+  if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
 
   const endpoints = [
-    { url: `${cloudBase}/du_/api/framework/projects`, label: "DU Framework API" },
-    { url: `${cloudBase}/du_/api/v1/projects`, label: "DU API v1" },
-    { url: `${cloudBase}/aifabric_/ai-deployer/v1/projects`, label: "AI Center Deployer" },
-    { url: `${cloudBase}/aifabric_/api/v1/projects`, label: "AI Fabric API" },
+    { url: `${cloudBase}/du_/api/framework/projects`, label: "DU Framework API", apiVersion: "1" },
+    { url: `${cloudBase}/du_/api/framework/projects`, label: "DU Framework API v2", apiVersion: "2" },
+    { url: `${cloudBase}/aifabric_/ai-deployer/v1/projects`, label: "AI Center Deployer", apiVersion: "" },
   ];
 
   let serviceAvailable = false;
   let activeEndpoint: typeof endpoints[0] | null = null;
   for (const ep of endpoints) {
     try {
-      const probeRes = await fetch(`${ep.url}?$top=1`, { headers: hdrs });
+      const probeUrl = ep.apiVersion ? `${ep.url}?api-version=${ep.apiVersion}&$top=1` : `${ep.url}?$top=1`;
+      const probeRes = await fetch(probeUrl, { headers: hdrs });
       const probeText = await probeRes.text();
       console.log(`[UiPath Deploy] DU probe ${ep.label} -> ${probeRes.status}: ${probeText.slice(0, 200)}`);
 
@@ -1516,9 +1530,16 @@ async function provisionDocUnderstanding(
         activeEndpoint = ep;
         break;
       }
-      if (probeRes.status === 401 || probeRes.status === 403) {
+      if (probeRes.status === 403) {
         serviceAvailable = true;
         activeEndpoint = ep;
+        console.log(`[UiPath Deploy] DU probe ${ep.label} returned 403 — service exists but needs folder permissions`);
+        break;
+      }
+      if (probeRes.status === 400 && probeText.includes("InvalidApiVersion")) {
+        serviceAvailable = true;
+        activeEndpoint = ep;
+        console.log(`[UiPath Deploy] DU probe ${ep.label} returned 400 InvalidApiVersion — service exists`);
         break;
       }
     } catch { continue; }
@@ -1538,7 +1559,8 @@ async function provisionDocUnderstanding(
       let found = false;
       if (activeEndpoint) {
         try {
-          const checkRes = await fetch(`${activeEndpoint.url}?$top=50`, { headers: hdrs });
+          const checkUrl = activeEndpoint.apiVersion ? `${activeEndpoint.url}?api-version=${activeEndpoint.apiVersion}&$top=50` : `${activeEndpoint.url}?$top=50`;
+          const checkRes = await fetch(checkUrl, { headers: hdrs });
           if (checkRes.ok) {
             const checkText = await checkRes.text();
             const genuineCheck = isGenuineServiceResponse(checkText);
@@ -1565,7 +1587,8 @@ async function provisionDocUnderstanding(
             Description: truncDesc(project.description || `Document Understanding project for ${project.name}`),
             DocumentTypes: project.documentTypes || [],
           };
-          const res = await fetch(ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+          const createUrl = ep.apiVersion ? `${ep.url}?api-version=${ep.apiVersion}` : ep.url;
+          const res = await fetch(createUrl, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
           const text = await res.text();
           console.log(`[UiPath Deploy] DU project "${project.name}" via ${ep.label} -> ${res.status}: ${text.slice(0, 300)}`);
 
@@ -1581,7 +1604,8 @@ async function provisionDocUnderstanding(
 
             let verified = false;
             try {
-              const verifyRes = await fetch(`${ep.url}?$top=50`, { headers: hdrs });
+              const verifyUrl = ep.apiVersion ? `${ep.url}?api-version=${ep.apiVersion}&$top=50` : `${ep.url}?$top=50`;
+              const verifyRes = await fetch(verifyUrl, { headers: hdrs });
               if (verifyRes.ok) {
                 const verifyText = await verifyRes.text();
                 const verifyCheck = isGenuineServiceResponse(verifyText);
@@ -2336,31 +2360,10 @@ function formatInfraProbeResults(probe: InfraProbeResult): DeploymentResult[] {
 
 async function getPMToken(config: UiPathConfig): Promise<string | null> {
   try {
-    const params = new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
-      scope: "PM.RobotAccount PM.RobotAccount.Read PM.RobotAccount.Write",
-    });
-    params.append("acr_values", `tenantId:${config.orgName}`);
-
-    const res = await fetch("https://cloud.uipath.com/identity_/connect/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString(),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`[UiPath Deploy] PM token failed (${res.status}): ${errText.slice(0, 200)}`);
-      return null;
-    }
-    const data = await res.json();
-    if (data.access_token && data.scope?.includes("PM.RobotAccount")) {
-      console.log("[UiPath Deploy] PM token acquired successfully");
-      return data.access_token;
-    }
-    console.warn("[UiPath Deploy] PM token issued but missing RobotAccount scope");
-    return null;
+    const { getPmToken } = await import("./uipath-auth");
+    const token = await getPmToken();
+    console.log("[UiPath Deploy] PM token acquired via centralized auth");
+    return token;
   } catch (err: any) {
     console.warn(`[UiPath Deploy] PM token error: ${err.message}`);
     return null;
@@ -2534,7 +2537,7 @@ export async function deployAllArtifacts(
     let svcAvail: ServiceAvailabilityMap | null = null;
     try {
       svcAvail = await probeServiceAvailability();
-      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}`);
+      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}`);
     } catch { /* non-critical — proceed without filtering */ }
 
     const queueResults = await provisionQueues(base, hdrs, artifacts.queues);

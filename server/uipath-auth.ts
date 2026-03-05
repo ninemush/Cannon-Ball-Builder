@@ -24,30 +24,42 @@ type CachedToken = {
   expiresAt: number;
 };
 
+export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF";
+
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 const TOKEN_ENDPOINT = "https://cloud.uipath.com/identity_/connect/token";
-const DEFAULT_OR_SCOPES = [
-  "OR.Default", "OR.Administration", "OR.Execution",
-  "OR.Queues", "OR.Queues.Read", "OR.Queues.Write",
-  "OR.Processes", "OR.Folders", "OR.Folders.Read",
-  "OR.Jobs", "OR.Jobs.Read", "OR.Jobs.Write",
-  "OR.Triggers", "OR.Triggers.Read", "OR.Triggers.Write",
-  "OR.Robots", "OR.Robots.Read", "OR.Machines",
-  "OR.Assets", "OR.Assets.Read", "OR.Assets.Write",
-  "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
-  "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
-  "OR.TestDataQueues", "OR.TestDataQueues.Read",
-  "OR.Tasks", "OR.Tasks.Read", "OR.Tasks.Write",
-].join(" ");
 
-const DEFAULT_TM_SCOPES = [
-  "TM.TestCases", "TM.TestCases.Read", "TM.TestCases.Write",
-  "TM.TestSets", "TM.TestSets.Read", "TM.TestSets.Write",
-  "TM.TestExecutions", "TM.TestExecutions.Read", "TM.TestExecutions.Write",
-  "TM.Projects", "TM.Projects.Read", "TM.Projects.Write", "TM.Users.Read",
-].join(" ");
+const RESOURCE_SCOPES: Record<ResourceType, string> = {
+  OR: [
+    "OR.Default", "OR.Administration", "OR.Execution",
+    "OR.Queues", "OR.Queues.Read", "OR.Queues.Write",
+    "OR.Processes", "OR.Folders", "OR.Folders.Read",
+    "OR.Jobs", "OR.Jobs.Read", "OR.Jobs.Write",
+    "OR.Triggers", "OR.Triggers.Read", "OR.Triggers.Write",
+    "OR.Robots", "OR.Robots.Read", "OR.Machines",
+    "OR.Assets", "OR.Assets.Read", "OR.Assets.Write",
+    "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
+    "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
+    "OR.TestDataQueues", "OR.TestDataQueues.Read",
+    "OR.Tasks", "OR.Tasks.Read", "OR.Tasks.Write",
+  ].join(" "),
+  TM: [
+    "TM.TestCases", "TM.TestCases.Read", "TM.TestCases.Write",
+    "TM.TestSets", "TM.TestSets.Read", "TM.TestSets.Write",
+    "TM.TestExecutions", "TM.TestExecutions.Read", "TM.TestExecutions.Write",
+    "TM.Projects", "TM.Projects.Read", "TM.Projects.Write", "TM.Users.Read",
+  ].join(" "),
+  DU: "Du.DocumentManager.Document",
+  PM: [
+    "PM.Security", "PM.AuthSetting", "PM.OAuthApp",
+    "PM.RobotAccount", "PM.RobotAccount.Read", "PM.RobotAccount.Write",
+  ].join(" "),
+  DF: [
+    "DataFabric.Schema.Read", "DataFabric.Data.Read", "DataFabric.Data.Write",
+  ].join(" "),
+};
 
-export const DEFAULT_SCOPES = DEFAULT_OR_SCOPES;
+export const DEFAULT_SCOPES = RESOURCE_SCOPES.OR;
 
 function resolveOrScopes(stored: string | undefined, defaults: string): string {
   if (!stored) return defaults;
@@ -56,8 +68,7 @@ function resolveOrScopes(stored: string | undefined, defaults: string): string {
 }
 
 let cachedConfig: UiPathAuthConfig | null = null;
-let cachedToken: CachedToken | null = null;
-let cachedTmToken: CachedToken | null = null;
+const tokenCache: Partial<Record<ResourceType, CachedToken>> = {};
 let configLoadedAt = 0;
 const CONFIG_TTL_MS = 30_000;
 
@@ -80,7 +91,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   const clientId = map.get("uipath_client_id");
   const clientSecret = map.get("uipath_client_secret");
   const storedScopes = map.get("uipath_scopes");
-  const scopes = resolveOrScopes(storedScopes, DEFAULT_OR_SCOPES);
+  const scopes = resolveOrScopes(storedScopes, RESOURCE_SCOPES.OR);
   const folderId = map.get("uipath_folder_id") || undefined;
   const folderName = map.get("uipath_folder_name") || undefined;
 
@@ -97,7 +108,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
         tenantName: envTenantName,
         clientId: envClientId,
         clientSecret: envClientSecret,
-        scopes: resolveOrScopes(process.env.UIPATH_SCOPES, DEFAULT_OR_SCOPES),
+        scopes: resolveOrScopes(process.env.UIPATH_SCOPES, RESOURCE_SCOPES.OR),
         folderId: envFolderId,
       };
       configLoadedAt = now;
@@ -112,8 +123,8 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   return cachedConfig;
 }
 
-async function fetchNewToken(config: UiPathAuthConfig, scopeOverride?: string): Promise<CachedToken> {
-  const requestedScopes = scopeOverride || config.scopes;
+async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): Promise<CachedToken> {
+  const requestedScopes = resource === "OR" ? config.scopes : RESOURCE_SCOPES[resource];
   const params = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: config.clientId,
@@ -137,27 +148,26 @@ async function fetchNewToken(config: UiPathAuthConfig, scopeOverride?: string): 
     const msg = err.name === "AbortError"
       ? "Token request timed out after 15s"
       : `Token request failed: ${err.message}`;
-    console.error(`[UiPath Auth] ${msg} (client: ${maskClientId(config.clientId)})`);
+    console.error(`[UiPath Auth] ${msg} (${resource} token, client: ${maskClientId(config.clientId)})`);
     throw new UiPathAuthError(msg);
   }
   clearTimeout(timeoutId);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.error(`[UiPath Auth] Token request failed (${res.status}) for client ${maskClientId(config.clientId)}`);
-    throw new UiPathAuthError(`Authentication failed (${res.status}): ${text.slice(0, 200)}`, res.status);
+    console.error(`[UiPath Auth] ${resource} token request failed (${res.status}) for client ${maskClientId(config.clientId)}`);
+    throw new UiPathAuthError(`${resource} authentication failed (${res.status}): ${text.slice(0, 200)}`, res.status);
   }
 
   const data = await res.json();
   if (!data.access_token) {
-    throw new UiPathAuthError("Token response missing access_token");
+    throw new UiPathAuthError(`${resource} token response missing access_token`);
   }
 
   const expiresIn = data.expires_in || 3600;
   const expiresAt = Date.now() + expiresIn * 1000;
 
-  const label = scopeOverride ? "TM" : "OR";
-  console.log(`[UiPath Auth] ${label} token acquired for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
+  console.log(`[UiPath Auth] ${resource} token acquired for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
 
   try {
     const jwtParts = data.access_token.split(".");
@@ -166,10 +176,13 @@ async function fetchNewToken(config: UiPathAuthConfig, scopeOverride?: string): 
       const tokenScopes: string[] = typeof payload.scope === "string"
         ? payload.scope.split(" ")
         : Array.isArray(payload.scope) ? payload.scope : [];
-      const orScopes = tokenScopes.filter((s: string) => s.startsWith("OR."));
-      const tmScopes = tokenScopes.filter((s: string) => s.startsWith("TM."));
-      const acScopes = tokenScopes.filter((s: string) => s.startsWith("AC."));
-      console.log(`[UiPath Auth] ${label} token scopes: OR=${orScopes.length}, TM=${tmScopes.length}, AC=${acScopes.length}`);
+      const scopeCounts = new Map<string, number>();
+      for (const s of tokenScopes) {
+        const prefix = s.split(".")[0];
+        scopeCounts.set(prefix, (scopeCounts.get(prefix) || 0) + 1);
+      }
+      const summary = Array.from(scopeCounts.entries()).map(([k, v]) => `${k}=${v}`).join(", ");
+      console.log(`[UiPath Auth] ${resource} token scopes: ${summary}`);
     }
   } catch (decodeErr: any) {
     console.log(`[UiPath Auth] Could not decode JWT payload: ${decodeErr.message}`);
@@ -183,6 +196,41 @@ function isTokenValid(token: CachedToken | null): boolean {
   return Date.now() < token.expiresAt - TOKEN_REFRESH_BUFFER_MS;
 }
 
+async function getResourceToken(resource: ResourceType): Promise<string> {
+  const config = await loadConfig();
+  if (!config) {
+    throw new UiPathAuthError("UiPath is not configured. Set credentials in Admin > Integrations.");
+  }
+
+  const cached = tokenCache[resource];
+  if (isTokenValid(cached ?? null) && cached) {
+    return cached.accessToken;
+  }
+
+  tokenCache[resource] = await fetchNewToken(config, resource);
+  return tokenCache[resource]!.accessToken;
+}
+
+async function getResourceHeaders(resource: ResourceType, extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+  const config = await loadConfig();
+  if (!config) {
+    throw new UiPathAuthError("UiPath is not configured.");
+  }
+
+  const token = await getResourceToken(resource);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    ...extraHeaders,
+  };
+
+  if (resource === "OR" && config.folderId) {
+    headers["X-UIPATH-OrganizationUnitId"] = config.folderId;
+  }
+
+  return headers;
+}
+
 export function getBaseUrl(config: UiPathAuthConfig): string {
   return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
 }
@@ -191,12 +239,34 @@ export function getTestManagerBaseUrl(config: UiPathAuthConfig): string {
   return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`;
 }
 
+export function getDuBaseUrl(config: UiPathAuthConfig): string {
+  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/du_`;
+}
+
+export function getDataServiceBaseUrl(config: UiPathAuthConfig): string {
+  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/dataservice_`;
+}
+
+export function getCloudBaseUrl(config: UiPathAuthConfig): string {
+  return `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+}
+
 export function invalidateToken(): void {
-  cachedToken = null;
+  tokenCache.OR = undefined;
 }
 
 export function invalidateTmToken(): void {
-  cachedTmToken = null;
+  tokenCache.TM = undefined;
+}
+
+export function invalidateResourceToken(resource: ResourceType): void {
+  tokenCache[resource] = undefined;
+}
+
+export function invalidateAllTokens(): void {
+  for (const key of Object.keys(tokenCache) as ResourceType[]) {
+    tokenCache[key] = undefined;
+  }
 }
 
 export function invalidateConfig(): void {
@@ -209,67 +279,72 @@ export async function getConfig(): Promise<UiPathAuthConfig | null> {
 }
 
 export async function getToken(): Promise<string> {
-  const config = await loadConfig();
-  if (!config) {
-    throw new UiPathAuthError("UiPath is not configured. Set credentials in Admin > Integrations.");
-  }
-
-  if (isTokenValid(cachedToken) && cachedToken) {
-    return cachedToken.accessToken;
-  }
-
-  cachedToken = await fetchNewToken(config);
-  return cachedToken.accessToken;
+  return getResourceToken("OR");
 }
 
 export async function getTmToken(): Promise<string> {
-  const config = await loadConfig();
-  if (!config) {
-    throw new UiPathAuthError("UiPath is not configured. Set credentials in Admin > Integrations.");
-  }
+  return getResourceToken("TM");
+}
 
-  if (isTokenValid(cachedTmToken) && cachedTmToken) {
-    return cachedTmToken.accessToken;
-  }
+export async function getDuToken(): Promise<string> {
+  return getResourceToken("DU");
+}
 
-  cachedTmToken = await fetchNewToken(config, DEFAULT_TM_SCOPES);
-  return cachedTmToken.accessToken;
+export async function getPmToken(): Promise<string> {
+  return getResourceToken("PM");
+}
+
+export async function getDfToken(): Promise<string> {
+  return getResourceToken("DF");
 }
 
 export async function getHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
-  const config = await loadConfig();
-  if (!config) {
-    throw new UiPathAuthError("UiPath is not configured.");
-  }
-
-  const token = await getToken();
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-    ...extraHeaders,
-  };
-
-  if (config.folderId) {
-    headers["X-UIPATH-OrganizationUnitId"] = config.folderId;
-  }
-
-  return headers;
+  return getResourceHeaders("OR", extraHeaders);
 }
 
 export async function getTmHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
-  const config = await loadConfig();
-  if (!config) {
-    throw new UiPathAuthError("UiPath is not configured.");
+  return getResourceHeaders("TM", extraHeaders);
+}
+
+export async function getDuHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+  return getResourceHeaders("DU", extraHeaders);
+}
+
+export async function getPmHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+  return getResourceHeaders("PM", extraHeaders);
+}
+
+export async function getDfHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+  return getResourceHeaders("DF", extraHeaders);
+}
+
+export function getResourceScopes(): Record<ResourceType, string> {
+  return { ...RESOURCE_SCOPES };
+}
+
+export async function tryAcquireResourceToken(resource: ResourceType): Promise<{ ok: boolean; scopes: string[]; error?: string }> {
+  try {
+    const token = await getResourceToken(resource);
+    const parts = token.split(".");
+    if (parts.length === 3) {
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+      const scopes: string[] = typeof payload.scope === "string"
+        ? payload.scope.split(" ")
+        : Array.isArray(payload.scope) ? payload.scope : [];
+      return { ok: true, scopes };
+    }
+    return { ok: true, scopes: [] };
+  } catch (err: any) {
+    return { ok: false, scopes: [], error: err.message };
   }
+}
 
-  const token = await getTmToken();
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-    ...extraHeaders,
-  };
-
-  return headers;
+function detectResourceType(url: string): ResourceType {
+  if (url.includes("/testmanager_/") || url.includes("/tmapi_/")) return "TM";
+  if (url.includes("/du_/") || url.includes("/documentunderstanding_/")) return "DU";
+  if (url.includes("/dataservice_/") || url.includes("/datafabric_/")) return "DF";
+  if (url.includes("/identity_/api/") && !url.includes("/connect/")) return "PM";
+  return "OR";
 }
 
 export async function healthCheck(): Promise<{ ok: boolean; message: string; latencyMs: number; tenantName?: string; folderName?: string }> {
@@ -330,8 +405,8 @@ export async function makeAuthenticatedRequest(
   options: RequestInit = {},
   retryOn401 = true
 ): Promise<Response> {
-  const isTmUrl = url.includes("/testmanager_/") || url.includes("/tmapi_/");
-  const headers = isTmUrl ? await getTmHeaders() : await getHeaders();
+  const resource = detectResourceType(url);
+  const headers = await getResourceHeaders(resource);
   const mergedHeaders = { ...headers, ...(options.headers as Record<string, string> || {}) };
 
   const controller = new AbortController();
@@ -351,12 +426,8 @@ export async function makeAuthenticatedRequest(
   clearTimeout(timeoutId);
 
   if (res.status === 401 && retryOn401) {
-    console.log("[UiPath Auth] Got 401, refreshing token and retrying...");
-    if (isTmUrl) {
-      invalidateTmToken();
-    } else {
-      invalidateToken();
-    }
+    console.log(`[UiPath Auth] Got 401 on ${resource} request, refreshing token and retrying...`);
+    invalidateResourceToken(resource);
     return makeAuthenticatedRequest(url, options, false);
   }
 

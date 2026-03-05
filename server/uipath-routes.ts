@@ -543,13 +543,12 @@ export function registerUiPathRoutes(app: Express): void {
 
         let pmToken: string | null = null;
         try {
-          const pmScopes = "PM.RobotAccount PM.RobotAccount.Read PM.RobotAccount.Write";
-          const pmParams = new URLSearchParams({ grant_type: "client_credentials", client_id: config.clientId, client_secret: config.clientSecret, scope: pmScopes });
-          pmParams.append("acr_values", `tenantId:${config.orgName}`);
-          const pmRes = await safeCall("pm_token", "https://cloud.uipath.com/identity_/connect/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: pmParams.toString() });
-          sec.steps.push({ step: "pm_token", ...pmRes, scopesRequested: pmScopes, scopesGranted: pmRes.data?.scope || null });
-          if (pmRes.ok && pmRes.data?.access_token) pmToken = pmRes.data.access_token;
-        } catch {}
+          const { getPmToken } = await import("./uipath-auth");
+          pmToken = await getPmToken();
+          sec.steps.push({ step: "pm_token", ok: true, status: 200, note: "PM token acquired via centralized auth" });
+        } catch (pmErr: any) {
+          sec.steps.push({ step: "pm_token", ok: false, status: 0, note: `PM token failed: ${pmErr.message}` });
+        }
 
         if (pmToken) {
           const pmHdrs = { "Authorization": `Bearer ${pmToken}`, "Content-Type": "application/json" };

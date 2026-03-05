@@ -1704,15 +1704,50 @@ function IntegrationsTab() {
                 )}
 
                 {scopeVerification.grantedScopes.length > 0 && (
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Granted Scopes ({scopeVerification.grantedScopes.length})</p>
-                    <div className="flex flex-wrap gap-1">
-                      {scopeVerification.grantedScopes.map((scope) => (
-                        <span key={scope} className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-mono">
-                          {scope}
-                        </span>
-                      ))}
-                    </div>
+                    {(() => {
+                      const groups: Record<string, string[]> = {};
+                      const labelMap: Record<string, string> = {
+                        "OR": "Orchestrator",
+                        "TM": "Test Manager",
+                        "Du": "Document Understanding",
+                        "PM": "Platform Management",
+                        "DataFabric": "Data Service",
+                      };
+                      for (const scope of scopeVerification.grantedScopes) {
+                        const prefix = scope.startsWith("OR.") ? "OR"
+                          : scope.startsWith("TM.") ? "TM"
+                          : scope.startsWith("Du.") ? "Du"
+                          : scope.startsWith("PM.") ? "PM"
+                          : scope.startsWith("DataFabric.") ? "DataFabric"
+                          : "Other";
+                        if (!groups[prefix]) groups[prefix] = [];
+                        groups[prefix].push(scope);
+                      }
+                      const colorMap: Record<string, string> = {
+                        "OR": "bg-blue-500/10 text-blue-400",
+                        "TM": "bg-purple-500/10 text-purple-400",
+                        "Du": "bg-amber-500/10 text-amber-400",
+                        "PM": "bg-cyan-500/10 text-cyan-400",
+                        "DataFabric": "bg-emerald-500/10 text-emerald-400",
+                        "Other": "bg-primary/10 text-primary",
+                      };
+                      return Object.entries(groups).map(([prefix, scopes]) => (
+                        <div key={prefix} className="space-y-1">
+                          <p className="text-[10px] font-medium text-muted-foreground">
+                            {labelMap[prefix] || prefix} ({scopes.length})
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {scopes.map((scope) => (
+                              <span key={scope} className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${colorMap[prefix] || colorMap.Other}`}>
+                                {scope}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ));
+                    })()}
                   </div>
                 )}
               </div>

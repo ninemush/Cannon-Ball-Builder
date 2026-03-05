@@ -1729,31 +1729,41 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
   }
 
   try {
-    const token = await getAccessToken(config);
-    const requestedScopes = config.scopes.split(/\s+/).filter(Boolean);
-
-    let grantedScopes: string[] = [];
-    try {
-      const parts = token.split(".");
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
-        if (payload.scope) {
-          grantedScopes = Array.isArray(payload.scope) ? payload.scope : payload.scope.split(/\s+/);
-        } else if (payload.scp) {
-          grantedScopes = Array.isArray(payload.scp) ? payload.scp : payload.scp.split(/\s+/);
-        }
-      }
-    } catch {
-      grantedScopes = [...requestedScopes];
-    }
+    const { tryAcquireResourceToken, getToken, getHeaders: getOrHeaders } = await import("./uipath-auth");
 
     const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
     const orchBase = `${base}/orchestrator_`;
-    const hdrs: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    };
-    if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+
+    const resourceResults = await Promise.allSettled([
+      tryAcquireResourceToken("OR"),
+      tryAcquireResourceToken("TM"),
+      tryAcquireResourceToken("DU"),
+      tryAcquireResourceToken("PM"),
+      tryAcquireResourceToken("DF"),
+    ]);
+
+    const resources: Record<string, { ok: boolean; scopes: string[]; error?: string }> = {};
+    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF"> = ["OR", "TM", "DU", "PM", "DF"];
+    for (let i = 0; i < resourceNames.length; i++) {
+      const r = resourceResults[i];
+      resources[resourceNames[i]] = r.status === "fulfilled" ? r.value : { ok: false, scopes: [], error: "Token request failed" };
+    }
+
+    const allGrantedScopes: string[] = [];
+    const scopeSummary: string[] = [];
+    for (const [name, res] of Object.entries(resources)) {
+      if (res.ok && res.scopes.length > 0) {
+        allGrantedScopes.push(...res.scopes);
+        scopeSummary.push(`${name}=${res.scopes.length}`);
+      } else if (!res.ok) {
+        scopeSummary.push(`${name}=unavailable`);
+      } else {
+        scopeSummary.push(`${name}=0`);
+      }
+    }
+
+    const requestedScopes = config.scopes.split(/\s+/).filter(Boolean);
+    const hdrs = await getOrHeaders();
 
     const serviceChecks: Record<string, { available: boolean; message: string }> = {};
 
@@ -1768,70 +1778,93 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       : { available: false, message: `HTTP ${blobRes.status} — may need OR.Blobs scope` };
 
     const taskCatRes = await fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs });
-    serviceChecks["Action Center"] = taskCatRes.ok
+    serviceChecks["Action Center (Maestro)"] = taskCatRes.ok
       ? { available: true, message: "Accessible" }
       : { available: false, message: `HTTP ${taskCatRes.status} — Action Center may not be enabled or needs OR.Tasks scope` };
 
-    let tmAvailable = false;
-    let tmMsg = "";
-
-    try {
+    if (resources.TM.ok) {
       const { getTmToken } = await import("./uipath-auth");
       const tmTok = await getTmToken();
-      const tmHdrs: Record<string, string> = { Authorization: `Bearer ${tmTok}`, "Content-Type": "application/json" };
-      const tmBases = [
-        `${base}/testmanager_/api/v2/projects?$top=1`,
-        `${base}/tmapi_/api/v2/projects?$top=1`,
-      ];
-      for (const tmUrl of tmBases) {
+      const tmHdrs = { Authorization: `Bearer ${tmTok}`, "Content-Type": "application/json" };
+      let tmAvailable = false;
+      let tmMsg = "";
+      for (const tmUrl of [`${base}/testmanager_/api/v2/projects?$top=1`, `${base}/tmapi_/api/v2/projects?$top=1`]) {
         try {
           const tmRes = await fetch(tmUrl, { headers: tmHdrs });
-          if (tmRes.ok) {
-            tmAvailable = true;
-            tmMsg = "Accessible (TM token)";
-            break;
-          } else {
-            tmMsg = `HTTP ${tmRes.status}`;
-          }
+          if (tmRes.ok) { tmAvailable = true; tmMsg = "Accessible (TM token)"; break; }
+          if (tmRes.status === 401 || tmRes.status === 403) { tmAvailable = true; tmMsg = `Available (HTTP ${tmRes.status} — needs permissions)`; break; }
+          tmMsg = `HTTP ${tmRes.status}`;
         } catch { tmMsg = "Not reachable"; }
       }
-    } catch (err: any) {
-      tmMsg = `TM token unavailable: ${err.message}`;
-    }
-
-    if (!tmAvailable) {
-      const orchTmRes = await fetch(`${orchBase}/odata/TestSets?$top=1`, { headers: hdrs }).catch(() => null);
-      if (orchTmRes?.ok) {
-        tmAvailable = true;
-        tmMsg = "Accessible (via Orchestrator OData)";
+      if (!tmAvailable) {
+        const orchTmRes = await fetch(`${orchBase}/odata/TestSets?$top=1`, { headers: hdrs }).catch(() => null);
+        if (orchTmRes?.ok) { tmAvailable = true; tmMsg = "Accessible (via Orchestrator OData)"; }
       }
-    }
-    serviceChecks["Test Manager"] = { available: tmAvailable, message: tmAvailable ? tmMsg : `Not available on this tenant (${tmMsg})` };
-
-    const duRes = await fetch(`${base}/du_/api/framework/projects?$top=1`, { headers: hdrs });
-    if (duRes.ok) {
-      serviceChecks["Document Understanding"] = { available: true, message: "Accessible" };
+      serviceChecks["Test Manager"] = { available: tmAvailable, message: tmAvailable ? tmMsg : `Not available (${tmMsg})` };
     } else {
-      const aiRes = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: hdrs });
-      serviceChecks["Document Understanding"] = aiRes.ok
-        ? { available: true, message: "Accessible via AI Center" }
-        : { available: false, message: `Not reachable (DU: ${duRes.status}, AI Center: ${aiRes.status})` };
+      serviceChecks["Test Manager"] = { available: false, message: `TM token unavailable: ${resources.TM.error || "scopes not configured"}` };
     }
 
-    let tmGrantedScopes: string[] = [];
-    try {
-      const { getTmToken } = await import("./uipath-auth");
-      const tmTok = await getTmToken();
-      const tmParts = tmTok.split(".");
-      if (tmParts.length === 3) {
-        const tmPayload = JSON.parse(Buffer.from(tmParts[1], "base64").toString("utf-8"));
-        if (tmPayload.scope) {
-          tmGrantedScopes = Array.isArray(tmPayload.scope) ? tmPayload.scope : tmPayload.scope.split(/\s+/);
-        }
-      }
-    } catch {}
+    if (resources.DU.ok) {
+      const { getDuToken } = await import("./uipath-auth");
+      const duTok = await getDuToken();
+      const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
+      if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
 
-    const allGrantedScopes = [...grantedScopes, ...tmGrantedScopes];
+      let duAvailable = false;
+      let duMsg = "";
+      for (const [ep, label] of [
+        [`${base}/du_/api/framework/projects?api-version=1`, "DU Framework API v1"],
+        [`${base}/du_/api/framework/projects?api-version=2`, "DU Framework API v2"],
+        [`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, "AI Center"],
+      ] as const) {
+        try {
+          const duRes = await fetch(ep, { headers: duHdrs });
+          if (duRes.ok) {
+            const txt = await duRes.text();
+            if (!txt.trim().startsWith("<")) { duAvailable = true; duMsg = `Accessible (${label})`; break; }
+          }
+          if (duRes.status === 403) { duAvailable = true; duMsg = `Available via ${label} (HTTP 403 — needs folder permissions)`; break; }
+          if (duRes.status === 400) {
+            const txt = await duRes.text();
+            if (txt.includes("InvalidApiVersion")) { duAvailable = true; duMsg = `Available (${label} — needs valid api-version)`; }
+          }
+        } catch { }
+      }
+      serviceChecks["Document Understanding"] = { available: duAvailable, message: duAvailable ? duMsg : "DU service not reachable with DU token" };
+    } else {
+      const duRes = await fetch(`${base}/du_/api/framework/projects?api-version=1`, { headers: hdrs }).catch(() => null);
+      if (duRes && (duRes.ok || duRes.status === 403 || duRes.status === 400)) {
+        serviceChecks["Document Understanding"] = { available: true, message: `Available (no DU token — ${resources.DU.error || "scope not configured"})` };
+      } else {
+        serviceChecks["Document Understanding"] = { available: false, message: `DU token unavailable: ${resources.DU.error || "scopes not configured"}` };
+      }
+    }
+
+    if (resources.PM.ok) {
+      serviceChecks["Platform Management"] = { available: true, message: `Token acquired (${resources.PM.scopes.length} scopes)` };
+    } else {
+      serviceChecks["Platform Management"] = { available: false, message: `PM token unavailable: ${resources.PM.error || "scopes not configured"}` };
+    }
+
+    if (resources.DF.ok) {
+      const { getDfToken } = await import("./uipath-auth");
+      const dfTok = await getDfToken();
+      const dfHdrs = { Authorization: `Bearer ${dfTok}`, "Content-Type": "application/json" };
+      let dfAvailable = false;
+      let dfMsg = "";
+      const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { headers: dfHdrs, redirect: "manual" }).catch(() => null);
+      if (dfSwagger && dfSwagger.status === 200) {
+        dfAvailable = true;
+        dfMsg = "Data Service provisioned";
+      } else {
+        dfMsg = `Data Service not reachable (swagger: ${dfSwagger?.status || "error"})`;
+      }
+      serviceChecks["Data Service"] = { available: dfAvailable, message: dfMsg };
+    } else {
+      serviceChecks["Data Service"] = { available: false, message: `DF token unavailable: ${resources.DF.error || "scopes not configured"}` };
+    }
+
     const availableCount = Object.values(serviceChecks).filter(s => s.available).length;
     const totalCount = Object.keys(serviceChecks).length;
 
@@ -1839,7 +1872,7 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       success: true,
       requestedScopes,
       grantedScopes: allGrantedScopes,
-      message: `Token obtained successfully. ${availableCount}/${totalCount} services accessible. OR scopes: ${grantedScopes.length}, TM scopes: ${tmGrantedScopes.length} (separate tokens per UiPath requirement).`,
+      message: `${availableCount}/${totalCount} services accessible. Scopes: ${scopeSummary.join(", ")} (separate tokens per UiPath resource).`,
       services: serviceChecks,
     };
   } catch (err: any) {
@@ -1854,6 +1887,8 @@ export type ServiceAvailabilityMap = {
   actionCenter: boolean;
   testManager: boolean;
   documentUnderstanding: boolean;
+  dataService: boolean;
+  platformManagement: boolean;
   environments: boolean;
   triggers: boolean;
 };
@@ -1861,7 +1896,8 @@ export type ServiceAvailabilityMap = {
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
   const result: ServiceAvailabilityMap = {
     configured: false, orchestrator: false, actionCenter: false,
-    testManager: false, documentUnderstanding: false, environments: true, triggers: true,
+    testManager: false, documentUnderstanding: false, dataService: false,
+    platformManagement: false, environments: true, triggers: true,
   };
 
   const config = await getUiPathConfig();
@@ -1869,14 +1905,10 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
   result.configured = true;
 
   try {
-    const token = await getAccessToken(config);
+    const { getHeaders: getOrHeaders, tryAcquireResourceToken } = await import("./uipath-auth");
+    const hdrs = await getOrHeaders();
     const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
     const orchBase = `${base}/orchestrator_`;
-    const hdrs: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    };
-    if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
 
     const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
     result.orchestrator = orchRes.ok;
@@ -1904,8 +1936,6 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
       } else {
         result.actionCenter = false;
       }
-    } else {
-      result.actionCenter = false;
     }
 
     if (envRes) {
@@ -1917,39 +1947,48 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     const processSchedulesOk = schedRes ? (schedRes.ok || schedRes.status === 400) && schedRes.status !== 404 && schedRes.status !== 405 : false;
     result.triggers = queueTriggersOk || processSchedulesOk;
 
-    const tmBases = [
-      `${base}/testmanager_/api/v2/projects?$top=1`,
-      `${base}/tmapi_/api/v2/projects?$top=1`,
-    ];
-    let tmHdrs = { ...hdrs };
-    try {
+    const [tmResult, duResult, pmResult, dfResult] = await Promise.allSettled([
+      tryAcquireResourceToken("TM"),
+      tryAcquireResourceToken("DU"),
+      tryAcquireResourceToken("PM"),
+      tryAcquireResourceToken("DF"),
+    ]);
+
+    if (tmResult.status === "fulfilled" && tmResult.value.ok) {
       const { getTmToken } = await import("./uipath-auth");
       const tmTok = await getTmToken();
-      tmHdrs = { ...hdrs, Authorization: `Bearer ${tmTok}` };
-    } catch { }
-    for (const tmUrl of tmBases) {
-      try {
-        const tmRes = await fetch(tmUrl, { headers: tmHdrs });
-        if (tmRes.ok) {
-          const tmText = await tmRes.text();
-          const isHTML = tmText.trim().startsWith("<");
-          if (!isHTML) { result.testManager = true; break; }
-        } else if (tmRes.status === 401 || tmRes.status === 403) {
-          result.testManager = true;
-          break;
-        }
-      } catch { /* continue */ }
+      const tmHdrs = { Authorization: `Bearer ${tmTok}`, "Content-Type": "application/json" };
+      for (const tmUrl of [`${base}/testmanager_/api/v2/projects?$top=1`, `${base}/tmapi_/api/v2/projects?$top=1`]) {
+        try {
+          const tmRes = await fetch(tmUrl, { headers: tmHdrs });
+          if (tmRes.ok) { const txt = await tmRes.text(); if (!txt.trim().startsWith("<")) { result.testManager = true; break; } }
+          if (tmRes.status === 401 || tmRes.status === 403) { result.testManager = true; break; }
+        } catch { }
+      }
     }
 
-    const duUrls = [
-      `${base}/du_/api/framework/projects?$top=1`,
-      `${base}/aifabric_/ai-deployer/v1/projects?$top=1`,
-    ];
-    for (const duUrl of duUrls) {
-      try {
-        const duRes = await fetch(duUrl, { headers: hdrs });
-        if (duRes.ok) { result.documentUnderstanding = true; break; }
-      } catch { /* continue */ }
+    if (duResult.status === "fulfilled" && duResult.value.ok) {
+      const { getDuToken } = await import("./uipath-auth");
+      const duTok = await getDuToken();
+      const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
+      if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+      for (const ep of [`${base}/du_/api/framework/projects?api-version=1`, `${base}/du_/api/framework/projects?api-version=2`]) {
+        try {
+          const duRes = await fetch(ep, { headers: duHdrs });
+          if (duRes.ok || duRes.status === 403 || duRes.status === 400) { result.documentUnderstanding = true; break; }
+        } catch { }
+      }
+    }
+
+    if (pmResult.status === "fulfilled" && pmResult.value.ok) {
+      result.platformManagement = true;
+    }
+
+    if (dfResult.status === "fulfilled" && dfResult.value.ok) {
+      const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { redirect: "manual" }).catch(() => null);
+      if (dfSwagger && dfSwagger.status === 200) {
+        result.dataService = true;
+      }
     }
 
     return result;
