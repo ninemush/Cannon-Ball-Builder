@@ -244,6 +244,8 @@ CONDITIONALLY include these — ONLY if the corresponding service is listed as A
 - "actionCenter" — ONLY if Action Center is available. Format: [{"taskCatalog": "...", "assignedRole": "...", "sla": "...", "escalation": "...", "description": "..."}]
 - "documentUnderstanding" — ONLY if Document Understanding is available. Format: [{"name": "...", "documentTypes": [...], "description": "..."}]
 - "testCases" — ONLY if Test Manager is available. Format: [{"name": "TC001 - ...", "description": "...", "steps": [{"action": "...", "expected": "..."}]}]
+- "requirements" — ONLY if Test Manager is available. Format: [{"name": "REQ-001: Requirement name", "description": "Business requirement from PDD", "source": "PDD Section X"}]
+- "testSets" — ONLY if Test Manager is available. Format: [{"name": "Happy Path Tests", "description": "Core scenario validation", "testCaseNames": ["TC001 - Test case name"]}]
 
 CRITICAL RULES FOR ARTIFACTS:
 1. All description fields have a maximum length of 250 characters. Keep descriptions concise.
@@ -466,14 +468,14 @@ export function registerChatRoutes(app: Express): void {
       } catch (e) { /* non-critical */ }
 
       let serviceAvailability: ServiceAvailabilityMap | null = null;
-      const sddRelevantStages = ["Design", "Solution Design", "Build", "Test", "UAT", "Deployment"];
-      if (sddRelevantStages.some(s => idea.stage.toLowerCase().includes(s.toLowerCase()))) {
-        try {
-          serviceAvailability = await probeServiceAvailability();
-          if (serviceAvailability.configured) {
-            console.log(`[Chat] Service probe: AC=${serviceAvailability.actionCenter}, TM=${serviceAvailability.testManager}, DU=${serviceAvailability.documentUnderstanding}, Env=${serviceAvailability.environments}, Trig=${serviceAvailability.triggers}`);
-          }
-        } catch (e) { /* non-critical — proceed without probe */ }
+      try {
+        console.log(`[Chat] Running service probe for stage: ${idea.stage}`);
+        serviceAvailability = await probeServiceAvailability();
+        if (serviceAvailability.configured) {
+          console.log(`[Chat] Service probe: AC=${serviceAvailability.actionCenter}, TM=${serviceAvailability.testManager}, DU=${serviceAvailability.documentUnderstanding}, Env=${serviceAvailability.environments}, Trig=${serviceAvailability.triggers}`);
+        }
+      } catch (e) {
+        console.warn("[Chat] Service probe failed:", (e as any)?.message);
       }
 
       const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability);

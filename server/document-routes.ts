@@ -373,7 +373,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
           system: "You are a UiPath automation consultant. Extract the Orchestrator artifact definitions and output ONLY a fenced JSON block. Output nothing else.",
           messages: [{
             role: "user",
-            content: `From this document, extract ALL Orchestrator and platform artifacts and output them as a single fenced block:\n\n\`\`\`orchestrator_artifacts\n{ "queues": [...], "assets": [...], "machines": [...], "triggers": [...], "storageBuckets": [...], "environments": [...], "actionCenter": [...], "documentUnderstanding": [...], "testCases": [...] }\n\`\`\`\n\nDocument:\n${combinedText.slice(0, 8000)}`
+            content: `From this document, extract ALL Orchestrator and platform artifacts and output them as a single fenced block:\n\n\`\`\`orchestrator_artifacts\n{ "queues": [...], "assets": [...], "machines": [...], "triggers": [...], "storageBuckets": [...], "environments": [...], "actionCenter": [...], "documentUnderstanding": [...], "testCases": [...], "requirements": [...], "testSets": [...] }\n\`\`\`\n\nDocument:\n${combinedText.slice(0, 8000)}`
           }],
         });
         const recoveryText = recoveryResponse.content.find((b) => b.type === "text")?.text || "";

@@ -1519,9 +1519,14 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       }
     }
 
+    const acAvailable = orchOk ? true : taskOk;
+    if (orchOk && !taskOk) {
+      console.log("[Platform Capabilities] AC probe returned non-ok but Orchestrator is connected — marking Action Center as available (provisioning will determine actual support)");
+    }
+
     const avail = {
       orchestrator: orchOk,
-      actionCenter: taskOk,
+      actionCenter: acAvailable,
       documentUnderstanding: duAvailable,
       testManager: tm1Ok || tm2Ok,
       storageBuckets: bucketOk,
