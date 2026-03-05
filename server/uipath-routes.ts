@@ -308,7 +308,9 @@ export function registerUiPathRoutes(app: Express): void {
             (artifacts.environments?.length || 0) > 0 ||
             (artifacts.actionCenter?.length || 0) > 0 ||
             (artifacts.documentUnderstanding?.length || 0) > 0 ||
-            (artifacts.testCases?.length || 0) > 0
+            (artifacts.testCases?.length || 0) > 0 ||
+            (artifacts.testDataQueues?.length || 0) > 0 ||
+            (artifacts.robotAccounts?.length || 0) > 0
           )) {
             const releaseId = result.details?.processId || null;
             const releaseKey = result.details?.releaseKey || null;
@@ -317,7 +319,8 @@ export function registerUiPathRoutes(app: Express): void {
               (artifacts.machines?.length || 0) + (artifacts.triggers?.length || 0) +
               (artifacts.storageBuckets?.length || 0) + (artifacts.environments?.length || 0) +
               (artifacts.actionCenter?.length || 0) + (artifacts.documentUnderstanding?.length || 0) +
-              (artifacts.testCases?.length || 0);
+              (artifacts.testCases?.length || 0) + (artifacts.testDataQueues?.length || 0) +
+              (artifacts.robotAccounts?.length || 0);
             console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId}, releaseName=${releaseName})`);
 
             const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName);
@@ -382,17 +385,6 @@ export function registerUiPathRoutes(app: Express): void {
         summary: result.details?.deploymentSummary || "",
       } : null;
 
-      const chatMsg = deployReportData
-        ? `${chatLines}\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
-        : chatLines;
-
-      await chatStorage.createMessage(ideaId, "assistant", chatMsg);
-    } else {
-      await chatStorage.createMessage(
-        ideaId,
-        "assistant",
-        `Failed to push to UiPath Orchestrator. ${result.message}`
-      );
     }
 
     return res.json(result);

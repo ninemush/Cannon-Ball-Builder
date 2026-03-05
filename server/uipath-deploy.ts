@@ -1669,8 +1669,8 @@ async function provisionTestCases(
     return [{
       artifact: "Test Case",
       name: `${(testCases?.length || 0) + (testDataQueues?.length || 0)} item(s)`,
-      status: "skipped" as const,
-      message: `Could not acquire token with TM scopes: ${err.message}`,
+      status: "failed" as const,
+      message: `Could not acquire token with TM scopes: ${err.message}. Ensure TM.* scopes are granted in the UiPath External Application.`,
     }];
   }
 
@@ -2580,26 +2580,22 @@ export async function deployAllArtifacts(
     }
 
     if (svcAvail && !svcAvail.actionCenter && (artifacts.actionCenter?.length || 0) > 0) {
-      allResults.push({ artifact: "Action Center", name: `${artifacts.actionCenter!.length} task catalog(s)`, status: "skipped", message: "Action Center is not available on this tenant. Enable it in Admin > Tenant > Services, then assign it to the target folder." });
-    } else {
-      const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter);
-      allResults.push(...actionCenterResults);
+      console.log("[UiPath Deploy] Probe says Action Center unavailable, but attempting provisioning anyway...");
     }
+    const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter);
+    allResults.push(...actionCenterResults);
 
     if (svcAvail && !svcAvail.documentUnderstanding && (artifacts.documentUnderstanding?.length || 0) > 0) {
-      allResults.push({ artifact: "Document Understanding", name: `${artifacts.documentUnderstanding!.length} project(s)`, status: "skipped", message: "Document Understanding is not available on this tenant. It requires an Enterprise license or the service may not be enabled." });
-    } else {
-      const duResults = await provisionDocUnderstanding(config, token, artifacts.documentUnderstanding);
-      allResults.push(...duResults);
+      console.log("[UiPath Deploy] Probe says DU unavailable, but attempting provisioning anyway...");
     }
+    const duResults = await provisionDocUnderstanding(config, token, artifacts.documentUnderstanding);
+    allResults.push(...duResults);
 
-    const hasTestArtifacts = (artifacts.testCases?.length || 0) > 0 || (artifacts.testDataQueues?.length || 0) > 0;
-    if (svcAvail && !svcAvail.testManager && hasTestArtifacts) {
-      allResults.push({ artifact: "Test Case", name: `${artifacts.testCases?.length || 0} test case(s), ${artifacts.testDataQueues?.length || 0} test data queue(s)`, status: "skipped", message: "Test Manager is not available on this tenant. Test artifacts were defined in the SDD but cannot be provisioned. Test Manager requires an Enterprise license or TM scopes (TM.Projects, TM.TestCases) to be enabled." });
-    } else {
-      const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId);
-      allResults.push(...testResults);
+    if (svcAvail && !svcAvail.testManager && ((artifacts.testCases?.length || 0) > 0 || (artifacts.testDataQueues?.length || 0) > 0)) {
+      console.log("[UiPath Deploy] Probe says Test Manager unavailable, but attempting provisioning anyway...");
     }
+    const testResults = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId);
+    allResults.push(...testResults);
 
     const created = allResults.filter(r => r.status === "created").length;
     const existed = allResults.filter(r => r.status === "exists").length;

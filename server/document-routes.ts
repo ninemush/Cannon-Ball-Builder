@@ -285,6 +285,18 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
     if (toBeNodes.length > 0) {
       contextPrompt += `\n\nTo-Be process map:\n${JSON.stringify({ nodes: mapSummary(toBeNodes), edges: toBeEdges.map((e: any) => ({ source: e.sourceNodeId, target: e.targetNodeId, label: e.label })) })}`;
     }
+    try {
+      const platformProfile = await getPlatformCapabilities();
+      if (platformProfile.configured) {
+        contextPrompt += `\n\nUiPath Platform Capabilities (connected Orchestrator):\n${platformProfile.availableDescription}`;
+        if (platformProfile.unavailableRecommendations) {
+          contextPrompt += `\n${platformProfile.unavailableRecommendations}`;
+        }
+        console.log(`[PDD] Platform capabilities injected: ${platformProfile.summary}`);
+      }
+    } catch (err: any) {
+      console.log(`[PDD] Could not fetch platform capabilities: ${err.message}`);
+    }
   } else if (docType === "SDD") {
     const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
     if (pdd) {

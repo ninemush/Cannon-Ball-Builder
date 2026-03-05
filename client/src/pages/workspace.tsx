@@ -755,23 +755,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
               if (data.deployStatus) {
                 if (data.deployComplete) {
                   if (data.deployReport) {
-                    setStreamingMsg((prev) => prev ? {
-                      ...prev,
-                      content: prev.content || data.deployStatus || "Deployment complete.",
-                      isStreaming: false,
-                      deployReport: data.deployReport,
-                    } : {
-                      id: `deploy-done-${Date.now()}`,
-                      role: "assistant",
-                      content: data.deployStatus || "Deployment complete.",
-                      timestamp: new Date(),
-                      isStreaming: false,
-                      deployReport: data.deployReport,
-                    });
-                    setTimeout(() => {
-                      setStreamingMsg(null);
-                      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-                    }, 500);
+                    setStreamingMsg(null);
+                    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
                   } else {
                     setStreamingMsg(null);
                     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
