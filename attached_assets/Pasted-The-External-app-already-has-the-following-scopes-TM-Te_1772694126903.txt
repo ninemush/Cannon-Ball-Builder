@@ -1,0 +1,15 @@
+The External app already has the following  scopes:
+
+TM.TestCases TM.Users.Read TM.Projects.Write TM.Users.Write TM.Requirements TM.Projects TM.Requirements.Read TM.Projects.Read TM.Requirements.Write TM.CustomFieldValues.Write TM.CustomFieldValues.Read TM.CustomFieldValues TM.CustomFieldDefinitions.Write TM.CustomFieldDefinitions.Read TM.CustomFieldDefinitions TM.Attachments.Write TM.Attachments.Read TM.Attachments TM.Defects TM.Defects.Read TM.TestExecutions.Write TM.TestExecutions.Read TM.TestExecutions TM.TestSets.Write TM.TestSets.Read TM.TestSets TM.TestCases.Write TM.TestCases.Read TM.Defects.Write TM.Users TM.Administration.Read TM.Administration TM.Maintenance.Write TM.Maintenance.Read TM.Maintenance TM.Administration.Write TM.ObjectLabels TM.ObjectLabels.Read TM.ObjectLabels.Write TM.PerformanceScenarios TM.PerformanceScenarios.Read TM.PerformanceScenarios.Write TM.PerformanceScenarioExecutions TM.PerformanceScenarioExecutions.Read TM.PerformanceScenarioExecutions.Write
+
+OR.Webhooks.Read OR.Webhooks.Write OR.Monitoring OR.Monitoring.Read OR.Monitoring.Write OR.ML OR.ML.Read OR.ML.Write OR.Tasks OR.Tasks.Read OR.Tasks.Write OR.Analytics OR.Analytics.Read OR.Analytics.Write OR.Webhooks OR.Folders OR.Folders.Write OR.BackgroundTasks OR.BackgroundTasks.Read OR.BackgroundTasks.Write OR.TestSets OR.TestSets.Read OR.TestSets.Write OR.TestSetExecutions OR.TestSetExecutions.Read OR.TestSetExecutions.Write OR.TestSetSchedules OR.TestSetSchedules.Read OR.TestSetSchedules.Write OR.TestDataQueues OR.Folders.Read OR.Audit.Write OR.Audit.Read OR.Audit OR.License OR.License.Read OR.License.Write OR.Settings OR.Settings.Read OR.Settings.Write OR.Robots OR.Robots.Read OR.Robots.Write OR.Machines OR.Machines.Read OR.Machines.Write OR.Execution OR.Execution.Read OR.Execution.Write OR.Assets OR.Administration.Write OR.Administration.Read OR.Administration OR.Users.Write OR.Users.Read OR.Users OR.TestDataQueues.Read OR.Jobs.Write OR.Jobs OR.Queues.Write OR.Queues.Read OR.Queues OR.Assets.Write OR.Assets.Read OR.Jobs.Read OR.TestDataQueues.Write OR.Hypervisor.Write OR.Hypervisor.Read OR.Hypervisor OR.AutomationSolutions.Access OR.Buckets OR.Buckets.Read OR.Buckets.Write
+
+PM.Security PM.AuthSetting PM.OAuthApp PM.OAuthApp.Read PM.OAuthApp.Write PM.OAuthAppSecret.Write PM.Audit PM.User.Write PM.User.Read PM.User PM.Setting.Write PM.Setting.Read PM.Setting PM.RobotAccount.Write PM.UserLoginAttempt PM.RobotAccount.Read PM.Group.Write PM.Group.Read PM.Group PM.Audit.Read PM.RobotAccount PM.UserLoginAttempt.Read PM.License PM.License.Read PM.License.Write PM.Scim
+
+Du.DocumentManager.Document Du.Digitization.Api Du.Extraction.Api Du.Classification.Api Du.Validation.Api Du.DataDeletion.Api
+
+PIMS
+DataFabric.Schema.Read DataFabric.Data.Read DataFabric.Data.Write
+
+
+Im not sure why our connection probe does not show all scopes that i see on the Orch. It looks like we are only fetching OR scopes.
