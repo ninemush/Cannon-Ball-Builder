@@ -1686,7 +1686,7 @@ async function provisionTestCases(
   };
 
   let activeTmBase: string | null = null;
-  let projectId: number | null = null;
+  let projectId: string | number | null = null;
   let projectPrefix: string | null = null;
 
   for (const tmBase of tmBases) {
@@ -1892,40 +1892,34 @@ async function provisionTestCases(
           label: string;
         }> = [
           {
+            url: `${activeTmBase}/api/v2/${projectId}/testcases`,
+            body: camelBody,
+            hdrs: tmHdrsWithTenant,
+            label: "V2 /{projectId}/testcases camelCase (TM token)",
+          },
+          {
+            url: `${activeTmBase}/api/v2/${projectId}/testcases`,
+            body: pascalBody,
+            hdrs: tmHdrsWithTenant,
+            label: "V2 /{projectId}/testcases PascalCase (TM token)",
+          },
+          {
+            url: `${activeTmBase}/api/v2/${projectId}/testcases`,
+            body: camelBody,
+            hdrs: mainTokenHdrs,
+            label: "V2 /{projectId}/testcases camelCase (main token)",
+          },
+          {
             url: `${activeTmBase}/api/v2/Projects/${projectId}/TestCases`,
             body: camelBody,
             hdrs: tmHdrsWithTenant,
-            label: "V2 camelCase /Projects/{id}/TestCases (TM token)",
+            label: "Legacy /Projects/{id}/TestCases camelCase (TM token)",
           },
           {
             url: `${activeTmBase}/api/v2/Projects/${projectId}/TestCases`,
             body: pascalBody,
             hdrs: tmHdrsWithTenant,
-            label: "V2 PascalCase /Projects/{id}/TestCases (TM token)",
-          },
-          {
-            url: `${activeTmBase}/api/v2/TestCases`,
-            body: { ...pascalBody, ProjectId: projectId },
-            hdrs: tmHdrsWithTenant,
-            label: "V2 PascalCase /TestCases with ProjectId in body (TM token)",
-          },
-          {
-            url: `${activeTmBase}/api/v2/projects/${projectId}/test-cases`,
-            body: camelBody,
-            hdrs: tmHdrsWithTenant,
-            label: "V2 kebab-case /projects/{id}/test-cases (TM token)",
-          },
-          {
-            url: `${activeTmBase}/api/v2/Projects/${projectId}/TestCases`,
-            body: camelBody,
-            hdrs: mainTokenHdrs,
-            label: "V2 camelCase /Projects/{id}/TestCases (main Orchestrator token)",
-          },
-          {
-            url: `${activeTmBase}/api/v2/TestCases`,
-            body: { ...pascalBody, ProjectId: projectId },
-            hdrs: mainTokenHdrs,
-            label: "V2 PascalCase /TestCases with ProjectId in body (main token)",
+            label: "Legacy /Projects/{id}/TestCases PascalCase (TM token)",
           },
         ];
 
@@ -1966,7 +1960,37 @@ async function provisionTestCases(
               const key = creation.data?.Key || creation.data?.key || (projectPrefix ? `${projectPrefix}-${createdId}` : null);
               let msg = `Created via ${attempt.label} (ID: ${createdId}${key ? `, Key: ${key}` : ""})`;
               if (tc.labels?.length) msg += `, labels: ${tc.labels.join(", ")}`;
-              if (tc.steps?.length) msg += `, ${tc.steps.length} manual steps`;
+
+              if (tc.steps?.length && createdId) {
+                try {
+                  const stepsBody = tc.steps.map((s, idx) => ({
+                    stepDescription: s.action,
+                    expectedResult: s.expected,
+                    order: idx + 1,
+                  }));
+                  const stepsRes = await uipathFetch(`${activeTmBase}/api/v2/${projectId}/teststeps/testcase/${createdId}`, {
+                    method: "PUT",
+                    headers: tmHdrsWithTenant,
+                    body: JSON.stringify(stepsBody),
+                    label: `TM TestSteps for ${tc.name}`,
+                    maxRetries: 1,
+                    redirect: "manual" as any,
+                  });
+                  if (stepsRes.ok) {
+                    msg += `, ${tc.steps.length} manual steps attached`;
+                    console.log(`[UiPath Deploy] Test steps for "${tc.name}" attached successfully via PUT teststeps`);
+                  } else {
+                    msg += `, ${tc.steps.length} manual steps (inline)`;
+                    console.log(`[UiPath Deploy] Test steps PUT for "${tc.name}" returned ${stepsRes.status}: ${stepsRes.text.slice(0, 200)} — steps may have been included inline`);
+                  }
+                } catch (stepsErr: any) {
+                  msg += `, ${tc.steps.length} manual steps (inline)`;
+                  console.log(`[UiPath Deploy] Test steps PUT for "${tc.name}" failed: ${stepsErr.message} — steps may have been included inline`);
+                }
+              } else if (tc.steps?.length) {
+                msg += `, ${tc.steps.length} manual steps (inline)`;
+              }
+
               results.push({ artifact: "Test Case", name: tc.name, status: "created", message: msg, id: createdId });
               created = true;
               break;
