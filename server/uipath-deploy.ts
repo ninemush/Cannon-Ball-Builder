@@ -2415,7 +2415,7 @@ async function provisionTestSets(
           try {
             const assignRes = await uipathFetch(`${activeTmBase}/api/v2/${projectId}/testsets/${existingMatch.id}/assigntestcases`, {
               method: "POST", headers: hdrs,
-              body: JSON.stringify({ testCaseIds: tcIds }),
+              body: JSON.stringify(tcIds),
               label: "TM Assign TestCases to existing TestSet", maxRetries: 1, redirect: "manual" as any,
             });
             if (assignRes.ok) {
@@ -2460,7 +2460,7 @@ async function provisionTestSets(
                 try {
                   const assignRes = await uipathFetch(`${activeTmBase}/api/v2/${projectId}/testsets/${createdSetId}/assigntestcases`, {
                     method: "POST", headers: hdrs,
-                    body: JSON.stringify({ testCaseIds: tcIds }),
+                    body: JSON.stringify(tcIds),
                     label: "TM Assign TestCases to TestSet", maxRetries: 1, redirect: "manual" as any,
                   });
                   if (assignRes.ok) {
@@ -2516,7 +2516,7 @@ async function linkRequirementsToTestCases(
     try {
       const assignRes = await uipathFetch(`${activeTmBase}/api/v2/${projectId}/requirements/${reqId}/assigntestcases`, {
         method: "POST", headers: hdrs,
-        body: JSON.stringify({ testCaseIds: tcIds }),
+        body: JSON.stringify(tcIds),
         label: `TM Link Requirement "${reqName}" to TestCases`, maxRetries: 1, redirect: "manual" as any,
       });
       if (assignRes.ok) {

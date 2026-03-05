@@ -49,7 +49,7 @@ UiPath's identity server (`cloud.uipath.com/identity_/connect/token`) cannot mix
 | Resource | Token Function | Scopes | Service |
 |---|---|---|---|
 | OR | `getToken()` / `getHeaders()` | 74 OR.* scopes (from DB) | Orchestrator, Action Center |
-| TM | `getTmToken()` / `getTmHeaders()` | 13 TM.* scopes | Test Manager |
+| TM | `getTmToken()` / `getTmHeaders()` | 16 TM.* scopes | Test Manager |
 | DU | `getDuToken()` | `Du.DocumentManager.Document` | Document Understanding |
 | PM | `getPmToken()` | 6 PM.* scopes | Platform Management, Robot Accounts |
 | DF | `getDfToken()` | `DataFabric.Schema.Read .Data.Read .Data.Write` | Data Service |

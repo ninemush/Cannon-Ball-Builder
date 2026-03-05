@@ -47,6 +47,7 @@ const RESOURCE_SCOPES: Record<ResourceType, string> = {
     "TM.TestCases", "TM.TestCases.Read", "TM.TestCases.Write",
     "TM.TestSets", "TM.TestSets.Read", "TM.TestSets.Write",
     "TM.TestExecutions", "TM.TestExecutions.Read", "TM.TestExecutions.Write",
+    "TM.Requirements", "TM.Requirements.Read", "TM.Requirements.Write",
     "TM.Projects", "TM.Projects.Read", "TM.Projects.Write", "TM.Users.Read",
   ].join(" "),
   DU: "Du.DocumentManager.Document",
