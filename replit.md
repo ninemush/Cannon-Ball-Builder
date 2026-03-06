@@ -17,7 +17,7 @@ The application is built on a modern web stack designed for scalability and an i
 
 **Key Features and Design Choices:**
 
--   **UI/UX**: Features a responsive top navigation, a horizontal chevron-style stage stepper bar (10 stages rendered as CSS clip-path arrow segments with completed/current/future visual states), and a resizable two-panel workspace displaying a live React Flow process map and the AI chat interface. The chevron stepper sits between the header and the panels, replacing the former vertical sidebar.
+-   **UI/UX**: Features a responsive sidebar, top navigation, and a resizable three-panel workspace displaying stage progress, a live React Flow process map, and the AI chat interface.
 -   **Process Map Engine**: Custom node types (Start/End, Task, Decision) are supported, with DAG-based layout for intelligent branching. It includes confidence scoring, inline editing, context menus, and an approval workflow. Dynamic updates from AI's `[STEP: 1.0 Name ...]` tags ensure deterministic step-number-based edge resolution.
 -   **Automated Stage Transitions**: An engine automatically transitions ideas across 10 pipeline stages based on predefined criteria, with comprehensive audit logging.
 -   **Document Generation**: Automates the generation of Process Design Documents (PDD) and Solution Design Documents (SDD) post-approvals, including version control. Regenerated documents are auto-saved, and raw `[STEP:]` tags are formatted and replaced with process map tables.

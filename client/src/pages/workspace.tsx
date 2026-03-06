@@ -19,6 +19,7 @@ import {
   Package,
   Pencil,
   FileText,
+  ListChecks,
   Map as MapIcon,
   MessageSquare,
   ListPlus,
@@ -228,6 +229,29 @@ const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
   },
 };
 
+function formatEST(date: Date): { short: string; full: string } {
+  const opts: Intl.DateTimeFormatOptions = {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  };
+  const fullOpts: Intl.DateTimeFormatOptions = {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  };
+  return {
+    short: date.toLocaleDateString("en-US", opts),
+    full: date.toLocaleString("en-US", fullOpts),
+  };
+}
 
 const STAGE_ARTIFACTS: Record<string, string[]> = {
   "Design": ["as-is-map"],
@@ -246,19 +270,6 @@ const ARTIFACT_LABELS: Record<string, string> = {
   "sdd": "SDD",
 };
 
-const CHEVRON_LABELS: Record<string, string> = {
-  "Idea": "IDEA",
-  "Feasibility Assessment": "FEASIBILITY",
-  "Validated Backlog": "BACKLOG",
-  "Design": "DESIGN",
-  "Build": "BUILD",
-  "Test": "TEST",
-  "Governance / Security Scan": "GOVERNANCE",
-  "CoE Approval": "COE APPROVAL",
-  "Deploy": "DEPLOY",
-  "Maintenance": "MAINTENANCE",
-};
-
 function StageTracker({
   idea,
   onStageClick,
@@ -267,6 +278,29 @@ function StageTracker({
   onStageClick: (stage: string) => void;
 }) {
   const currentIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
+
+  const { data: stageHistory } = useQuery<{ transitions: Array<{ stage: string; timestamp: string }> }>({
+    queryKey: ["/api/ideas", idea.id, "stage-history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ideas/${idea.id}/stage-history`, { credentials: "include" });
+      if (!res.ok) return { transitions: [] };
+      return res.json();
+    },
+    staleTime: 30000,
+  });
+
+  const completedStages = useMemo(() => {
+    const result: Record<string, { short: string; full: string }> = {};
+    const createdFormatted = formatEST(new Date(idea.createdAt));
+    result["Idea"] = createdFormatted;
+
+    if (stageHistory?.transitions) {
+      for (const t of stageHistory.transitions) {
+        result[t.stage] = formatEST(new Date(t.timestamp));
+      }
+    }
+    return result;
+  }, [idea.createdAt, stageHistory]);
 
   const { data: approvalSummary } = useQuery<Record<string, any>>({
     queryKey: ["/api/ideas", idea.id, "approval-summary"],
@@ -323,87 +357,100 @@ function StageTracker({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div
-        className="flex items-stretch w-full overflow-x-auto scrollbar-thin bg-background"
-        data-testid="panel-stage-tracker"
-      >
-        {PIPELINE_STAGES.map((stage, index) => {
-          const isCompleted = index < currentIndex;
-          const isCurrent = index === currentIndex;
-          const isFuture = index > currentIndex;
-          const isFirst = index === 0;
-          const isLast = index === PIPELINE_STAGES.length - 1;
-          const tooltip = getStageTooltip(stage);
-          const label = CHEVRON_LABELS[stage] || stage.toUpperCase();
-          const stageNum = index + 1;
+      <div className="flex flex-col h-full" data-testid="panel-stage-tracker">
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Progress
+          </h3>
+        </div>
+        <div className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4">
+          <div className="relative">
+            {PIPELINE_STAGES.map((stage, index) => {
+              const isCompleted = index < currentIndex;
+              const isCurrent = index === currentIndex;
+              const isFuture = index > currentIndex;
+              const tooltip = getStageTooltip(stage);
 
-          const chevronContent = (
-            <div
-              key={stage}
-              className="relative flex items-center shrink-0 group"
-              data-testid={`stage-step-${index}`}
-              style={{ zIndex: index + 1 }}
-            >
-              <div
-                onClick={isCompleted ? () => onStageClick(stage) : undefined}
-                className={`
-                  relative flex items-center gap-1.5 sm:gap-2 h-10
-                  ${isFirst ? "pl-3 sm:pl-4" : "pl-5 sm:pl-6"}
-                  ${isLast ? "pr-3 sm:pr-4" : "pr-4 sm:pr-5"}
-                  transition-all duration-200 select-none
-                  ${isCompleted
-                    ? "cursor-pointer bg-[hsl(186,100%,28%)] hover:bg-[hsl(186,100%,34%)] dark:bg-[hsl(186,100%,32%)] dark:hover:bg-[hsl(186,100%,38%)]"
-                    : isCurrent
-                      ? "cursor-default bg-[hsl(19,92%,45%)] dark:bg-[hsl(19,92%,47%)]"
-                      : "cursor-default bg-zinc-200 dark:bg-zinc-700"
-                  }
-                `}
-                data-testid={isCompleted ? `button-stage-${index}` : undefined}
-                style={{
-                  clipPath: isFirst
-                    ? "polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%)"
-                    : isLast
-                      ? "polygon(0 0, 100% 0, 100% 100%, 0 100%, 12px 50%)"
-                      : "polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%, 12px 50%)",
-                  marginLeft: isFirst ? "0" : "-12px",
-                }}
-              >
-                {isCompleted && (
-                  <Check className="h-3 w-3 shrink-0 text-white" />
-                )}
-                {isCurrent && (
-                  <div className="w-2 h-2 rounded-full bg-white animate-pulse shrink-0" />
-                )}
-                {isFuture && (
-                  <Lock className="h-2.5 w-2.5 shrink-0 text-zinc-400 dark:text-zinc-400" />
-                )}
-                <span className={`text-[9px] sm:text-[10px] font-bold tracking-wider whitespace-nowrap leading-none ${
-                  isCompleted || isCurrent ? "text-white" : "text-zinc-500 dark:text-zinc-300"
-                }`}>
-                  {label}
-                </span>
-                <span className={`text-[8px] sm:text-[9px] font-semibold leading-none ${
-                  isCompleted || isCurrent ? "text-white/60" : "text-zinc-400 dark:text-zinc-400"
-                }`}>
-                  {stageNum}
-                </span>
-              </div>
-            </div>
-          );
+              const stageContent = (
+                <div key={stage} className="relative flex items-start group" data-testid={`stage-step-${index}`}>
+                  {index < PIPELINE_STAGES.length - 1 && (
+                    <div
+                      className={`absolute left-[11px] top-[24px] w-[2px] h-[calc(100%-8px)] ${
+                        isCompleted
+                          ? "bg-cb-teal/40"
+                          : isCurrent
+                            ? "bg-gradient-to-b from-primary/60 to-border/30"
+                            : "bg-border/30"
+                      }`}
+                    />
+                  )}
 
-          if (tooltip && (isCompleted || isCurrent)) {
-            return (
-              <Tooltip key={stage}>
-                <TooltipTrigger asChild>{chevronContent}</TooltipTrigger>
-                <TooltipContent side="bottom" className="p-2.5 bg-zinc-900 border-zinc-700 max-w-[260px]">
-                  {tooltip}
-                </TooltipContent>
-              </Tooltip>
-            );
-          }
+                  <div className="relative z-10 flex items-center justify-center w-6 h-6 shrink-0 mt-0.5">
+                    {isCompleted && (
+                      <button
+                        onClick={() => onStageClick(stage)}
+                        className="flex items-center justify-center w-5 h-5 rounded-full bg-cb-teal/20 border border-cb-teal/30 cursor-pointer hover:bg-cb-teal/30 transition-colors"
+                        data-testid={`button-stage-${index}`}
+                      >
+                        <Check className="h-2.5 w-2.5 text-cb-teal" />
+                      </button>
+                    )}
+                    {isCurrent && (
+                      <div className="flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 border-2 border-primary">
+                        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                      </div>
+                    )}
+                    {isFuture && (
+                      <div className="flex items-center justify-center w-5 h-5 rounded-full bg-muted/30 border border-border/50">
+                        <Lock className="h-2 w-2 text-muted-foreground/40" />
+                      </div>
+                    )}
+                  </div>
 
-          return chevronContent;
-        })}
+                  <div className="ml-2.5 pb-5 min-w-0 flex-1">
+                    <span
+                      className={`text-xs leading-tight block ${
+                        isCurrent
+                          ? "text-primary font-semibold"
+                          : isCompleted
+                            ? "text-foreground/80 font-medium"
+                            : "text-muted-foreground/50"
+                      }`}
+                    >
+                      {stage}
+                    </span>
+                    {isCompleted && completedStages[stage] && (
+                      <span
+                        className="text-[10px] text-muted-foreground/60 mt-0.5 block cursor-default"
+                        title={completedStages[stage].full}
+                      >
+                        {completedStages[stage].short}
+                      </span>
+                    )}
+                    {isCurrent && (
+                      <span className="text-[10px] text-primary/70 mt-0.5 block">
+                        In progress
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+
+              if (tooltip && (isCompleted || isCurrent)) {
+                return (
+                  <Tooltip key={stage}>
+                    <TooltipTrigger asChild>{stageContent}</TooltipTrigger>
+                    <TooltipContent side="right" className="p-2.5 bg-zinc-900 border-zinc-700 max-w-[260px]">
+                      {tooltip}
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              return stageContent;
+            })}
+          </div>
+        </div>
       </div>
     </TooltipProvider>
   );
@@ -1593,11 +1640,14 @@ function ExportDialog({ ideaId, ideaTitle }: { ideaId: string; ideaTitle: string
   );
 }
 
-type MobileTab = "map" | "chat";
+type MobileTab = "stages" | "map" | "chat";
 
 export default function Workspace() {
   const [, params] = useRoute("/workspace/:id");
   const ideaId = params?.id;
+  const [selectedCompletedStage, setSelectedCompletedStage] = useState<
+    string | null
+  >(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -1687,11 +1737,43 @@ export default function Workspace() {
   }
 
   function handleStageClick(stage: string) {
-    toast({ title: `Stage: ${stage}`, description: "Completed" });
+    setSelectedCompletedStage((prev) => (prev === stage ? null : stage));
   }
 
-  const stageBar = (
-    <StageTracker idea={idea} onStageClick={handleStageClick} />
+  const stagePanel = (
+    <div className="relative h-full">
+      <StageTracker idea={idea} onStageClick={handleStageClick} />
+      {selectedCompletedStage && (
+        <div className="absolute inset-0 bg-card z-20 flex flex-col" data-testid="drawer-stage-summary">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+            <h4 className="text-xs font-semibold text-foreground">
+              {selectedCompletedStage}
+            </h4>
+            <button
+              onClick={() => setSelectedCompletedStage(null)}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="button-close-drawer"
+            >
+              Close
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Check className="h-3 w-3 text-cb-teal" />
+              <span className="text-xs text-muted-foreground">
+                Completed
+              </span>
+            </div>
+            <div className="p-3 rounded-md bg-muted/20 border border-border/40">
+              <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+                Stage summary and artifacts will appear here
+                once the AI assistant is connected.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 
   const mapPanel = (
@@ -1712,6 +1794,7 @@ export default function Workspace() {
   const chatPanel = <ChatPanel idea={idea} />;
 
   const mobileTabs = [
+    { id: "stages" as MobileTab, label: "Stages", icon: ListChecks },
     { id: "map" as MobileTab, label: "Map", icon: MapIcon },
     { id: "chat" as MobileTab, label: "Chat", icon: MessageSquare },
   ];
@@ -1819,11 +1902,10 @@ export default function Workspace() {
         </div>
       </div>
 
-      {stageBar}
-
       {isMobile ? (
         <>
           <div className="flex-1 min-h-0 overflow-hidden">
+            {mobileTab === "stages" && stagePanel}
             {mobileTab === "map" && <div className="h-full">{mapPanel}</div>}
             {mobileTab === "chat" && chatPanel}
           </div>
@@ -1852,16 +1934,27 @@ export default function Workspace() {
             className="h-full"
             data-testid="workspace-panels"
           >
-            <ResizablePanel defaultSize={55} minSize={30}>
+            <ResizablePanel
+              defaultSize={15}
+              minSize={12}
+              maxSize={25}
+              className="bg-card/20"
+            >
+              {stagePanel}
+            </ResizablePanel>
+
+            <ResizableHandle withHandle />
+
+            <ResizablePanel defaultSize={50} minSize={30}>
               {mapPanel}
             </ResizablePanel>
 
             <ResizableHandle withHandle />
 
             <ResizablePanel
-              defaultSize={45}
+              defaultSize={35}
               minSize={25}
-              maxSize={60}
+              maxSize={50}
             >
               {chatPanel}
             </ResizablePanel>
