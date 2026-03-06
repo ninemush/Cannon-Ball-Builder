@@ -324,7 +324,7 @@ function StageTracker({
   return (
     <TooltipProvider delayDuration={200}>
       <div
-        className="flex items-stretch w-full overflow-x-auto scrollbar-thin border-b border-border bg-card/40"
+        className="flex items-stretch w-full overflow-x-auto scrollbar-thin bg-background"
         data-testid="panel-stage-tracker"
       >
         {PIPELINE_STAGES.map((stage, index) => {
@@ -347,11 +347,16 @@ function StageTracker({
               <div
                 onClick={isCompleted ? () => onStageClick(stage) : undefined}
                 className={`
-                  relative flex items-center gap-1 sm:gap-1.5 h-9
+                  relative flex items-center gap-1.5 sm:gap-2 h-10
                   ${isFirst ? "pl-3 sm:pl-4" : "pl-5 sm:pl-6"}
-                  ${isLast ? "pr-3 sm:pr-4" : "pr-3 sm:pr-4"}
+                  ${isLast ? "pr-3 sm:pr-4" : "pr-4 sm:pr-5"}
                   transition-all duration-200 select-none
-                  ${isCompleted ? "cursor-pointer" : "cursor-default"}
+                  ${isCompleted
+                    ? "cursor-pointer bg-[hsl(186,100%,28%)] hover:bg-[hsl(186,100%,34%)] dark:bg-[hsl(186,100%,32%)] dark:hover:bg-[hsl(186,100%,38%)]"
+                    : isCurrent
+                      ? "cursor-default bg-[hsl(19,92%,45%)] dark:bg-[hsl(19,92%,47%)]"
+                      : "cursor-default bg-zinc-200 dark:bg-zinc-700"
+                  }
                 `}
                 data-testid={isCompleted ? `button-stage-${index}` : undefined}
                 style={{
@@ -361,11 +366,6 @@ function StageTracker({
                       ? "polygon(0 0, 100% 0, 100% 100%, 0 100%, 12px 50%)"
                       : "polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%, 12px 50%)",
                   marginLeft: isFirst ? "0" : "-12px",
-                  backgroundColor: isCompleted
-                    ? "hsl(186 100% 30%)"
-                    : isCurrent
-                      ? "hsl(var(--primary))"
-                      : "hsl(var(--muted))",
                 }}
               >
                 {isCompleted && (
@@ -375,15 +375,15 @@ function StageTracker({
                   <div className="w-2 h-2 rounded-full bg-white animate-pulse shrink-0" />
                 )}
                 {isFuture && (
-                  <Lock className="h-2.5 w-2.5 shrink-0 text-muted-foreground/60" />
+                  <Lock className="h-2.5 w-2.5 shrink-0 text-zinc-400 dark:text-zinc-400" />
                 )}
-                <span className={`text-[9px] sm:text-[10px] font-semibold tracking-wider whitespace-nowrap leading-none ${
-                  isCurrent ? "text-primary-foreground" : isCompleted ? "text-white" : "text-muted-foreground/70"
+                <span className={`text-[9px] sm:text-[10px] font-bold tracking-wider whitespace-nowrap leading-none ${
+                  isCompleted || isCurrent ? "text-white" : "text-zinc-500 dark:text-zinc-300"
                 }`}>
                   {label}
                 </span>
-                <span className={`text-[8px] sm:text-[9px] font-medium leading-none ${
-                  isCompleted ? "text-white/60" : isCurrent ? "text-primary-foreground/60" : "text-muted-foreground/40"
+                <span className={`text-[8px] sm:text-[9px] font-semibold leading-none ${
+                  isCompleted || isCurrent ? "text-white/60" : "text-zinc-400 dark:text-zinc-400"
                 }`}>
                   {stageNum}
                 </span>
