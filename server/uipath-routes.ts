@@ -273,11 +273,12 @@ export function registerUiPathRoutes(app: Express): void {
       if (rows.length === 0) return res.status(404).json({ message: "Connection not found" });
       const conn = rows[0];
 
+      const orScopes = conn.scopes.split(/\s+/).filter(s => s.startsWith("OR."));
       const tokenParams = new URLSearchParams({
         grant_type: "client_credentials",
         client_id: conn.clientId,
         client_secret: conn.clientSecret,
-        scope: "OR.Default",
+        scope: orScopes.length > 0 ? orScopes.join(" ") : conn.scopes,
       });
 
       const tokenRes = await fetch("https://cloud.uipath.com/identity_/connect/token", {
