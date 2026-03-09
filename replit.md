@@ -43,6 +43,7 @@ The application employs a modern web stack for scalability and an intuitive user
 -   **LLM-Based Intent Classification**: Uses a lightweight LLM call to classify user intent (PDD, SDD, DEPLOY, CHAT) to drive appropriate system actions and document generation.
 -   **Document Approval**: Supports approval of PDD/SDD via dedicated buttons or chat phrases, with a pending-approval banner for unapproved documents.
 -   **Artifact Upsert on Re-deployment**: Deployment uses create-or-update logic for all artifact types in UiPath Orchestrator, including PUT-404 fallback to POST.
+-   **SSE Deploy Streaming**: Button-triggered deploy (`POST /api/ideas/:ideaId/push-uipath`) uses Server-Sent Events to stream real-time per-artifact progress to the client. `deployAllArtifacts` accepts an `onProgress` callback. The deploy report is saved as an assistant chat message with `[DEPLOY_REPORT:{...}]` tag for both chat-triggered and button-triggered deploys.
 -   **Document Understanding — Discovery-Based Provisioning**: Manages DU project provisioning by discovering existing projects via API, as direct project creation is not supported.
 -   **Integration Status Bar**: Displays live UiPath connection status, robot count, pending tasks, and latency.
 -   **File Upload Content Extraction**: Server-side extraction from various document types (DOCX, PDF, XLSX, TXT, CSV) for AI context.

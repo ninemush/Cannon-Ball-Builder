@@ -417,19 +417,55 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
   const pushMutation = useMutation({
     mutationFn: async () => {
       onDeployProgress?.("Deploying to Orchestrator...");
-      const res = await apiRequest("POST", `/api/ideas/${ideaId}/push-uipath`);
-      return res.json();
+      const res = await fetch(`/api/ideas/${ideaId}/push-uipath`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+        const err = await res.json();
+        throw new Error(err.message || "Deploy failed");
+      }
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalResult: any = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.deployStatus) {
+              onDeployProgress?.(event.deployStatus);
+            }
+            if (event.deployComplete) {
+              finalResult = event;
+            }
+          } catch {}
+        }
+      }
+
+      if (!finalResult) throw new Error("Deploy stream ended without completion");
+      return finalResult;
     },
-    onSuccess: (data: { success: boolean; message: string; details?: any }) => {
+    onSuccess: (data: any) => {
       onDeployProgress?.("");
       onDeployComplete?.();
       if (data.success) {
-        setPushResult(data);
-        const d = data.details;
+        setPushResult(data.result || data);
+        const d = data.result?.details;
         const processInfo = d?.processName ? ` Process "${d.processName}" created.` : "";
         toast({ title: "Deployed to UiPath", description: `"${d?.packageId}" v${d?.version} deployed.${processInfo}` });
       } else {
-        toast({ title: "Push failed", description: data.message, variant: "destructive" });
+        const msg = data.error || data.result?.message || "Deploy failed";
+        toast({ title: "Push failed", description: msg, variant: "destructive" });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
     },

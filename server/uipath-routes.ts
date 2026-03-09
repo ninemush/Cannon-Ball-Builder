@@ -473,35 +473,65 @@ export function registerUiPathRoutes(app: Express): void {
       return res.status(500).json({ message: "Invalid package data" });
     }
 
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const sendEvent = (data: Record<string, any>) => {
+      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {}
+    };
+
+    let clientDisconnected = false;
+    req.on("close", () => {
+      clientDisconnected = true;
+      clearInterval(heartbeat);
+    });
+
+    const heartbeat = setInterval(() => {
+      try { res.write(`: heartbeat\n\n`); } catch {}
+    }, 5000);
+
     try {
-      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-      if (sdd?.content) pkg._sddContent = sdd.content;
-      if (idea.automationType) pkg._automationType = idea.automationType;
-      const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-      const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-      const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
-      if (mapNodes.length > 0) {
-        pkg._processNodes = mapNodes;
-        const edges = await processMapStorage.getEdgesByIdeaId(ideaId, toBeNodes.length > 0 ? "to-be" : "as-is");
-        pkg._processEdges = edges;
-      }
-      if (sdd?.content) {
-        const { parseArtifactsFromSDD: parseSdd, extractArtifactsWithLLM: extractLlm } = await import("./uipath-deploy");
-        let artifacts = parseSdd(sdd.content);
-        if (!artifacts) artifacts = await extractLlm(sdd.content);
-        if (artifacts) pkg._orchestratorArtifacts = artifacts;
-      }
-    } catch (err: any) {
-      console.log(`[UiPath Deploy] Could not enrich package with process data: ${err.message}`);
-    }
+      sendEvent({ deployStatus: "Preparing package for deployment..." });
 
-    const result = await pushToUiPath(pkg);
+      let sdd: any = null;
+      try {
+        sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+        if (sdd?.content) pkg._sddContent = sdd.content;
+        if (idea.automationType) pkg._automationType = idea.automationType;
+        const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+        const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
+        const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
+        if (mapNodes.length > 0) {
+          pkg._processNodes = mapNodes;
+          const edges = await processMapStorage.getEdgesByIdeaId(ideaId, toBeNodes.length > 0 ? "to-be" : "as-is");
+          pkg._processEdges = edges;
+        }
+        if (sdd?.content) {
+          const { parseArtifactsFromSDD: parseSdd, extractArtifactsWithLLM: extractLlm } = await import("./uipath-deploy");
+          let artifacts = parseSdd(sdd.content);
+          if (!artifacts) artifacts = await extractLlm(sdd.content);
+          if (artifacts) pkg._orchestratorArtifacts = artifacts;
+        }
+      } catch (err: any) {
+        console.log(`[UiPath Deploy] Could not enrich package with process data: ${err.message}`);
+      }
 
-    if (result.success) {
+      sendEvent({ deployStatus: "Uploading package to Orchestrator..." });
+      const result = await pushToUiPath(pkg);
+
+      if (!result.success) {
+        sendEvent({ deployComplete: true, success: false, result });
+        clearInterval(heartbeat);
+        return res.end();
+      }
+
       const details = result.details;
       const packageId = details?.packageId || pkg.projectName;
       const packageVersion = details?.version || "1.0.0";
 
+      sendEvent({ deployStatus: "Creating process in Orchestrator..." });
       let processResult: { success: boolean; message: string; process?: any } = { success: false, message: "" };
       try {
         const processName = packageId.replace(/_/g, " ");
@@ -518,29 +548,24 @@ export function registerUiPathRoutes(app: Express): void {
         console.error("[UiPath] Auto-create process failed:", err.message);
       }
 
-      const processLine = processResult.success
-        ? `\n**Process created:** "${result.details?.processName}" — ready to run`
-        : `\n**Process:** Could not auto-create (${processResult.message}). You may need to create it manually in Orchestrator.`;
+      sendEvent({ deployStatus: processResult.success ? `Process "${result.details?.processName}" created` : "Process creation skipped" });
 
-      let deploymentReport = "";
       try {
-        const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
         if (sdd?.content) {
           let artifacts = parseArtifactsFromSDD(sdd.content);
 
           if (!artifacts) {
             console.log("[UiPath] No artifacts block in SDD, attempting LLM extraction...");
+            sendEvent({ deployStatus: "Extracting artifacts from SDD..." });
             artifacts = await extractArtifactsWithLLM(sdd.content);
           }
 
           if (artifacts && (!artifacts.actionCenter || artifacts.actionCenter.length === 0)) {
             const acMentions = (sdd.content.match(/[Aa]ction\s*[Cc]enter|[Hh]uman.*[Ll]oop|[Aa]pproval|[Ee]scalation/gi) || []).length;
             if (acMentions > 0) {
-              console.log(`[UiPath] SDD has ${acMentions} approval/AC mentions but no actionCenter artifacts — supplementing via LLM...`);
               const supplemented = await extractArtifactsWithLLM(sdd.content);
               if (supplemented?.actionCenter?.length) {
                 artifacts.actionCenter = supplemented.actionCenter;
-                console.log(`[UiPath] Supplemented ${supplemented.actionCenter.length} Action Center artifact(s): ${supplemented.actionCenter.map(a => a.taskCatalog).join(", ")}`);
               }
             }
           }
@@ -563,66 +588,30 @@ export function registerUiPathRoutes(app: Express): void {
             const releaseId = result.details?.processId || null;
             const releaseKey = result.details?.releaseKey || null;
             const releaseName = result.details?.processName || null;
-            const totalArtifacts = (artifacts.queues?.length || 0) + (artifacts.assets?.length || 0) +
-              (artifacts.machines?.length || 0) + (artifacts.triggers?.length || 0) +
-              (artifacts.storageBuckets?.length || 0) + (artifacts.environments?.length || 0) +
-              (artifacts.actionCenter?.length || 0) + (artifacts.documentUnderstanding?.length || 0) +
-              (artifacts.testCases?.length || 0) + (artifacts.testDataQueues?.length || 0) +
-              (artifacts.robotAccounts?.length || 0) + (artifacts.requirements?.length || 0) +
-              (artifacts.testSets?.length || 0) + (artifacts.agents?.length || 0) +
-              (artifacts.knowledgeBases?.length || 0) + (artifacts.promptTemplates?.length || 0);
-            console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId}, releaseName=${releaseName})`);
 
-            const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName);
-            deploymentReport = formatDeploymentReport(deployResult.results);
+            sendEvent({ deployStatus: "Provisioning Orchestrator artifacts..." });
+
+            const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName, (step) => {
+              sendEvent({ deployStatus: step });
+            });
 
             result.details = {
               ...result.details,
               deploymentResults: deployResult.results,
               deploymentSummary: deployResult.summary,
             };
-          } else {
-            console.warn("[UiPath] No artifacts could be extracted from SDD (content length:", sdd.content.length, ")");
-            deploymentReport = "\n\n⚠️ No Orchestrator artifacts (queues, assets, triggers) could be extracted from the SDD. The SDD may be missing the deployment specification section. Ask me to **revise the SDD** and I will regenerate it with the full Orchestrator Deployment Specification including all artifacts.";
           }
-        } else {
-          console.warn("[UiPath] No SDD found for idea, skipping artifact provisioning");
-          deploymentReport = "\n\nNo SDD found — artifact provisioning skipped. Generate and approve an SDD to enable automatic artifact provisioning.";
         }
       } catch (err: any) {
         console.error("[UiPath] Artifact deployment failed:", err.message);
-        deploymentReport = `\n\nArtifact deployment encountered an error: ${err.message}`;
+        sendEvent({ deployStatus: `Artifact deployment error: ${err.message}` });
+        result.details = {
+          ...result.details,
+          artifactError: err.message,
+        };
       }
 
       const deployResults = result.details?.deploymentResults || [];
-      const createdCount = deployResults.filter((r: any) => r.status === "created").length;
-      const failedCount = deployResults.filter((r: any) => r.status === "failed").length;
-      const skippedCount = deployResults.filter((r: any) => r.status === "skipped").length;
-
-      let statusLine = "";
-      if (deployResults.length > 0) {
-        if (failedCount > 0) {
-          statusLine = `${createdCount} artifact(s) provisioned, ${failedCount} failed — see the deployment report for details.`;
-        } else if (skippedCount > 0) {
-          statusLine = `${createdCount} artifact(s) provisioned, ${skippedCount} skipped (service not available on tenant).`;
-        } else if (createdCount > 0) {
-          statusLine = `All ${createdCount} artifact(s) provisioned successfully.`;
-        }
-      } else if (deploymentReport) {
-        statusLine = deploymentReport.replace(/^\n+/, "");
-      }
-
-      const chatLines = [
-        `Package deployed to UiPath Orchestrator.`,
-        ``,
-        `**${packageId}** v${packageVersion}`,
-        processLine,
-        statusLine,
-        ``,
-        processResult.success
-          ? `The automation is ready. You can trigger a job from this workspace or from Orchestrator.`
-          : `Create a Process from this package in Orchestrator to make it runnable.`,
-      ].filter(Boolean).join("\n");
 
       const deployReportData = deployResults.length > 0 ? {
         packageId,
@@ -635,9 +624,31 @@ export function registerUiPathRoutes(app: Express): void {
         summary: result.details?.deploymentSummary || "",
       } : null;
 
-    }
+      const processLine = processResult.success
+        ? `Process "${result.details?.processName}" created — ready to run.`
+        : "";
 
-    return res.json(result);
+      const artifactErrorLine = result.details?.artifactError
+        ? `\n\n⚠️ Artifact deployment error: ${result.details.artifactError}`
+        : "";
+
+      const chatContent = deployReportData
+        ? `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${artifactErrorLine}\n\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
+        : `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${artifactErrorLine}`;
+
+      if (!clientDisconnected) {
+        await chatStorage.createMessage(ideaId, "assistant", chatContent);
+      }
+
+      sendEvent({ deployComplete: true, success: true, result, deployReport: deployReportData });
+      clearInterval(heartbeat);
+      return res.end();
+    } catch (err: any) {
+      console.error("[UiPath Push] Error:", err.message);
+      sendEvent({ deployComplete: true, success: false, error: err.message });
+      clearInterval(heartbeat);
+      return res.end();
+    }
   });
 
   app.get("/api/admin/uipath-diagnostic", async (req: Request, res: Response) => {
