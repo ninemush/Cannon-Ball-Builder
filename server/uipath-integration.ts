@@ -1458,21 +1458,64 @@ export type PlatformCapabilityProfile = {
   licenseInfo?: LicenseInfo | null;
 };
 
-export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfile> {
-  const empty: PlatformCapabilityProfile = {
+type UnifiedProbeResult = {
+  configured: boolean;
+  flags: {
+    orchestrator: boolean;
+    actionCenter: boolean;
+    testManager: boolean;
+    documentUnderstanding: boolean;
+    dataService: boolean;
+    platformManagement: boolean;
+    environments: boolean;
+    triggers: boolean;
+    storageBuckets: boolean;
+    aiCenter: boolean;
+  };
+  grantedScopes: string[];
+  licenseInfo: LicenseInfo | null;
+  cachedAt: number;
+  probeFailed?: boolean;
+  probeError?: string;
+};
+
+let _probeCache: UnifiedProbeResult | null = null;
+const PROBE_CACHE_TTL_MS = 60_000;
+
+export function clearProbeCache(): void {
+  _probeCache = null;
+}
+
+async function probeAllServices(): Promise<UnifiedProbeResult> {
+  if (_probeCache && Date.now() - _probeCache.cachedAt < PROBE_CACHE_TTL_MS) {
+    return _probeCache;
+  }
+
+  const empty: UnifiedProbeResult = {
     configured: false,
-    available: { orchestrator: false, actionCenter: false, documentUnderstanding: false, testManager: false, storageBuckets: false, aiCenter: false },
+    flags: {
+      orchestrator: false, actionCenter: false, testManager: false,
+      documentUnderstanding: false, dataService: false, platformManagement: false,
+      environments: true, triggers: true, storageBuckets: false, aiCenter: false,
+    },
     grantedScopes: [],
-    summary: "UiPath is not configured. The SDD will be generated with general best practices.",
-    availableDescription: "",
-    unavailableRecommendations: "",
+    licenseInfo: null,
+    cachedAt: Date.now(),
   };
 
   const config = await getUiPathConfig();
-  if (!config) return empty;
+  if (!config) {
+    _probeCache = empty;
+    return empty;
+  }
 
   try {
+    const { getHeaders: getOrHeaders, tryAcquireResourceToken, getDuToken } = await import("./uipath-auth");
     const token = await getAccessToken(config);
+    const hdrs = await getOrHeaders();
+    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+    const orchBase = `${base}/orchestrator_`;
+
     let grantedScopes: string[] = [];
     try {
       const parts = token.split(".");
@@ -1483,108 +1526,208 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       }
     } catch { grantedScopes = config.scopes.split(/\s+/); }
 
-    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
-    const orchBase = `${base}/orchestrator_`;
-    const hdrs: Record<string, string> = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-    if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+    const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
+    const orchOk = orchRes.ok;
+    if (!orchOk) {
+      const result: UnifiedProbeResult = {
+        configured: true, flags: { ...empty.flags, environments: false, triggers: false },
+        grantedScopes, licenseInfo: null, cachedAt: Date.now(),
+      };
+      _probeCache = result;
+      return result;
+    }
 
-    const probe = async (url: string): Promise<boolean> => {
-      try { const r = await fetch(url, { headers: hdrs }); return r.ok; } catch { return false; }
-    };
-
-    const [orchOk, bucketOk, taskOk, tm1Ok, tm2Ok, duOk, aiOk, licenseInfo] = await Promise.all([
-      probe(`${orchBase}/odata/Folders?$top=1`),
-      probe(`${orchBase}/odata/Buckets?$top=1`),
-      probe(`${orchBase}/odata/TaskCatalogs?$top=1`),
-      probe(`${base}/testmanager_/api/v2/projects?$top=1`),
-      probe(`${base}/tmapi_/api/v2/projects?$top=1`),
-      probe(`${base}/du_/api/framework/projects?$top=1`),
-      probe(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`),
+    const [acRes, envRes, trigRes, schedRes, bucketRes, licenseInfo] = await Promise.all([
+      fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/Environments?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/QueueTriggers?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/ProcessSchedules?$top=1`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}/odata/Buckets?$top=1`, { headers: hdrs }).catch(() => null),
       fetchLicenseInfo(orchBase, hdrs),
     ]);
 
-    let duAvailable = duOk || aiOk;
-    if (!duAvailable) {
-      try {
-        const { tryAcquireResourceToken, getDuToken } = await import("./uipath-auth");
-        const duTokenResult = await tryAcquireResourceToken("DU");
-        if (duTokenResult.ok) {
-          const duTok = await getDuToken();
-          const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
-          if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
-          for (const ep of [
-            `${base}/du_/api/framework/projects?api-version=1`,
-            `${base}/du_/api/framework/projects?api-version=2`,
-            `${base}/du_/api/framework/projects?$top=1`,
-          ]) {
-            try {
-              const duRes = await fetch(ep, { headers: duHdrs });
-              if (duRes.ok || duRes.status === 403 || duRes.status === 400) {
-                duAvailable = true;
-                console.log(`[Platform Capabilities] DU detected via DU token probe: ${ep} -> ${duRes.status}`);
-                break;
-              }
-            } catch {}
-          }
+    let acAvailable = true;
+    if (acRes) {
+      if (acRes.ok) {
+        const acText = await acRes.text();
+        const isHTML = acText.trim().startsWith("<");
+        if (isHTML) {
+          acAvailable = true;
+          console.log("[UiPath Probe] Action Center returned HTML but Orchestrator is connected — marking as available");
+        } else {
+          try {
+            const data = JSON.parse(acText);
+            const hasError = data.errorCode || data["odata.error"] || (data.message && typeof data.message === "string" && data.message.includes("not onboarded"));
+            acAvailable = true;
+            if (hasError) {
+              console.log("[UiPath Probe] Action Center endpoint returned error but is reachable — marking as available");
+            }
+          } catch { acAvailable = true; }
         }
-      } catch (duErr: any) {
-        console.log(`[Platform Capabilities] DU token probe failed: ${duErr.message}`);
+      } else {
+        acAvailable = true;
+        console.log(`[UiPath Probe] Action Center returned ${acRes.status} — marking as available (Orchestrator is connected)`);
       }
     }
 
-    const acAvailable = orchOk ? true : taskOk;
-    if (orchOk && !taskOk) {
-      console.log("[Platform Capabilities] AC probe returned non-ok but Orchestrator is connected — marking Action Center as available (provisioning will determine actual support)");
+    let envAvailable = true;
+    if (envRes) {
+      envAvailable = envRes.ok || envRes.status === 400;
+      if (envRes.status === 404 || envRes.status === 405) envAvailable = false;
     }
 
-    const avail = {
-      orchestrator: orchOk,
-      actionCenter: acAvailable,
-      documentUnderstanding: duAvailable,
-      testManager: tm1Ok || tm2Ok,
-      storageBuckets: bucketOk,
-      aiCenter: aiOk,
-    };
+    const queueTriggersOk = trigRes ? (trigRes.ok || trigRes.status === 400) && trigRes.status !== 404 && trigRes.status !== 405 : false;
+    const processSchedulesOk = schedRes ? (schedRes.ok || schedRes.status === 400) && schedRes.status !== 404 && schedRes.status !== 405 : false;
+    const triggersAvailable = queueTriggersOk || processSchedulesOk;
 
-    const availNames: string[] = [];
-    const unavailRecs: string[] = [];
+    const bucketsAvailable = bucketRes ? bucketRes.ok : false;
 
-    if (avail.orchestrator) availNames.push("UiPath Orchestrator (queues, assets, triggers, machines, environments, processes, jobs)");
-    else unavailRecs.push("- **Orchestrator**: Core service not accessible. Verify connection credentials.");
+    const [tmResult, duResult, pmResult, dfResult] = await Promise.allSettled([
+      tryAcquireResourceToken("TM"),
+      tryAcquireResourceToken("DU"),
+      tryAcquireResourceToken("PM"),
+      tryAcquireResourceToken("DF"),
+    ]);
 
-    if (avail.actionCenter) availNames.push("Action Center (human-in-the-loop tasks, approvals, escalations, SLA management)");
-    else unavailRecs.push("- **Action Center**: Not available. If enabled, it would allow human-in-the-loop steps — approvals, validations, exception handling escalations — directly within the automation workflow instead of external email/chat processes.");
+    let tmAvailable = false;
+    if (tmResult.status === "fulfilled" && tmResult.value.ok) {
+      tmAvailable = true;
+      console.log("[UiPath Probe] TM token acquired — Test Manager available");
+    }
 
-    if (avail.documentUnderstanding) availNames.push("Document Understanding (intelligent document processing, OCR, ML classification, data extraction)");
-    else unavailRecs.push("- **Document Understanding**: Not available. If enabled, it could automate document classification, data extraction from invoices/forms/contracts using ML models instead of manual data entry or rigid template-based parsing.");
+    let duAvailable = false;
+    if (duResult.status === "fulfilled" && duResult.value.ok) {
+      const duTok = await getDuToken();
+      const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
+      if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+      for (const ep of [
+        `${base}/du_/api/framework/projects?api-version=1`,
+        `${base}/du_/api/framework/projects?api-version=2`,
+      ]) {
+        try {
+          const duRes = await fetch(ep, { headers: duHdrs });
+          if (duRes.ok || duRes.status === 403 || duRes.status === 400 || duRes.status === 404) {
+            duAvailable = true;
+            console.log(`[UiPath Probe] DU detected via DU token: ${ep} -> ${duRes.status}`);
+            break;
+          }
+        } catch {}
+      }
+    }
 
-    if (avail.testManager) availNames.push("Test Manager (automated test projects, test cases, test execution, regression suites)");
-    else unavailRecs.push("- **Test Manager**: Not available. If enabled, it would allow automated test case management and regression testing for the automation, ensuring quality across updates.");
+    let aiAvailable = false;
+    const aiProbe = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: hdrs }).catch(() => null);
+    if (aiProbe && aiProbe.ok) aiAvailable = true;
+    if (!duAvailable && aiAvailable) duAvailable = true;
 
-    if (avail.storageBuckets) availNames.push("Storage Buckets (file storage for input/output documents, templates, logs)");
-    else unavailRecs.push("- **Storage Buckets**: Not available. If enabled, it could provide centralized cloud storage for automation input files, output documents, templates, and audit logs.");
+    let pmAvailable = false;
+    if (pmResult.status === "fulfilled" && pmResult.value.ok) pmAvailable = true;
 
-    if (avail.aiCenter) availNames.push("AI Center (custom ML models, model training, AI skill deployment)");
-    else unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, or NLP tasks within the automation.");
+    let dsAvailable = false;
+    if (dfResult.status === "fulfilled" && dfResult.value.ok) {
+      const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { redirect: "manual" }).catch(() => null);
+      if (dfSwagger && dfSwagger.status === 200) dsAvailable = true;
+    }
 
-    const profile: PlatformCapabilityProfile = {
+    const result: UnifiedProbeResult = {
       configured: true,
-      available: avail,
+      flags: {
+        orchestrator: true,
+        actionCenter: acAvailable,
+        testManager: tmAvailable,
+        documentUnderstanding: duAvailable,
+        dataService: dsAvailable,
+        platformManagement: pmAvailable,
+        environments: envAvailable,
+        triggers: triggersAvailable,
+        storageBuckets: bucketsAvailable,
+        aiCenter: aiAvailable,
+      },
       grantedScopes,
-      summary: `Connected to ${config.orgName}/${config.tenantName}. ${availNames.length} services available.`,
-      availableDescription: availNames.length > 0
-        ? `The following UiPath platform services are AVAILABLE and should be used in the solution design:\n${availNames.map(n => `- ${n}`).join("\n")}`
-        : "No UiPath services detected.",
-      unavailableRecommendations: unavailRecs.length > 0
-        ? `The following services are NOT currently available on this tenant. Include a "Platform Recommendations" section explaining how each would enhance the solution if enabled:\n${unavailRecs.join("\n")}`
-        : "All major UiPath platform services are available.",
       licenseInfo,
+      cachedAt: Date.now(),
     };
 
-    return profile;
+    _probeCache = result;
+    console.log(`[UiPath Probe] Unified probe complete — ${Object.entries(result.flags).filter(([, v]) => v).map(([k]) => k).join(", ")}`);
+    return result;
   } catch (err: any) {
-    return { ...empty, summary: `Could not probe UiPath platform: ${err.message}. SDD will use general best practices.` };
+    console.warn(`[UiPath Probe] Unified probe failed: ${err.message}`);
+    const result: UnifiedProbeResult = {
+      ...empty,
+      configured: true,
+      flags: { ...empty.flags, environments: false, triggers: false },
+      cachedAt: Date.now(),
+      probeFailed: true,
+      probeError: err.message,
+    };
+    _probeCache = result;
+    return result;
   }
+}
+
+export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfile> {
+  const empty: PlatformCapabilityProfile = {
+    configured: false,
+    available: { orchestrator: false, actionCenter: false, documentUnderstanding: false, testManager: false, storageBuckets: false, aiCenter: false },
+    grantedScopes: [],
+    summary: "UiPath is not configured. The SDD will be generated with general best practices.",
+    availableDescription: "",
+    unavailableRecommendations: "",
+  };
+
+  const probe = await probeAllServices();
+  if (!probe.configured) return empty;
+  if (probe.probeFailed) {
+    return { ...empty, configured: true, summary: `Could not probe UiPath platform: ${probe.probeError || "unknown error"}. SDD will use general best practices.` };
+  }
+
+  const avail = {
+    orchestrator: probe.flags.orchestrator,
+    actionCenter: probe.flags.actionCenter,
+    documentUnderstanding: probe.flags.documentUnderstanding,
+    testManager: probe.flags.testManager,
+    storageBuckets: probe.flags.storageBuckets,
+    aiCenter: probe.flags.aiCenter,
+  };
+
+  const availNames: string[] = [];
+  const unavailRecs: string[] = [];
+
+  if (avail.orchestrator) availNames.push("UiPath Orchestrator (queues, assets, triggers, machines, environments, processes, jobs)");
+  else unavailRecs.push("- **Orchestrator**: Core service not accessible. Verify connection credentials.");
+
+  if (avail.actionCenter) availNames.push("Action Center (human-in-the-loop tasks, approvals, escalations, SLA management)");
+  else unavailRecs.push("- **Action Center**: Not available. If enabled, it would allow human-in-the-loop steps — approvals, validations, exception handling escalations — directly within the automation workflow instead of external email/chat processes.");
+
+  if (avail.documentUnderstanding) availNames.push("Document Understanding (intelligent document processing, OCR, ML classification, data extraction)");
+  else unavailRecs.push("- **Document Understanding**: Not available. If enabled, it could automate document classification, data extraction from invoices/forms/contracts using ML models instead of manual data entry or rigid template-based parsing.");
+
+  if (avail.testManager) availNames.push("Test Manager (automated test projects, test cases, test execution, regression suites)");
+  else unavailRecs.push("- **Test Manager**: Not available. If enabled, it would allow automated test case management and regression testing for the automation, ensuring quality across updates.");
+
+  if (avail.storageBuckets) availNames.push("Storage Buckets (file storage for input/output documents, templates, logs)");
+  else unavailRecs.push("- **Storage Buckets**: Not available. If enabled, it could provide centralized cloud storage for automation input files, output documents, templates, and audit logs.");
+
+  if (avail.aiCenter) availNames.push("AI Center (custom ML models, model training, AI skill deployment)");
+  else unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, or NLP tasks within the automation.");
+
+  const config = await getUiPathConfig();
+  const orgTenant = config ? `${config.orgName}/${config.tenantName}` : "unknown";
+
+  return {
+    configured: true,
+    available: avail,
+    grantedScopes: probe.grantedScopes,
+    summary: `Connected to ${orgTenant}. ${availNames.length} services available.`,
+    availableDescription: availNames.length > 0
+      ? `The following UiPath platform services are AVAILABLE and should be used in the solution design:\n${availNames.map(n => `- ${n}`).join("\n")}`
+      : "No UiPath services detected.",
+    unavailableRecommendations: unavailRecs.length > 0
+      ? `The following services are NOT currently available on this tenant. Include a "Platform Recommendations" section explaining how each would enhance the solution if enabled:\n${unavailRecs.join("\n")}`
+      : "All major UiPath platform services are available.",
+    licenseInfo: probe.licenseInfo,
+  };
 }
 
 export async function probeUiPathScopes(): Promise<{
@@ -1924,110 +2067,18 @@ export type ServiceAvailabilityMap = {
 };
 
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
-  const result: ServiceAvailabilityMap = {
-    configured: false, orchestrator: false, actionCenter: false,
-    testManager: false, documentUnderstanding: false, dataService: false,
-    platformManagement: false, environments: true, triggers: true,
+  const probe = await probeAllServices();
+  return {
+    configured: probe.configured,
+    orchestrator: probe.flags.orchestrator,
+    actionCenter: probe.flags.actionCenter,
+    testManager: probe.flags.testManager,
+    documentUnderstanding: probe.flags.documentUnderstanding,
+    dataService: probe.flags.dataService,
+    platformManagement: probe.flags.platformManagement,
+    environments: probe.flags.environments,
+    triggers: probe.flags.triggers,
   };
-
-  const config = await getUiPathConfig();
-  if (!config) return result;
-  result.configured = true;
-
-  try {
-    const { getHeaders: getOrHeaders, tryAcquireResourceToken } = await import("./uipath-auth");
-    const hdrs = await getOrHeaders();
-    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
-    const orchBase = `${base}/orchestrator_`;
-
-    const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
-    result.orchestrator = orchRes.ok;
-    if (!orchRes.ok) return result;
-
-    const [acRes, envRes, trigRes, schedRes] = await Promise.all([
-      fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/Environments?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/QueueTriggers?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/ProcessSchedules?$top=1`, { headers: hdrs }).catch(() => null),
-    ]);
-
-    if (acRes) {
-      if (acRes.ok) {
-        const acText = await acRes.text();
-        const isHTML = acText.trim().startsWith("<");
-        if (isHTML) {
-          result.actionCenter = true;
-          console.log("[UiPath Probe] Action Center returned HTML but Orchestrator is connected — marking as available (provisioning will determine actual support)");
-        } else {
-          try {
-            const data = JSON.parse(acText);
-            const hasError = data.errorCode || data["odata.error"] || (data.message && typeof data.message === "string" && data.message.includes("not onboarded"));
-            result.actionCenter = true;
-            if (hasError) {
-              console.log("[UiPath Probe] Action Center endpoint returned error but is reachable — marking as available");
-            }
-          } catch { result.actionCenter = true; }
-        }
-      } else if (acRes.status === 401 || acRes.status === 403 || acRes.status === 404) {
-        result.actionCenter = true;
-        console.log(`[UiPath Probe] Action Center returned ${acRes.status} — service exists but may need permissions`);
-      } else {
-        result.actionCenter = true;
-        console.log(`[UiPath Probe] Action Center returned ${acRes.status} — marking as available (Orchestrator is connected)`);
-      }
-    } else {
-      result.actionCenter = true;
-    }
-
-    if (envRes) {
-      result.environments = envRes.ok || envRes.status === 400;
-      if (envRes.status === 404 || envRes.status === 405) result.environments = false;
-    }
-
-    const queueTriggersOk = trigRes ? (trigRes.ok || trigRes.status === 400) && trigRes.status !== 404 && trigRes.status !== 405 : false;
-    const processSchedulesOk = schedRes ? (schedRes.ok || schedRes.status === 400) && schedRes.status !== 404 && schedRes.status !== 405 : false;
-    result.triggers = queueTriggersOk || processSchedulesOk;
-
-    const [tmResult, duResult, pmResult, dfResult] = await Promise.allSettled([
-      tryAcquireResourceToken("TM"),
-      tryAcquireResourceToken("DU"),
-      tryAcquireResourceToken("PM"),
-      tryAcquireResourceToken("DF"),
-    ]);
-
-    if (tmResult.status === "fulfilled" && tmResult.value.ok) {
-      result.testManager = true;
-      console.log("[UiPath Probe] TM token acquired successfully — marking Test Manager as available");
-    }
-
-    if (duResult.status === "fulfilled" && duResult.value.ok) {
-      const { getDuToken } = await import("./uipath-auth");
-      const duTok = await getDuToken();
-      const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
-      if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
-      for (const ep of [`${base}/du_/api/framework/projects?api-version=1`, `${base}/du_/api/framework/projects?api-version=2`]) {
-        try {
-          const duRes = await fetch(ep, { headers: duHdrs });
-          if (duRes.ok || duRes.status === 403 || duRes.status === 400) { result.documentUnderstanding = true; break; }
-        } catch { }
-      }
-    }
-
-    if (pmResult.status === "fulfilled" && pmResult.value.ok) {
-      result.platformManagement = true;
-    }
-
-    if (dfResult.status === "fulfilled" && dfResult.value.ok) {
-      const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { redirect: "manual" }).catch(() => null);
-      if (dfSwagger && dfSwagger.status === 200) {
-        result.dataService = true;
-      }
-    }
-
-    return result;
-  } catch {
-    return result;
-  }
 }
 
 export async function testUiPathConnection(): Promise<{ success: boolean; message: string; errorType?: string }> {

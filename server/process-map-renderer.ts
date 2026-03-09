@@ -1,5 +1,7 @@
-import dagre from "@dagrejs/dagre";
+import dagreImport from "@dagrejs/dagre";
 import sharp from "sharp";
+
+const dagre = (dagreImport as any).default || dagreImport;
 
 interface MapNode {
   id: number;

@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, runHealthCheck, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes } from "./uipath-integration";
+import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, runHealthCheck, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache } from "./uipath-integration";
 import { parseArtifactsFromSDD, extractArtifactsWithLLM, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
 import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
@@ -52,6 +52,7 @@ async function migrateExistingConfigToConnection(): Promise<void> {
   });
   auth.invalidateAllTokens();
   auth.invalidateConfig();
+  clearProbeCache();
   migrationDone = true;
   console.log("[UiPath] Migrated existing config to uipath_connections table");
 }

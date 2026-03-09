@@ -358,6 +358,9 @@
 }
 
 .process-map-canvas {
+  background: #f8fafc;
+}
+.dark .process-map-canvas {
   background: #0a0a0f;
 }
 
