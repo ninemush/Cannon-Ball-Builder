@@ -627,6 +627,8 @@ ${depEntries}
       enrichment,
       useReFramework,
       painPoints,
+      deploymentResults: pkg._deploymentResults || undefined,
+      extractedArtifacts: orchestratorArtifacts || undefined,
     });
     archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
     console.log(`[UiPath] Generated Developer Handoff Guide: ${allGaps.length} gaps, ~${(allGaps.reduce((s: number, g: XamlGap) => s + g.estimatedMinutes, 0) / 60).toFixed(1)}h effort, REFramework=${useReFramework}`);

@@ -706,32 +706,70 @@ function renderVariablesBlock(variables: VariableDecl[]): string {
 
 function mapClrType(type: string): string {
   const lower = type.toLowerCase();
-  if (lower === "string") return "x:String";
-  if (lower === "int32" || lower === "integer" || lower === "int") return "x:Int32";
-  if (lower === "boolean" || lower === "bool") return "x:Boolean";
-  if (lower.includes("datatable")) return "scg2:DataTable";
+  if (lower === "string" || lower === "system.string") return "x:String";
+  if (lower === "int32" || lower === "integer" || lower === "int" || lower === "system.int32") return "x:Int32";
+  if (lower === "int64" || lower === "long" || lower === "system.int64") return "x:Int64";
+  if (lower === "boolean" || lower === "bool" || lower === "system.boolean") return "x:Boolean";
+  if (lower === "double" || lower === "system.double") return "x:Double";
+  if (lower === "decimal" || lower === "system.decimal") return "x:Decimal";
+  if (lower === "datetime" || lower === "system.datetime") return "s:DateTime";
+  if (lower === "timespan" || lower === "system.timespan") return "s:TimeSpan";
+  if (lower === "object" || lower === "system.object") return "x:Object";
+  if (lower.includes("datatable") || lower.includes("system.data.datatable")) return "scg2:DataTable";
+  if (lower.includes("datarow") || lower.includes("system.data.datarow")) return "scg2:DataRow";
+  if (lower.includes("securestring") || lower.includes("system.security.securestring")) return "s:Security.SecureString";
+  if (lower.includes("mailmessage") || lower.includes("system.net.mail.mailmessage")) return "s:Net.Mail.MailMessage";
+  if (lower.includes("list(") || lower.includes("list<")) return type;
+  if (lower.includes("dictionary") || lower.includes("dictionary<")) return type;
+  if (lower.includes("queueitem") || lower.includes("uipath.core.queueitem")) return "ui:QueueItem";
+  if (lower.includes("queueitemdata") || lower.includes("uipath.core.queueitemdata")) return "ui:QueueItemData";
   return type;
+}
+
+function isUiActivity(activityType: string): boolean {
+  const uiTypes = ["ui:OpenBrowser", "ui:NavigateTo", "ui:TypeInto", "ui:Click", "ui:GetText",
+    "ui:ElementExists", "ui:AttachBrowser", "ui:AttachWindow", "ui:UseApplicationBrowser"];
+  return uiTypes.some(t => activityType.startsWith(t));
+}
+
+function isNonCriticalActivity(activityType: string): boolean {
+  const nonCritical = ["ui:LogMessage", "ui:SendSmtpMailMessage", "ui:SendOutlookMailMessage"];
+  return nonCritical.some(t => activityType === t);
 }
 
 function renderActivity(
   activityType: string,
   displayName: string,
   properties: Record<string, string>,
-  selectorHint?: string
+  selectorHint?: string,
+  operationalProps?: { timeout?: number; continueOnError?: boolean; delayBefore?: number; delayAfter?: number }
 ): string {
   let propAttrs = "";
   for (const [key, value] of Object.entries(properties)) {
     propAttrs += ` ${key}="${escapeXml(value)}"`;
   }
 
-  let selectorXml = "";
   if (selectorHint) {
-    selectorXml = `\n            <!-- TODO: Replace placeholder selector with real UI selector captured from UiPath Studio -->
-            <!-- Selector hint: ${escapeXml(selectorHint)} -->`;
+    propAttrs += ` Selector="${escapeXml(selectorHint)}"`;
+  }
+
+  if (isUiActivity(activityType)) {
+    const timeout = operationalProps?.timeout ?? 30000;
+    propAttrs += ` TimeoutMS="${timeout}"`;
+  }
+
+  const continueOnError = operationalProps?.continueOnError ?? (isNonCriticalActivity(activityType) ? true : false);
+  propAttrs += ` ContinueOnError="${continueOnError ? "True" : "False"}"`;
+
+  if (operationalProps?.delayBefore && operationalProps.delayBefore > 0) {
+    propAttrs += ` DelayBefore="${operationalProps.delayBefore}"`;
+  }
+  if (operationalProps?.delayAfter && operationalProps.delayAfter > 0) {
+    propAttrs += ` DelayAfter="${operationalProps.delayAfter}"`;
   }
 
   return `
-          <${activityType} DisplayName="${escapeXml(displayName)}"${propAttrs} />${selectorXml}`;
+          <${activityType} DisplayName="${escapeXml(displayName)}"${propAttrs} />`;
 }
 
 function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retry" | "catch" | "escalate" | "none"): string {
@@ -814,17 +852,19 @@ function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec): {
       }
     }
 
-    let propAttrs = "";
+    const props: Record<string, string> = {};
     for (const [key, value] of Object.entries(act.properties || {})) {
-      propAttrs += ` ${key}="${escapeXml(String(value))}"`;
+      props[key] = String(value);
     }
 
-    let selectorComment = "";
-    if (act.selectorHint) {
-      selectorComment = `\n              <!-- Selector: ${escapeXml(act.selectorHint)} -->`;
-    }
+    const operationalProps = {
+      timeout: act.timeout,
+      continueOnError: act.continueOnError,
+      delayBefore: act.delayBefore,
+      delayAfter: act.delayAfter,
+    };
 
-    innerXml += `\n            <${act.activityType} DisplayName="${escapeXml(act.displayName)}"${propAttrs} />${selectorComment}`;
+    innerXml += renderActivity(act.activityType, act.displayName, props, act.selectorHint, operationalProps).replace(/\n          /, "\n            ");
   }
 
   for (const gap of enrichedNode.gaps || []) {
@@ -1581,6 +1621,29 @@ export function aggregatePackages(results: XamlGeneratorResult[]): string[] {
   return Array.from(pkgs);
 }
 
+export type DhgDeploymentResult = {
+  artifact: string;
+  name: string;
+  status: "created" | "exists" | "failed" | "skipped" | "manual";
+  message: string;
+  id?: number;
+};
+
+export type DhgExtractedArtifacts = {
+  queues?: Array<{ name: string; description?: string; jsonSchema?: string; outputSchema?: string; maxRetries?: number; uniqueReference?: boolean }>;
+  assets?: Array<{ name: string; type: string; value?: string; description?: string }>;
+  machines?: Array<{ name: string; type?: string; runtimeType?: string; slots?: number; description?: string }>;
+  triggers?: Array<{ name: string; type: string; queueName?: string; cron?: string; timezone?: string; startStrategy?: string; maxJobsCount?: number; description?: string }>;
+  storageBuckets?: Array<{ name: string; storageProvider?: string; description?: string }>;
+  environments?: Array<{ name: string; type?: string; description?: string }>;
+  robotAccounts?: Array<{ name: string; type?: string; role?: string; description?: string }>;
+  actionCenter?: Array<{ taskCatalog: string; priority?: string; actions?: string[]; formFields?: Array<{ name: string; type: string; required?: boolean }>; sla?: string; escalation?: string; description?: string }>;
+  documentUnderstanding?: Array<{ name: string; documentTypes?: string[]; taxonomyFields?: Array<{ documentType: string; fields: Array<{ name: string; type: string }> }>; classifierType?: string; description?: string }>;
+  testCases?: Array<{ name: string; testType?: string; priority?: string; preconditions?: string[]; postconditions?: string[]; testData?: Array<{ field: string; value: string; dataType?: string }>; automationWorkflow?: string; description?: string }>;
+  testSets?: Array<{ name: string; executionMode?: string; environment?: string; triggerType?: string; testCaseNames?: string[]; description?: string }>;
+  requirements?: Array<{ name: string; type?: string; priority?: string; acceptanceCriteria?: string[]; source?: string; description?: string }>;
+};
+
 export type DhgOptions = {
   projectName: string;
   description?: string;
@@ -1591,6 +1654,8 @@ export type DhgOptions = {
   enrichment?: EnrichmentResult | null;
   useReFramework?: boolean;
   painPoints?: { name: string; description: string }[];
+  deploymentResults?: DhgDeploymentResult[];
+  extractedArtifacts?: DhgExtractedArtifacts;
 };
 
 export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
@@ -1604,6 +1669,8 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     enrichment,
     useReFramework,
     painPoints,
+    deploymentResults,
+    extractedArtifacts,
   } = opts;
 
   const selectorGaps = gaps.filter((g) => g.category === "selector");
@@ -1613,25 +1680,72 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   const logicGaps = gaps.filter((g) => g.category === "logic");
   const manualGaps = gaps.filter((g) => g.category === "manual");
 
-  const totalMinutes = gaps.reduce((sum, g) => sum + g.estimatedMinutes, 0);
-  const totalHours = (totalMinutes / 60).toFixed(1);
+  const totalXamlMinutes = gaps.reduce((sum, g) => sum + g.estimatedMinutes, 0);
 
+  let sectionNum = 0;
   let md = "";
 
-  md += `# Developer Handoff Guide\n\n`;
+  md += `# Enhanced Developer Handoff Guide\n\n`;
   md += `**Project:** ${projectName}\n`;
   if (description) {
     md += `**Description:** ${description}\n`;
   }
   md += `**Generated:** ${new Date().toISOString().split("T")[0]}\n`;
-  md += `**Estimated Completion Effort:** ${totalHours} hours (${totalMinutes} minutes)\n`;
   md += `**Architecture Pattern:** ${useReFramework ? "REFramework (Robotic Enterprise Framework) — Queue-based transactional processing" : "Sequential (Linear workflow)"}\n`;
   if (enrichment) {
     md += `**AI Enrichment:** Applied — activities have system-specific selectors and real property values\n`;
   }
   md += `\n---\n\n`;
 
-  md += `## 1. Architecture Decision Record\n\n`;
+  sectionNum++;
+  md += `## ${sectionNum}. Execution Readiness Summary\n\n`;
+  if (deploymentResults?.length) {
+    const artifactTypes = new Map<string, { total: number; ready: number; needsAttention: number; failed: number }>();
+    for (const r of deploymentResults) {
+      if (!artifactTypes.has(r.artifact)) {
+        artifactTypes.set(r.artifact, { total: 0, ready: 0, needsAttention: 0, failed: 0 });
+      }
+      const entry = artifactTypes.get(r.artifact)!;
+      entry.total++;
+      if (r.status === "created" || r.status === "exists") entry.ready++;
+      else if (r.status === "failed" || r.status === "manual") entry.needsAttention++;
+      else entry.failed++;
+    }
+    if (!artifactTypes.has("XAML Workflow")) {
+      artifactTypes.set("XAML Workflow", { total: workflowNames.length, ready: workflowNames.length - gaps.length, needsAttention: gaps.length > 0 ? 1 : 0, failed: 0 });
+    }
+
+    let totalReady = 0;
+    let totalAll = 0;
+    md += `| Artifact Type | Provisioned | Ready | Needs Attention | Status |\n`;
+    md += `|---------------|-------------|-------|-----------------|--------|\n`;
+    artifactTypes.forEach((stats, type) => {
+      totalReady += stats.ready;
+      totalAll += stats.total;
+      const statusIcon = stats.needsAttention === 0 && stats.failed === 0 ? "Ready" : stats.ready > 0 ? "Partial" : "Action Required";
+      md += `| ${type} | ${stats.total} | ${stats.ready} | ${stats.needsAttention + stats.failed} | ${statusIcon} |\n`;
+    });
+    const readinessPct = totalAll > 0 ? Math.round((totalReady / totalAll) * 100) : 0;
+    md += `\n**Overall Readiness: ${readinessPct}%** (${totalReady}/${totalAll} artifacts provisioned successfully)\n\n`;
+
+    const failedResults = deploymentResults.filter(r => r.status === "failed" || r.status === "manual");
+    if (failedResults.length > 0) {
+      md += `### Items Requiring Immediate Attention\n\n`;
+      md += `| Artifact | Name | Issue |\n`;
+      md += `|----------|------|-------|\n`;
+      for (const r of failedResults) {
+        md += `| ${r.artifact} | ${r.name} | ${r.message.slice(0, 120)} |\n`;
+      }
+      md += `\n`;
+    }
+  } else {
+    md += `No deployment results available. Run deployment to generate a readiness report.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Architecture Decision Record\n\n`;
   if (useReFramework) {
     md += `### Why REFramework?\n\n`;
     md += `This automation uses the UiPath Robotic Enterprise Framework (REFramework) because:\n`;
@@ -1659,7 +1773,8 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
 
   md += `---\n\n`;
 
-  md += `## 2. Package Overview\n\n`;
+  sectionNum++;
+  md += `## ${sectionNum}. Package Overview\n\n`;
   md += `This automation package was generated by CannonBall from an approved Solution Design Document (SDD). `;
   md += `It contains near-production-ready XAML workflows with real UiPath activities, but requires developer review and completion of the items listed below.\n\n`;
   md += `### File Listing\n\n`;
@@ -1698,13 +1813,14 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
 
   md += `---\n\n`;
 
-  md += `## 3. Selector Completion Checklist\n\n`;
-  if (selectorGaps.length === 0) {
-    md += `No UI selectors require configuration.\n\n`;
-  } else {
+  sectionNum++;
+  md += `## ${sectionNum}. XAML Completion Checklist\n\n`;
+
+  if (selectorGaps.length > 0) {
+    md += `### Selector Completion\n\n`;
     md += `The following activities have placeholder UI selectors that must be replaced with real selectors captured from UiPath Studio.\n\n`;
-    md += `| # | Activity | Description | Placeholder Selector | Est. Time |\n`;
-    md += `|---|----------|-------------|---------------------|----------|\n`;
+    md += `| # | System | Activity | Current Hint | What to Capture | Est. Time |\n`;
+    md += `|---|--------|----------|-------------|-----------------|----------|\n`;
 
     const selectorsBySystem: Record<string, XamlGap[]> = {};
     for (const g of selectorGaps) {
@@ -1717,7 +1833,7 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     for (const [sys, sysGaps] of Object.entries(selectorsBySystem)) {
       for (const g of sysGaps) {
         sIdx++;
-        md += `| ${sIdx} | \`${g.activity}\` | ${g.description} | \`${g.placeholder}\` | ${g.estimatedMinutes} min |\n`;
+        md += `| ${sIdx} | ${sys} | \`${g.activity}\` | \`${g.placeholder}\` | ${g.description} | ${g.estimatedMinutes} min |\n`;
       }
     }
     md += `\n`;
@@ -1753,49 +1869,360 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
         md += `- Test selectors across different screen resolutions and user accounts\n\n`;
       }
     }
+  } else {
+    md += `No UI selectors require configuration.\n\n`;
   }
 
-  md += `---\n\n`;
-
-  md += `## 4. Credential & Asset Setup\n\n`;
-  if (credentialGaps.length === 0) {
-    md += `No credential or asset configuration required.\n\n`;
-  } else {
-    md += `The following Orchestrator Assets need to be created with real values.\n\n`;
-    md += `| # | Activity | Description | Placeholder | Est. Time |\n`;
-    md += `|---|----------|-------------|------------|----------|\n`;
+  if (credentialGaps.length > 0) {
+    md += `### Credential & Asset Setup\n\n`;
+    md += `| # | Asset Name | Description | Action Required | Orchestrator Path |\n`;
+    md += `|---|-----------|-------------|-----------------|-------------------|\n`;
     credentialGaps.forEach((g, i) => {
-      md += `| ${i + 1} | \`${g.activity}\` | ${g.description} | ${g.placeholder} | ${g.estimatedMinutes} min |\n`;
+      md += `| ${i + 1} | \`${g.activity}\` | ${g.description} | Replace \`${g.placeholder}\` | Tenant > Assets > ${g.activity} |\n`;
     });
     md += `\n`;
-    md += `**Setup instructions:**\n`;
-    md += `1. Go to UiPath Orchestrator > Tenant > Assets\n`;
-    md += `2. Create each credential asset listed above\n`;
-    md += `3. For Credential type assets, provide the username and password\n`;
-    md += `4. For Text/Integer assets, provide the appropriate value\n`;
-    md += `5. Ensure the robot has access to the assets in the correct folder\n\n`;
+  }
+
+  if (endpointGaps.length > 0 || configGaps.length > 0) {
+    md += `### API Endpoint & Configuration\n\n`;
+    const integrationGaps = [...endpointGaps, ...configGaps];
+    md += `| # | Category | Activity | Expected Format | Current Placeholder |\n`;
+    md += `|---|----------|----------|----------------|--------------------|\n`;
+    integrationGaps.forEach((g, i) => {
+      md += `| ${i + 1} | ${g.category} | \`${g.activity}\` | ${g.description} | \`${g.placeholder}\` |\n`;
+    });
+    md += `\n`;
   }
 
   md += `---\n\n`;
 
-  md += `## 5. Integration Endpoints\n\n`;
-  const integrationGaps = [...endpointGaps, ...configGaps];
-  if (integrationGaps.length === 0) {
-    md += `No integration endpoints require configuration.\n\n`;
+  sectionNum++;
+  md += `## ${sectionNum}. Queue Configuration\n\n`;
+  const queues = extractedArtifacts?.queues;
+  const queueResults = deploymentResults?.filter(r => r.artifact === "Queue");
+  if (queues?.length) {
+    for (const q of queues) {
+      const result = queueResults?.find(r => r.name === q.name);
+      const status = result ? `${result.status}` : "unknown";
+      md += `### ${q.name} (${status})\n\n`;
+      md += `- **Max Retries:** ${q.maxRetries ?? 3}\n`;
+      md += `- **Unique Reference:** ${q.uniqueReference ? "Yes" : "No"}\n`;
+      if (q.description) md += `- **Purpose:** ${q.description}\n`;
+      md += `\n`;
+
+      if (q.jsonSchema) {
+        const hasPlaceholder = q.jsonSchema.includes("PLACEHOLDER_");
+        md += `**Input Schema (SpecificContent):**\n`;
+        md += `\`\`\`json\n${q.jsonSchema}\n\`\`\`\n`;
+        if (hasPlaceholder) {
+          md += `> **Action Required:** Replace all \`PLACEHOLDER_\` values in the schema with real field definitions.\n`;
+        }
+        md += `\n`;
+      }
+      if (q.outputSchema) {
+        md += `**Output Schema:**\n`;
+        md += `\`\`\`json\n${q.outputSchema}\n\`\`\`\n\n`;
+      }
+      if (!q.jsonSchema && !q.outputSchema) {
+        md += `> No JSON schemas were generated. Consider adding SpecificContent validation in Orchestrator > Queues > ${q.name} > Edit for production reliability.\n\n`;
+      }
+    }
   } else {
-    md += `The following API URLs, database connections, and file paths need real values.\n\n`;
-    md += `| # | Category | Activity | Description | Placeholder | Est. Time |\n`;
-    md += `|---|----------|----------|-------------|------------|----------|\n`;
-    integrationGaps.forEach((g, i) => {
-      md += `| ${i + 1} | ${g.category} | \`${g.activity}\` | ${g.description} | \`${g.placeholder}\` | ${g.estimatedMinutes} min |\n`;
+    md += `No queues configured for this process.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Asset Configuration\n\n`;
+  const assets = extractedArtifacts?.assets;
+  const assetResults = deploymentResults?.filter(r => r.artifact === "Asset");
+  if (assets?.length) {
+    md += `| # | Asset Name | Type | Current Value | Action Required | Orchestrator Path |\n`;
+    md += `|---|-----------|------|---------------|-----------------|-------------------|\n`;
+    assets.forEach((a, i) => {
+      const result = assetResults?.find(r => r.name === a.name);
+      const hasPlaceholder = (a.value || "").includes("PLACEHOLDER_");
+      const action = a.type === "Credential" ? "Set username & password" : hasPlaceholder ? `Replace PLACEHOLDER_ value` : result?.status === "created" || result?.status === "exists" ? "Verify value" : "Create asset";
+      md += `| ${i + 1} | \`${a.name}\` | ${a.type} | \`${a.value || "(empty)"}\` | ${action} | Tenant > Assets > ${a.name} |\n`;
     });
     md += `\n`;
+    const credentialAssets = assets.filter(a => a.type === "Credential");
+    if (credentialAssets.length > 0) {
+      md += `**Credential Assets** require manual setup with real username/password:\n`;
+      for (const ca of credentialAssets) {
+        md += `- \`${ca.name}\`: ${ca.description || "Set credentials in Orchestrator"}\n`;
+      }
+      md += `\n`;
+    }
+  } else {
+    md += `No assets configured for this process.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Trigger Configuration\n\n`;
+  const triggers = extractedArtifacts?.triggers;
+  const triggerResults = deploymentResults?.filter(r => r.artifact === "Trigger");
+  if (triggers?.length) {
+    md += `| # | Trigger Name | Type | Schedule/Queue | Timezone | Strategy | Status |\n`;
+    md += `|---|-------------|------|---------------|----------|----------|--------|\n`;
+    triggers.forEach((t, i) => {
+      const result = triggerResults?.find(r => r.name === t.name);
+      const status = result?.status || "unknown";
+      const usedFallback = result?.message?.includes("fallback") || result?.message?.includes("ProcessSchedule");
+      const scheduleInfo = t.type === "Queue" ? `Queue: ${t.queueName || "N/A"}` : `Cron: ${t.cron || "N/A"}`;
+      md += `| ${i + 1} | \`${t.name}\` | ${t.type} | ${scheduleInfo} | ${t.timezone || "UTC"} | ${t.startStrategy || "Specific"} | ${status}${usedFallback ? " (polling fallback)" : ""} |\n`;
+    });
+    md += `\n`;
+    const fallbackTriggers = triggerResults?.filter(r => r.message?.includes("fallback") || r.message?.includes("ProcessSchedule"));
+    if (fallbackTriggers?.length) {
+      md += `> **Note:** ${fallbackTriggers.length} trigger(s) used polling-based ProcessSchedule fallback instead of native queue triggers. `;
+      md += `These poll every 5 minutes. For lower latency, configure native Queue Triggers in Orchestrator > Automation > Triggers after upgrading your tenant.\n\n`;
+    }
+  } else {
+    md += `No triggers configured for this process.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Test Suite Completion\n\n`;
+  const testCases = extractedArtifacts?.testCases;
+  const testSets = extractedArtifacts?.testSets;
+  const tcResults = deploymentResults?.filter(r => r.artifact === "Test Case");
+  const tsResults = deploymentResults?.filter(r => r.artifact === "Test Set");
+  if (testCases?.length) {
+    md += `### Test Cases\n\n`;
+    md += `| # | Test Case | Type | Priority | Workflow | Status |\n`;
+    md += `|---|-----------|------|----------|----------|--------|\n`;
+    testCases.forEach((tc, i) => {
+      const result = tcResults?.find(r => r.name === tc.name);
+      md += `| ${i + 1} | \`${tc.name}\` | ${tc.testType || "Functional"} | ${tc.priority || "Medium"} | ${tc.automationWorkflow || "Main.xaml"} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+
+    const tcsWithPlaceholderData = testCases.filter(tc => tc.testData?.some(td => td.value?.includes("PLACEHOLDER_")));
+    if (tcsWithPlaceholderData.length > 0) {
+      md += `**Test Data Requiring Real Values:**\n\n`;
+      for (const tc of tcsWithPlaceholderData) {
+        const placeholderFields = tc.testData?.filter(td => td.value?.includes("PLACEHOLDER_")) || [];
+        md += `- \`${tc.name}\`: Replace ${placeholderFields.map(f => `\`${f.field}\``).join(", ")} with real test data\n`;
+      }
+      md += `\n`;
+    }
+  }
+  if (testSets?.length) {
+    md += `### Test Sets\n\n`;
+    md += `| # | Test Set | Execution | Environment | Trigger | Test Cases | Status |\n`;
+    md += `|---|----------|-----------|-------------|---------|------------|--------|\n`;
+    testSets.forEach((ts, i) => {
+      const result = tsResults?.find(r => r.name === ts.name);
+      md += `| ${i + 1} | \`${ts.name}\` | ${ts.executionMode || "Sequential"} | ${ts.environment || "N/A"} | ${ts.triggerType || "Manual"} | ${ts.testCaseNames?.length || 0} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+  }
+  if (!testCases?.length && !testSets?.length) {
+    md += `No test cases or test sets were generated.\n\n`;
+  } else {
+    md += `### Test Environment Setup\n\n`;
+    md += `- [ ] Test Manager project created and accessible\n`;
+    md += `- [ ] Test data queues seeded with sample transaction data\n`;
+    md += `- [ ] Test credentials configured (separate from production)\n`;
+    md += `- [ ] Target applications available in test environment\n`;
+    md += `- [ ] Robot assigned to test folder with appropriate permissions\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Action Center Setup\n\n`;
+  const acArtifacts = extractedArtifacts?.actionCenter;
+  const acResults = deploymentResults?.filter(r => r.artifact === "Action Center");
+  if (acArtifacts?.length) {
+    for (const ac of acArtifacts) {
+      const result = acResults?.find(r => r.name === ac.taskCatalog);
+      md += `### ${ac.taskCatalog} (${result?.status || "unknown"})\n\n`;
+      if (ac.description) md += `- **Purpose:** ${ac.description}\n`;
+      if (ac.priority) md += `- **Priority:** ${ac.priority}\n`;
+      if (ac.sla) md += `- **SLA:** ${ac.sla}\n`;
+      if (ac.escalation) md += `- **Escalation:** ${ac.escalation}\n`;
+      if (ac.actions?.length) md += `- **Available Actions:** ${ac.actions.join(", ")}\n`;
+      md += `\n`;
+
+      if (ac.formFields?.length) {
+        md += `**Form Fields to Configure:**\n\n`;
+        md += `| Field | Type | Required |\n`;
+        md += `|-------|------|----------|\n`;
+        for (const f of ac.formFields) {
+          md += `| ${f.name} | ${f.type} | ${f.required ? "Yes" : "No"} |\n`;
+        }
+        md += `\n`;
+      }
+
+      if (result?.status === "failed" || result?.status === "manual") {
+        md += `> **Manual Setup Required:** Create this task catalog in Orchestrator > Action Center > Task Catalogs. `;
+        md += `Configure the form fields listed above and assign to the appropriate folder.\n\n`;
+      }
+    }
+  } else {
+    md += `No Action Center task catalogs required for this process.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Document Understanding Setup\n\n`;
+  const duArtifacts = extractedArtifacts?.documentUnderstanding;
+  const duResults = deploymentResults?.filter(r => r.artifact === "Document Understanding");
+  if (duArtifacts?.length) {
+    for (const du of duArtifacts) {
+      const result = duResults?.find(r => r.name === du.name);
+      md += `### ${du.name} (${result?.status || "unknown"})\n\n`;
+      if (du.description) md += `- **Purpose:** ${du.description}\n`;
+      if (du.documentTypes?.length) md += `- **Document Types:** ${du.documentTypes.join(", ")}\n`;
+      if (du.classifierType) md += `- **Classifier:** ${du.classifierType}\n`;
+      md += `\n`;
+
+      if (du.taxonomyFields?.length) {
+        md += `**Taxonomy Fields to Configure:**\n\n`;
+        for (const tf of du.taxonomyFields) {
+          md += `**${tf.documentType}:**\n\n`;
+          md += `| Field | Type |\n`;
+          md += `|-------|------|\n`;
+          for (const f of tf.fields) {
+            md += `| ${f.name} | ${f.type} |\n`;
+          }
+          md += `\n`;
+        }
+      }
+
+      md += `**Setup Steps:**\n`;
+      md += `1. Open Document Understanding in UiPath Automation Cloud\n`;
+      md += `2. Create or configure the taxonomy with the fields listed above\n`;
+      md += `3. Upload training documents for each document type\n`;
+      md += `4. Train the ${du.classifierType || "ML"} classifier\n`;
+      md += `5. Validate extraction accuracy meets business requirements\n`;
+      md += `6. Publish the trained model and note the API endpoint\n\n`;
+    }
+  } else {
+    md += `No Document Understanding projects required for this process.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Requirements Traceability\n\n`;
+  const requirements = extractedArtifacts?.requirements;
+  const reqResults = deploymentResults?.filter(r => r.artifact === "Requirement");
+  if (requirements?.length) {
+    md += `| # | Requirement | Type | Priority | Source | Status |\n`;
+    md += `|---|------------|------|----------|--------|--------|\n`;
+    requirements.forEach((req, i) => {
+      const result = reqResults?.find(r => r.name === req.name);
+      md += `| ${i + 1} | \`${req.name}\` | ${req.type || "Functional"} | ${req.priority || "Medium"} | ${req.source || "SDD"} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+
+    const reqsWithCriteria = requirements.filter(r => r.acceptanceCriteria?.length);
+    if (reqsWithCriteria.length > 0) {
+      md += `### Acceptance Criteria\n\n`;
+      for (const req of reqsWithCriteria) {
+        md += `**${req.name}:**\n`;
+        for (const c of req.acceptanceCriteria!) {
+          md += `- [ ] ${c}\n`;
+        }
+        md += `\n`;
+      }
+    }
+
+    const failedReqs = reqResults?.filter(r => r.status === "failed" || r.status === "manual");
+    if (failedReqs?.length) {
+      md += `> **Action Required:** ${failedReqs.length} requirement(s) failed to provision in Test Manager. Create them manually in Test Manager > Requirements.\n\n`;
+    }
+  } else {
+    md += `No requirements configured for this process.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
+  md += `## ${sectionNum}. Infrastructure Checklist\n\n`;
+
+  const machines = extractedArtifacts?.machines;
+  const machineResults = deploymentResults?.filter(r => r.artifact === "Machine");
+  const robots = extractedArtifacts?.robotAccounts;
+  const robotResults = deploymentResults?.filter(r => r.artifact === "Robot Account");
+  const buckets = extractedArtifacts?.storageBuckets;
+  const bucketResults = deploymentResults?.filter(r => r.artifact === "Storage Bucket");
+  const environments = extractedArtifacts?.environments;
+  const envResults = deploymentResults?.filter(r => r.artifact === "Environment");
+
+  md += `### Machine Templates\n\n`;
+  if (machines?.length) {
+    md += `| Machine | Type | Runtime | Slots | Status |\n`;
+    md += `|---------|------|---------|-------|--------|\n`;
+    machines.forEach(m => {
+      const result = machineResults?.find(r => r.name === m.name);
+      md += `| \`${m.name}\` | ${m.type || "Unattended"} | ${m.runtimeType || m.type || "Unattended"} | ${m.slots || 1} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+    md += `- [ ] Verify machine templates are assigned to the correct folder\n`;
+    md += `- [ ] Confirm slot allocation matches license availability\n\n`;
+  } else {
+    md += `No machine templates configured.\n\n`;
+  }
+
+  md += `### Robot Accounts\n\n`;
+  if (robots?.length) {
+    md += `| Robot | Type | Role | Status |\n`;
+    md += `|-------|------|------|--------|\n`;
+    robots.forEach(r => {
+      const result = robotResults?.find(rr => rr.name === r.name);
+      md += `| \`${r.name}\` | ${r.type || "Unattended"} | ${r.role || "Executor"} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+    md += `- [ ] Verify robot accounts have correct permissions in target folder\n`;
+    md += `- [ ] Confirm robot has access to all required applications\n`;
+    md += `- [ ] Test robot credentials for target systems\n\n`;
+  } else {
+    md += `No robot accounts configured.\n\n`;
+  }
+
+  md += `### Storage Buckets\n\n`;
+  if (buckets?.length) {
+    md += `| Bucket | Provider | Status |\n`;
+    md += `|--------|----------|--------|\n`;
+    buckets.forEach(b => {
+      const result = bucketResults?.find(r => r.name === b.name);
+      md += `| \`${b.name}\` | ${b.storageProvider || "Orchestrator"} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+    md += `- [ ] Verify bucket access permissions for the robot\n`;
+    md += `- [ ] Confirm storage provider connectivity (if external: Azure/AWS/GCP)\n\n`;
+  } else {
+    md += `No storage buckets configured.\n\n`;
+  }
+
+  md += `### Environments\n\n`;
+  if (environments?.length) {
+    md += `| Environment | Type | Status |\n`;
+    md += `|-------------|------|--------|\n`;
+    environments.forEach(e => {
+      const result = envResults?.find(r => r.name === e.name);
+      md += `| \`${e.name}\` | ${e.type || "Production"} | ${result?.status || "unknown"} |\n`;
+    });
+    md += `\n`;
+  } else {
+    md += `No environments configured.\n\n`;
   }
 
   md += `---\n\n`;
 
   if (painPoints && painPoints.length > 0) {
-    md += `## 6. Risk Assessment (Pain Points)\n\n`;
+    sectionNum++;
+    md += `## ${sectionNum}. Risk Assessment (Pain Points)\n\n`;
     md += `The following process pain points were identified during analysis. These areas may require extra attention during development and testing.\n\n`;
     md += `| # | Step | Risk | Mitigation |\n`;
     md += `|---|------|------|------------|\n`;
@@ -1805,8 +2232,8 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     md += `\n---\n\n`;
   }
 
-  const testingSectionNum = painPoints && painPoints.length > 0 ? 7 : 6;
-  md += `## ${testingSectionNum}. Testing Checklist\n\n`;
+  sectionNum++;
+  md += `## ${sectionNum}. Testing & Go-Live Checklist\n\n`;
   let testingContent = "";
   if (sddContent) {
     const section7Match = sddContent.match(/## 7[\.\s][^\n]+\n([\s\S]*?)(?=## \d+\.|$)/);
@@ -1856,29 +2283,25 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
 
   md += `---\n\n`;
 
-  const gapsSectionNum = testingSectionNum + 1;
-  md += `## ${gapsSectionNum}. Known Gaps & Manual Steps\n\n`;
   const complexGaps = [...logicGaps, ...manualGaps];
-  if (complexGaps.length === 0) {
-    md += `No complex logic gaps or manual steps identified.\n\n`;
-  } else {
+  if (complexGaps.length > 0) {
+    sectionNum++;
+    md += `## ${sectionNum}. Known Gaps & Manual Steps\n\n`;
     md += `The following items require manual implementation or complex business logic that could not be fully automated.\n\n`;
     md += `| # | Category | Activity | Description | Est. Time |\n`;
     md += `|---|----------|----------|-------------|----------|\n`;
     complexGaps.forEach((g, i) => {
       md += `| ${i + 1} | ${g.category} | \`${g.activity}\` | ${g.description} | ${g.estimatedMinutes} min |\n`;
     });
-    md += `\n`;
+    md += `\n---\n\n`;
   }
 
-  md += `---\n\n`;
+  sectionNum++;
+  md += `## ${sectionNum}. Estimated Completion Effort\n\n`;
 
-  const effortSectionNum = gapsSectionNum + 1;
-  md += `## ${effortSectionNum}. Estimated Completion Effort\n\n`;
-  md += `| Category | Count | Est. Minutes | Est. Hours |\n`;
-  md += `|----------|-------|-------------|------------|\n`;
+  const effortItems: { category: string; count: number; minutes: number }[] = [];
 
-  const categories: { label: string; items: XamlGap[] }[] = [
+  const xamlCategories: { label: string; items: XamlGap[] }[] = [
     { label: "UI Selector Configuration", items: selectorGaps },
     { label: "Credential & Asset Setup", items: credentialGaps },
     { label: "Integration Endpoints", items: endpointGaps },
@@ -1886,16 +2309,46 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     { label: "Business Logic Implementation", items: logicGaps },
     { label: "Manual Steps", items: manualGaps },
   ];
-
-  for (const cat of categories) {
+  for (const cat of xamlCategories) {
     if (cat.items.length > 0) {
-      const mins = cat.items.reduce((s, g) => s + g.estimatedMinutes, 0);
-      md += `| ${cat.label} | ${cat.items.length} | ${mins} | ${(mins / 60).toFixed(1)} |\n`;
+      effortItems.push({ category: cat.label, count: cat.items.length, minutes: cat.items.reduce((s, g) => s + g.estimatedMinutes, 0) });
     }
   }
 
-  md += `| **Total** | **${gaps.length}** | **${totalMinutes}** | **${totalHours}** |\n\n`;
+  const failedQueues = deploymentResults?.filter(r => r.artifact === "Queue" && (r.status === "failed" || r.status === "manual"));
+  if (failedQueues?.length) effortItems.push({ category: "Queue Setup (manual)", count: failedQueues.length, minutes: failedQueues.length * 10 });
 
+  const credAssets = extractedArtifacts?.assets?.filter(a => a.type === "Credential");
+  if (credAssets?.length) effortItems.push({ category: "Credential Asset Values", count: credAssets.length, minutes: credAssets.length * 5 });
+
+  const failedTriggers = deploymentResults?.filter(r => r.artifact === "Trigger" && (r.status === "failed" || r.status === "manual"));
+  if (failedTriggers?.length) effortItems.push({ category: "Trigger Setup (manual)", count: failedTriggers.length, minutes: failedTriggers.length * 15 });
+
+  const failedAC = deploymentResults?.filter(r => r.artifact === "Action Center" && (r.status === "failed" || r.status === "manual"));
+  if (failedAC?.length) effortItems.push({ category: "Action Center Form Setup", count: failedAC.length, minutes: failedAC.length * 30 });
+
+  if (duArtifacts?.length) effortItems.push({ category: "Document Understanding Training", count: duArtifacts.length, minutes: duArtifacts.length * 120 });
+
+  const failedRobots = deploymentResults?.filter(r => r.artifact === "Robot Account" && (r.status === "failed" || r.status === "manual"));
+  if (failedRobots?.length) effortItems.push({ category: "Robot Account Setup", count: failedRobots.length, minutes: failedRobots.length * 15 });
+
+  const tcsWithPlaceholders = testCases?.filter(tc => tc.testData?.some(td => td.value?.includes("PLACEHOLDER_")));
+  if (tcsWithPlaceholders?.length) effortItems.push({ category: "Test Data Completion", count: tcsWithPlaceholders.length, minutes: tcsWithPlaceholders.length * 10 });
+
+  md += `| Category | Count | Est. Minutes | Est. Hours |\n`;
+  md += `|----------|-------|-------------|------------|\n`;
+  let totalMinutes = 0;
+  let totalCount = 0;
+  for (const item of effortItems) {
+    md += `| ${item.category} | ${item.count} | ${item.minutes} | ${(item.minutes / 60).toFixed(1)} |\n`;
+    totalMinutes += item.minutes;
+    totalCount += item.count;
+  }
+  const totalHours = (totalMinutes / 60).toFixed(1);
+  md += `| **Total** | **${totalCount}** | **${totalMinutes}** | **${totalHours}** |\n\n`;
+
+  const confidence = totalMinutes < 120 ? "High" : totalMinutes < 480 ? "Medium" : "Low";
+  md += `**Confidence Level:** ${confidence}\n\n`;
   md += `> **Note:** These estimates assume a developer familiar with UiPath Studio and the target applications. `;
   md += `Actual effort may vary based on environment complexity, selector stability, and business rule complexity.\n`;
 
@@ -1913,7 +2366,7 @@ function extractSystemFromGap(gap: XamlGap): string {
   return "General";
 }
 
-export function generateDhgSummary(gaps: XamlGap[]): string {
+export function generateDhgSummary(gaps: XamlGap[], deploymentResults?: DhgDeploymentResult[]): string {
   const selectorCount = gaps.filter((g) => g.category === "selector").length;
   const credentialCount = gaps.filter((g) => g.category === "credential").length;
   const endpointCount = gaps.filter((g) => g.category === "endpoint").length;
@@ -1924,7 +2377,7 @@ export function generateDhgSummary(gaps: XamlGap[]): string {
   const totalHours = (totalMinutes / 60).toFixed(1);
 
   const lines: string[] = [
-    `Developer Handoff Summary (${gaps.length} items, ~${totalHours}h effort):`,
+    `Enhanced Developer Handoff Summary (${gaps.length} XAML items, ~${totalHours}h XAML effort):`,
   ];
 
   if (selectorCount > 0) lines.push(`  - ${selectorCount} UI selector(s) to capture`);
@@ -1934,7 +2387,16 @@ export function generateDhgSummary(gaps: XamlGap[]): string {
   if (logicCount > 0) lines.push(`  - ${logicCount} business logic gap(s) to implement`);
   if (manualCount > 0) lines.push(`  - ${manualCount} manual step(s) to complete`);
 
-  lines.push(`See DeveloperHandoffGuide.md in the package for full details.`);
+  if (deploymentResults?.length) {
+    const failed = deploymentResults.filter(r => r.status === "failed" || r.status === "manual");
+    const created = deploymentResults.filter(r => r.status === "created" || r.status === "exists");
+    lines.push(`  Orchestrator: ${created.length}/${deploymentResults.length} artifacts provisioned`);
+    if (failed.length > 0) {
+      lines.push(`  ${failed.length} artifact(s) need manual setup — see DHG for details`);
+    }
+  }
+
+  lines.push(`See DeveloperHandoffGuide.md in the package for full details (covers all 14 artifact types).`);
 
   return lines.join("\n");
 }

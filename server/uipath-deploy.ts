@@ -62,19 +62,19 @@ function generateUuid(): string {
 }
 
 export type OrchestratorArtifacts = {
-  queues?: Array<{ name: string; description?: string; maxRetries?: number; uniqueReference?: boolean }>;
+  queues?: Array<{ name: string; description?: string; maxRetries?: number; uniqueReference?: boolean; jsonSchema?: string; outputSchema?: string }>;
   assets?: Array<{ name: string; type: string; value?: string; description?: string }>;
-  machines?: Array<{ name: string; type?: string; slots?: number; description?: string }>;
-  triggers?: Array<{ name: string; type: string; queueName?: string; cron?: string; description?: string }>;
-  storageBuckets?: Array<{ name: string; description?: string }>;
+  machines?: Array<{ name: string; type?: string; slots?: number; description?: string; runtimeType?: string }>;
+  triggers?: Array<{ name: string; type: string; queueName?: string; cron?: string; description?: string; timezone?: string; startStrategy?: string; maxJobsCount?: number }>;
+  storageBuckets?: Array<{ name: string; description?: string; storageProvider?: string }>;
   environments?: Array<{ name: string; type?: string; description?: string }>;
-  robotAccounts?: Array<{ name: string; type?: string; description?: string }>;
-  actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string }>;
-  documentUnderstanding?: Array<{ name: string; documentTypes: string[]; description?: string }>;
-  testCases?: Array<{ name: string; description?: string; labels?: string[]; steps?: Array<{ action: string; expected: string }> }>;
+  robotAccounts?: Array<{ name: string; type?: string; description?: string; role?: string }>;
+  actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string; priority?: string; actions?: string[]; formFields?: Array<{ name: string; type: string; required?: boolean }> }>;
+  documentUnderstanding?: Array<{ name: string; documentTypes: string[]; description?: string; taxonomyFields?: Array<{ documentType: string; fields: Array<{ name: string; type: string }> }>; classifierType?: string }>;
+  testCases?: Array<{ name: string; description?: string; labels?: string[]; testType?: string; priority?: string; preconditions?: string[]; postconditions?: string[]; testData?: Array<{ field: string; value: string; dataType: string }>; automationWorkflow?: string; expectedDuration?: number; steps?: Array<{ action: string; expected: string }> }>;
   testDataQueues?: Array<{ name: string; description?: string; jsonSchema?: string; items?: Array<{ name: string; content: string }> }>;
-  requirements?: Array<{ name: string; description?: string; source?: string }>;
-  testSets?: Array<{ name: string; description?: string; testCaseNames?: string[] }>;
+  requirements?: Array<{ name: string; description?: string; source?: string; type?: string; priority?: string; acceptanceCriteria?: string[] }>;
+  testSets?: Array<{ name: string; description?: string; testCaseNames?: string[]; executionMode?: string; environment?: string; triggerType?: string }>;
 };
 
 export type DeploymentResult = {
@@ -194,14 +194,44 @@ export async function extractArtifactsWithLLM(sddContent: string): Promise<Orche
     console.log("[UiPath Deploy] Extracting artifacts from SDD using LLM...");
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      system: "You are a UiPath automation consultant. Extract Orchestrator artifact definitions from the SDD and output ONLY valid JSON. No other text, no markdown formatting, no code fences — just the raw JSON object. Keep descriptions under 250 characters to minimize output size.",
+      max_tokens: 8192,
+      system: `You are a senior UiPath RPA architect generating PRODUCTION-READY artifacts. Output ONLY valid JSON — no text, no markdown, no code fences.
+
+CRITICAL RULES:
+1. Every value must be as close to EXECUTABLE as possible. Use REAL values from the SDD — queue names, asset names, API endpoints, system URLs, file paths, cron schedules, field names, data types, email addresses, system names.
+2. Only use PLACEHOLDER_ prefix when the information is genuinely not in the SDD (e.g. actual passwords, environment-specific hostnames like PLACEHOLDER_SAP_HOST).
+3. Test cases must be AUTOMATION-GRADE: concrete preconditions, concrete postconditions, real test data values, specific step actions with field names and values, specific expected results with verifiable values.
+4. Queue schemas must define the actual data fields the process uses — derive from the SDD data model.
+5. Triggers must use the correct business timezone and realistic cron schedules.
+6. All descriptions must be specific and actionable, not generic.`,
       messages: [{
         role: "user",
-        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object with these keys: queues, assets, machines, triggers, storageBuckets, environments, robotAccounts, actionCenter, documentUnderstanding, testCases, testDataQueues, requirements, testSets. Include every artifact mentioned or implied. For credential assets use value "". For text/integer/bool assets provide sensible defaults. IMPORTANT: All triggers (Queue and Time) MUST be included — never treat them as manual steps. Generate test cases that cover the key automation scenarios described in the SDD — include labels like "Critical", "Smoke", "Regression" where appropriate. For robotAccounts, include any unattended robot accounts needed to run the automation — if machines are defined, at least one robot account should be defined to operate them. For testDataQueues, include any test data queues needed to supply test data to test cases (e.g. login credentials, input data sets). For requirements, extract business requirements from the PDD/SDD — compliance rules, process constraints, SLAs, and acceptance criteria. For testSets, group the test cases into logical sets (e.g. "Happy Path", "Exception Handling", "Regression") and reference test case names. CRITICAL for actionCenter: Any process step involving human approval, review, escalation, manual validation, human-in-the-loop decisions, or exception handling that requires human intervention MUST generate an Action Center task catalog entry. Each distinct approval/review/escalation type should be a separate taskCatalog. For example, if the process has "Manager Approval" and "Exception Review" steps, create two entries.
+        content: `Extract ALL UiPath Orchestrator and platform artifacts from this Solution Design Document. Output a single JSON object. Include every artifact mentioned or implied.
+
+ARTIFACT RULES:
+- queues: Include jsonSchema (JSON Schema for SpecificContent fields from the SDD data model) and outputSchema where applicable. maxRetries and uniqueReference must reflect the SDD's error handling requirements.
+- assets: For credential assets use value "". For text/integer/bool assets provide REAL values from the SDD. Descriptions must explain usage context (e.g. "SMTP server for invoice notification emails").
+- machines: Include runtimeType (Unattended|NonProduction|TestAutomation|Headless). Description must state the machine's purpose.
+- triggers: Include timezone (e.g. "America/New_York" from the SDD business context), startStrategy ("Specific"|"ModernJobs"), maxJobsCount. All triggers MUST be included — never treat them as manual steps.
+- storageBuckets: Include storageProvider ("Orchestrator"|"Azure"|"AWS"|"GCP") derived from the SDD tech stack.
+- robotAccounts: Include role (specific role name like "InvoiceProcessor" not generic "Executor"). At least one robot per machine.
+- actionCenter: Include priority ("Critical"|"High"|"Normal"|"Low"), actions array (e.g. ["Approve","Reject","Escalate"]), formFields array with field definitions. CRITICAL: Any human approval/review/escalation step MUST generate an entry.
+- documentUnderstanding: Include taxonomyFields (extraction fields per document type with name+type), classifierType ("Keyword"|"ML"|"Regex").
+- testCases: AUTOMATION-GRADE quality required:
+  - testType: "Functional"|"Regression"|"Smoke"|"Integration"|"E2E"
+  - priority: "Critical"|"High"|"Medium"|"Low"
+  - preconditions: specific setup requirements (e.g. "User logged into SAP client 100", "Queue has 5+ pending items")
+  - postconditions: specific verifiable end states (e.g. "Invoice status set to 'Posted' in SAP", "Confirmation email sent to requester")
+  - testData: concrete values [{field,value,dataType}] derived from SDD (e.g. {field:"InvoiceNumber",value:"INV-2024-001",dataType:"String"})
+  - automationWorkflow: which .xaml file to execute (e.g. "Main.xaml")
+  - expectedDuration: seconds
+  - steps: Each step MUST have specific field names, input values, and concrete expected results — NOT generic descriptions. Example: action="Enter 'INV-2024-001' in Invoice Number field", expected="Invoice Number field displays 'INV-2024-001'"
+- testDataQueues: Include jsonSchema and concrete test data items.
+- requirements: Include type ("Functional"|"NonFunctional"|"Compliance"|"SLA"), priority, acceptanceCriteria (concrete testable criteria array).
+- testSets: Include executionMode ("Sequential"|"Parallel"), environment (target environment name), triggerType ("Manual"|"Scheduled"|"CI/CD").
 
 Expected JSON shape:
-{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"..."}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"description":"..."}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"...","description":"..."}],"storageBuckets":[{"name":"...","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended|Attended|Development","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"...","escalation":"...","description":"..."}],"documentUnderstanding":[{"name":"ProjectName","documentTypes":["Invoice","Receipt"],"description":"..."}],"testCases":[{"name":"TC_001_TestName","description":"What this tests","labels":["Critical","Smoke"],"steps":[{"action":"Step action","expected":"Expected result"}]}],"testDataQueues":[{"name":"TestDataQueueName","description":"Queue for test data","jsonSchema":"{\"type\":\"object\",\"properties\":{\"field\":{\"type\":\"string\"}}}","items":[{"name":"Record_1","content":"{\"field\":\"value\"}"}]}],"requirements":[{"name":"REQ-001: Requirement name","description":"Business requirement","source":"PDD Section X"}],"testSets":[{"name":"Happy Path Tests","description":"Core scenario validation","testCaseNames":["TC_001_TestName"]}]}
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true,"jsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{...}}","outputSchema":"..."}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"Usage context"}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"runtimeType":"Unattended","description":"Purpose"}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"0 0 8 ? * MON-FRI","timezone":"America/New_York","startStrategy":"Specific","maxJobsCount":1,"description":"..."}],"storageBuckets":[{"name":"...","storageProvider":"Orchestrator","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended","role":"SpecificRole","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"4h","escalation":"Manager","priority":"High","actions":["Approve","Reject"],"formFields":[{"name":"...","type":"String|Number|Boolean","required":true}],"description":"..."}],"documentUnderstanding":[{"name":"...","documentTypes":["Invoice"],"taxonomyFields":[{"documentType":"Invoice","fields":[{"name":"InvoiceNumber","type":"String"}]}],"classifierType":"ML","description":"..."}],"testCases":[{"name":"TC_001_TestName","testType":"Functional","priority":"Critical","description":"...","preconditions":["Precondition 1"],"postconditions":["Postcondition 1"],"testData":[{"field":"FieldName","value":"TestValue","dataType":"String"}],"automationWorkflow":"Main.xaml","expectedDuration":60,"labels":["Critical","Smoke"],"steps":[{"action":"Specific action with field names and values","expected":"Specific expected result with values"}]}],"testDataQueues":[{"name":"...","description":"...","jsonSchema":"...","items":[{"name":"Record_1","content":"..."}]}],"requirements":[{"name":"REQ-001: Name","type":"Functional","priority":"Critical","description":"...","source":"SDD Section X","acceptanceCriteria":["Criteria 1"]}],"testSets":[{"name":"Happy Path Tests","description":"...","executionMode":"Sequential","environment":"Production","triggerType":"Manual","testCaseNames":["TC_001_TestName"]}]}
 
 SDD content:
 ${sddContent.slice(0, 12000)}`
@@ -283,6 +313,10 @@ ${sddContent.slice(0, 12000)}`
       validated.testCases = raw.testCases.filter((t: any) => typeof t?.name === "string" && t.name.length > 0).map((t: any) => ({
         ...t,
         labels: Array.isArray(t.labels) ? t.labels.filter((l: any) => typeof l === "string") : undefined,
+        preconditions: Array.isArray(t.preconditions) ? t.preconditions.filter((p: any) => typeof p === "string") : undefined,
+        postconditions: Array.isArray(t.postconditions) ? t.postconditions.filter((p: any) => typeof p === "string") : undefined,
+        testData: Array.isArray(t.testData) ? t.testData.filter((d: any) => typeof d?.field === "string") : undefined,
+        acceptanceCriteria: undefined,
       }));
     }
     if (Array.isArray(raw.testDataQueues)) {
@@ -555,6 +589,22 @@ async function provisionQueues(
         AcceptAutomaticallyRetry: true,
         EnforceUniqueReference: q.uniqueReference ?? false,
       };
+      if (q.jsonSchema) {
+        try {
+          JSON.parse(q.jsonSchema);
+          body.SpecificDataJsonSchema = q.jsonSchema;
+        } catch {
+          console.warn(`[UiPath Deploy] Queue "${q.name}" has invalid jsonSchema — skipping schema attachment`);
+        }
+      }
+      if (q.outputSchema) {
+        try {
+          JSON.parse(q.outputSchema);
+          body.OutputDataJsonSchema = q.outputSchema;
+        } catch {
+          console.warn(`[UiPath Deploy] Queue "${q.name}" has invalid outputSchema — skipping`);
+        }
+      }
 
       const res = await fetch(`${base}/odata/QueueDefinitions`, {
         method: "POST",
@@ -737,13 +787,18 @@ async function provisionMachines(
       }
 
       const machineType = (m.type || "Unattended").toLowerCase();
+      const runtime = (m.runtimeType || m.type || "Unattended").toLowerCase();
       const body: Record<string, any> = {
         Name: m.name,
         Description: truncDesc(m.description),
         Type: "Template",
       };
 
-      if (machineType.includes("unattended")) {
+      if (runtime.includes("headless") || runtime.includes("unattended")) {
+        body.UnattendedSlots = m.slots || 1;
+      } else if (runtime.includes("testautomation") || runtime.includes("nonproduction")) {
+        body.NonProductionSlots = m.slots || 1;
+      } else if (machineType.includes("unattended")) {
         body.UnattendedSlots = m.slots || 1;
       } else if (machineType.includes("attended")) {
         body.NonProductionSlots = 0;
@@ -815,23 +870,19 @@ async function provisionStorageBuckets(
         }
       }
 
+      const preferredProvider = b.storageProvider || "Orchestrator";
+      const providerOrder = [preferredProvider, ...(["Orchestrator", "Minio"].filter(p => p !== preferredProvider))];
       const bodyVariants = [
+        ...providerOrder.map(provider => ({
+          Name: b.name,
+          Identifier: generateUuid(),
+          Description: truncDesc(b.description),
+          StorageProvider: provider,
+        })),
         {
           Name: b.name,
           Identifier: generateUuid(),
           Description: truncDesc(b.description),
-        },
-        {
-          Name: b.name,
-          Identifier: generateUuid(),
-          Description: truncDesc(b.description),
-          StorageProvider: "Orchestrator",
-        },
-        {
-          Name: b.name,
-          Identifier: generateUuid(),
-          Description: truncDesc(b.description),
-          StorageProvider: "Minio",
         },
       ];
 
@@ -1101,7 +1152,7 @@ async function provisionTriggers(
           QueueDefinitionId: queueId,
           MinNumberOfItems: 1,
           MaxNumberOfItems: 100,
-          JobsCount: 1,
+          JobsCount: (t.maxJobsCount && t.maxJobsCount > 0) ? t.maxJobsCount : 1,
           RuntimeType: runtimeType,
           InputArguments: "{}",
         };
@@ -1133,6 +1184,10 @@ async function provisionTriggers(
         } else if (res.status === 409 || text.includes("already exists")) {
           results.push({ artifact: "Trigger", name: t.name, status: "exists", message: "Already exists" });
         } else if (res.status === 404 || res.status === 405) {
+          const triggerTz = t.timezone || "UTC";
+          const triggerTzIana = triggerTz === "UTC" ? "Etc/UTC" : triggerTz;
+          const fallbackStrategy = t.startStrategy === "ModernJobs" ? 0 : 15;
+          console.log(`[UiPath Deploy] Queue Trigger "${t.name}" — native QueueTrigger unavailable (${res.status}), falling back to polling ProcessSchedule every 5 minutes`);
           const schedBody: Record<string, any> = {
             Enabled: !createDisabled,
             Name: t.name,
@@ -1140,13 +1195,16 @@ async function provisionTriggers(
             ReleaseName: releaseName || "",
             StartProcessCron: "0 */5 * ? * *",
             StartProcessCronDetails: JSON.stringify({ type: 5, minutely: {}, hourly: {}, daily: {}, weekly: { weekdays: [] }, monthly: { weekdays: [] }, advancedCronExpression: "0 */5 * ? * *" }),
-            StartProcessCronSummary: `Queue polling for ${t.queueName}`,
-            TimeZoneId: "UTC",
-            TimeZoneIana: "Etc/UTC",
-            StartStrategy: 15,
+            StartProcessCronSummary: `Queue polling for ${t.queueName} (fallback from native queue trigger)`,
+            TimeZoneId: triggerTz,
+            TimeZoneIana: triggerTzIana,
+            StartStrategy: fallbackStrategy,
             RuntimeType: runtimeType,
             InputArguments: JSON.stringify({ QueueName: t.queueName }),
           };
+          if (t.maxJobsCount && t.maxJobsCount > 0) {
+            schedBody.JobsCount = t.maxJobsCount;
+          }
           const schedRes = await fetch(`${base}/odata/ProcessSchedules`, { method: "POST", headers: hdrs, body: JSON.stringify(schedBody) });
           const schedText = await schedRes.text();
           console.log(`[UiPath Deploy] Queue Trigger "${t.name}" fallback to ProcessSchedule -> ${schedRes.status}: ${schedText}`);
@@ -1196,6 +1254,8 @@ async function provisionTriggers(
           advancedCronExpression: cron,
         });
 
+        const timeTz = t.timezone || "UTC";
+        const timeTzIana = timeTz === "UTC" ? "Etc/UTC" : timeTz;
         const baseBody: Record<string, any> = {
           Enabled: !createDisabled,
           Name: t.name,
@@ -1205,13 +1265,17 @@ async function provisionTriggers(
           StartProcessCron: cron,
           StartProcessCronDetails: cronDetails,
           StartProcessCronSummary: t.description || "Scheduled trigger",
-          TimeZoneId: "UTC",
-          TimeZoneIana: "Etc/UTC",
+          TimeZoneId: timeTz,
+          TimeZoneIana: timeTzIana,
           RuntimeType: runtimeType,
           InputArguments: "{}",
         };
+        if (t.maxJobsCount && t.maxJobsCount > 0) {
+          baseBody.JobsCount = t.maxJobsCount;
+        }
 
-        const strategies = [15, 0, { Type: 0 }];
+        const preferredStrategy = t.startStrategy === "ModernJobs" ? 0 : 15;
+        const strategies = [preferredStrategy, ...[15, 0, { Type: 0 }].filter(s => s !== preferredStrategy)];
         let created = false;
         for (const strategy of strategies) {
           const body = { ...baseBody, StartStrategy: strategy };
@@ -1447,7 +1511,16 @@ async function provisionActionCenter(
       if (alreadyExists) continue;
 
       let created = false;
-      const catalogBody = { Name: ac.taskCatalog, Description: truncDesc(ac.description) };
+      const acDescParts = [ac.description || ""];
+      if (ac.priority) acDescParts.push(`Priority: ${ac.priority}`);
+      if (ac.sla) acDescParts.push(`SLA: ${ac.sla}`);
+      if (ac.escalation) acDescParts.push(`Escalation: ${ac.escalation}`);
+      if (ac.actions?.length) acDescParts.push(`Actions: ${ac.actions.join(", ")}`);
+      if (ac.formFields?.length) {
+        const fieldList = ac.formFields.map(f => `${f.name} (${f.type}${f.required ? ", required" : ""})`).join("; ");
+        acDescParts.push(`Form Fields: ${fieldList}`);
+      }
+      const catalogBody = { Name: ac.taskCatalog, Description: truncDesc(acDescParts.filter(Boolean).join(" | ")) };
 
       const catalogCreateAttempts = [
         { url: apiCatalogUrl, label: "AC REST API Catalog Create" },
@@ -1486,7 +1559,7 @@ async function provisionActionCenter(
           "@odata.type": "#UiPath.Server.Configuration.OData.CreateTaskParameters",
           Title: `${ac.taskCatalog} - Auto Provision`,
           Type: "ExternalTask",
-          Priority: "Medium",
+          Priority: ac.priority || "Medium",
         };
         const taskResult = await uipathFetch(genericTaskUrl, {
           method: "POST", headers: acHdrs,
@@ -2010,10 +2083,37 @@ async function provisionTestCases(
       }
 
       try {
+        let richDesc = tc.description || "";
+        if (tc.preconditions?.length) {
+          richDesc += "\n\n**Preconditions:**\n" + tc.preconditions.map(p => `- ${p}`).join("\n");
+        }
+        if (tc.postconditions?.length) {
+          richDesc += "\n\n**Postconditions:**\n" + tc.postconditions.map(p => `- ${p}`).join("\n");
+        }
+        if (tc.testData?.length) {
+          richDesc += "\n\n**Test Data:**\n| Field | Value | Type |\n|---|---|---|";
+          for (const td of tc.testData) {
+            richDesc += `\n| ${td.field} | ${td.value} | ${td.dataType} |`;
+          }
+        }
+        if (tc.automationWorkflow) {
+          richDesc += `\n\n**Automation Workflow:** ${tc.automationWorkflow}`;
+        }
+        if (tc.expectedDuration) {
+          richDesc += `\n**Expected Duration:** ${tc.expectedDuration}s`;
+        }
+
         const camelBody: Record<string, any> = {
           name: tc.name,
-          description: truncDesc(tc.description),
+          description: richDesc.slice(0, 2000),
         };
+        if (tc.testType) {
+          camelBody.type = tc.testType;
+          camelBody.testCaseType = tc.testType;
+        }
+        if (tc.priority) {
+          camelBody.priority = tc.priority;
+        }
         if (tc.labels?.length) {
           camelBody.labels = tc.labels;
         }
@@ -2029,9 +2129,16 @@ async function provisionTestCases(
 
         const pascalBody: Record<string, any> = {
           Name: tc.name,
-          Description: truncDesc(tc.description),
+          Description: richDesc.slice(0, 2000),
           ProjectId: projectId,
         };
+        if (tc.testType) {
+          pascalBody.Type = tc.testType;
+          pascalBody.TestCaseType = tc.testType;
+        }
+        if (tc.priority) {
+          pascalBody.Priority = tc.priority;
+        }
         if (tc.labels?.length) {
           pascalBody.Labels = tc.labels;
         }
@@ -2368,7 +2475,14 @@ async function provisionRequirements(
     let created = false;
     for (const url of createEndpoints) {
       try {
-        const body = { name: req.name, description: truncDesc(req.description || `${req.source || ""}`) };
+        const reqDescParts = [req.description || ""];
+        if (req.type) reqDescParts.push(`Type: ${req.type}`);
+        if (req.priority) reqDescParts.push(`Priority: ${req.priority}`);
+        if (req.source) reqDescParts.push(`Source: ${req.source}`);
+        if (req.acceptanceCriteria?.length) {
+          reqDescParts.push(`Acceptance Criteria:\n${req.acceptanceCriteria.map((c, i) => `  ${i + 1}. ${c}`).join("\n")}`);
+        }
+        const body = { name: req.name, description: truncDesc(reqDescParts.filter(Boolean).join("\n")) };
         const createRes = await uipathFetch(url, {
           method: "POST", headers: hdrs, body: JSON.stringify(body),
           label: "TM Create Requirement", maxRetries: 1, redirect: "manual" as any,
@@ -2464,7 +2578,15 @@ async function provisionTestSets(
     let created = false;
     for (const url of createEndpoints) {
       try {
-        const body = { name: ts.name, description: truncDesc(ts.description) };
+        let tsDesc = ts.description || "";
+        if (ts.executionMode || ts.environment || ts.triggerType) {
+          const configParts: string[] = [];
+          if (ts.executionMode) configParts.push(`Execution: ${ts.executionMode}`);
+          if (ts.environment) configParts.push(`Environment: ${ts.environment}`);
+          if (ts.triggerType) configParts.push(`Trigger: ${ts.triggerType}`);
+          tsDesc += (tsDesc ? "\n\n" : "") + configParts.join(" | ");
+        }
+        const body = { name: ts.name, description: truncDesc(tsDesc) };
         const createRes = await uipathFetch(url, {
           method: "POST", headers: hdrs, body: JSON.stringify(body),
           label: "TM Create TestSet", maxRetries: 1, redirect: "manual" as any,
@@ -2890,7 +3012,8 @@ async function provisionRobotAccounts(
             if (config.folderId) {
               try {
                 const assignUrl = `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers`;
-                const assignBody = { assignments: { UserIds: [createdId], RolesPerFolder: [{ FolderId: parseInt(config.folderId, 10), Roles: [{ Name: "Executor" }] }] } };
+                const roleName = ra.role || "Executor";
+                const assignBody = { assignments: { UserIds: [createdId], RolesPerFolder: [{ FolderId: parseInt(config.folderId, 10), Roles: [{ Name: roleName }] }] } };
                 await fetch(assignUrl, { method: "POST", headers: hdrs, body: JSON.stringify(assignBody) });
               } catch (err: any) {
                 console.warn(`[UiPath Deploy] Robot folder assignment failed: ${err.message}`);
