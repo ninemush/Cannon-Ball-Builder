@@ -1097,12 +1097,13 @@ async function provisionStorageBuckets(
           let shouldCreateBucket = false;
           if (descChanged) {
             try {
-              const updateBody: Record<string, any> = { ...existing };
-              delete updateBody["@odata.context"];
-              delete updateBody["@odata.id"];
-              delete updateBody["Id"];
-              delete updateBody["Identifier"];
-              updateBody.Description = newDesc;
+              const updateBody: Record<string, any> = {
+                Name: b.name,
+                Description: newDesc,
+              };
+              if (existing.StorageProvider) updateBody.StorageProvider = existing.StorageProvider;
+              if (existing.ContentType) updateBody.ContentType = existing.ContentType;
+              if (existing.ConcurrencyStamp) updateBody.ConcurrencyStamp = existing.ConcurrencyStamp;
 
               const putRes = await fetch(`${base}/odata/Buckets(${existingId})`, {
                 method: "PUT",
@@ -2051,16 +2052,16 @@ async function provisionDocUnderstanding(
   const results: DeploymentResult[] = [];
 
   const cloudBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+  const duConsoleUrl = `${cloudBase}/du_`;
+  const DEFAULT_DU_PROJECT = "CannonBall Test";
 
   let duToken: string;
-  let usingDedicatedToken = false;
   try {
     const { getDuToken } = await import("./uipath-auth");
     duToken = await getDuToken();
-    usingDedicatedToken = true;
-    console.log("[UiPath Deploy] Using DU-scoped token for Document Understanding provisioning");
+    console.log("[UiPath Deploy] Using DU-scoped token for Document Understanding discovery");
   } catch (err: any) {
-    console.warn(`[UiPath Deploy] DU token unavailable (${err.message}), falling back to OR token — DU operations may fail`);
+    console.warn(`[UiPath Deploy] DU token unavailable (${err.message}), falling back to OR token`);
     duToken = token;
   }
 
@@ -2071,148 +2072,99 @@ async function provisionDocUnderstanding(
   };
   if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
 
-  const endpoints = [
-    { url: `${cloudBase}/du_/api/framework/projects`, label: "DU Framework API", apiVersion: "1" },
-    { url: `${cloudBase}/du_/api/framework/projects`, label: "DU Framework API v2", apiVersion: "2" },
-    { url: `${cloudBase}/aifabric_/ai-deployer/v1/projects`, label: "AI Center Deployer", apiVersion: "" },
-  ];
+  const discoveryUrl = `${cloudBase}/du_/api/framework/projects?api-version=1`;
 
-  let serviceAvailable = false;
-  let activeEndpoint: typeof endpoints[0] | null = null;
-  for (const ep of endpoints) {
-    try {
-      const probeUrl = ep.apiVersion ? `${ep.url}?api-version=${ep.apiVersion}&$top=1` : `${ep.url}?$top=1`;
-      const probeRes = await fetch(probeUrl, { headers: hdrs });
-      const probeText = await probeRes.text();
-      console.log(`[UiPath Deploy] DU probe ${ep.label} -> ${probeRes.status}: ${probeText.slice(0, 200)}`);
+  let discoveredProjects: any[] = [];
+  let discoverySuccess = false;
+  try {
+    const listRes = await fetch(discoveryUrl, { headers: hdrs });
+    const listText = await listRes.text();
+    console.log(`[UiPath Deploy] DU Discovery GET /projects -> ${listRes.status}: ${listText.slice(0, 300)}`);
 
-      if (probeRes.ok) {
-        const genuineCheck = isGenuineServiceResponse(probeText);
-        if (!genuineCheck.genuine) {
-          console.log(`[UiPath Deploy] DU probe ${ep.label} returned 200 but not genuine: ${genuineCheck.reason}`);
-          continue;
-        }
-        serviceAvailable = true;
-        activeEndpoint = ep;
-        break;
+    if (listRes.ok) {
+      const genuineCheck = isGenuineServiceResponse(listText);
+      if (genuineCheck.genuine) {
+        const listData = JSON.parse(listText);
+        discoveredProjects = listData.value || listData.items || (Array.isArray(listData) ? listData : []);
+        discoverySuccess = true;
+        console.log(`[UiPath Deploy] DU Discovery found ${discoveredProjects.length} project(s): ${discoveredProjects.map((p: any) => p.name || p.Name).join(", ")}`);
       }
-      if (probeRes.status === 403) {
-        serviceAvailable = true;
-        activeEndpoint = ep;
-        console.log(`[UiPath Deploy] DU probe ${ep.label} returned 403 — service exists but needs folder permissions`);
-        break;
-      }
-      if (probeRes.status === 400 && probeText.includes("InvalidApiVersion")) {
-        serviceAvailable = true;
-        activeEndpoint = ep;
-        console.log(`[UiPath Deploy] DU probe ${ep.label} returned 400 InvalidApiVersion — service exists`);
-        break;
-      }
-    } catch { continue; }
+    } else if (listRes.status === 403) {
+      console.warn(`[UiPath Deploy] DU Discovery returned 403 — token scopes may be insufficient`);
+    }
+  } catch (err: any) {
+    console.warn(`[UiPath Deploy] DU Discovery error: ${err.message}`);
   }
 
-  if (!serviceAvailable) {
+  if (!discoverySuccess) {
     return du.map(project => ({
       artifact: "Document Understanding",
       name: project.name,
-      status: "failed" as const,
-      message: `Document Understanding service not available on this tenant. The DU microservice must be enabled by a tenant admin at https://cloud.uipath.com/${config.orgName}/${config.tenantName}. Document types needed: ${project.documentTypes?.join(", ") || "N/A"}.`,
+      status: "manual" as const,
+      message: `Could not access DU Discovery API. Ensure DU scopes (Du.Digitization.Api, etc.) are granted. Create/verify the DU project manually at ${duConsoleUrl}. Document types needed: ${project.documentTypes?.join(", ") || "N/A"}.`,
     }));
   }
 
-  for (const project of du) {
-    try {
-      let found = false;
-      if (activeEndpoint) {
-        try {
-          const checkUrl = activeEndpoint.apiVersion ? `${activeEndpoint.url}?api-version=${activeEndpoint.apiVersion}&$top=50` : `${activeEndpoint.url}?$top=50`;
-          const checkRes = await fetch(checkUrl, { headers: hdrs });
-          if (checkRes.ok) {
-            const checkText = await checkRes.text();
-            const genuineCheck = isGenuineServiceResponse(checkText);
-            if (genuineCheck.genuine) {
-              const checkData = JSON.parse(checkText);
-              const items = checkData.value || checkData.items || (Array.isArray(checkData) ? checkData : []);
-              const existing = items.find((p: any) => (p.Name || p.name) === project.name);
-              if (existing) {
-                results.push({ artifact: "Document Understanding", name: project.name, status: "exists", message: `Already exists (ID: ${existing.Id || existing.id}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: existing.Id || existing.id });
-                found = true;
-              }
-            }
-          }
-        } catch { /* continue to create */ }
-      }
-      if (found) continue;
+  const defaultProject = discoveredProjects.find((p: any) => (p.name || p.Name) === DEFAULT_DU_PROJECT);
 
-      let created = false;
-      const tryEndpoints = activeEndpoint ? [activeEndpoint, ...endpoints.filter(e => e !== activeEndpoint)] : endpoints;
-      for (const ep of tryEndpoints) {
-        try {
-          const body = {
-            Name: project.name,
-            Description: truncDesc(project.description || `Document Understanding project for ${project.name}`),
-            DocumentTypes: project.documentTypes || [],
-          };
-          const createUrl = ep.apiVersion ? `${ep.url}?api-version=${ep.apiVersion}` : ep.url;
-          const res = await fetch(createUrl, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-          const text = await res.text();
-          console.log(`[UiPath Deploy] DU project "${project.name}" via ${ep.label} -> ${res.status}: ${text.slice(0, 300)}`);
+  for (const artifact of du) {
+    const exactMatch = discoveredProjects.find((p: any) => (p.name || p.Name) === artifact.name);
 
-          if (res.ok || res.status === 201) {
-            const creation = validateCreationResponse(text);
-            if (!creation.valid) {
-              console.warn(`[UiPath Deploy] DU "${project.name}" got ${res.status} but body invalid: ${creation.error}`);
-              results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `API returned ${res.status} but response invalid: ${creation.error}` });
-              created = true;
-              break;
-            }
-            const createdId = creation.data?.Id || creation.data?.id;
+    if (exactMatch) {
+      const projId = exactMatch.id || exactMatch.Id;
+      let details = `Discovered DU project (ID: ${projId})`;
 
-            let verified = false;
-            try {
-              const verifyUrl = ep.apiVersion ? `${ep.url}?api-version=${ep.apiVersion}&$top=50` : `${ep.url}?$top=50`;
-              const verifyRes = await fetch(verifyUrl, { headers: hdrs });
-              if (verifyRes.ok) {
-                const verifyText = await verifyRes.text();
-                const verifyCheck = isGenuineServiceResponse(verifyText);
-                if (verifyCheck.genuine) {
-                  const verifyData = JSON.parse(verifyText);
-                  const items = verifyData.value || verifyData.items || (Array.isArray(verifyData) ? verifyData : []);
-                  const match = items.find((p: any) => (p.Name || p.name) === project.name || (p.Id || p.id) === createdId);
-                  if (match) {
-                    verified = true;
-                  }
-                }
-              }
-            } catch { /* verification failed */ }
+      try {
+        const detailRes = await fetch(`${cloudBase}/du_/api/framework/projects/${projId}?api-version=1`, { headers: hdrs });
+        if (detailRes.ok) {
+          const detailData = await detailRes.json();
+          const docTypes = detailData.documentTypes || detailData.DocumentTypes || [];
+          const classifiers = detailData.classifiers || detailData.Classifiers || [];
+          const extractors = detailData.extractors || detailData.Extractors || [];
+          const dtNames = docTypes.map((dt: any) => dt.name || dt.Name).filter(Boolean);
+          const clNames = classifiers.map((c: any) => c.name || c.Name).filter(Boolean);
+          const exNames = extractors.map((e: any) => e.name || e.Name).filter(Boolean);
+          details += `. Document types: ${dtNames.length ? dtNames.join(", ") : "none configured"}`;
+          details += `. Classifiers: ${clNames.length ? clNames.join(", ") : "none"}`;
+          details += `. Extractors: ${exNames.length ? exNames.join(", ") : "none"}`;
+        }
+      } catch {}
 
-            if (verified) {
-              results.push({ artifact: "Document Understanding", name: project.name, status: "created", message: `Created and verified via ${ep.label} (ID: ${createdId}). Doc types: ${project.documentTypes?.join(", ") || "N/A"}`, id: createdId });
-            } else {
-              results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `API returned ${res.status} but post-creation verification failed — DU project may not actually exist. Doc types needed: ${project.documentTypes?.join(", ") || "N/A"}` });
-            }
-            created = true;
-            break;
-          } else if (res.status === 409 || text.includes("already exists")) {
-            results.push({ artifact: "Document Understanding", name: project.name, status: "exists", message: `Already exists. Doc types: ${project.documentTypes?.join(", ") || "N/A"}` });
-            created = true;
-            break;
-          } else if (res.status === 404 || res.status === 405) {
-            continue;
-          } else {
-            results.push({ artifact: "Document Understanding", name: project.name, status: "manual", message: `${ep.label} returned HTTP ${res.status}. Doc types needed: ${project.documentTypes?.join(", ") || "N/A"}. Create the DU project manually in Document Understanding service.` });
-            created = true;
-            break;
-          }
-        } catch { continue; }
-      }
-
-      if (!created) {
-        results.push({ artifact: "Document Understanding", name: project.name, status: "manual", message: `Could not create DU project via API. Doc types needed: ${project.documentTypes?.join(", ") || "N/A"}. Create manually in Document Understanding service.` });
-      }
-    } catch (err: any) {
-      results.push({ artifact: "Document Understanding", name: project.name, status: "failed", message: `API error: ${err.message}` });
+      results.push({ artifact: "Document Understanding", name: artifact.name, status: "exists", message: details, id: exactMatch.id || exactMatch.Id });
+      continue;
     }
+
+    if (defaultProject) {
+      const projId = defaultProject.id || defaultProject.Id;
+      let details = `Linked to default DU project "${DEFAULT_DU_PROJECT}" (ID: ${projId})`;
+
+      try {
+        const detailRes = await fetch(`${cloudBase}/du_/api/framework/projects/${projId}?api-version=1`, { headers: hdrs });
+        if (detailRes.ok) {
+          const detailData = await detailRes.json();
+          const docTypes = detailData.documentTypes || detailData.DocumentTypes || [];
+          const classifiers = detailData.classifiers || detailData.Classifiers || [];
+          const extractors = detailData.extractors || detailData.Extractors || [];
+          const dtNames = docTypes.map((dt: any) => dt.name || dt.Name).filter(Boolean);
+          const clNames = classifiers.map((c: any) => c.name || c.Name).filter(Boolean);
+          const exNames = extractors.map((e: any) => e.name || e.Name).filter(Boolean);
+          details += `. Document types: ${dtNames.length ? dtNames.join(", ") : "none configured"}`;
+          details += `. Classifiers: ${clNames.length ? clNames.join(", ") : "none"}`;
+          details += `. Extractors: ${exNames.length ? exNames.join(", ") : "none"}`;
+        }
+      } catch {}
+
+      details += `. Artifact doc types needed: ${artifact.documentTypes?.join(", ") || "N/A"}`;
+      results.push({ artifact: "Document Understanding", name: artifact.name, status: "exists", message: details, id: projId });
+      continue;
+    }
+
+    results.push({
+      artifact: "Document Understanding",
+      name: artifact.name,
+      status: "manual" as const,
+      message: `No matching DU project found. Create a project in the Document Understanding UI at ${duConsoleUrl}. Document types needed: ${artifact.documentTypes?.join(", ") || "N/A"}. Tip: the predefined project (ID: 00000000-0000-0000-0000-000000000000) provides access to public pre-trained models.`,
+    });
   }
   return results;
 }

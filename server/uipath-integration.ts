@@ -1615,25 +1615,21 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       const duTok = await getDuToken();
       const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
       if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
-      for (const ep of [
-        `${base}/du_/api/framework/projects?api-version=1`,
-        `${base}/du_/api/framework/projects?api-version=2`,
-      ]) {
-        try {
-          const duRes = await fetch(ep, { headers: duHdrs });
-          if (duRes.ok || duRes.status === 403 || duRes.status === 400 || duRes.status === 404) {
-            duAvailable = true;
-            console.log(`[UiPath Probe] DU detected via DU token: ${ep} -> ${duRes.status}`);
-            break;
-          }
-        } catch {}
-      }
+      const duProbeUrl = `${base}/du_/api/framework/projects?api-version=1`;
+      try {
+        const duRes = await fetch(duProbeUrl, { headers: duHdrs });
+        console.log(`[UiPath Probe] DU Discovery: ${duProbeUrl} -> ${duRes.status}`);
+        if (duRes.ok) {
+          duAvailable = true;
+        } else if (duRes.status === 403) {
+          console.warn(`[UiPath Probe] DU token got 403 — scopes may be insufficient for Discovery API`);
+        }
+      } catch {}
     }
 
     let aiAvailable = false;
     const aiProbe = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: hdrs }).catch(() => null);
     if (aiProbe && aiProbe.ok) aiAvailable = true;
-    if (!duAvailable && aiAvailable) duAvailable = true;
 
     let agentsAvailable = false;
     const agentProbe = await fetch(`${base}/orchestrator_/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1`, { headers: hdrs }).catch(() => null);

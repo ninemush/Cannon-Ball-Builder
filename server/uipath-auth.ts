@@ -50,7 +50,10 @@ const RESOURCE_SCOPES: Record<ResourceType, string> = {
     "TM.Requirements", "TM.Requirements.Read", "TM.Requirements.Write",
     "TM.Projects", "TM.Projects.Read", "TM.Projects.Write", "TM.Users.Read",
   ].join(" "),
-  DU: "Du.DocumentManager.Document",
+  DU: [
+    "Du.Classification.Api", "Du.DataDeletion.Api", "Du.Digitization.Api",
+    "Du.DocumentManager.Document", "Du.Extraction.Api", "Du.Validation.Api",
+  ].join(" "),
   PM: [
     "PM.Security", "PM.AuthSetting", "PM.OAuthApp",
     "PM.RobotAccount", "PM.RobotAccount.Read", "PM.RobotAccount.Write",

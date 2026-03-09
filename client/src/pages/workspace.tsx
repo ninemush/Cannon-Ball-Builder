@@ -1072,24 +1072,33 @@ function ChatPanel({ idea }: { idea: Idea }) {
   const [isUploading, setIsUploading] = useState(false);
   const [bannerApproving, setBannerApproving] = useState(false);
 
-  const latestDocMessage = useMemo(() => {
-    const docMessages = displayMessages.filter(m => m.docType && m.docId);
-    if (docMessages.length === 0) return null;
-    const latest = docMessages[docMessages.length - 1];
-    if (approvedDocIds.has(latest.docId!)) return null;
-    return { docType: latest.docType!, docId: latest.docId! };
-  }, [displayMessages, approvedDocIds]);
+  const hasPddDoc = useMemo(() => displayMessages.some(m => m.docType === "PDD" && m.docId), [displayMessages]);
+  const hasSddDoc = useMemo(() => displayMessages.some(m => m.docType === "SDD" && m.docId), [displayMessages]);
 
-  const { data: latestDocApproval } = useQuery<{ document: any; approval: any }>({
-    queryKey: ["/api/ideas", idea.id, "documents", "latest", latestDocMessage?.docType],
-    enabled: !!latestDocMessage,
+  const { data: pddApprovalData } = useQuery<{ document: any; approval: any }>({
+    queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"],
+    enabled: hasPddDoc,
+  });
+  const { data: sddApprovalData } = useQuery<{ document: any; approval: any }>({
+    queryKey: ["/api/ideas", idea.id, "documents", "latest", "SDD"],
+    enabled: hasSddDoc,
   });
 
   const pendingApprovalDoc = useMemo(() => {
-    if (!latestDocMessage) return null;
-    if (latestDocApproval?.approval) return null;
-    return latestDocMessage;
-  }, [latestDocMessage, latestDocApproval]);
+    if (hasPddDoc && pddApprovalData?.document && !pddApprovalData?.approval) {
+      const pddMsg = [...displayMessages].reverse().find(m => m.docType === "PDD" && m.docId);
+      if (pddMsg && !approvedDocIds.has(pddMsg.docId!)) {
+        return { docType: "PDD", docId: pddMsg.docId! };
+      }
+    }
+    if (hasSddDoc && sddApprovalData?.document && !sddApprovalData?.approval) {
+      const sddMsg = [...displayMessages].reverse().find(m => m.docType === "SDD" && m.docId);
+      if (sddMsg && !approvedDocIds.has(sddMsg.docId!)) {
+        return { docType: "SDD", docId: sddMsg.docId! };
+      }
+    }
+    return null;
+  }, [hasPddDoc, hasSddDoc, pddApprovalData, sddApprovalData, displayMessages, approvedDocIds]);
 
   const handleBannerApprove = useCallback(async () => {
     if (!pendingApprovalDoc) return;
@@ -1101,7 +1110,8 @@ function ChatPanel({ idea }: { idea: Idea }) {
       });
       if (!res.ok) throw new Error(await res.text());
       handleDocApproved(pendingApprovalDoc.docType as "PDD" | "SDD", pendingApprovalDoc.docId);
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", pendingApprovalDoc.docType] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "SDD"] });
     } catch (err: any) {
       toast({ title: "Approval failed", description: err.message, variant: "destructive" });
     } finally {
