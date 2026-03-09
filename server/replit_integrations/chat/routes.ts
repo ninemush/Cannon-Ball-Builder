@@ -237,8 +237,8 @@ DOCUMENT GENERATION:
 - Example: [DOC:SDD:0]## 1. Automation Architecture Overview\\n...rest of SDD...
 - The number after the colon (0) is a placeholder — the system assigns the real ID.
 - IMPORTANT: Do NOT include [STEP:] tags inside [DOC:PDD:0] or [DOC:SDD:0] document content. The system automatically appends the process map from the database as a formatted table. Write the TO-BE and AS-IS process sections as narrative prose describing the automated flow — do not output raw [STEP:] tags inside documents.
-- DOCUMENT APPROVALS happen through a Confirm button that appears on the document card in the UI. Do NOT ask users to say "approved" in chat. Instead, tell them to use the Approve/Confirm button on the document card that appears above.
-- After the user approves a document via the button, the system records the approval. You will see this in the document context above. Do not re-ask for approval if it is already approved.
+- DOCUMENT APPROVALS: Users can approve a document in two ways: (1) by clicking the Approve button on the document card that appears in the chat above, or (2) by typing approval phrases in chat such as "approved", "I approve", "looks good", etc. Both methods are fully supported. After generating a document, tell users they can type "approved" in chat or scroll up to the document card and click Approve.
+- After the user approves a document (via button or chat), the system records the approval. You will see this in the document context above. Do not re-ask for approval if it is already approved.
 
 PDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
 - Include a dedicated "## Automation Approach" section after the Executive Summary explaining WHY this automation type was selected, referencing the evaluation framework factors (data structure, decision logic, volume, systems, error handling, cost).

@@ -1070,6 +1070,44 @@ function ChatPanel({ idea }: { idea: Idea }) {
   }, [isStreaming, isGeneratingDoc, messageQueue, sendMessageDirect]);
 
   const [isUploading, setIsUploading] = useState(false);
+  const [bannerApproving, setBannerApproving] = useState(false);
+
+  const latestDocMessage = useMemo(() => {
+    const docMessages = displayMessages.filter(m => m.docType && m.docId);
+    if (docMessages.length === 0) return null;
+    const latest = docMessages[docMessages.length - 1];
+    if (approvedDocIds.has(latest.docId!)) return null;
+    return { docType: latest.docType!, docId: latest.docId! };
+  }, [displayMessages, approvedDocIds]);
+
+  const { data: latestDocApproval } = useQuery<{ document: any; approval: any }>({
+    queryKey: ["/api/ideas", idea.id, "documents", "latest", latestDocMessage?.docType],
+    enabled: !!latestDocMessage,
+  });
+
+  const pendingApprovalDoc = useMemo(() => {
+    if (!latestDocMessage) return null;
+    if (latestDocApproval?.approval) return null;
+    return latestDocMessage;
+  }, [latestDocMessage, latestDocApproval]);
+
+  const handleBannerApprove = useCallback(async () => {
+    if (!pendingApprovalDoc) return;
+    setBannerApproving(true);
+    try {
+      const res = await fetch(`/api/ideas/${idea.id}/documents/${pendingApprovalDoc.docId}/approve`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      handleDocApproved(pendingApprovalDoc.docType as "PDD" | "SDD", pendingApprovalDoc.docId);
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", pendingApprovalDoc.docType] });
+    } catch (err: any) {
+      toast({ title: "Approval failed", description: err.message, variant: "destructive" });
+    } finally {
+      setBannerApproving(false);
+    }
+  }, [pendingApprovalDoc, idea.id, handleDocApproved, toast]);
 
   const handleSend = useCallback(async () => {
     let text = inputValue.trim();
@@ -1382,6 +1420,24 @@ function ChatPanel({ idea }: { idea: Idea }) {
       </div>
 
       <div className="p-3 border-t border-border">
+        {pendingApprovalDoc && !isStreaming && !isGeneratingDoc && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-2 rounded-md bg-cb-teal/10 border border-cb-teal/30" data-testid="banner-pending-approval">
+            <Check className="h-3.5 w-3.5 text-cb-teal shrink-0" />
+            <span className="text-xs text-foreground/80 flex-1">
+              {pendingApprovalDoc.docType} is ready for review
+            </span>
+            <Button
+              size="sm"
+              className="h-6 text-[11px] bg-cb-teal hover:bg-cb-teal/80 text-white px-3"
+              onClick={handleBannerApprove}
+              disabled={bannerApproving}
+              data-testid="button-banner-approve"
+            >
+              {bannerApproving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+              Approve {pendingApprovalDoc.docType}
+            </Button>
+          </div>
+        )}
         {messageQueue.length > 0 && (
           <div className="mb-2 space-y-1" data-testid="message-queue">
             <div className="flex items-center gap-1.5 mb-1">
