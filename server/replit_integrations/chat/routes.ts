@@ -947,82 +947,80 @@ export function registerChatRoutes(app: Express): void {
               "Cookie": req.headers.cookie || "",
             },
           });
-          const deployData = await deployRes.json();
-          if (deployData.success) {
-            const d = deployData.details;
+
+          let finalEvent: any = null;
+
+          if (deployRes.headers.get("content-type")?.includes("text/event-stream") && deployRes.body) {
+            const reader = deployRes.body as AsyncIterable<Uint8Array>;
+            const decoder = new TextDecoder();
+            let sseBuffer = "";
+
+            for await (const chunk of reader) {
+              sseBuffer += decoder.decode(chunk, { stream: true });
+              const lines = sseBuffer.split("\n");
+              sseBuffer = lines.pop() || "";
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                try {
+                  const event = JSON.parse(line.slice(6));
+                  if (event.deployStatus && !event.deployComplete) {
+                    res.write(`data: ${JSON.stringify({ deployStatus: event.deployStatus })}\n\n`);
+                  }
+                  if (event.deployComplete) {
+                    finalEvent = event;
+                  }
+                } catch {}
+              }
+            }
+          } else {
+            try {
+              const jsonData = await deployRes.json();
+              finalEvent = { deployComplete: true, success: jsonData.success, result: jsonData };
+            } catch {
+              finalEvent = { deployComplete: true, success: false, error: "Invalid response from deploy endpoint" };
+            }
+          }
+
+          if (!finalEvent) {
+            finalEvent = { deployComplete: true, success: false, error: "Deploy stream ended unexpectedly without completion" };
+          }
+
+          if (finalEvent?.success) {
+            const d = finalEvent.result?.details;
             let statusMsg = `Deployment complete — ${d?.packageId} v${d?.version}`;
             if (d?.processName) statusMsg += ` — Process "${d.processName}" ready.`;
             const deployResults: Array<{artifact: string; name: string; status: string; message: string}> = d?.deploymentResults || [];
+            const deployReport = finalEvent.deployReport;
 
-            const coreResults: Array<{artifact: string; name: string; status: string; message: string}> = [];
-            if (d?.packageId) {
-              const alreadyHasPackage = deployResults.some(r => r.artifact === "Package");
-              if (!alreadyHasPackage) {
-                coreResults.push({
-                  artifact: "Package",
-                  name: d.packageId,
-                  status: "created",
-                  message: `Package uploaded v${d.version || "1.0.0"}`,
-                });
-              }
-            }
-            if (d?.processName) {
-              const alreadyHasProcess = deployResults.some(r => r.artifact === "Process");
-              if (!alreadyHasProcess) {
-                coreResults.push({
-                  artifact: "Process",
-                  name: d.processName,
-                  status: "created",
-                  message: `Process linked to package ${d.packageId || ""}`,
-                });
-              }
-            }
-
-            const allResults = [...coreResults, ...deployResults];
-
-            const deployReport = {
-              packageId: d?.packageId,
-              version: d?.version,
-              processName: d?.processName,
-              orgName: d?.orgName,
-              tenantName: d?.tenantName,
-              folderName: d?.folderName,
-              results: allResults,
-              summary: d?.deploymentSummary || "",
-            };
-
-            const created = deployResults.filter(r => r.status === "created");
-            const existed = deployResults.filter(r => r.status === "exists");
-            const failed = deployResults.filter(r => r.status === "failed");
-            const skipped = deployResults.filter(r => r.status === "skipped");
-            const manual = deployResults.filter(r => r.status === "manual");
+            const created = deployResults.filter((r: any) => r.status === "created");
+            const existed = deployResults.filter((r: any) => r.status === "exists");
+            const failed = deployResults.filter((r: any) => r.status === "failed");
+            const skipped = deployResults.filter((r: any) => r.status === "skipped");
+            const manual = deployResults.filter((r: any) => r.status === "manual");
             let verifiedSummary = `VERIFIED DEPLOYMENT RESULTS (use ONLY these facts when discussing this deployment):\n`;
             verifiedSummary += `- Package: ${d?.packageId} v${d?.version}\n`;
             verifiedSummary += `- Process: ${d?.processName || "N/A"}\n`;
-            verifiedSummary += `- Created: ${created.length} (${created.map(r => `${r.artifact}: ${r.name}`).join(", ") || "none"})\n`;
+            verifiedSummary += `- Created: ${created.length} (${created.map((r: any) => `${r.artifact}: ${r.name}`).join(", ") || "none"})\n`;
             verifiedSummary += `- Already existed: ${existed.length}\n`;
             if (failed.length > 0) {
-              verifiedSummary += `- FAILED: ${failed.length} (${failed.map(r => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
+              verifiedSummary += `- FAILED: ${failed.length} (${failed.map((r: any) => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
             }
             if (skipped.length > 0) {
-              verifiedSummary += `- SKIPPED (service unavailable): ${skipped.length} (${skipped.map(r => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
+              verifiedSummary += `- SKIPPED (service unavailable): ${skipped.length} (${skipped.map((r: any) => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
             }
             if (manual.length > 0) {
-              verifiedSummary += `- MANUAL SETUP REQUIRED: ${manual.length} (${manual.map(r => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
+              verifiedSummary += `- MANUAL SETUP REQUIRED: ${manual.length} (${manual.map((r: any) => `${r.artifact}: ${r.name} — ${r.message}`).join("; ")})\n`;
             }
 
             await chatStorage.createMessage(ideaId, "system", verifiedSummary);
 
-            const deployMsgContent = `${statusMsg}\n[DEPLOY_REPORT:${JSON.stringify(deployReport)}]`;
             if (savedStreamMsgId) {
-              await chatStorage.updateMessageContent(savedStreamMsgId, deployMsgContent);
-            } else {
-              await chatStorage.createMessage(ideaId, "assistant", deployMsgContent);
+              await chatStorage.updateMessageContent(savedStreamMsgId, statusMsg);
             }
 
             res.write(`data: ${JSON.stringify({ deployStatus: statusMsg, deployComplete: true, deployReport })}\n\n`);
           } else {
-            const errMsg = `Deployment failed: ${deployData.message}`;
+            const errMsg = `Deployment failed: ${finalEvent?.error || finalEvent?.result?.message || "Unknown error"}`;
             if (savedStreamMsgId) {
               await chatStorage.updateMessageContent(savedStreamMsgId, errMsg);
             } else {
