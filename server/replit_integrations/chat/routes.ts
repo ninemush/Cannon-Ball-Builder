@@ -451,12 +451,22 @@ export function registerChatRoutes(app: Express): void {
       const lastSddIdx = filteredHistory.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:SDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
       const lastPddIdx = filteredHistory.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:PDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
 
+      const stripStaleServiceAvailability = (content: string): string => {
+        return content
+          .replace(/\|?\s*Document Understanding\s*\|[^|]*\|[^|]*\|/gi, "")
+          .replace(/Live UiPath Orchestrator service availability confirmed at time of design:[\s\S]*?(?=\*\*Target outcomes|\n##|\n\*\*[A-Z])/gi, "[Service availability table removed — see current probe data in system context]\n\n")
+          .replace(/Service\s+\|?\s*Status\s*\|?\s*Role[\s\S]*?(?=\n\n|\n##|\n\*\*[A-Z])/gi, "[Service availability table removed — see current probe data]\n\n");
+      };
+
       const cleanedHistory = filteredHistory.map((m, i) => {
         if (m.role === "assistant" && m.content.startsWith("[DOC:SDD:") && i !== lastSddIdx) {
           return { ...m, content: "[Previous SDD version — superseded. See current document status in system context.]" };
         }
         if (m.role === "assistant" && m.content.startsWith("[DOC:PDD:") && i !== lastPddIdx) {
           return { ...m, content: "[Previous PDD version — superseded. See current document status in system context.]" };
+        }
+        if (m.role === "assistant" && (m.content.startsWith("[DOC:SDD:") || m.content.startsWith("[DOC:PDD:"))) {
+          return { ...m, content: stripStaleServiceAvailability(m.content) };
         }
         return m;
       });
@@ -517,6 +527,48 @@ export function registerChatRoutes(app: Express): void {
         }
       }, 5000);
 
+      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "CHAT" = "CHAT";
+      try {
+        let recentMessages = chatMessages.slice(-4);
+        if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
+          recentMessages = recentMessages.slice(1);
+        }
+        if (recentMessages.length === 0) {
+          recentMessages = chatMessages.slice(-1);
+        }
+        const classifyRes = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 20,
+          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, or CHAT. Only classify as PDD/SDD/PDD_SDD if the user is clearly requesting GENERATION or REGENERATION of a document (e.g. "generate the PDD", "write the SDD", "regenerate PDD"). If the user is APPROVING a document (e.g. "I approve", "looks good", "approved"), classify as CHAT — approvals are not generation requests. If both documents are being requested for generation, reply PDD_SDD.`,
+          messages: recentMessages,
+        });
+        const rawClassify = (classifyRes.content[0]?.type === "text" ? classifyRes.content[0].text : "").trim();
+        const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
+        if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY"].includes(classifyText)) {
+          const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
+          classifiedIntent = normalized as typeof classifiedIntent;
+        }
+        console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
+      } catch (classifyErr: any) {
+        console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
+      }
+
+      if (chatApprovalDone && (classifiedIntent === "PDD" || classifiedIntent === "SDD" || classifiedIntent === "PDD_SDD")) {
+        console.log(`[Chat] Downgrading intent ${classifiedIntent} → CHAT (approval already processed)`);
+        classifiedIntent = "CHAT";
+      }
+
+      let earlyDocType: "PDD" | "SDD" | null = null;
+      if (classifiedIntent === "PDD" || classifiedIntent === "PDD_SDD") {
+        earlyDocType = "PDD";
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch {}
+      } else if (classifiedIntent === "SDD") {
+        earlyDocType = "SDD";
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
+      } else if (classifiedIntent === "DEPLOY") {
+        try { res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`); } catch {}
+      }
+
       let docContext = "";
       try {
         const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
@@ -552,44 +604,18 @@ export function registerChatRoutes(app: Express): void {
         console.warn("[Chat] Service probe failed:", (e as any)?.message);
       }
 
-      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null);
-
-      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "CHAT" = "CHAT";
-      try {
-        let recentMessages = chatMessages.slice(-4);
-        if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
-          recentMessages = recentMessages.slice(1);
-        }
-        if (recentMessages.length === 0) {
-          recentMessages = chatMessages.slice(-1);
-        }
-        const classifyRes = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 20,
-          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, or CHAT. Only classify as PDD/SDD/PDD_SDD/DEPLOY if the user is clearly requesting, approving, or confirming that action. PDD is always generated before SDD per the pipeline sequence. If both documents are being requested or approved, reply PDD_SDD.`,
-          messages: recentMessages,
-        });
-        const rawClassify = (classifyRes.content[0]?.type === "text" ? classifyRes.content[0].text : "").trim();
-        const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
-        if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY"].includes(classifyText)) {
-          const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
-          classifiedIntent = normalized as typeof classifiedIntent;
-        }
-        console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
-      } catch (classifyErr: any) {
-        console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
-      }
-
-      let earlyDocType: "PDD" | "SDD" | null = null;
-      if (classifiedIntent === "PDD" || classifiedIntent === "PDD_SDD") {
-        earlyDocType = "PDD";
-        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch {}
+      let intentOverride = "";
+      if (classifiedIntent === "PDD") {
+        intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting a PDD (Process Design Document). You MUST generate a PDD using the [DOC:PDD:0] tag. Do NOT generate an SDD. Start your response with [DOC:PDD:0] followed by the full PDD content.";
       } else if (classifiedIntent === "SDD") {
-        earlyDocType = "SDD";
-        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
+        intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting an SDD (Solution Design Document). You MUST generate an SDD using the [DOC:SDD:0] tag. Do NOT generate a PDD. Start your response with [DOC:SDD:0] followed by the full SDD content.";
+      } else if (classifiedIntent === "PDD_SDD") {
+        intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting both PDD and SDD. Per the pipeline sequence, the PDD must be generated and approved first. Generate the PDD NOW using [DOC:PDD:0]. The SDD will be generated separately after PDD approval. Start your response with [DOC:PDD:0] followed by the full PDD content. Do NOT generate an SDD in this response.";
       } else if (classifiedIntent === "DEPLOY") {
-        try { res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`); } catch {}
+        intentOverride = "\n\nDEPLOYMENT DIRECTIVE: The user is requesting deployment to UiPath Orchestrator. Proceed with the deployment flow.";
       }
+
+      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null) + intentOverride;
 
       const stream = anthropic.messages.stream({
         model: "claude-sonnet-4-6",

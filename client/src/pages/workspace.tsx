@@ -733,22 +733,26 @@ function ChatPanel({ idea }: { idea: Idea }) {
                 setDeployStep("");
               }
               if (data.docProgress) {
+                console.log(`[Chat SSE] docProgress event:`, data.docProgress);
                 if (data.docProgress.started) {
                   setIsGeneratingDoc(true);
                   setGeneratingDocType(data.docProgress.docType || "PDD");
                   setDocProgressSection("");
+                  setStreamingMsg((prev) => prev ? { ...prev } : prev);
                 }
                 if (data.docProgress.section) {
                   setDocProgressSection(data.docProgress.section);
                 }
               }
               if (data.deployStatus) {
+                console.log(`[Chat SSE] deployStatus event:`, data.deployStatus);
                 if (data.deployComplete) {
                   setDeployStep("");
                   setStreamingMsg(null);
                   queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
                 } else {
                   setDeployStep(data.deployStatus);
+                  setStreamingMsg((prev) => prev ? { ...prev } : prev);
                 }
               }
               if (data.transition) {
