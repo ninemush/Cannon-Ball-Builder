@@ -101,6 +101,7 @@ export function registerUiPathRoutes(app: Express): void {
     if (!requireAdmin(req, res)) return;
     const { folderId, folderName } = req.body;
     await saveUiPathFolder(folderId || null, folderName || null);
+    clearProbeCache();
     return res.json({ success: true });
   });
 
@@ -143,6 +144,7 @@ export function registerUiPathRoutes(app: Express): void {
     }
     auth.invalidateAllTokens();
     auth.invalidateConfig();
+    clearProbeCache();
 
     const testResult = await testUiPathConnection();
     return res.json({
@@ -196,6 +198,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (isFirst) {
         auth.invalidateAllTokens();
         auth.invalidateConfig();
+        clearProbeCache();
       }
       return res.json({ ...row, clientSecret: "••••••••" });
     } catch (err: any) {
@@ -226,6 +229,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (updated.isActive) {
         auth.invalidateAllTokens();
         auth.invalidateConfig();
+        clearProbeCache();
       }
       return res.json({ ...updated, clientSecret: "••••••••" });
     } catch (err: any) {
@@ -259,6 +263,7 @@ export function registerUiPathRoutes(app: Express): void {
       const [activated] = await db.update(uipathConnections).set({ isActive: true }).where(eq(uipathConnections.id, id)).returning();
       auth.invalidateAllTokens();
       auth.invalidateConfig();
+      clearProbeCache();
       return res.json({ ...activated, clientSecret: "••••••••" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });

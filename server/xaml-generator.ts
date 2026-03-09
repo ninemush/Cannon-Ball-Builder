@@ -1683,7 +1683,7 @@ export function aggregatePackages(results: XamlGeneratorResult[]): string[] {
 export type DhgDeploymentResult = {
   artifact: string;
   name: string;
-  status: "created" | "exists" | "failed" | "skipped" | "manual";
+  status: "created" | "exists" | "updated" | "failed" | "skipped" | "manual";
   message: string;
   id?: number;
 };
@@ -1757,7 +1757,7 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   const totalAutoFixed = analysisReports?.reduce((s, r) => s + r.report.totalAutoFixed, 0) ?? 0;
   const totalRulesChecked = analysisReports?.reduce((s, r) => s + r.report.totalChecked, 0) ?? 0;
   const totalRulesPassed = analysisReports?.reduce((s, r) => s + r.report.totalPassed, 0) ?? 0;
-  const provisionedCount = deploymentResults?.filter(r => r.status === "created" || r.status === "exists").length ?? 0;
+  const provisionedCount = deploymentResults?.filter(r => r.status === "created" || r.status === "exists" || r.status === "updated").length ?? 0;
   const totalProvisionAttempts = deploymentResults?.length ?? 0;
 
   const readinessComponents: number[] = [];
@@ -1850,7 +1850,7 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     for (const r of deploymentResults) {
       const entry = artifactTypes.get(r.artifact) || { total: 0, ready: 0, needs: 0 };
       entry.total++;
-      if (r.status === "created" || r.status === "exists") entry.ready++;
+      if (r.status === "created" || r.status === "exists" || r.status === "updated") entry.ready++;
       else entry.needs++;
       artifactTypes.set(r.artifact, entry);
     }
@@ -2244,7 +2244,7 @@ export function generateDhgSummary(gaps: XamlGap[], deploymentResults?: DhgDeplo
 
   if (deploymentResults?.length) {
     const failed = deploymentResults.filter(r => r.status === "failed" || r.status === "manual");
-    const created = deploymentResults.filter(r => r.status === "created" || r.status === "exists");
+    const created = deploymentResults.filter(r => r.status === "created" || r.status === "exists" || r.status === "updated");
     lines.push(`  Orchestrator: ${created.length}/${deploymentResults.length} artifacts provisioned`);
     if (failed.length > 0) {
       lines.push(`  ${failed.length} artifact(s) need manual setup — see DHG for details`);

@@ -17,6 +17,7 @@ import {
   FileText,
   TestTube,
   HandMetal,
+  RefreshCw,
 } from "lucide-react";
 
 interface DeploymentResult {
@@ -54,6 +55,7 @@ const artifactIcon = (artifact: string) => {
 
 const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; bg: string; label: string }> = {
   created: { icon: CheckCircle2, color: "text-green-400", bg: "bg-green-500/10", label: "Created" },
+  updated: { icon: RefreshCw, color: "text-cyan-400", bg: "bg-cyan-500/10", label: "Updated" },
   exists: { icon: Info, color: "text-blue-400", bg: "bg-blue-500/10", label: "Exists" },
   skipped: { icon: Info, color: "text-slate-400", bg: "bg-slate-500/10", label: "Not Available" },
   manual: { icon: HandMetal, color: "text-amber-400", bg: "bg-amber-500/10", label: "Manual Setup" },
@@ -98,6 +100,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
 
   const counts = {
     created: resultsToDisplay.filter((r) => r.status === "created").length,
+    updated: resultsToDisplay.filter((r) => r.status === "updated").length,
     exists: resultsToDisplay.filter((r) => r.status === "exists").length,
     skipped: resultsToDisplay.filter((r) => r.status === "skipped").length,
     manual: resultsToDisplay.filter((r) => r.status === "manual").length,
@@ -156,6 +159,12 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           <span className="flex items-center gap-1 text-xs text-green-400" data-testid="text-deploy-created-count">
             <CheckCircle2 className="h-3 w-3" />
             {counts.created} created
+          </span>
+        )}
+        {counts.updated > 0 && (
+          <span className="flex items-center gap-1 text-xs text-cyan-400" data-testid="text-deploy-updated-count">
+            <RefreshCw className="h-3 w-3" />
+            {counts.updated} updated
           </span>
         )}
         {counts.exists > 0 && (
@@ -237,7 +246,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
                     const msgExpanded = expandedMessages[itemKey];
                     const hasDetailMessage = item.message && item.message.length > 60;
                     const showExpandable = hasDetailMessage && item.status !== "created";
-                    const showMessage = item.status === "failed" || item.status === "skipped" || item.status === "manual" || (item.status === "exists" && item.message && item.message.includes("polling"));
+                    const showMessage = item.status === "failed" || item.status === "skipped" || item.status === "manual" || item.status === "updated" || (item.status === "exists" && item.message && item.message.includes("polling"));
 
                     return (
                       <div

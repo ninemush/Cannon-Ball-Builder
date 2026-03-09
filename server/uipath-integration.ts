@@ -1760,24 +1760,13 @@ export async function probeUiPathScopes(): Promise<{
 
   try {
     const token = await getAccessToken(config);
-    let grantedScopes: string[] = [];
-    try {
-      const parts = token.split(".");
-      if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
-        const scopeVal = payload.scope || payload.scp;
-        if (scopeVal) grantedScopes = Array.isArray(scopeVal) ? scopeVal : scopeVal.split(/\s+/);
-      }
-    } catch { grantedScopes = []; }
+    const comparison = decodeAndCompareScopes(token, requestedScopes);
 
-    if (grantedScopes.length === 0) {
+    if (!comparison.decodedOk) {
       return { status: "ok", requestedScopes, grantedScopes: requestedScopes, missingInApp: [], extraInApp: [], message: "Token obtained. Could not decode granted scopes from JWT — assuming scopes are correct." };
     }
 
-    const grantedSet = new Set(grantedScopes);
-    const requestedSet = new Set(requestedScopes);
-    const missingInApp = grantedScopes.filter(s => !requestedSet.has(s));
-    const extraInApp = requestedScopes.filter(s => !grantedSet.has(s));
+    const { grantedScopes, missingInApp, extraInApp } = comparison;
 
     if (missingInApp.length === 0 && extraInApp.length === 0) {
       return { status: "ok", requestedScopes, grantedScopes, missingInApp: [], extraInApp: [], message: "Scopes are in sync." };
@@ -1807,6 +1796,23 @@ function decodeJwtScopes(token: string): string[] {
   } catch {
     return [];
   }
+}
+
+function decodeAndCompareScopes(token: string, requestedScopes: string[]): {
+  grantedScopes: string[];
+  missingInApp: string[];
+  extraInApp: string[];
+  decodedOk: boolean;
+} {
+  const grantedScopes = decodeJwtScopes(token);
+  if (grantedScopes.length === 0) {
+    return { grantedScopes: [], missingInApp: [], extraInApp: [], decodedOk: false };
+  }
+  const grantedSet = new Set(grantedScopes);
+  const requestedSet = new Set(requestedScopes);
+  const missingInApp = grantedScopes.filter(s => !requestedSet.has(s));
+  const extraInApp = requestedScopes.filter(s => !grantedSet.has(s));
+  return { grantedScopes, missingInApp, extraInApp, decodedOk: true };
 }
 
 export async function autoDetectUiPathScopes(): Promise<{
@@ -1932,10 +1938,7 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
   }
 
   try {
-    const { tryAcquireResourceToken, getToken, getHeaders: getOrHeaders } = await import("./uipath-auth");
-
-    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
-    const orchBase = `${base}/orchestrator_`;
+    const { tryAcquireResourceToken } = await import("./uipath-auth");
 
     const resourceResults = await Promise.allSettled([
       tryAcquireResourceToken("OR"),
@@ -1966,90 +1969,38 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
     }
 
     const requestedScopes = config.scopes.split(/\s+/).filter(Boolean);
-    const hdrs = await getOrHeaders();
+
+    const probe = await probeAllServices();
 
     const serviceChecks: Record<string, { available: boolean; message: string }> = {};
 
-    const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
-    serviceChecks["Orchestrator"] = orchRes.ok
+    serviceChecks["Orchestrator"] = probe.flags.orchestrator
       ? { available: true, message: "Connected" }
-      : { available: false, message: `HTTP ${orchRes.status}` };
+      : { available: false, message: "Not accessible" };
 
-    const blobRes = await fetch(`${orchBase}/odata/Buckets?$top=1`, { headers: hdrs });
-    serviceChecks["Storage Buckets"] = blobRes.ok
+    serviceChecks["Storage Buckets"] = probe.flags.storageBuckets
       ? { available: true, message: "Accessible" }
-      : { available: false, message: `HTTP ${blobRes.status} — may need OR.Blobs scope` };
+      : { available: false, message: "Not accessible — may need OR.Blobs scope" };
 
-    const taskCatRes = await fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs });
-    serviceChecks["Action Center (Maestro)"] = taskCatRes.ok
+    serviceChecks["Action Center (Maestro)"] = probe.flags.actionCenter
       ? { available: true, message: "Accessible" }
-      : { available: true, message: `Reachable (HTTP ${taskCatRes.status}) — provisioning will determine actual support` };
+      : { available: false, message: "Not accessible" };
 
-    if (resources.TM.ok) {
-      serviceChecks["Test Manager"] = { available: true, message: `TM token acquired (${resources.TM.scopes.length} scopes)` };
-    } else {
-      serviceChecks["Test Manager"] = { available: false, message: `TM token unavailable: ${resources.TM.error || "scopes not configured"}` };
-    }
+    serviceChecks["Test Manager"] = probe.flags.testManager
+      ? { available: true, message: `TM available (token: ${resources.TM.ok ? "acquired" : "unavailable"})` }
+      : { available: false, message: `TM token unavailable: ${resources.TM.error || "scopes not configured"}` };
 
-    if (resources.DU.ok) {
-      const { getDuToken } = await import("./uipath-auth");
-      const duTok = await getDuToken();
-      const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
-      if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+    serviceChecks["Document Understanding"] = probe.flags.documentUnderstanding
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: `DU unavailable: ${resources.DU.error || "scopes not configured"}` };
 
-      let duAvailable = false;
-      let duMsg = "";
-      for (const [ep, label] of [
-        [`${base}/du_/api/framework/projects?api-version=1`, "DU Framework API v1"],
-        [`${base}/du_/api/framework/projects?api-version=2`, "DU Framework API v2"],
-        [`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, "AI Center"],
-      ] as const) {
-        try {
-          const duRes = await fetch(ep, { headers: duHdrs });
-          if (duRes.ok) {
-            const txt = await duRes.text();
-            if (!txt.trim().startsWith("<")) { duAvailable = true; duMsg = `Accessible (${label})`; break; }
-          }
-          if (duRes.status === 403) { duAvailable = true; duMsg = `Available via ${label} (HTTP 403 — needs folder permissions)`; break; }
-          if (duRes.status === 400) {
-            const txt = await duRes.text();
-            if (txt.includes("InvalidApiVersion")) { duAvailable = true; duMsg = `Available (${label} — needs valid api-version)`; }
-          }
-        } catch { }
-      }
-      serviceChecks["Document Understanding"] = { available: duAvailable, message: duAvailable ? duMsg : "DU service not reachable with DU token" };
-    } else {
-      const duRes = await fetch(`${base}/du_/api/framework/projects?api-version=1`, { headers: hdrs }).catch(() => null);
-      if (duRes && (duRes.ok || duRes.status === 403 || duRes.status === 400)) {
-        serviceChecks["Document Understanding"] = { available: true, message: `Available (no DU token — ${resources.DU.error || "scope not configured"})` };
-      } else {
-        serviceChecks["Document Understanding"] = { available: false, message: `DU token unavailable: ${resources.DU.error || "scopes not configured"}` };
-      }
-    }
+    serviceChecks["Platform Management"] = probe.flags.platformManagement
+      ? { available: true, message: `Token acquired` }
+      : { available: false, message: `PM token unavailable: ${resources.PM.error || "scopes not configured"}` };
 
-    if (resources.PM.ok) {
-      serviceChecks["Platform Management"] = { available: true, message: `Token acquired (${resources.PM.scopes.length} scopes)` };
-    } else {
-      serviceChecks["Platform Management"] = { available: false, message: `PM token unavailable: ${resources.PM.error || "scopes not configured"}` };
-    }
-
-    if (resources.DF.ok) {
-      const { getDfToken } = await import("./uipath-auth");
-      const dfTok = await getDfToken();
-      const dfHdrs = { Authorization: `Bearer ${dfTok}`, "Content-Type": "application/json" };
-      let dfAvailable = false;
-      let dfMsg = "";
-      const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { headers: dfHdrs, redirect: "manual" }).catch(() => null);
-      if (dfSwagger && dfSwagger.status === 200) {
-        dfAvailable = true;
-        dfMsg = "Data Service provisioned";
-      } else {
-        dfMsg = `Data Service not reachable (swagger: ${dfSwagger?.status || "error"})`;
-      }
-      serviceChecks["Data Service"] = { available: dfAvailable, message: dfMsg };
-    } else {
-      serviceChecks["Data Service"] = { available: false, message: `DF token unavailable: ${resources.DF.error || "scopes not configured"}` };
-    }
+    serviceChecks["Data Service"] = probe.flags.dataService
+      ? { available: true, message: "Data Service provisioned" }
+      : { available: false, message: `DF unavailable: ${resources.DF.error || "scopes not configured"}` };
 
     const availableCount = Object.values(serviceChecks).filter(s => s.available).length;
     const totalCount = Object.keys(serviceChecks).length;

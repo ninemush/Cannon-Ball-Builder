@@ -80,7 +80,7 @@ export type OrchestratorArtifacts = {
 export type DeploymentResult = {
   artifact: string;
   name: string;
-  status: "created" | "exists" | "failed" | "skipped" | "manual";
+  status: "created" | "exists" | "updated" | "failed" | "skipped" | "manual";
   message: string;
   id?: number;
   manualSteps?: string[];
@@ -577,7 +577,59 @@ async function provisionQueues(
       if (checkRes.ok) {
         const checkData = await checkRes.json();
         if (checkData.value?.length > 0) {
-          results.push({ artifact: "Queue", name: q.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+          const existing = checkData.value[0];
+          const existingId = existing.Id;
+
+          const desiredDesc = truncDesc(q.description);
+          const desiredMaxRetries = q.maxRetries ?? 3;
+          const desiredUniqueRef = q.uniqueReference ?? false;
+          let desiredJsonSchema: string | undefined;
+          if (q.jsonSchema) {
+            try { JSON.parse(q.jsonSchema); desiredJsonSchema = q.jsonSchema; } catch {}
+          }
+          let desiredOutputSchema: string | undefined;
+          if (q.outputSchema) {
+            try { JSON.parse(q.outputSchema); desiredOutputSchema = q.outputSchema; } catch {}
+          }
+
+          const needsUpdate =
+            (desiredDesc && existing.Description !== desiredDesc) ||
+            (existing.MaxNumberOfRetries !== desiredMaxRetries) ||
+            (existing.EnforceUniqueReference !== desiredUniqueRef) ||
+            (desiredJsonSchema && existing.SpecificDataJsonSchema !== desiredJsonSchema) ||
+            (desiredOutputSchema && existing.OutputDataJsonSchema !== desiredOutputSchema);
+
+          if (needsUpdate) {
+            const updateBody: Record<string, any> = {
+              Name: q.name,
+              Description: desiredDesc || existing.Description,
+              MaxNumberOfRetries: desiredMaxRetries,
+              AcceptAutomaticallyRetry: existing.AcceptAutomaticallyRetry ?? true,
+              EnforceUniqueReference: desiredUniqueRef,
+            };
+            if (desiredJsonSchema) updateBody.SpecificDataJsonSchema = desiredJsonSchema;
+            if (desiredOutputSchema) updateBody.OutputDataJsonSchema = desiredOutputSchema;
+
+            try {
+              const putRes = await fetch(`${base}/odata/QueueDefinitions(${existingId})`, {
+                method: "PUT",
+                headers: hdrs,
+                body: JSON.stringify(updateBody),
+              });
+              const putText = await putRes.text();
+              console.log(`[UiPath Deploy] Queue "${q.name}" UPDATE -> ${putRes.status}: ${putText.slice(0, 500)}`);
+
+              if (putRes.ok) {
+                results.push({ artifact: "Queue", name: q.name, status: "updated", message: `Updated existing queue (ID: ${existingId})`, id: existingId });
+              } else {
+                results.push({ artifact: "Queue", name: q.name, status: "failed", message: `Update failed (ID: ${existingId}): ${sanitizeErrorMessage(putRes.status, putText)}`, id: existingId });
+              }
+            } catch (putErr: any) {
+              results.push({ artifact: "Queue", name: q.name, status: "failed", message: `Update error (ID: ${existingId}): ${putErr.message}`, id: existingId });
+            }
+          } else {
+            results.push({ artifact: "Queue", name: q.name, status: "exists", message: `Already exists (ID: ${existingId}) — no changes needed`, id: existingId });
+          }
           continue;
         }
       }
@@ -654,7 +706,75 @@ async function provisionAssets(
       if (checkRes.ok) {
         const checkData = await checkRes.json();
         if (checkData.value?.length > 0) {
-          results.push({ artifact: "Asset", name: a.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+          const existing = checkData.value[0];
+          const existingId = existing.Id;
+          const assetTypeLower = (a.type || "Text").toLowerCase();
+
+          if (assetTypeLower === "credential") {
+            results.push({ artifact: "Asset", name: a.name, status: "exists", message: `Already exists (ID: ${existingId}). Credential assets are not auto-updated for security — update manually in Orchestrator.`, id: existingId });
+            continue;
+          }
+
+          const newDesc = truncDesc(a.description);
+          let needsUpdate = false;
+          const changes: string[] = [];
+
+          if (newDesc && newDesc !== (existing.Description || "")) {
+            needsUpdate = true;
+            changes.push("Description");
+          }
+
+          if (assetTypeLower === "integer") {
+            const newVal = parseInt(a.value || "0") || 0;
+            if (newVal !== (existing.IntValue ?? 0)) {
+              needsUpdate = true;
+              changes.push(`IntValue: ${existing.IntValue ?? 0} -> ${newVal}`);
+            }
+          } else if (assetTypeLower === "bool" || assetTypeLower === "boolean") {
+            const newVal = a.value === "true" || a.value === "True" || a.value === "1";
+            if (newVal !== (existing.BoolValue ?? false)) {
+              needsUpdate = true;
+              changes.push(`BoolValue: ${existing.BoolValue ?? false} -> ${newVal}`);
+            }
+          } else {
+            const newVal = a.value || "";
+            if (newVal !== (existing.StringValue || "")) {
+              needsUpdate = true;
+              changes.push(`StringValue changed`);
+            }
+          }
+
+          if (!needsUpdate) {
+            results.push({ artifact: "Asset", name: a.name, status: "exists", message: `Already exists with same values (ID: ${existingId})`, id: existingId });
+            continue;
+          }
+
+          const updateBody: Record<string, any> = {
+            Name: a.name,
+            ValueScope: existing.ValueScope || "Global",
+            Description: newDesc || existing.Description || "",
+          };
+
+          if (assetTypeLower === "integer") {
+            updateBody.ValueType = "Integer";
+            updateBody.IntValue = parseInt(a.value || "0") || 0;
+          } else if (assetTypeLower === "bool" || assetTypeLower === "boolean") {
+            updateBody.ValueType = "Bool";
+            updateBody.BoolValue = a.value === "true" || a.value === "True" || a.value === "1";
+          } else {
+            updateBody.ValueType = "Text";
+            updateBody.StringValue = a.value || "";
+          }
+
+          const updateRes = await fetch(`${base}/odata/Assets(${existingId})`, { method: "PUT", headers: hdrs, body: JSON.stringify(updateBody) });
+          const updateText = await updateRes.text();
+          console.log(`[UiPath Deploy] Asset "${a.name}" UPDATE -> ${updateRes.status}: ${updateText.slice(0, 500)}`);
+
+          if (updateRes.ok) {
+            results.push({ artifact: "Asset", name: a.name, status: "updated", message: `Updated (ID: ${existingId}). Changes: ${changes.join(", ")}`, id: existingId });
+          } else {
+            results.push({ artifact: "Asset", name: a.name, status: "failed", message: `Update failed: ${sanitizeErrorMessage(updateRes.status, updateText)}`, id: existingId });
+          }
           continue;
         }
       }
@@ -775,13 +895,70 @@ async function provisionMachines(
       if (checkRes.ok) {
         const checkData = await checkRes.json();
         if (checkData.value?.length > 0) {
-          machineId = checkData.value[0].Id;
+          const existing = checkData.value[0];
+          machineId = existing.Id;
+
+          const runtime = (m.runtimeType || m.type || "Unattended").toLowerCase();
+          const newDesc = truncDesc(m.description);
+          const newSlots = m.slots || 1;
+
+          let desiredSlotField = "UnattendedSlots";
+          if (runtime.includes("headless") || runtime.includes("unattended")) {
+            desiredSlotField = "UnattendedSlots";
+          } else if (runtime.includes("testautomation")) {
+            desiredSlotField = "TestAutomationSlots";
+          } else if (runtime.includes("nonproduction")) {
+            desiredSlotField = "NonProductionSlots";
+          }
+
+          const descChanged = (existing.Description || "") !== newDesc;
+          const slotsChanged = (existing[desiredSlotField] || 0) !== newSlots;
+
+          if (descChanged || slotsChanged) {
+            const updateBody: Record<string, any> = {
+              Name: m.name,
+              Description: newDesc,
+              Type: existing.Type || "Template",
+            };
+            if (desiredSlotField === "UnattendedSlots") updateBody.UnattendedSlots = newSlots;
+            else if (desiredSlotField === "NonProductionSlots") updateBody.NonProductionSlots = newSlots;
+            else if (desiredSlotField === "TestAutomationSlots") updateBody.TestAutomationSlots = newSlots;
+
+            try {
+              const putRes = await fetch(`${base}/odata/Machines(${machineId})`, {
+                method: "PUT",
+                headers: hdrs,
+                body: JSON.stringify(updateBody),
+              });
+              const putText = await putRes.text();
+              console.log(`[UiPath Deploy] Machine "${m.name}" PUT update -> ${putRes.status}: ${putText.slice(0, 300)}`);
+
+              if (putRes.ok) {
+                const changes: string[] = [];
+                if (descChanged) changes.push("Description");
+                if (slotsChanged) changes.push(`${desiredSlotField}: ${existing[desiredSlotField] || 0} → ${newSlots}`);
+                const folderAssign = await assignMachineToFolder(base, hdrs, machineId!);
+                const folderNote = folderAssign.success ? folderAssign.message : `Folder assignment note: ${folderAssign.message}`;
+                results.push({ artifact: "Machine", name: m.name, status: "updated", message: `Updated (ID: ${machineId}). Changed: ${changes.join(", ")}. ${folderNote}`, id: machineId ?? undefined });
+                continue;
+              } else {
+                const putText = await putRes.text().catch(() => "");
+                console.warn(`[UiPath Deploy] Machine "${m.name}" update failed (${putRes.status})`);
+                results.push({ artifact: "Machine", name: m.name, status: "failed", message: `Update failed (ID: ${machineId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: machineId ?? undefined });
+                continue;
+              }
+            } catch (putErr: any) {
+              console.warn(`[UiPath Deploy] Machine "${m.name}" update error: ${putErr.message}`);
+              results.push({ artifact: "Machine", name: m.name, status: "failed", message: `Update error (ID: ${machineId}): ${putErr.message}`, id: machineId ?? undefined });
+              continue;
+            }
+          }
+
           const folderAssign = await assignMachineToFolder(base, hdrs, machineId!);
-          const folderStatus = folderAssign.success ? "exists" : "exists" as const;
           const folderNote = folderAssign.success
             ? folderAssign.message
             : `Not in current folder — assign manually: Orchestrator > Folder Settings > Machines. ${folderAssign.message}`;
-          results.push({ artifact: "Machine", name: m.name, status: folderStatus, message: `Already exists at tenant level (ID: ${machineId}). ${folderNote}`, id: machineId ?? undefined });
+          results.push({ artifact: "Machine", name: m.name, status: "exists", message: `Already exists at tenant level (ID: ${machineId}). ${folderNote}`, id: machineId ?? undefined });
           continue;
         }
       }
@@ -865,7 +1042,45 @@ async function provisionStorageBuckets(
       if (checkRes.ok) {
         const checkData = await checkRes.json();
         if (checkData.value?.length > 0) {
-          results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+          const existing = checkData.value[0];
+          const existingId = existing.Id;
+          const newDesc = truncDesc(b.description);
+          const descChanged = (existing.Description || "") !== newDesc;
+
+          if (descChanged) {
+            try {
+              const updateBody: Record<string, any> = {
+                Name: b.name,
+                Description: newDesc,
+              };
+              if (existing.StorageProvider) updateBody.StorageProvider = existing.StorageProvider;
+              if (existing.Identifier) updateBody.Identifier = existing.Identifier;
+
+              const putRes = await fetch(`${base}/odata/Buckets(${existingId})`, {
+                method: "PUT",
+                headers: hdrs,
+                body: JSON.stringify(updateBody),
+              });
+              const putText = await putRes.text();
+              console.log(`[UiPath Deploy] Bucket "${b.name}" PUT update -> ${putRes.status}: ${putText.slice(0, 300)}`);
+
+              if (putRes.ok) {
+                results.push({ artifact: "Storage Bucket", name: b.name, status: "updated", message: `Updated Description (ID: ${existingId})`, id: existingId });
+                continue;
+              } else {
+                const putText = await putRes.text().catch(() => "");
+                console.warn(`[UiPath Deploy] Bucket "${b.name}" update failed (${putRes.status})`);
+                results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `Update failed (ID: ${existingId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: existingId });
+                continue;
+              }
+            } catch (putErr: any) {
+              console.warn(`[UiPath Deploy] Bucket "${b.name}" update error: ${putErr.message}`);
+              results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `Update error (ID: ${existingId}): ${putErr.message}`, id: existingId });
+              continue;
+            }
+          }
+
+          results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: `Already exists (ID: ${existingId})`, id: existingId });
           continue;
         }
       }
@@ -944,7 +1159,13 @@ type RuntimeDetectionResult = {
   warning?: string;
 };
 
-async function detectAvailableRuntimeType(base: string, hdrs: Record<string, string>): Promise<RuntimeDetectionResult> {
+type PreFetchedInfraData = {
+  machines: InfraProbeResult['machines'];
+  sessions: InfraProbeResult['sessions'];
+  robots: InfraProbeResult['robots'];
+};
+
+async function detectAvailableRuntimeType(base: string, hdrs: Record<string, string>, prefetched?: PreFetchedInfraData): Promise<RuntimeDetectionResult> {
   const result: RuntimeDetectionResult = {
     runtimeType: "Unattended",
     verified: false,
@@ -953,105 +1174,122 @@ async function detectAvailableRuntimeType(base: string, hdrs: Record<string, str
   };
 
   try {
-    const machRes = await fetch(`${base}/odata/Machines?$top=50&$select=Id,Name,Type,UnattendedSlots,NonProductionSlots,TestAutomationSlots,HeadlessSlots`, { headers: hdrs });
-    if (machRes.ok) {
-      const machData = await machRes.json();
-      const machines = machData.value || [];
-      if (machines.length > 0) {
-        const hasUnattended = machines.some((m: any) => (m.UnattendedSlots || 0) > 0);
-        const hasNonProd = machines.some((m: any) => (m.NonProductionSlots || 0) > 0);
-        const hasTestAuto = machines.some((m: any) => (m.TestAutomationSlots || 0) > 0);
-        const hasHeadless = machines.some((m: any) => (m.HeadlessSlots || 0) > 0);
-
-        result.hasUnattendedSlots = hasUnattended;
-        if (hasUnattended) result.availableTypes.push("Unattended");
-        if (hasNonProd) result.availableTypes.push("NonProduction");
-        if (hasTestAuto) result.availableTypes.push("TestAutomation");
-        if (hasHeadless) result.availableTypes.push("Headless");
-
-        if (hasUnattended) {
-          result.runtimeType = "Unattended";
-          result.verified = true;
-          console.log(`[UiPath Deploy] Runtime detection: Found ${machines.length} machine template(s) with Unattended slots`);
-          return result;
-        }
-        if (hasNonProd) {
-          result.runtimeType = "NonProduction";
-          result.verified = true;
-          console.log(`[UiPath Deploy] Runtime detection: No Unattended slots, using NonProduction`);
-          return result;
-        }
-
-        console.warn(`[UiPath Deploy] Runtime detection: ${machines.length} machine template(s) found but NONE have Unattended or NonProduction slots`);
-        result.warning = `${machines.length} machine template(s) found in folder but none have Unattended runtime slots configured. Triggers will fail until an Unattended runtime is assigned to a machine template in this folder.`;
-      } else {
-        console.warn(`[UiPath Deploy] Runtime detection: No machine templates found in folder`);
-        result.warning = "No machine templates found in this folder. Triggers require at least one machine template with Unattended runtime slots.";
+    let machines: any[];
+    if (prefetched) {
+      machines = prefetched.machines;
+    } else {
+      const machRes = await fetch(`${base}/odata/Machines?$top=50&$select=Id,Name,Type,UnattendedSlots,NonProductionSlots,TestAutomationSlots,HeadlessSlots`, { headers: hdrs });
+      if (!machRes.ok) { machines = []; } else {
+        const machData = await machRes.json();
+        machines = machData.value || [];
       }
+    }
+    if (machines.length > 0) {
+      const hasUnattended = machines.some((m: any) => (m.UnattendedSlots || m.unattendedSlots || 0) > 0);
+      const hasNonProd = machines.some((m: any) => (m.NonProductionSlots || m.nonProdSlots || 0) > 0);
+      const hasTestAuto = machines.some((m: any) => (m.TestAutomationSlots || m.testAutomationSlots || 0) > 0);
+      const hasHeadless = machines.some((m: any) => (m.HeadlessSlots || m.headlessSlots || 0) > 0);
+
+      result.hasUnattendedSlots = hasUnattended;
+      if (hasUnattended) result.availableTypes.push("Unattended");
+      if (hasNonProd) result.availableTypes.push("NonProduction");
+      if (hasTestAuto) result.availableTypes.push("TestAutomation");
+      if (hasHeadless) result.availableTypes.push("Headless");
+
+      if (hasUnattended) {
+        result.runtimeType = "Unattended";
+        result.verified = true;
+        console.log(`[UiPath Deploy] Runtime detection: Found ${machines.length} machine template(s) with Unattended slots`);
+        return result;
+      }
+      if (hasNonProd) {
+        result.runtimeType = "NonProduction";
+        result.verified = true;
+        console.log(`[UiPath Deploy] Runtime detection: No Unattended slots, using NonProduction`);
+        return result;
+      }
+
+      console.warn(`[UiPath Deploy] Runtime detection: ${machines.length} machine template(s) found but NONE have Unattended or NonProduction slots`);
+      result.warning = `${machines.length} machine template(s) found in folder but none have Unattended runtime slots configured. Triggers will fail until an Unattended runtime is assigned to a machine template in this folder.`;
+    } else {
+      console.warn(`[UiPath Deploy] Runtime detection: No machine templates found in folder`);
+      result.warning = "No machine templates found in this folder. Triggers require at least one machine template with Unattended runtime slots.";
     }
   } catch (err: any) {
     console.warn(`[UiPath Deploy] Machine template check failed: ${err.message}`);
   }
 
   try {
-    const sessRes = await fetch(`${base}/odata/Sessions?$top=10&$select=RuntimeType,MachineId,MachineName`, { headers: hdrs });
-    if (sessRes.ok) {
-      const sessData = await sessRes.json();
-      if (sessData.value?.length > 0) {
-        const types = sessData.value.map((s: any) => s.RuntimeType).filter(Boolean);
-        const uniqueTypes = Array.from(new Set(types as string[]));
-        result.availableTypes = Array.from(new Set([...result.availableTypes, ...uniqueTypes]));
+    let sessionValues: any[];
+    if (prefetched) {
+      sessionValues = prefetched.sessions;
+    } else {
+      const sessRes = await fetch(`${base}/odata/Sessions?$top=10&$select=RuntimeType,MachineId,MachineName`, { headers: hdrs });
+      if (!sessRes.ok) { sessionValues = []; } else {
+        const sessData = await sessRes.json();
+        sessionValues = sessData.value || [];
+      }
+    }
+    if (sessionValues.length > 0) {
+      const types = sessionValues.map((s: any) => s.RuntimeType || s.runtimeType).filter(Boolean);
+      const uniqueTypes = Array.from(new Set(types as string[]));
+      result.availableTypes = Array.from(new Set([...result.availableTypes, ...uniqueTypes]));
 
-        if (types.includes("Unattended")) {
-          result.runtimeType = "Unattended";
-          result.verified = true;
-          result.hasUnattendedSlots = true;
-          result.warning = undefined;
-          console.log(`[UiPath Deploy] Runtime detection: Found active Unattended session(s)`);
-          return result;
+      if (types.includes("Unattended")) {
+        result.runtimeType = "Unattended";
+        result.verified = true;
+        result.hasUnattendedSlots = true;
+        result.warning = undefined;
+        console.log(`[UiPath Deploy] Runtime detection: Found active Unattended session(s)`);
+        return result;
+      }
+      if (types.includes("Production")) {
+        result.runtimeType = "Production";
+        result.verified = true;
+        result.warning = undefined;
+        return result;
+      }
+      if (uniqueTypes.length > 0) {
+        result.runtimeType = uniqueTypes[0];
+        result.verified = true;
+        if (!result.warning) {
+          result.warning = `No Unattended sessions found. Using "${uniqueTypes[0]}" runtime. Triggers may fail if this runtime type cannot execute scheduled jobs.`;
         }
-        if (types.includes("Production")) {
-          result.runtimeType = "Production";
-          result.verified = true;
-          result.warning = undefined;
-          return result;
-        }
-        if (uniqueTypes.length > 0) {
-          result.runtimeType = uniqueTypes[0];
-          result.verified = true;
-          if (!result.warning) {
-            result.warning = `No Unattended sessions found. Using "${uniqueTypes[0]}" runtime. Triggers may fail if this runtime type cannot execute scheduled jobs.`;
-          }
-          return result;
-        }
+        return result;
       }
     }
   } catch { /* ignore */ }
 
   try {
-    const robotRes = await fetch(`${base}/odata/Robots?$top=10&$select=Type,MachineName`, { headers: hdrs });
-    if (robotRes.ok) {
-      const robotData = await robotRes.json();
-      if (robotData.value?.length > 0) {
-        const types = robotData.value.map((r: any) => r.Type).filter(Boolean);
-        const uniqueTypes = Array.from(new Set(types as string[]));
-        result.availableTypes = Array.from(new Set([...result.availableTypes, ...uniqueTypes]));
+    let robotValues: any[];
+    if (prefetched) {
+      robotValues = prefetched.robots;
+    } else {
+      const robotRes = await fetch(`${base}/odata/Robots?$top=10&$select=Type,MachineName`, { headers: hdrs });
+      if (!robotRes.ok) { robotValues = []; } else {
+        const robotData = await robotRes.json();
+        robotValues = robotData.value || [];
+      }
+    }
+    if (robotValues.length > 0) {
+      const types = robotValues.map((r: any) => r.Type || r.type).filter(Boolean);
+      const uniqueTypes = Array.from(new Set(types as string[]));
+      result.availableTypes = Array.from(new Set([...result.availableTypes, ...uniqueTypes]));
 
-        if (types.includes("Unattended")) {
-          result.runtimeType = "Unattended";
-          result.verified = true;
-          result.hasUnattendedSlots = true;
-          result.warning = undefined;
-          return result;
+      if (types.includes("Unattended")) {
+        result.runtimeType = "Unattended";
+        result.verified = true;
+        result.hasUnattendedSlots = true;
+        result.warning = undefined;
+        return result;
+      }
+      if (uniqueTypes.length > 0) {
+        result.runtimeType = uniqueTypes[0];
+        result.verified = true;
+        if (!result.warning) {
+          result.warning = `No Unattended robots found. Using "${uniqueTypes[0]}" runtime.`;
         }
-        if (uniqueTypes.length > 0) {
-          result.runtimeType = uniqueTypes[0];
-          result.verified = true;
-          if (!result.warning) {
-            result.warning = `No Unattended robots found. Using "${uniqueTypes[0]}" runtime.`;
-          }
-          return result;
-        }
+        return result;
       }
     }
   } catch { /* ignore */ }
@@ -1105,7 +1343,36 @@ async function provisionTriggers(
         if (checkRes.ok) {
           const checkData = await checkRes.json();
           if (checkData.value?.length > 0) {
-            results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+            const existing = checkData.value[0];
+            const existingId = existing.Id;
+            const updateBody: Record<string, any> = {};
+            let changed = false;
+            const desiredJobsCount = (t.maxJobsCount && t.maxJobsCount > 0) ? t.maxJobsCount : 1;
+            if (existing.JobsCount !== desiredJobsCount) { updateBody.JobsCount = desiredJobsCount; changed = true; }
+            if (existing.MinNumberOfItems !== undefined && existing.MinNumberOfItems !== 1) { updateBody.MinNumberOfItems = 1; changed = true; }
+            if (existing.MaxNumberOfItems !== undefined && existing.MaxNumberOfItems !== 100) { updateBody.MaxNumberOfItems = 100; changed = true; }
+            if (existing.RuntimeType !== runtimeType) { updateBody.RuntimeType = runtimeType; changed = true; }
+            if (changed) {
+              try {
+                const putRes = await fetch(`${base}/odata/QueueTriggers(${existingId})`, {
+                  method: "PUT",
+                  headers: hdrs,
+                  body: JSON.stringify({ ...existing, ...updateBody }),
+                });
+                const putText = await putRes.text();
+                console.log(`[UiPath Deploy] Queue Trigger "${t.name}" update -> ${putRes.status}: ${putText}`);
+                if (putRes.ok) {
+                  const changedFields = Object.keys(updateBody).join(", ");
+                  results.push({ artifact: "Trigger", name: t.name, status: "updated", message: `Updated (ID: ${existingId}). Changed: ${changedFields}`, id: existingId });
+                } else {
+                  results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Update failed (ID: ${existingId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: existingId });
+                }
+              } catch (upErr: any) {
+                results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Update error (ID: ${existingId}): ${upErr.message}`, id: existingId });
+              }
+            } else {
+              results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${existingId}), no changes needed`, id: existingId });
+            }
             alreadyExists = true;
           }
         }
@@ -1117,7 +1384,34 @@ async function provisionTriggers(
           if (schedCheckRes.ok) {
             const schedCheckData = await schedCheckRes.json();
             if (schedCheckData.value?.length > 0) {
-              results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists as queue-polling trigger (ID: ${schedCheckData.value[0].Id}). Native queue triggers are not available on this tenant — polling every 5 min instead.`, id: schedCheckData.value[0].Id });
+              const existingSched = schedCheckData.value[0];
+              const existingSchedId = existingSched.Id;
+              const schedUpdateBody: Record<string, any> = {};
+              let schedChanged = false;
+              const desiredSchedJobsCount = (t.maxJobsCount && t.maxJobsCount > 0) ? t.maxJobsCount : 1;
+              if (existingSched.JobsCount !== undefined && existingSched.JobsCount !== desiredSchedJobsCount) { schedUpdateBody.JobsCount = desiredSchedJobsCount; schedChanged = true; }
+              if (existingSched.RuntimeType !== runtimeType) { schedUpdateBody.RuntimeType = runtimeType; schedChanged = true; }
+              if (schedChanged) {
+                try {
+                  const putRes = await fetch(`${base}/odata/ProcessSchedules(${existingSchedId})`, {
+                    method: "PUT",
+                    headers: hdrs,
+                    body: JSON.stringify({ ...existingSched, ...schedUpdateBody }),
+                  });
+                  const putText = await putRes.text();
+                  console.log(`[UiPath Deploy] Queue Trigger (polling) "${t.name}" update -> ${putRes.status}: ${putText}`);
+                  if (putRes.ok) {
+                    const changedFields = Object.keys(schedUpdateBody).join(", ");
+                    results.push({ artifact: "Trigger", name: t.name, status: "updated", message: `Updated queue-polling trigger (ID: ${existingSchedId}). Changed: ${changedFields}. Native queue triggers not available — polling every 5 min.`, id: existingSchedId });
+                  } else {
+                    results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Queue-polling trigger update failed (ID: ${existingSchedId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: existingSchedId });
+                  }
+                } catch (upErr: any) {
+                  results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Queue-polling trigger update error (ID: ${existingSchedId}): ${upErr.message}`, id: existingSchedId });
+                }
+              } else {
+                results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists as queue-polling trigger (ID: ${existingSchedId}), no changes needed. Native queue triggers not available — polling every 5 min.`, id: existingSchedId });
+              }
               alreadyExists = true;
             }
           }
@@ -1231,6 +1525,10 @@ async function provisionTriggers(
           results.push({ artifact: "Trigger", name: t.name, status: "failed", message: sanitizeErrorMessage(res.status, text) });
         }
       } else {
+        const cron = sanitizeCronExpression(t.cron || "0 0 9 ? * MON-FRI *");
+        const timeTz = t.timezone || "UTC";
+        const timeTzIana = timeTz === "UTC" ? "Etc/UTC" : timeTz;
+
         const checkRes = await fetch(
           `${base}/odata/ProcessSchedules?$filter=Name eq '${odataEscape(t.name)}'&$top=1`,
           { headers: hdrs }
@@ -1238,12 +1536,46 @@ async function provisionTriggers(
         if (checkRes.ok) {
           const checkData = await checkRes.json();
           if (checkData.value?.length > 0) {
-            results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${checkData.value[0].Id})`, id: checkData.value[0].Id });
+            const existingTime = checkData.value[0];
+            const existingTimeId = existingTime.Id;
+            const timeUpdateBody: Record<string, any> = {};
+            let timeChanged = false;
+            if (existingTime.StartProcessCron !== cron) { timeUpdateBody.StartProcessCron = cron; timeChanged = true; }
+            if (existingTime.RuntimeType !== runtimeType) { timeUpdateBody.RuntimeType = runtimeType; timeChanged = true; }
+            if (existingTime.TimeZoneId !== timeTz) { timeUpdateBody.TimeZoneId = timeTz; timeUpdateBody.TimeZoneIana = timeTzIana; timeChanged = true; }
+            const desiredTimeJobsCount = (t.maxJobsCount && t.maxJobsCount > 0) ? t.maxJobsCount : undefined;
+            if (desiredTimeJobsCount !== undefined && existingTime.JobsCount !== desiredTimeJobsCount) { timeUpdateBody.JobsCount = desiredTimeJobsCount; timeChanged = true; }
+            if (timeChanged) {
+              if (timeUpdateBody.StartProcessCron) {
+                timeUpdateBody.StartProcessCronDetails = JSON.stringify({
+                  type: 5, minutely: {}, hourly: {}, daily: {}, weekly: { weekdays: [] }, monthly: { weekdays: [] },
+                  advancedCronExpression: timeUpdateBody.StartProcessCron,
+                });
+              }
+              try {
+                const putRes = await fetch(`${base}/odata/ProcessSchedules(${existingTimeId})`, {
+                  method: "PUT",
+                  headers: hdrs,
+                  body: JSON.stringify({ ...existingTime, ...timeUpdateBody }),
+                });
+                const putText = await putRes.text();
+                console.log(`[UiPath Deploy] Time Trigger "${t.name}" update -> ${putRes.status}: ${putText}`);
+                if (putRes.ok) {
+                  const changedFields = Object.keys(timeUpdateBody).filter(k => k !== "StartProcessCronDetails" && k !== "TimeZoneIana").join(", ");
+                  results.push({ artifact: "Trigger", name: t.name, status: "updated", message: `Updated (ID: ${existingTimeId}). Changed: ${changedFields}`, id: existingTimeId });
+                } else {
+                  results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Time trigger update failed (ID: ${existingTimeId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: existingTimeId });
+                }
+              } catch (upErr: any) {
+                results.push({ artifact: "Trigger", name: t.name, status: "failed", message: `Time trigger update error (ID: ${existingTimeId}): ${upErr.message}`, id: existingTimeId });
+              }
+            } else {
+              results.push({ artifact: "Trigger", name: t.name, status: "exists", message: `Already exists (ID: ${existingTimeId}), no changes needed`, id: existingTimeId });
+            }
             continue;
           }
         }
 
-        const cron = sanitizeCronExpression(t.cron || "0 0 9 ? * MON-FRI *");
         const cronDetails = JSON.stringify({
           type: 5,
           minutely: {},
@@ -1253,9 +1585,6 @@ async function provisionTriggers(
           monthly: { weekdays: [] },
           advancedCronExpression: cron,
         });
-
-        const timeTz = t.timezone || "UTC";
-        const timeTzIana = timeTz === "UTC" ? "Etc/UTC" : timeTz;
         const baseBody: Record<string, any> = {
           Enabled: !createDisabled,
           Name: t.name,
@@ -2687,7 +3016,7 @@ export type ServiceAvailability = {
 };
 
 export type InfraProbeResult = {
-  machines: Array<{ id: number; name: string; type: string; unattendedSlots: number; nonProdSlots: number }>;
+  machines: Array<{ id: number; name: string; type: string; unattendedSlots: number; nonProdSlots: number; testAutomationSlots: number; headlessSlots: number }>;
   users: Array<{ id: number; userName: string; type: string; rolesList: string[] }>;
   sessions: Array<{ robotName: string; machineName: string; state: string; runtimeType: string }>;
   robots: Array<{ id: number; name: string; machineName: string; type: string; userName: string }>;
@@ -2696,7 +3025,7 @@ export type InfraProbeResult = {
 };
 
 async function preflightInfraProbe(
-  base: string, hdrs: Record<string, string>, folderId?: string, config?: UiPathConfig
+  base: string, hdrs: Record<string, string>, folderId?: string, config?: UiPathConfig, svcAvail?: ServiceAvailabilityMap | null
 ): Promise<InfraProbeResult> {
   const result: InfraProbeResult = {
     machines: [], users: [], sessions: [], robots: [],
@@ -2708,7 +3037,7 @@ async function preflightInfraProbe(
   try {
     const machUrl = numFolderId
       ? `${base}/odata/Folders/UiPath.Server.Configuration.OData.GetMachinesForFolder(key=${numFolderId})?$top=100`
-      : `${base}/odata/Machines?$top=100&$select=Id,Name,Type,UnattendedSlots,NonProductionSlots`;
+      : `${base}/odata/Machines?$top=100&$select=Id,Name,Type,UnattendedSlots,NonProductionSlots,TestAutomationSlots,HeadlessSlots`;
     const machRes = await fetch(machUrl, { headers: hdrs });
     if (machRes.ok) {
       const data = await machRes.json();
@@ -2718,6 +3047,8 @@ async function preflightInfraProbe(
         type: m.Type || "Unknown",
         unattendedSlots: m.UnattendedSlots || 0,
         nonProdSlots: m.NonProductionSlots || 0,
+        testAutomationSlots: m.TestAutomationSlots || 0,
+        headlessSlots: m.HeadlessSlots || 0,
       }));
     }
   } catch (err: any) {
@@ -2775,66 +3106,17 @@ async function preflightInfraProbe(
     console.warn(`[UiPath Probe] Robots probe failed: ${err.message}`);
   }
 
-  try {
-    const acProbeUrl = `${base}/odata/TaskCatalogs?$top=1`;
-    const acRes = await fetch(acProbeUrl, { headers: hdrs });
-    const acText = await acRes.text();
-    const acIsHTML = acText.trim().startsWith("<") || acText.includes("<!DOCTYPE");
-    if (acRes.ok && !acIsHTML) {
-      const genuineCheck = isGenuineServiceResponse(acText);
-      if (genuineCheck.genuine) {
-        result.actionCenter = { available: true, endpoint: "Orchestrator", message: "Action Center is licensed and available" };
-      } else {
-        result.actionCenter = { available: false, message: "Action Center endpoint returned non-genuine response" };
-      }
-    } else if (acRes.status === 401 || acRes.status === 403) {
-      result.actionCenter = { available: false, message: `Action Center returned ${acRes.status} — may need additional permissions or not licensed` };
-    } else {
-      result.actionCenter = { available: false, message: `Action Center not available (HTTP ${acRes.status})` };
-    }
-  } catch (err: any) {
-    result.actionCenter = { available: false, message: `Action Center probe error: ${err.message}` };
-  }
-
-  try {
-    const tmOdataUrl = `${base}/odata/TestSets?$top=1`;
-    const tmRes = await fetch(tmOdataUrl, { headers: hdrs });
-    if (tmRes.ok) {
-      const tmText = await tmRes.text();
-      const tmIsHTML = tmText.trim().startsWith("<") || tmText.includes("<!DOCTYPE");
-      if (!tmIsHTML) {
-        const genuineCheck = isGenuineServiceResponse(tmText);
-        if (genuineCheck.genuine) {
-          result.testManager = { available: true, endpoint: "Orchestrator", message: "Test Manager is licensed and available (via Orchestrator OData)" };
-        } else {
-          result.testManager = { available: false, message: `Test Manager OData returned non-genuine response: ${genuineCheck.reason}` };
-        }
-      } else {
-        result.testManager = { available: false, message: "Test Manager OData returned HTML" };
-      }
-    } else if (tmRes.status === 401 || tmRes.status === 403) {
-      result.testManager = { available: false, message: `Test Manager returned ${tmRes.status} — may need additional permissions` };
-    } else {
-      result.testManager = { available: false, message: `Test Manager not available (HTTP ${tmRes.status})` };
-    }
-  } catch (err: any) {
-    result.testManager = { available: false, message: `Test Manager probe error: ${err.message}` };
-  }
-
-  if (config) {
-    const primaryTmBase = getTestManagerBaseUrl(config as UiPathAuthConfig);
-    try {
-      const tmToken = await getTmToken();
-      const tmHdrs = { "Authorization": `Bearer ${tmToken}`, "Content-Type": "application/json", "Accept": "application/json" };
-      const tmProjRes = await fetch(`${primaryTmBase}/api/v2/Projects?$top=1`, { headers: tmHdrs, redirect: "manual" });
-      if (tmProjRes.ok) {
-        const tmText = await tmProjRes.text();
-        const genuineCheck = isGenuineServiceResponse(tmText);
-        if (genuineCheck.genuine) {
-          result.testManager = { available: true, endpoint: primaryTmBase, message: `Test Manager is licensed and available (TM API + Orchestrator OData)` };
-        }
-      }
-    } catch { }
+  if (svcAvail) {
+    result.actionCenter = {
+      available: svcAvail.actionCenter,
+      endpoint: svcAvail.actionCenter ? "Orchestrator" : undefined,
+      message: svcAvail.actionCenter ? "Action Center is licensed and available (via probeAllServices)" : "Action Center not available (via probeAllServices)",
+    };
+    result.testManager = {
+      available: svcAvail.testManager,
+      endpoint: svcAvail.testManager ? "Orchestrator" : undefined,
+      message: svcAvail.testManager ? "Test Manager is licensed and available (via probeAllServices)" : "Test Manager not available (via probeAllServices)",
+    };
   }
 
   console.log(`[UiPath Probe] Infrastructure: ${result.machines.length} machines, ${result.users.length} users, ${result.sessions.length} sessions, ${result.robots.length} robots | Action Center: ${result.actionCenter.available ? "✓" : "✗"} | Test Manager: ${result.testManager.available ? "✓" : "✗"}`);
@@ -3088,15 +3370,15 @@ export async function deployAllArtifacts(
     if (validation.releaseKey) releaseKey = validation.releaseKey;
     if (validation.releaseName) releaseName = validation.releaseName;
 
-    const infraProbe = await preflightInfraProbe(base, hdrs, config.folderId, config);
-    const infraResults = formatInfraProbeResults(infraProbe);
-    allResults.push(...infraResults);
-
     let svcAvail: ServiceAvailabilityMap | null = null;
     try {
       svcAvail = await probeServiceAvailability();
       console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}`);
     } catch { /* non-critical — proceed without filtering */ }
+
+    const infraProbe = await preflightInfraProbe(base, hdrs, config.folderId, config, svcAvail);
+    const infraResults = formatInfraProbeResults(infraProbe);
+    allResults.push(...infraResults);
 
     const queueResults = await provisionQueues(base, hdrs, artifacts.queues);
     allResults.push(...queueResults);
@@ -3120,7 +3402,8 @@ export async function deployAllArtifacts(
     const robotResults = await provisionRobotAccounts(base, hdrs, config, artifacts.robotAccounts, infraProbe);
     allResults.push(...robotResults);
 
-    const runtimeCheck = await detectAvailableRuntimeType(base, hdrs);
+    const infraData: PreFetchedInfraData = { machines: infraProbe.machines, sessions: infraProbe.sessions, robots: infraProbe.robots };
+    const runtimeCheck = await detectAvailableRuntimeType(base, hdrs, infraData);
     if (runtimeCheck.warning && (artifacts.triggers?.length || 0) > 0) {
       allResults.push({
         artifact: "Runtime Check",
