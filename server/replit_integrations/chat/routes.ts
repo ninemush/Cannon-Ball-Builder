@@ -554,6 +554,43 @@ export function registerChatRoutes(app: Express): void {
 
       const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null);
 
+      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "CHAT" = "CHAT";
+      try {
+        let recentMessages = chatMessages.slice(-4);
+        if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
+          recentMessages = recentMessages.slice(1);
+        }
+        if (recentMessages.length === 0) {
+          recentMessages = chatMessages.slice(-1);
+        }
+        const classifyRes = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 20,
+          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, or CHAT. Only classify as PDD/SDD/PDD_SDD/DEPLOY if the user is clearly requesting, approving, or confirming that action. PDD is always generated before SDD per the pipeline sequence. If both documents are being requested or approved, reply PDD_SDD.`,
+          messages: recentMessages,
+        });
+        const rawClassify = (classifyRes.content[0]?.type === "text" ? classifyRes.content[0].text : "").trim();
+        const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
+        if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY"].includes(classifyText)) {
+          const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
+          classifiedIntent = normalized as typeof classifiedIntent;
+        }
+        console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
+      } catch (classifyErr: any) {
+        console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
+      }
+
+      let earlyDocType: "PDD" | "SDD" | null = null;
+      if (classifiedIntent === "PDD" || classifiedIntent === "PDD_SDD") {
+        earlyDocType = "PDD";
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch {}
+      } else if (classifiedIntent === "SDD") {
+        earlyDocType = "SDD";
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
+      } else if (classifiedIntent === "DEPLOY") {
+        try { res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`); } catch {}
+      }
+
       const stream = anthropic.messages.stream({
         model: "claude-sonnet-4-6",
         max_tokens: 8192,
@@ -561,34 +598,11 @@ export function registerChatRoutes(app: Express): void {
         messages: chatMessages,
       });
 
-      const userMsg = (chatMessages[chatMessages.length - 1]?.content || "").toLowerCase().trim();
-      const prevAssistantMsg = chatMessages.length >= 2
-        ? (chatMessages[chatMessages.length - 2]?.role === "assistant" ? chatMessages[chatMessages.length - 2].content.toLowerCase() : "")
-        : "";
-      const isShortAffirmative = userMsg.length < 60 && /^(yes|yeah|yep|sure|ok|okay|go ahead|do it|proceed|approved|confirm|absolutely|please|go for it|sounds good|let'?s do it|yes.*both|yes.*go|yes.*ahead|yes.*please|yes.*sure)/.test(userMsg);
-      const prevMentionsDoc = /pdd|sdd|process design|solution design|regenerat|document/.test(prevAssistantMsg);
-      const userExplicitDoc = /(?:re)?generat(?:e|ing)?\s+(?:the\s+)?(?:a\s+)?(?:new\s+)?(?:pdd|sdd)|rewrite\s+(?:the\s+)?(?:pdd|sdd)|redo\s+(?:the\s+)?(?:pdd|sdd)|create\s+(?:the\s+)?(?:pdd|sdd)/i.test(userMsg);
-      const prevMentionsDeploy = /deploy|push.*uipath|orchestrator|push.*to/i.test(prevAssistantMsg);
-      const userExplicitDeploy = /deploy|push.*uipath|push.*to.*orchestrator/i.test(userMsg);
-
-      let earlyDocType: "PDD" | "SDD" | null = null;
-      if (userExplicitDoc || (isShortAffirmative && prevMentionsDoc)) {
-        if (/sdd|solution design/i.test(userMsg) || (/sdd|solution design/i.test(prevAssistantMsg) && !/pdd|process design/i.test(prevAssistantMsg))) {
-          earlyDocType = "SDD";
-        } else {
-          earlyDocType = "PDD";
-        }
-        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: earlyDocType } })}\n\n`); } catch { /* ignore */ }
-        console.log(`[Chat] Early doc-generation detection: ${earlyDocType} (affirmative=${isShortAffirmative}, explicit=${userExplicitDoc})`);
-      } else if (userExplicitDeploy || (isShortAffirmative && prevMentionsDeploy)) {
-        try { res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`); } catch { /* ignore */ }
-        console.log(`[Chat] Early deploy detection (affirmative=${isShortAffirmative}, explicit=${userExplicitDeploy})`);
-      }
-
       let fullResponse = "";
       let stopReason = "";
       let docProgressDocType: "PDD" | "SDD" | null = earlyDocType;
       let docProgressStarted = earlyDocType !== null;
+      let expectSddAfterPdd = classifiedIntent === "PDD_SDD";
       let lastEmittedSectionNumber = -1;
 
       for await (const event of stream) {
@@ -610,6 +624,12 @@ export function registerChatRoutes(app: Express): void {
                 docProgressStarted = true;
                 try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: docProgressDocType } })}\n\n`); } catch { /* ignore */ }
               }
+            } else if (expectSddAfterPdd && docProgressDocType === "PDD" && /\[DOC:SDD:/.test(fullResponse)) {
+              docProgressDocType = "SDD";
+              lastEmittedSectionNumber = -1;
+              expectSddAfterPdd = false;
+              try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch { /* ignore */ }
+              console.log(`[Chat] Switched doc progress indicator from PDD to SDD (PDD_SDD flow)`);
             }
 
             if (docProgressStarted && docProgressDocType) {

@@ -956,7 +956,6 @@ async function provisionMachines(
             const updateBody: Record<string, any> = {
               Name: m.name,
               Description: newDesc,
-              Type: existing.Type || "Template",
             };
             if (desiredSlotField === "UnattendedSlots") updateBody.UnattendedSlots = newSlots;
             else if (desiredSlotField === "NonProductionSlots") updateBody.NonProductionSlots = newSlots;
@@ -982,6 +981,12 @@ async function provisionMachines(
               } else if (putRes.status === 404 || putText.toLowerCase().includes("does not exist")) {
                 console.log(`[UiPath Deploy] Machine "${m.name}" PUT returned 404 (ID ${machineId} likely in different folder) — falling back to create in current folder`);
                 shouldCreateMachine = true;
+              } else if (putRes.status === 409) {
+                console.log(`[UiPath Deploy] Machine "${m.name}" PUT returned 409 (immutable field conflict) — treating as exists`);
+                const folderAssign = await assignMachineToFolder(base, hdrs, machineId!);
+                const folderNote = folderAssign.success ? folderAssign.message : `Folder assignment note: ${folderAssign.message}`;
+                results.push({ artifact: "Machine", name: m.name, status: "exists", message: `Already exists (ID: ${machineId}, update skipped — immutable field conflict). ${folderNote}`, id: machineId ?? undefined });
+                continue;
               } else {
                 console.warn(`[UiPath Deploy] Machine "${m.name}" update failed (${putRes.status})`);
                 results.push({ artifact: "Machine", name: m.name, status: "failed", message: `Update failed (ID: ${machineId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: machineId ?? undefined });
@@ -1097,7 +1102,6 @@ async function provisionStorageBuckets(
                 Description: newDesc,
               };
               if (existing.StorageProvider) updateBody.StorageProvider = existing.StorageProvider;
-              if (existing.Identifier) updateBody.Identifier = existing.Identifier;
 
               const putRes = await fetch(`${base}/odata/Buckets(${existingId})`, {
                 method: "PUT",
@@ -1113,6 +1117,10 @@ async function provisionStorageBuckets(
               } else if (putRes.status === 404 || putText.toLowerCase().includes("does not exist")) {
                 console.log(`[UiPath Deploy] Bucket "${b.name}" PUT returned 404 (ID ${existingId} likely in different folder) — falling back to create in current folder`);
                 shouldCreateBucket = true;
+              } else if (putRes.status === 409) {
+                console.log(`[UiPath Deploy] Bucket "${b.name}" PUT returned 409 (immutable field conflict) — treating as exists`);
+                results.push({ artifact: "Storage Bucket", name: b.name, status: "exists", message: `Already exists (ID: ${existingId}, update skipped — immutable field conflict)`, id: existingId });
+                continue;
               } else {
                 console.warn(`[UiPath Deploy] Bucket "${b.name}" update failed (${putRes.status})`);
                 results.push({ artifact: "Storage Bucket", name: b.name, status: "failed", message: `Update failed (ID: ${existingId}, ${putRes.status}): ${putText.slice(0, 200)}`, id: existingId });
