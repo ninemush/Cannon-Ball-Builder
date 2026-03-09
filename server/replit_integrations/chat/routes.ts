@@ -5,7 +5,7 @@ import { storage } from "../../storage";
 import { documentStorage } from "../../document-storage";
 import { processMapStorage } from "../../process-map-storage";
 import { evaluateTransition } from "../../stage-transition";
-import { PIPELINE_STAGES, type PipelineStage } from "@shared/schema";
+import { PIPELINE_STAGES, type PipelineStage, type AutomationType } from "@shared/schema";
 import { probeServiceAvailability, type ServiceAvailabilityMap } from "../../uipath-integration";
 
 const anthropic = new Anthropic({
@@ -37,7 +37,7 @@ function detectApprovalIntent(userMessage: string): "PDD" | "SDD" | null {
   return "PDD";
 }
 
-function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null): string {
+function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null, automationType?: AutomationType | null): string {
   let serviceContext = "";
   if (serviceAvailability && serviceAvailability.configured) {
     const available: string[] = [];
@@ -90,11 +90,46 @@ FILE UPLOAD HANDLING:
 
 STAGE BEHAVIOR:
 - Idea: Extract the process with targeted single questions. Identify who does it, what triggers it, what systems are involved, what the pain points are, and what a successful outcome looks like.
-- Feasibility Assessment: Assess automation potential directly. Flag complexity honestly. Give an effort range. Do not hedge excessively.
-- Design: Reconstruct the process step by step. Output each confirmed step using the [STEP] tag format below so the visual map builds in real time.
+- Feasibility Assessment: Assess automation potential directly. Flag complexity honestly. Give an effort range. Do not hedge excessively. ALSO: perform the Automation Type Assessment (see below) and output the [AUTOMATION_TYPE:] tag.
+- Design: Reconstruct the process step by step. Output each confirmed step using the [STEP] tag format below so the visual map builds in real time. Use agent-specific step types when the automation type is "agent" or "hybrid".
+
+AUTOMATION TYPE ASSESSMENT (MANDATORY during Feasibility Assessment):
+You MUST evaluate whether this process is best served by traditional RPA, a UiPath Agent (AI-driven autonomous agent), or a hybrid approach. Analyze using this framework:
+
+| Factor | Favors RPA | Favors Agent | Favors Hybrid |
+|--------|-----------|--------------|---------------|
+| Data structure | Structured, fixed schema, form fields | Unstructured, variable format, natural language | Mix of structured + unstructured |
+| Decision logic | Rule-based, deterministic, if/then | Judgment-based, context-dependent, interpretation | Rules with exceptions needing judgment |
+| Volume & Repetition | High volume, identical repetitive steps | Lower volume, varied scenarios each time | High volume with exception handling |
+| System interactions | Fixed UI selectors, APIs, database queries | Email triage, chat interfaces, document interpretation | API backbone + natural language edges |
+| Error handling | Known exception patterns, retry logic | Novel/unpredictable scenarios, reasoning needed | Known patterns + escalation for novel cases |
+| Cost model | Lower per-transaction, higher dev cost | Higher per-transaction (LLM calls), lower dev cost | Balanced — RPA for bulk, Agent for exceptions |
+
+After your analysis, output EXACTLY ONE of these tags:
+[AUTOMATION_TYPE: rpa | <rationale in 1-2 sentences>]
+[AUTOMATION_TYPE: agent | <rationale in 1-2 sentences>]
+[AUTOMATION_TYPE: hybrid | <rationale in 1-2 sentences>]
+
+Examples:
+[AUTOMATION_TYPE: rpa | This process follows strict rules with structured data from SAP — every step is deterministic with known UI selectors and no judgment calls.]
+[AUTOMATION_TYPE: agent | This process involves triaging unstructured customer emails, interpreting intent, and making context-dependent routing decisions — ideal for an AI agent.]
+[AUTOMATION_TYPE: hybrid | The core invoice processing is structured RPA, but exception handling and vendor communication require judgment — a hybrid with agent nodes for exceptions is optimal.]
+
+${automationType && automationType !== "rpa" ? `CURRENT AUTOMATION TYPE: ${automationType.toUpperCase()}
+This idea has been assessed as "${automationType}" automation. All subsequent design, documentation, and deployment must reflect this:
+${automationType === "agent" ? `- Design the TO-BE as an AI Agent workflow. Steps should primarily use agent-task and agent-decision node types.
+- The agent handles unstructured reasoning, natural language interpretation, and context-dependent decisions autonomously.
+- RPA task nodes are only used for structured system interactions the agent delegates to (API calls, database updates, file operations).` : ""}${automationType === "hybrid" ? `- Design the TO-BE as a HYBRID workflow. Use standard task/decision nodes for structured RPA steps and agent-task/agent-decision nodes for judgment-heavy steps.
+- Clearly label which steps are RPA-driven vs. Agent-driven so the process map visually distinguishes them.
+- The agent handles exceptions, natural language, and judgment calls. RPA handles the structured backbone.` : ""}` : ""}
 
 STEP TAG FORMAT — output one per line for every confirmed process step:
-[STEP: <number> <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end> | FROM: <parent step number> | LABEL: <edge label>]
+[STEP: <number> <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end/agent-task/agent-decision> | FROM: <parent step number> | LABEL: <edge label>]
+
+AGENT NODE TYPES (use when automation type is "agent" or "hybrid"):
+- TYPE: agent-task — An AI-powered action where the agent reasons, interprets, or generates (e.g., "Classify Email Intent", "Draft Response", "Extract Key Terms from Contract"). Use instead of "task" when the step requires judgment, interpretation, or natural language understanding.
+- TYPE: agent-decision — A judgment call where the agent evaluates context and decides (e.g., "Determine Escalation Priority", "Assess Fraud Risk"). Use instead of "decision" when the branching logic is not purely rule-based but requires contextual reasoning.
+- Standard task/decision types remain for structured, deterministic RPA steps even in hybrid workflows.
 
 STEP NUMBERING RULES:
 - Every step gets a unique number: 1.0, 2.0, 3.0, etc.
@@ -205,6 +240,23 @@ DOCUMENT GENERATION:
 - DOCUMENT APPROVALS happen through a Confirm button that appears on the document card in the UI. Do NOT ask users to say "approved" in chat. Instead, tell them to use the Approve/Confirm button on the document card that appears above.
 - After the user approves a document via the button, the system records the approval. You will see this in the document context above. Do not re-ask for approval if it is already approved.
 
+PDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
+- Include a dedicated "## Automation Approach" section after the Executive Summary explaining WHY this automation type was selected, referencing the evaluation framework factors (data structure, decision logic, volume, systems, error handling, cost).
+- For hybrid: include a clear delineation of which process segments are RPA-driven vs. Agent-driven with a table.
+- Include an "Agent Capability Requirements" subsection describing what the agent needs to understand and do (e.g., "interpret email intent", "classify document type", "draft natural language responses").
+- Include a "Knowledge Base Requirements" subsection listing what documents, FAQs, or reference data the agent needs access to for reasoning.
+
+SDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
+- Include a "## Agent Architecture" section describing the agent's design:
+  - Agent name and purpose
+  - System prompt / behavioral instructions for the agent
+  - Tools the agent can invoke (which UiPath activities/APIs)
+  - Knowledge bases the agent accesses
+  - Guardrails and safety constraints
+  - Escalation rules (when does the agent hand off to a human?)
+- For hybrid: include a mapping table showing which XAML workflows invoke which agents and at which steps.
+- The orchestrator_artifacts block MUST include agent-specific artifacts (see AGENT ARTIFACTS below).
+
 CRITICAL — NEVER STALL DOCUMENT GENERATION:
 - When a PDD has been approved and the user asks about the SDD (or the system tells you to generate one), you MUST generate the SDD IMMEDIATELY with the information available. Do NOT ask follow-up questions, do NOT request clarification, do NOT say you need more details. Use reasonable professional assumptions for any gaps — you are a senior consultant, fill in blanks with industry best practices.
 - The same applies to PDD generation after process map approval: generate immediately, do not stall.
@@ -249,6 +301,11 @@ CONDITIONALLY include these — ONLY if the corresponding service is listed as A
 - "testCases" — ONLY if Test Manager is available. Format: [{"name": "TC001 - ...", "description": "...", "steps": [{"action": "...", "expected": "..."}]}]
 - "requirements" — ONLY if Test Manager is available. Format: [{"name": "REQ-001: Requirement name", "description": "Business requirement from PDD", "source": "PDD Section X"}]
 - "testSets" — ONLY if Test Manager is available. Format: [{"name": "Happy Path Tests", "description": "Core scenario validation", "testCaseNames": ["TC001 - Test case name"]}]
+
+AGENT ARTIFACTS (include when automation type is "agent" or "hybrid"):
+- "agents" — Agent definitions. Format: [{"name": "AgentName", "description": "Agent purpose (max 250 chars)", "systemPrompt": "Full behavioral instructions for the agent", "tools": [{"name": "ToolName", "description": "What this tool does", "activityType": "UiPath activity or API the agent can invoke"}], "knowledgeBases": ["KBName1"], "guardrails": ["Safety constraint 1", "Safety constraint 2"], "escalationRules": [{"condition": "When to escalate", "target": "Human role or queue"}], "maxIterations": 10, "temperature": 0.3}]
+- "knowledgeBases" — Knowledge base definitions for agent context. Format: [{"name": "KBName", "description": "Purpose (max 250 chars)", "documentSources": ["Source description 1"], "refreshFrequency": "daily|weekly|monthly"}]
+- "promptTemplates" — Reusable prompt templates stored as assets. Format: [{"name": "TemplateName", "description": "Purpose (max 250 chars)", "template": "Prompt template text with {{variable}} placeholders", "variables": ["variable1", "variable2"]}]
 
 CRITICAL RULES FOR ARTIFACTS:
 1. All description fields have a maximum length of 250 characters. Keep descriptions concise.
@@ -495,7 +552,7 @@ export function registerChatRoutes(app: Express): void {
         console.warn("[Chat] Service probe failed:", (e as any)?.message);
       }
 
-      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability);
+      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null);
 
       const stream = anthropic.messages.stream({
         model: "claude-sonnet-4-6",
@@ -589,6 +646,7 @@ export function registerChatRoutes(app: Express): void {
       let cleanedResponse = fullResponse
         .replace(/\[DEPLOY_UIPATH\]/g, "")
         .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
+        .replace(/\[AUTOMATION_TYPE:\s*[^\]]+\]/gi, "")
         .trim();
 
       const docTagMatch = cleanedResponse.match(/^\[DOC:(PDD|SDD):\d+\]/);
@@ -703,6 +761,22 @@ export function registerChatRoutes(app: Express): void {
             res.write(`data: ${JSON.stringify({ transition: { transitioned: true, fromStage: idea.stage, toStage: targetStage, reason: "Moved backward for revision" } })}\n\n`);
             skipAutoTransition = true;
           }
+        }
+      }
+
+      const autoTypeMatch = fullResponse.match(/\[AUTOMATION_TYPE:\s*(rpa|agent|hybrid)\s*\|\s*([^\]]+)\]/i);
+      if (autoTypeMatch) {
+        const detectedType = autoTypeMatch[1].toLowerCase() as AutomationType;
+        const rationale = autoTypeMatch[2].trim();
+        try {
+          await storage.updateIdea(ideaId, {
+            automationType: detectedType,
+            automationTypeRationale: rationale,
+          });
+          console.log(`[Chat] Automation type set to "${detectedType}" for idea ${ideaId}: ${rationale}`);
+          res.write(`data: ${JSON.stringify({ automationType: { type: detectedType, rationale } })}\n\n`);
+        } catch (atErr: any) {
+          console.error(`[Chat] Failed to save automation type:`, atErr?.message);
         }
       }
 

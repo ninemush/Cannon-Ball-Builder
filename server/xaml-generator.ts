@@ -9,7 +9,7 @@ import {
 } from "./workflow-analyzer";
 
 export type XamlGap = {
-  category: "selector" | "credential" | "endpoint" | "logic" | "config" | "manual";
+  category: "selector" | "credential" | "endpoint" | "logic" | "config" | "manual" | "agent";
   activity: string;
   description: string;
   placeholder: string;
@@ -172,6 +172,8 @@ type WorkflowStep = {
   errorHandling?: "retry" | "catch" | "escalate" | "none";
   selectorHint?: string;
   notes?: string;
+  nodeType?: string;
+  role?: string;
 };
 
 type WorkflowSpec = {
@@ -224,6 +226,10 @@ function classifyActivity(ctx: ActivityContext): {
   }
   if (combined.includes("browser") || combined.includes("web") || combined.includes("click") || combined.includes("type") || combined.includes("navigate") || combined.includes("login") || combined.includes("portal") || combined.includes("screen") || combined.includes("ui ") || combined.includes("application")) {
     return classifyUI(ctx, combined);
+  }
+
+  if (ctx.nodeType === "agent-task" || ctx.nodeType === "agent-loop") {
+    return classifyAgent(ctx, combined);
   }
 
   return classifyGeneral(ctx, combined);
@@ -689,6 +695,40 @@ function classifyGeneral(ctx: ActivityContext, _combined: string): ReturnType<ty
   };
 }
 
+function classifyAgent(ctx: ActivityContext, _combined: string): ReturnType<typeof classifyActivity> {
+  const gaps: XamlGap[] = [];
+  const variables: VariableDecl[] = [
+    { name: "str_AgentInput", type: "String", defaultValue: '""' },
+    { name: "str_AgentOutput", type: "String", defaultValue: '""' },
+  ];
+
+  gaps.push({
+    category: "agent",
+    activity: "InvokeAgent",
+    description: `Configure agent invocation for "${ctx.name}" — set agent name, input data mapping, and output capture`,
+    placeholder: "AgentInvocation_Stub.xaml",
+    estimatedMinutes: 30,
+  });
+  gaps.push({
+    category: "agent",
+    activity: "InvokeAgent",
+    description: `Define agent prompt template and guardrails for "${ctx.name}"`,
+    placeholder: "Configure agent system prompt and escalation rules",
+    estimatedMinutes: 20,
+  });
+
+  return {
+    activityType: "ui:InvokeWorkflowFile",
+    activityPackage: "UiPath.System.Activities",
+    properties: {
+      WorkflowFileName: "AgentInvocation_Stub.xaml",
+    },
+    errorHandling: "catch",
+    variables,
+    gaps,
+  };
+}
+
 function renderVariablesBlock(variables: VariableDecl[]): string {
   if (variables.length === 0) return "<Sequence.Variables />";
 
@@ -837,6 +877,73 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
           </TryCatch>`;
 }
 
+function renderAgentTaskSequence(stepName: string, description: string, role: string): string {
+  const safeStepName = escapeXml(stepName);
+  const agentRole = role ? escapeXml(role) : "AI Agent";
+  const annotationText = escapeXml(
+    `[Agent Step] ${stepName}\nAgent Role: ${agentRole}\nDescription: ${description || stepName}\nThis step is handled by a UiPath Agent (AI-driven) rather than traditional RPA.\nThe agent uses LLM reasoning to process unstructured or judgment-based work.`
+  );
+
+  return `
+          <Sequence DisplayName="Agent: ${safeStepName}" sap2010:Annotation.AnnotationText="${annotationText}">
+            <Sequence.Variables>
+              <Variable x:TypeArguments="x:String" Name="str_AgentInput" Default="&quot;&quot;" />
+              <Variable x:TypeArguments="x:String" Name="str_AgentOutput" Default="&quot;&quot;" />
+            </Sequence.Variables>
+            <ui:LogMessage Level="Info" Message="'Invoking agent for: ${safeStepName}'" DisplayName="Log Agent Start: ${safeStepName}" />
+            <ui:InvokeWorkflowFile DisplayName="Invoke Agent: ${safeStepName}" WorkflowFileName="AgentInvocation_Stub.xaml">
+              <ui:InvokeWorkflowFile.Arguments>
+                <InArgument x:TypeArguments="x:String" x:Key="in_AgentName">"${safeStepName}"</InArgument>
+                <InArgument x:TypeArguments="x:String" x:Key="in_InputData">[str_AgentInput]</InArgument>
+                <OutArgument x:TypeArguments="x:String" x:Key="out_AgentResult">[str_AgentOutput]</OutArgument>
+              </ui:InvokeWorkflowFile.Arguments>
+            </ui:InvokeWorkflowFile>
+            <Assign DisplayName="Capture Agent Output: ${safeStepName}">
+              <Assign.To><OutArgument x:TypeArguments="x:String">[str_AgentOutput]</OutArgument></Assign.To>
+              <Assign.Value><InArgument x:TypeArguments="x:String">[str_AgentOutput]</InArgument></Assign.Value>
+            </Assign>
+            <ui:LogMessage Level="Info" Message="'Agent completed: ${safeStepName}'" DisplayName="Log Agent Complete: ${safeStepName}" />
+          </Sequence>`;
+}
+
+function renderAgentDecision(stepName: string, description: string, role: string, thenXml: string, elseXml: string): string {
+  const safeStepName = escapeXml(stepName);
+  const agentRole = role ? escapeXml(role) : "AI Agent";
+  const annotationText = escapeXml(
+    `[Agent Decision] ${stepName}\nAgent Role: ${agentRole}\nJudgment Call: ${description || stepName}\nThis decision is evaluated by a UiPath Agent using LLM reasoning rather than deterministic rules.\nThe agent analyzes context and makes a judgment-based determination.`
+  );
+
+  const defaultThen = thenXml || `\n              <ui:LogMessage Level="Info" Message="'Agent decision YES path: ${safeStepName}'" DisplayName="Agent Then Path" />`;
+  const defaultElse = elseXml || `\n              <ui:LogMessage Level="Info" Message="'Agent decision NO path: ${safeStepName}'" DisplayName="Agent Else Path" />`;
+
+  return `
+          <Sequence DisplayName="Agent Decision Setup: ${safeStepName}" sap2010:Annotation.AnnotationText="${annotationText}">
+            <Sequence.Variables>
+              <Variable x:TypeArguments="x:Boolean" Name="bool_AgentDecisionResult" Default="False" />
+              <Variable x:TypeArguments="x:String" Name="str_AgentDecisionInput" Default="&quot;&quot;" />
+            </Sequence.Variables>
+            <ui:LogMessage Level="Info" Message="'Invoking agent decision for: ${safeStepName}'" DisplayName="Log Agent Decision Start" />
+            <ui:InvokeWorkflowFile DisplayName="Agent Evaluate: ${safeStepName}" WorkflowFileName="AgentInvocation_Stub.xaml">
+              <ui:InvokeWorkflowFile.Arguments>
+                <InArgument x:TypeArguments="x:String" x:Key="in_AgentName">"${safeStepName}"</InArgument>
+                <InArgument x:TypeArguments="x:String" x:Key="in_InputData">[str_AgentDecisionInput]</InArgument>
+                <OutArgument x:TypeArguments="x:Boolean" x:Key="out_DecisionResult">[bool_AgentDecisionResult]</OutArgument>
+              </ui:InvokeWorkflowFile.Arguments>
+            </ui:InvokeWorkflowFile>
+            <If DisplayName="Agent Decision: ${safeStepName}" Condition="[bool_AgentDecisionResult]">
+              <If.Then>
+                <Sequence DisplayName="Agent Yes: ${safeStepName}">${defaultThen}
+                </Sequence>
+              </If.Then>
+              <If.Else>
+                <Sequence DisplayName="Agent No: ${safeStepName}">${defaultElse}
+                </Sequence>
+              </If.Else>
+            </If>
+            <ui:LogMessage Level="Info" Message="'Agent decision completed: ${safeStepName}'" DisplayName="Log Agent Decision Complete" />
+          </Sequence>`;
+}
+
 function wrapInIf(innerXml: string, condition: string, displayName: string): string {
   return `
           <If DisplayName="Decision: ${escapeXml(displayName)}" Condition="[${escapeXml(condition)}]">
@@ -961,6 +1068,7 @@ export function generateRichXamlFromNodes(
   const startNodes = sortedNodes.filter(n => n.nodeType === "start");
   const endNodes = sortedNodes.filter(n => n.nodeType === "end");
   const taskNodes = sortedNodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end");
+  const hasAgentNodes = taskNodes.some(n => n.nodeType === "agent-task" || n.nodeType === "agent-decision" || n.nodeType === "agent-loop");
 
   if (startNodes.length > 0) {
     for (const node of startNodes) {
@@ -994,6 +1102,70 @@ export function generateRichXamlFromNodes(
   for (const node of taskNodes) {
     const enrichedSpec = enrichedMap.get(node.id);
     const nodeTrace = `Step #${node.orderIndex} "${escapeXml(node.name)}" [${node.nodeType}]${node.system ? ` | System: ${escapeXml(node.system)}` : ""}${node.role ? ` | Role: ${escapeXml(node.role)}` : ""}`;
+
+    if (node.nodeType === "agent-task" || node.nodeType === "agent-loop") {
+      activities += `
+        <!-- Agent Step: ${nodeTrace} -->`;
+      const agentXml = renderAgentTaskSequence(node.name, node.description || "", node.role || "");
+      const wrappedAgent = wrapInTryCatch(agentXml, node.name, "catch");
+      activities += wrappedAgent;
+      allVariables.push({ name: "str_AgentInput", type: "String", defaultValue: '""' });
+      allVariables.push({ name: "str_AgentOutput", type: "String", defaultValue: '""' });
+      allGaps.push({
+        category: "agent",
+        activity: "InvokeAgent",
+        description: `Configure agent invocation for "${node.name}" — set agent name, input data mapping, and output capture`,
+        placeholder: "AgentInvocation_Stub.xaml",
+        estimatedMinutes: 30,
+      });
+      continue;
+    }
+
+    if (node.nodeType === "agent-decision") {
+      const outEdges = edgeMap.get(node.id) || [];
+      const edgeLabels = outEdges.map(e => `"${e.label || "unlabeled"}" -> node #${e.target}`).join(", ");
+      activities += `
+        <!-- Agent Decision: ${nodeTrace} | Branches: ${edgeLabels} -->`;
+
+      let thenActivities = "";
+      let elseActivities = "";
+      for (const outEdge of outEdges) {
+        const targetNode = nodeMap.get(outEdge.target);
+        if (!targetNode) continue;
+        const targetEnriched = enrichedMap.get(outEdge.target);
+        let branchXml: string;
+        if (targetEnriched && targetEnriched.activities.length > 0) {
+          const rendered = renderEnrichedActivities(targetEnriched);
+          branchXml = rendered.xml;
+          rendered.packages.forEach(p => usedPackages.add(p));
+          allVariables.push(...rendered.variables);
+          allGaps.push(...rendered.gaps);
+        } else {
+          const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false });
+          branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
+        }
+        const label = (outEdge.label || "").toLowerCase();
+        if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
+          thenActivities += branchXml;
+        } else {
+          elseActivities += branchXml;
+        }
+      }
+
+      const agentDecisionXml = renderAgentDecision(node.name, node.description || "", node.role || "", thenActivities, elseActivities);
+      const wrappedDecision = wrapInTryCatch(agentDecisionXml, node.name, "catch");
+      activities += wrappedDecision;
+      allVariables.push({ name: "bool_AgentDecisionResult", type: "Boolean", defaultValue: "False" });
+      allVariables.push({ name: "str_AgentDecisionInput", type: "String", defaultValue: '""' });
+      allGaps.push({
+        category: "agent",
+        activity: "AgentDecision",
+        description: `Configure agent decision logic for "${node.name}" — this is a judgment-based evaluation handled by AI`,
+        placeholder: "Agent evaluates context and returns boolean decision",
+        estimatedMinutes: 25,
+      });
+      continue;
+    }
 
     if (enrichedSpec && enrichedSpec.activities.length > 0) {
       if (node.nodeType === "decision") {
@@ -1224,6 +1396,42 @@ export function generateRichXamlFromSpec(
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const stepName = step.activity || step.activityType || `Step ${i + 1}`;
+
+    if (step.nodeType === "agent-task" || step.nodeType === "agent-loop") {
+      activities += `
+        <!-- Agent Step: ${escapeXml(stepName)} -->`;
+      const agentXml = renderAgentTaskSequence(stepName, step.notes || "", step.role || "");
+      const wrappedAgent = wrapInTryCatch(agentXml, stepName, "catch");
+      activities += wrappedAgent;
+      allVariables.push({ name: "str_AgentInput", type: "String", defaultValue: '""' });
+      allVariables.push({ name: "str_AgentOutput", type: "String", defaultValue: '""' });
+      allGaps.push({
+        category: "agent",
+        activity: "InvokeAgent",
+        description: `Configure agent invocation for "${stepName}" — set agent name, input data mapping, and output capture`,
+        placeholder: "AgentInvocation_Stub.xaml",
+        estimatedMinutes: 30,
+      });
+      continue;
+    }
+
+    if (step.nodeType === "agent-decision") {
+      activities += `
+        <!-- Agent Decision: ${escapeXml(stepName)} -->`;
+      const agentDecisionXml = renderAgentDecision(stepName, step.notes || "", step.role || "", "", "");
+      const wrappedDecision = wrapInTryCatch(agentDecisionXml, stepName, "catch");
+      activities += wrappedDecision;
+      allVariables.push({ name: "bool_AgentDecisionResult", type: "Boolean", defaultValue: "False" });
+      allVariables.push({ name: "str_AgentDecisionInput", type: "String", defaultValue: '""' });
+      allGaps.push({
+        category: "agent",
+        activity: "AgentDecision",
+        description: `Configure agent decision logic for "${stepName}" — this is a judgment-based evaluation handled by AI`,
+        placeholder: "Agent evaluates context and returns boolean decision",
+        estimatedMinutes: 25,
+      });
+      continue;
+    }
 
     if (step.activityType) {
       usedPackages.add(step.activityPackage || "UiPath.System.Activities");
@@ -1716,6 +1924,7 @@ export type DhgOptions = {
   deploymentResults?: DhgDeploymentResult[];
   extractedArtifacts?: DhgExtractedArtifacts;
   analysisReports?: Array<{ fileName: string; report: AnalysisReport }>;
+  automationType?: "rpa" | "agent" | "hybrid";
 };
 
 export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
@@ -1732,6 +1941,7 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     deploymentResults,
     extractedArtifacts,
     analysisReports,
+    automationType,
   } = opts;
 
   const selectorGaps = gaps.filter((g) => g.category === "selector");
@@ -1749,11 +1959,16 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   if (description) md += `**Description:** ${description}\n`;
   md += `**Generated:** ${new Date().toISOString().split("T")[0]}\n`;
   md += `**Architecture:** ${useReFramework ? "REFramework (Queue-based transactional)" : "Sequential (Linear workflow)"}\n`;
+  if (automationType && automationType !== "rpa") {
+    const atLabel = automationType === "agent" ? "UiPath Agent (AI-driven autonomous)" : "Hybrid (RPA + Agent)";
+    md += `**Automation Type:** ${atLabel}\n`;
+  }
   if (enrichment) md += `**AI Enrichment:** Applied — activities use system-specific selectors and real property values\n`;
 
   const tier3Items = [...selectorGaps, ...credentialGaps.filter(g => !(g.placeholder || "").includes("PLACEHOLDER_"))];
   const tier2Items = [...endpointGaps, ...configGaps];
-  const tier3Minutes = tier3Items.reduce((s, g) => s + g.estimatedMinutes, 0);
+  const earlyAgentMinutes = (automationType === "agent" || automationType === "hybrid") ? (155 + (automationType === "hybrid" ? 30 : 0)) : 0;
+  const tier3Minutes = tier3Items.reduce((s, g) => s + g.estimatedMinutes, 0) + earlyAgentMinutes;
   const totalAutoFixed = analysisReports?.reduce((s, r) => s + r.report.totalAutoFixed, 0) ?? 0;
   const totalRulesChecked = analysisReports?.reduce((s, r) => s + r.report.totalChecked, 0) ?? 0;
   const totalRulesPassed = analysisReports?.reduce((s, r) => s + r.report.totalPassed, 0) ?? 0;
@@ -1860,6 +2075,19 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
       md += `| ${type} | ${stats.total} | ${stats.ready} | ${stats.needs} |\n`;
     });
     md += `\n**${provisionedCount}/${totalProvisionAttempts}** artifacts provisioned successfully\n\n`;
+
+    if (automationType === "agent" || automationType === "hybrid") {
+      const agentResults = deploymentResults?.filter(r => r.artifact === "Agent" || r.artifact === "Knowledge Base" || r.artifact === "Prompt Template") || [];
+      if (agentResults.length > 0) {
+        md += `### Agent Artifacts Provisioned\n\n`;
+        md += `| Artifact | Name | Status | Details |\n`;
+        md += `|----------|------|--------|--------|\n`;
+        for (const ar of agentResults) {
+          md += `| ${ar.artifact} | \`${ar.name}\` | ${ar.status} | ${ar.message.slice(0, 100)} |\n`;
+        }
+        md += `\n`;
+      }
+    }
   }
 
   md += `---\n\n`;
@@ -1917,6 +2145,25 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     tier2Items.forEach((g, i) => {
       md += `| ${i + 1} | ${g.category} | \`${g.activity}\` | \`${g.placeholder}\` | ${g.description} |\n`;
     });
+    md += `\n`;
+  }
+
+  if (automationType === "agent" || automationType === "hybrid") {
+    const agentGaps = gaps.filter(g => g.category === "agent");
+    md += `### Agent Configuration (Review Recommended)\n\n`;
+    md += `The following agent settings were generated by AI and should be reviewed before production use:\n\n`;
+    md += `| # | Item | Action Required |\n`;
+    md += `|---|------|-----------------|\n`;
+    md += `| 1 | Agent guardrails | Review safety constraints and response boundaries |\n`;
+    md += `| 2 | Escalation rules | Verify escalation conditions and human-handoff triggers |\n`;
+    md += `| 3 | Agent temperature/iterations | Tune LLM parameters for your use case |\n`;
+    md += `| 4 | Tool permissions | Confirm which UiPath activities the agent can invoke |\n`;
+    if (agentGaps.length > 0) {
+      let agIdx = 5;
+      for (const g of agentGaps) {
+        md += `| ${agIdx++} | ${g.activity} | ${g.description} |\n`;
+      }
+    }
     md += `\n`;
   }
 
@@ -1986,14 +2233,30 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     md += `\n`;
   }
 
-  if (selectorGaps.length === 0 && credentialGaps.length === 0 && credentialAssets.length === 0 && complexGaps.length === 0) {
+  if (automationType === "agent" || automationType === "hybrid") {
+    md += `### Agent Setup (Human Required)\n\n`;
+    md += `These items require human expertise and access to configure the agent for production:\n\n`;
+    md += `| # | Task | Description | Est. Time |\n`;
+    md += `|---|------|-------------|----------|\n`;
+    md += `| 1 | Knowledge base content | Upload and index actual business documents, SOPs, and reference materials | 60 min |\n`;
+    md += `| 2 | Production prompt tuning | Test and refine system prompts against real-world scenarios and edge cases | 45 min |\n`;
+    md += `| 3 | Agent end-to-end testing | Execute agent with representative inputs, verify outputs and escalation behavior | 30 min |\n`;
+    md += `| 4 | Guardrail validation | Verify agent stays within safety constraints with adversarial test cases | 20 min |\n`;
+    if (automationType === "hybrid") {
+      md += `| 5 | RPA-Agent handoff testing | Verify data flows correctly between RPA sequences and agent invocations | 30 min |\n`;
+    }
+    md += `\n`;
+  }
+
+  if (selectorGaps.length === 0 && credentialGaps.length === 0 && credentialAssets.length === 0 && complexGaps.length === 0 && (!automationType || automationType === "rpa")) {
     md += `No items require human intervention. The package is ready for Studio validation.\n\n`;
   }
 
+  const agentTier3Minutes = (automationType === "agent" || automationType === "hybrid") ? (155 + (automationType === "hybrid" ? 30 : 0)) : 0;
   const tier3TotalMinutes = selectorGaps.reduce((s, g) => s + g.estimatedMinutes, 0) +
     credentialGaps.reduce((s, g) => s + g.estimatedMinutes, 0) +
     complexGaps.reduce((s, g) => s + g.estimatedMinutes, 0) +
-    credentialAssets.length * 5;
+    credentialAssets.length * 5 + agentTier3Minutes;
   md += `**Total Tier 3 Effort: ~${(tier3TotalMinutes / 60).toFixed(1)} hours** (${selectorGaps.length} selectors, ${credentialGaps.length + credentialAssets.length} credentials, ${complexGaps.length} logic items)\n\n`;
 
   md += `---\n\n`;
@@ -2030,7 +2293,14 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   md += `| Naming Conventions | Variables/arguments follow type/direction prefixes? | AI: Auto-corrected |\n`;
   md += `| Annotations | Every activity annotated with business context? | AI: Done |\n`;
   md += `| Argument Validation | Entry points validate required arguments? | AI: Done |\n`;
-  md += `| Config Management | Environment-specific values in Config.xlsx? | AI: Done |\n\n`;
+  md += `| Config Management | Environment-specific values in Config.xlsx? | AI: Done |\n`;
+  if (automationType === "agent" || automationType === "hybrid") {
+    md += `| Agent Guardrails | Safety constraints prevent harmful agent actions? | Tier 2: Review |\n`;
+    md += `| Agent Escalation | Human handoff triggers correctly configured? | Tier 2: Review |\n`;
+    md += `| Agent Testing | Agent produces expected outputs for sample inputs? | Tier 3: Pending |\n`;
+    md += `| Knowledge Base | Agent has access to required reference documents? | Tier 3: Pending |\n`;
+  }
+  md += `\n`;
 
   md += `### Pre-Deployment Verification\n\n`;
   md += `1. Open the project in UiPath Studio\n`;
@@ -2228,6 +2498,7 @@ export function generateDhgSummary(gaps: XamlGap[], deploymentResults?: DhgDeplo
   const configCount = gaps.filter((g) => g.category === "config").length;
   const logicCount = gaps.filter((g) => g.category === "logic").length;
   const manualCount = gaps.filter((g) => g.category === "manual").length;
+  const agentCount = gaps.filter((g) => g.category === "agent").length;
   const totalMinutes = gaps.reduce((sum, g) => sum + g.estimatedMinutes, 0);
   const totalHours = (totalMinutes / 60).toFixed(1);
 
@@ -2241,6 +2512,7 @@ export function generateDhgSummary(gaps: XamlGap[], deploymentResults?: DhgDeplo
   if (configCount > 0) lines.push(`  - ${configCount} configuration value(s) to update`);
   if (logicCount > 0) lines.push(`  - ${logicCount} business logic gap(s) to implement`);
   if (manualCount > 0) lines.push(`  - ${manualCount} manual step(s) to complete`);
+  if (agentCount > 0) lines.push(`  - ${agentCount} agent invocation(s) to configure`);
 
   if (deploymentResults?.length) {
     const failed = deploymentResults.filter(r => r.status === "failed" || r.status === "manual");

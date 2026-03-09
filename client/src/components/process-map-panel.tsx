@@ -64,6 +64,8 @@ import {
   History,
   RefreshCw,
   Cable,
+  Brain,
+  Repeat,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -207,7 +209,7 @@ interface CompletenessIssue {
 
 function analyzeCompleteness(nodes: ProcessMapData["nodes"], edges: ProcessMapData["edges"]): CompletenessIssue[] {
   const issues: CompletenessIssue[] = [];
-  const actionableNodes = nodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end");
+  const actionableNodes = nodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end" && n.nodeType !== "agent-loop");
 
   actionableNodes.forEach((n) => {
     if (!n.role?.trim()) {
@@ -220,7 +222,7 @@ function analyzeCompleteness(nodes: ProcessMapData["nodes"], edges: ProcessMapDa
     }
   });
 
-  const hasDecision = nodes.some(n => n.nodeType === "decision");
+  const hasDecision = nodes.some(n => n.nodeType === "decision" || n.nodeType === "agent-decision");
   if (actionableNodes.length >= 3 && !hasDecision) {
     issues.push({ type: "no_decision", message: "No decision points — consider adding branching logic", severity: "info" });
   }
@@ -376,7 +378,7 @@ function filterNodesForLevel(
       const actionable = group.nodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end");
       if (actionable.length === 0) return;
       const totalSteps = actionable.length;
-      const decisions = actionable.filter(n => n.nodeType === "decision").length;
+      const decisions = actionable.filter(n => n.nodeType === "decision" || n.nodeType === "agent-decision").length;
       const desc = decisions > 0 ? `${totalSteps} steps, ${decisions} decision${decisions > 1 ? "s" : ""}` : `${totalSteps} steps`;
       const phaseNode = {
         ...actionable[0],
@@ -493,13 +495,13 @@ function filterNodesForLevel(
   });
 
   allNodes.forEach(n => {
-    if (n.nodeType === "decision" && (outDegree[n.id] || 0) >= 3) {
+    if ((n.nodeType === "decision" || n.nodeType === "agent-decision") && (outDegree[n.id] || 0) >= 3) {
       keepIds.add(n.id);
     }
   });
 
   phaseGroups.forEach((group) => {
-    const tasks = group.nodes.filter(n => n.nodeType === "task");
+    const tasks = group.nodes.filter(n => n.nodeType === "task" || n.nodeType === "agent-task" || n.nodeType === "agent-loop");
     if (tasks.length > 0) {
       keepIds.add(tasks[0].id);
       if (tasks.length > 1) keepIds.add(tasks[tasks.length - 1].id);
@@ -558,7 +560,8 @@ interface ProcessMapPanelProps {
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
   if (nodeType === "start") return { width: 72, height: 72 };
   if (nodeType === "end") return { width: 72, height: 72 };
-  if (nodeType === "decision") return { width: 100, height: 100 };
+  if (nodeType === "decision" || nodeType === "agent-decision") return { width: 100, height: 100 };
+  if (nodeType === "agent-loop") return { width: 280, height: 90 };
   return { width: 280, height: 80 };
 }
 
@@ -677,6 +680,7 @@ function getNodeConfidence(data: any): number {
   if (data.system && data.system.trim() && data.system !== "Manual") score += 25;
   if (data.description && data.description.trim()) score += 25;
   if (data.nodeType === "start" || data.nodeType === "end") return 100;
+  if (data.nodeType === "agent-loop") return Math.max(score, 50);
   return score;
 }
 
@@ -1054,11 +1058,233 @@ function TaskNode({ data, id }: { data: any; id: string }) {
   );
 }
 
+function AgentTaskNode({ data, id }: { data: any; id: string }) {
+  const confidence = getNodeConfidence(data);
+  const isLowConf = confidence < 50;
+  const isGhost = data.isGhost;
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
+  const connectModeSourceId = data.connectModeSourceId;
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+
+  const accentColor = "#a855f7";
+  const bgColor = isDark ? "rgba(88,28,135,0.25)" : "rgba(147,51,234,0.06)";
+  const borderColor = isGhost || isLowConf
+    ? (isDark ? "rgba(139,92,246,0.3)" : "rgba(168,85,247,0.3)")
+    : (isDark ? "rgba(139,92,246,0.5)" : "rgba(168,85,247,0.45)");
+  const boxShadow = isDark
+    ? "0 2px 12px rgba(139,92,246,0.15), inset 0 1px 0 rgba(255,255,255,0.03)"
+    : "0 1px 3px rgba(139,92,246,0.12), 0 1px 2px rgba(139,92,246,0.08)";
+
+  return (
+    <div
+      className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
+      style={{
+        width: 280,
+        opacity: isGhost || isLowConf ? 0.5 : 1,
+        borderStyle: isGhost ? "dashed" : "solid",
+      }}
+      data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+        ]}
+        sourceHandles={[
+          { position: Position.Bottom },
+          { position: Position.Right, id: "right" },
+          { position: Position.Left, id: "left" },
+        ]}
+      />
+      <div
+        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        style={{
+          background: bgColor,
+          border: `1.5px solid ${borderColor}`,
+          boxShadow,
+        }}
+      >
+        <div
+          className="h-1.5 w-full"
+          style={{ background: `linear-gradient(90deg, ${accentColor}, #c084fc)` }}
+        />
+        <div className="px-4 py-3">
+          <div className="flex items-start gap-2">
+            <div
+              className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5"
+              style={{ background: "rgba(168,85,247,0.2)", border: "1px solid rgba(168,85,247,0.3)" }}
+            >
+              <Brain className="h-3.5 w-3.5" style={{ color: accentColor }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={`text-[13px] font-semibold leading-tight line-clamp-2 ${isDark ? "text-white/90" : "text-gray-900"}`}>
+                {data.label}
+              </div>
+              {data.role && (
+                <div className={`text-[10px] mt-0.5 line-clamp-2 ${isDark ? "text-white/40" : "text-gray-500"}`}>{data.role}</div>
+              )}
+            </div>
+          </div>
+          <div className="mt-1.5 flex items-center gap-1">
+            <Brain className="h-2.5 w-2.5 text-purple-400" />
+            <span className="text-[9px] text-purple-400/80 font-medium">AI Agent</span>
+          </div>
+        </div>
+      </div>
+      {data.isPainPoint && <Flag className="absolute -top-1.5 -right-1.5 h-3 w-3 text-red-500 fill-red-500 z-10" />}
+    </div>
+  );
+}
+
+function AgentDecisionNode({ data, id }: { data: any; id: string }) {
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
+  const connectModeSourceId = data.connectModeSourceId;
+
+  const bgColor = "#581c87";
+  const borderColor = "#a855f7";
+  const glowColor = "rgba(168,85,247,0.2)";
+
+  return (
+    <div
+      className={`relative flex items-center justify-center cursor-pointer ${connectModeSourceId === id ? "connect-mode-source" : ""}`}
+      style={{ width: 100, height: 100 }}
+      data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+        ]}
+        sourceHandles={[
+          { position: Position.Bottom, id: "bottom" },
+          { position: Position.Right, id: "right" },
+          { position: Position.Left, id: "left" },
+        ]}
+      />
+      <div
+        className="absolute transition-all hover:brightness-110"
+        style={{
+          width: 70,
+          height: 70,
+          transform: "rotate(45deg)",
+          background: `linear-gradient(135deg, ${bgColor}, ${bgColor}dd)`,
+          border: `2.5px solid ${borderColor}`,
+          borderRadius: 8,
+          boxShadow: `0 4px 20px ${glowColor}`,
+        }}
+      />
+      <div className="relative z-10 text-center" style={{ maxWidth: 80 }}>
+        <Brain className="h-3 w-3 text-purple-300 mx-auto mb-0.5" />
+        <div className="text-white text-[10px] font-bold leading-tight line-clamp-2 px-0.5">
+          {data.label}
+        </div>
+      </div>
+      {data.isPainPoint && <Flag className="absolute -top-1.5 -right-1.5 h-3 w-3 text-red-500 fill-red-500 z-20" />}
+    </div>
+  );
+}
+
+function AgentLoopNode({ data, id }: { data: any; id: string }) {
+  const isGhost = data.isGhost;
+  const { isHovered, onMouseEnter, onMouseLeave } = useNodeHover();
+  const connectModeSourceId = data.connectModeSourceId;
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+
+  const accentColor = "#a855f7";
+  const bgColor = isDark ? "rgba(88,28,135,0.2)" : "rgba(147,51,234,0.05)";
+  const borderColor = isDark ? "rgba(139,92,246,0.4)" : "rgba(168,85,247,0.35)";
+  const boxShadow = isDark
+    ? "0 2px 12px rgba(139,92,246,0.12), inset 0 1px 0 rgba(255,255,255,0.03)"
+    : "0 1px 3px rgba(139,92,246,0.1), 0 1px 2px rgba(139,92,246,0.06)";
+
+  return (
+    <div
+      className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
+      style={{
+        width: 280,
+        opacity: isGhost ? 0.5 : 1,
+        borderStyle: isGhost ? "dashed" : "solid",
+      }}
+      data-testid={`node-${id}`}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <NodeHoverTooltip data={{ ...data, nodeId: id }} visible={isHovered} />
+      <NodeHandles
+        nodeId={id}
+        isHovered={isHovered}
+        connectModeSourceId={connectModeSourceId}
+        targetHandles={[
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+        ]}
+        sourceHandles={[
+          { position: Position.Bottom },
+          { position: Position.Right, id: "right" },
+          { position: Position.Left, id: "left" },
+        ]}
+      />
+      <div
+        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        style={{
+          background: bgColor,
+          border: `2px dashed ${borderColor}`,
+          boxShadow,
+        }}
+      >
+        <div
+          className="h-1.5 w-full"
+          style={{ background: `linear-gradient(90deg, ${accentColor}88, #c084fc88, ${accentColor}88)` }}
+        />
+        <div className="px-4 py-3">
+          <div className="flex items-start gap-2">
+            <div
+              className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5"
+              style={{ background: "rgba(168,85,247,0.2)", border: "1px solid rgba(168,85,247,0.3)" }}
+            >
+              <Repeat className="h-3.5 w-3.5" style={{ color: accentColor }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className={`text-[13px] font-semibold leading-tight line-clamp-2 ${isDark ? "text-white/90" : "text-gray-900"}`}>
+                {data.label}
+              </div>
+              {data.role && (
+                <div className={`text-[10px] mt-0.5 line-clamp-2 ${isDark ? "text-white/40" : "text-gray-500"}`}>{data.role}</div>
+              )}
+            </div>
+          </div>
+          <div className="mt-1.5 flex items-center gap-1">
+            <Repeat className="h-2.5 w-2.5 text-purple-400" />
+            <span className="text-[9px] text-purple-400/80 font-medium">Agent Loop</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
   const nodeType = data.nodeType || "task";
   if (nodeType === "start") return <StartNode data={data} id={id} />;
   if (nodeType === "end") return <EndNode data={data} id={id} />;
   if (nodeType === "decision") return <DecisionNode data={data} id={id} />;
+  if (nodeType === "agent-task") return <AgentTaskNode data={data} id={id} />;
+  if (nodeType === "agent-decision") return <AgentDecisionNode data={data} id={id} />;
+  if (nodeType === "agent-loop") return <AgentLoopNode data={data} id={id} />;
   return <TaskNode data={data} id={id} />;
 }
 
@@ -1201,7 +1427,7 @@ interface NodeEditData {
   name: string;
   role: string;
   system: string;
-  nodeType: "task" | "decision" | "start" | "end";
+  nodeType: "task" | "decision" | "start" | "end" | "agent-task" | "agent-decision" | "agent-loop";
   description: string;
   isPainPoint: boolean;
 }
@@ -1279,6 +1505,9 @@ function InlineEditPanel({
             <option value="decision">Decision / Gateway</option>
             <option value="start">Start Event</option>
             <option value="end">End Event</option>
+            <option value="agent-task">Agent Task (AI)</option>
+            <option value="agent-decision">Agent Decision (AI)</option>
+            <option value="agent-loop">Agent Loop (AI)</option>
           </select>
         </div>
         <div>
@@ -1422,7 +1651,7 @@ function NodeContextMenu({
         data-testid="button-add-child-context"
       >
         <Plus className="h-3.5 w-3.5 text-cb-teal" />
-        {nodeData.nodeType === "decision" ? "Add Branch" : "Add Child Step"}
+        {(nodeData.nodeType === "decision" || nodeData.nodeType === "agent-decision") ? "Add Branch" : "Add Child Step"}
       </button>
       <button
         className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
@@ -2408,17 +2637,20 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
               <div className="flex items-center gap-2 min-w-0">
                 <div className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center"
                   style={{
-                    background: detailPopover.node.nodeType === "decision" ? "rgba(245,158,11,0.15)" :
+                    background: (detailPopover.node.nodeType === "decision" || detailPopover.node.nodeType === "agent-decision") ? "rgba(245,158,11,0.15)" :
                       detailPopover.node.nodeType === "start" ? "rgba(16,185,129,0.15)" :
-                      detailPopover.node.nodeType === "end" ? "rgba(239,68,68,0.15)" : "rgba(59,130,246,0.15)",
-                    border: `1px solid ${detailPopover.node.nodeType === "decision" ? "rgba(245,158,11,0.3)" :
+                      detailPopover.node.nodeType === "end" ? "rgba(239,68,68,0.15)" :
+                      (detailPopover.node.nodeType === "agent-task" || detailPopover.node.nodeType === "agent-loop") ? "rgba(168,85,247,0.15)" : "rgba(59,130,246,0.15)",
+                    border: `1px solid ${(detailPopover.node.nodeType === "decision" || detailPopover.node.nodeType === "agent-decision") ? "rgba(245,158,11,0.3)" :
                       detailPopover.node.nodeType === "start" ? "rgba(16,185,129,0.3)" :
-                      detailPopover.node.nodeType === "end" ? "rgba(239,68,68,0.3)" : "rgba(59,130,246,0.3)"}`,
+                      detailPopover.node.nodeType === "end" ? "rgba(239,68,68,0.3)" :
+                      (detailPopover.node.nodeType === "agent-task" || detailPopover.node.nodeType === "agent-loop") ? "rgba(168,85,247,0.3)" : "rgba(59,130,246,0.3)"}`,
                   }}
                 >
-                  {detailPopover.node.nodeType === "decision" ? <Diamond className="h-3 w-3 text-amber-400" /> :
+                  {(detailPopover.node.nodeType === "decision" || detailPopover.node.nodeType === "agent-decision") ? <Diamond className="h-3 w-3 text-amber-400" /> :
                    detailPopover.node.nodeType === "start" ? <Play className="h-3 w-3 text-emerald-400" /> :
                    detailPopover.node.nodeType === "end" ? <Square className="h-3 w-3 text-red-400" /> :
+                   (detailPopover.node.nodeType === "agent-task" || detailPopover.node.nodeType === "agent-loop") ? <Brain className="h-3 w-3 text-purple-400" /> :
                    <CircleDot className="h-3 w-3 text-blue-400" />}
                 </div>
                 <span className="text-xs font-semibold text-gray-900 dark:text-white truncate">{detailPopover.node.label || "(unnamed)"}</span>
@@ -2437,7 +2669,10 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
                 <Badge variant="outline" className="text-[10px] capitalize">
                   {detailPopover.node.nodeType === "decision" ? "Decision" :
                    detailPopover.node.nodeType === "start" ? "Start" :
-                   detailPopover.node.nodeType === "end" ? "End" : "Task"}
+                   detailPopover.node.nodeType === "end" ? "End" :
+                   detailPopover.node.nodeType === "agent-task" ? "Agent Task" :
+                   detailPopover.node.nodeType === "agent-decision" ? "Agent Decision" :
+                   detailPopover.node.nodeType === "agent-loop" ? "Agent Loop" : "Task"}
                 </Badge>
               </div>
               {detailPopover.node.role && (
@@ -3235,7 +3470,8 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                     >
                       <PerfIcon className={`h-2.5 w-2.5 ${perfColor}`} />
                       <span className="truncate">{node.name}</span>
-                      {node.nodeType === "decision" && <Diamond className="h-2.5 w-2.5 text-amber-500 shrink-0" />}
+                      {(node.nodeType === "decision" || node.nodeType === "agent-decision") && <Diamond className="h-2.5 w-2.5 text-amber-500 shrink-0" />}
+                      {(node.nodeType === "agent-task" || node.nodeType === "agent-loop") && <Brain className="h-2.5 w-2.5 text-purple-500 shrink-0" />}
                       <Maximize2 className="h-2 w-2 ml-auto shrink-0 opacity-0 group-hover:opacity-30" />
                     </button>
                   );

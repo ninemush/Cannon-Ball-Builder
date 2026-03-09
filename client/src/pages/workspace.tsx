@@ -25,6 +25,7 @@ import {
   ListPlus,
   Download,
   Trash2,
+  Brain,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -781,6 +782,9 @@ function ChatPanel({ idea }: { idea: Idea }) {
                     : `Stage Advanced: ${toStage}`,
                   description: reason || `Moved from ${fromStage}`,
                 });
+              }
+              if (data.automationType) {
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
               }
               if (data.error) {
                 streamingMsgRef.current = "";
@@ -1826,6 +1830,33 @@ export default function Workspace() {
               >
                 {idea.stage}
               </Badge>
+              {(idea.automationType !== "rpa" || idea.automationTypeRationale) && (
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge
+                        variant="outline"
+                        className={`shrink-0 text-[10px] hidden sm:inline-flex gap-1 ${
+                          idea.automationType === "agent"
+                            ? "bg-purple-500/15 text-purple-400 border-purple-500/25"
+                            : idea.automationType === "hybrid"
+                              ? "bg-teal-500/15 text-teal-400 border-teal-500/25"
+                              : "bg-blue-500/15 text-blue-400 border-blue-500/25"
+                        }`}
+                        data-testid="badge-automation-type"
+                      >
+                        {idea.automationType === "agent" && <Brain className="h-3 w-3" />}
+                        {idea.automationType === "agent" ? "Agent" : idea.automationType === "hybrid" ? "Hybrid" : "RPA"}
+                      </Badge>
+                    </TooltipTrigger>
+                    {idea.automationTypeRationale && (
+                      <TooltipContent side="bottom" className="max-w-[300px]">
+                        <p className="text-xs" data-testid="text-automation-rationale">{idea.automationTypeRationale}</p>
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">

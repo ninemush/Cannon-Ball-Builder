@@ -61,6 +61,22 @@ function generateUuid(): string {
   return uuid;
 }
 
+export type AgentToolDef = { name: string; description: string; activityType?: string };
+export type AgentEscalationRule = { condition: string; target: string };
+export type AgentDef = {
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  tools?: AgentToolDef[];
+  knowledgeBases?: string[];
+  guardrails?: string[];
+  escalationRules?: AgentEscalationRule[];
+  maxIterations?: number;
+  temperature?: number;
+};
+export type KnowledgeBaseDef = { name: string; description?: string; documentSources?: string[]; refreshFrequency?: string };
+export type PromptTemplateDef = { name: string; description?: string; template?: string; variables?: string[] };
+
 export type OrchestratorArtifacts = {
   queues?: Array<{ name: string; description?: string; maxRetries?: number; uniqueReference?: boolean; jsonSchema?: string; outputSchema?: string }>;
   assets?: Array<{ name: string; type: string; value?: string; description?: string }>;
@@ -75,6 +91,9 @@ export type OrchestratorArtifacts = {
   testDataQueues?: Array<{ name: string; description?: string; jsonSchema?: string; items?: Array<{ name: string; content: string }> }>;
   requirements?: Array<{ name: string; description?: string; source?: string; type?: string; priority?: string; acceptanceCriteria?: string[] }>;
   testSets?: Array<{ name: string; description?: string; testCaseNames?: string[]; executionMode?: string; environment?: string; triggerType?: string }>;
+  agents?: AgentDef[];
+  knowledgeBases?: KnowledgeBaseDef[];
+  promptTemplates?: PromptTemplateDef[];
 };
 
 export type DeploymentResult = {
@@ -153,7 +172,7 @@ export function parseArtifactsFromSDD(sddContent: string): OrchestratorArtifacts
       const inner = fence.replace(/```json\s*\n/, "").replace(/\n```$/, "").trim();
       try {
         const parsed = JSON.parse(sanitizeJsonString(inner));
-        if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers) {
+        if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents) {
           console.log("[parseArtifacts] Found artifacts in json fence block");
           return parsed;
         }
@@ -174,7 +193,7 @@ export function parseArtifactsFromSDD(sddContent: string): OrchestratorArtifacts
       }
       const jsonStr = sddContent.slice(braceStart, end);
       const parsed = JSON.parse(sanitizeJsonString(jsonStr));
-      if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers) {
+      if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents) {
         console.log("[parseArtifacts] Found artifacts in raw JSON");
         return parsed;
       }
@@ -331,6 +350,15 @@ ${sddContent.slice(0, 12000)}`
         testCaseNames: Array.isArray(s.testCaseNames) ? s.testCaseNames.filter((n: any) => typeof n === "string") : undefined,
       }));
     }
+    if (Array.isArray(raw.agents)) {
+      validated.agents = raw.agents.filter((a: any) => typeof a?.name === "string" && a.name.length > 0);
+    }
+    if (Array.isArray(raw.knowledgeBases)) {
+      validated.knowledgeBases = raw.knowledgeBases.filter((k: any) => typeof k?.name === "string" && k.name.length > 0);
+    }
+    if (Array.isArray(raw.promptTemplates)) {
+      validated.promptTemplates = raw.promptTemplates.filter((p: any) => typeof p?.name === "string" && p.name.length > 0);
+    }
 
     const hasContent = (validated.queues?.length || 0) + (validated.assets?.length || 0) +
       (validated.triggers?.length || 0) + (validated.machines?.length || 0) +
@@ -338,10 +366,11 @@ ${sddContent.slice(0, 12000)}`
       (validated.robotAccounts?.length || 0) + (validated.actionCenter?.length || 0) +
       (validated.documentUnderstanding?.length || 0) + (validated.testCases?.length || 0) +
       (validated.testDataQueues?.length || 0) + (validated.requirements?.length || 0) +
-      (validated.testSets?.length || 0);
+      (validated.testSets?.length || 0) + (validated.agents?.length || 0) +
+      (validated.knowledgeBases?.length || 0) + (validated.promptTemplates?.length || 0);
 
     if (hasContent > 0) {
-      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0}, testDataQueues:${validated.testDataQueues?.length||0}, requirements:${validated.requirements?.length||0}, testSets:${validated.testSets?.length||0})`);
+      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, testCases:${validated.testCases?.length||0}, testDataQueues:${validated.testDataQueues?.length||0}, requirements:${validated.requirements?.length||0}, testSets:${validated.testSets?.length||0}, agents:${validated.agents?.length||0}, knowledgeBases:${validated.knowledgeBases?.length||0}, promptTemplates:${validated.promptTemplates?.length||0})`);
       return validated;
     }
     console.warn("[UiPath Deploy] LLM returned JSON but no valid artifacts after validation. Raw keys:", Object.keys(raw));
@@ -3342,6 +3371,201 @@ async function provisionRobotAccounts(
   return results;
 }
 
+async function provisionAgentArtifacts(
+  base: string,
+  hdrs: Record<string, string>,
+  agents?: AgentDef[],
+  knowledgeBases?: KnowledgeBaseDef[],
+  promptTemplates?: PromptTemplateDef[],
+): Promise<DeploymentResult[]> {
+  const results: DeploymentResult[] = [];
+  const hasAgents = (agents?.length || 0) > 0;
+  const hasKBs = (knowledgeBases?.length || 0) > 0;
+  const hasTemplates = (promptTemplates?.length || 0) > 0;
+
+  if (!hasAgents && !hasKBs && !hasTemplates) return results;
+
+  console.log(`[UiPath Deploy] Provisioning agent artifacts: ${agents?.length || 0} agents, ${knowledgeBases?.length || 0} knowledge bases, ${promptTemplates?.length || 0} prompt templates`);
+
+  for (const kb of (knowledgeBases || [])) {
+    const assetName = `AgentKB_${kb.name.replace(/\s+/g, "_")}`;
+    const assetValue = JSON.stringify({
+      name: kb.name,
+      description: kb.description || "",
+      documentSources: kb.documentSources || [],
+      refreshFrequency: kb.refreshFrequency || "weekly",
+      provisionedBy: "CannonBall",
+      provisionedAt: new Date().toISOString(),
+    });
+
+    try {
+      const checkRes = await uipathFetch(`${base}/odata/Assets?$filter=Name eq '${odataEscape(assetName)}'`, { method: "GET", headers: hdrs });
+      const existing = isGenuineApiResponse(checkRes.text) ? JSON.parse(checkRes.text) : null;
+      const existingId = existing?.value?.[0]?.Id;
+
+      if (existingId) {
+        try {
+          const putRes = await uipathFetch(`${base}/odata/Assets(${existingId})`, {
+            method: "PUT",
+            headers: { ...hdrs, "Content-Type": "application/json" },
+            body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: assetValue, Description: truncDesc(kb.description) }),
+          });
+          if (putRes.status >= 200 && putRes.status < 300) {
+            results.push({ artifact: "Knowledge Base", name: kb.name, status: "updated", message: `Updated config asset "${assetName}" (ID: ${existingId})`, id: existingId });
+          } else {
+            results.push({ artifact: "Knowledge Base", name: kb.name, status: "failed", message: `Update failed (${putRes.status}): ${putRes.text.slice(0, 200)}`, id: existingId });
+          }
+        } catch (putErr: any) {
+          results.push({ artifact: "Knowledge Base", name: kb.name, status: "failed", message: `Update error: ${putErr.message}`, id: existingId });
+        }
+      } else {
+        const createRes = await uipathFetch(`${base}/odata/Assets`, {
+          method: "POST",
+          headers: { ...hdrs, "Content-Type": "application/json" },
+          body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: assetValue, Description: truncDesc(kb.description) }),
+        });
+        if (createRes.status >= 200 && createRes.status < 300) {
+          const creation = isValidCreation(createRes.text);
+          results.push({
+            artifact: "Knowledge Base",
+            name: kb.name,
+            status: "created",
+            message: `Created config asset "${assetName}" (ID: ${creation.data?.Id || "unknown"}). Populate with actual documents in Orchestrator.`,
+            id: creation.data?.Id,
+            manualSteps: [
+              `Upload knowledge base documents to Storage Bucket or external source`,
+              `Configure document indexing for agent retrieval`,
+              ...(kb.documentSources?.map(ds => `Add source: ${ds}`) || []),
+            ],
+          });
+        } else {
+          results.push({ artifact: "Knowledge Base", name: kb.name, status: "failed", message: `Creation failed (${createRes.status}): ${createRes.text.slice(0, 200)}` });
+        }
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Knowledge Base", name: kb.name, status: "failed", message: `Error: ${err.message}` });
+    }
+  }
+
+  for (const pt of (promptTemplates || [])) {
+    const assetName = `AgentPrompt_${pt.name.replace(/\s+/g, "_")}`;
+    const assetValue = JSON.stringify({
+      name: pt.name,
+      template: pt.template || "",
+      variables: pt.variables || [],
+      provisionedBy: "CannonBall",
+      provisionedAt: new Date().toISOString(),
+    });
+
+    try {
+      const checkRes = await uipathFetch(`${base}/odata/Assets?$filter=Name eq '${odataEscape(assetName)}'`, { method: "GET", headers: hdrs });
+      const existing = isGenuineApiResponse(checkRes.text) ? JSON.parse(checkRes.text) : null;
+      const existingId = existing?.value?.[0]?.Id;
+
+      if (existingId) {
+        try {
+          const putRes = await uipathFetch(`${base}/odata/Assets(${existingId})`, {
+            method: "PUT",
+            headers: { ...hdrs, "Content-Type": "application/json" },
+            body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: assetValue, Description: truncDesc(pt.description) }),
+          });
+          if (putRes.status >= 200 && putRes.status < 300) {
+            results.push({ artifact: "Prompt Template", name: pt.name, status: "updated", message: `Updated asset "${assetName}" (ID: ${existingId})`, id: existingId });
+          } else {
+            results.push({ artifact: "Prompt Template", name: pt.name, status: "failed", message: `Update failed (${putRes.status}): ${putRes.text.slice(0, 200)}`, id: existingId });
+          }
+        } catch (putErr: any) {
+          results.push({ artifact: "Prompt Template", name: pt.name, status: "failed", message: `Update error: ${putErr.message}`, id: existingId });
+        }
+      } else {
+        const createRes = await uipathFetch(`${base}/odata/Assets`, {
+          method: "POST",
+          headers: { ...hdrs, "Content-Type": "application/json" },
+          body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: assetValue, Description: truncDesc(pt.description) }),
+        });
+        if (createRes.status >= 200 && createRes.status < 300) {
+          const creation = isValidCreation(createRes.text);
+          results.push({ artifact: "Prompt Template", name: pt.name, status: "created", message: `Created asset "${assetName}" (ID: ${creation.data?.Id || "unknown"})`, id: creation.data?.Id });
+        } else {
+          results.push({ artifact: "Prompt Template", name: pt.name, status: "failed", message: `Creation failed (${createRes.status}): ${createRes.text.slice(0, 200)}` });
+        }
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Prompt Template", name: pt.name, status: "failed", message: `Error: ${err.message}` });
+    }
+  }
+
+  for (const agent of (agents || [])) {
+    const assetName = `Agent_${agent.name.replace(/\s+/g, "_")}`;
+    const agentConfig = JSON.stringify({
+      name: agent.name,
+      description: agent.description || "",
+      systemPrompt: agent.systemPrompt || "",
+      tools: agent.tools || [],
+      knowledgeBases: agent.knowledgeBases || [],
+      guardrails: agent.guardrails || [],
+      escalationRules: agent.escalationRules || [],
+      maxIterations: agent.maxIterations || 10,
+      temperature: agent.temperature ?? 0.3,
+      provisionedBy: "CannonBall",
+      provisionedAt: new Date().toISOString(),
+    });
+
+    try {
+      const checkRes = await uipathFetch(`${base}/odata/Assets?$filter=Name eq '${odataEscape(assetName)}'`, { method: "GET", headers: hdrs });
+      const existing = isGenuineApiResponse(checkRes.text) ? JSON.parse(checkRes.text) : null;
+      const existingId = existing?.value?.[0]?.Id;
+
+      if (existingId) {
+        try {
+          const putRes = await uipathFetch(`${base}/odata/Assets(${existingId})`, {
+            method: "PUT",
+            headers: { ...hdrs, "Content-Type": "application/json" },
+            body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: agentConfig, Description: truncDesc(agent.description) }),
+          });
+          if (putRes.status >= 200 && putRes.status < 300) {
+            results.push({ artifact: "Agent", name: agent.name, status: "updated", message: `Updated config asset "${assetName}" (ID: ${existingId})`, id: existingId });
+          } else {
+            results.push({ artifact: "Agent", name: agent.name, status: "failed", message: `Update failed (${putRes.status}): ${putRes.text.slice(0, 200)}`, id: existingId });
+          }
+        } catch (putErr: any) {
+          results.push({ artifact: "Agent", name: agent.name, status: "failed", message: `Update error: ${putErr.message}`, id: existingId });
+        }
+      } else {
+        const createRes = await uipathFetch(`${base}/odata/Assets`, {
+          method: "POST",
+          headers: { ...hdrs, "Content-Type": "application/json" },
+          body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: agentConfig, Description: truncDesc(agent.description) }),
+        });
+        if (createRes.status >= 200 && createRes.status < 300) {
+          const creation = isValidCreation(createRes.text);
+          const manualSteps = [
+            `Configure agent in UiPath Autopilot/Agent Builder using the stored config asset "${assetName}"`,
+            `Review and tune the system prompt for production use`,
+            ...(agent.guardrails?.map(g => `Verify guardrail: ${g}`) || []),
+            ...(agent.escalationRules?.map(r => `Configure escalation: ${r.condition} → ${r.target}`) || []),
+            ...(agent.knowledgeBases?.map(kb => `Connect knowledge base: ${kb}`) || []),
+          ];
+          results.push({
+            artifact: "Agent",
+            name: agent.name,
+            status: "created",
+            message: `Created config asset "${assetName}" (ID: ${creation.data?.Id || "unknown"}). Agent definition stored — configure in Autopilot/Agent Builder.`,
+            id: creation.data?.Id,
+            manualSteps,
+          });
+        } else {
+          results.push({ artifact: "Agent", name: agent.name, status: "failed", message: `Creation failed (${createRes.status}): ${createRes.text.slice(0, 200)}` });
+        }
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Agent", name: agent.name, status: "failed", message: `Error: ${err.message}` });
+    }
+  }
+
+  return results;
+}
+
 export async function deployAllArtifacts(
   artifacts: OrchestratorArtifacts,
   releaseId: number | null,
@@ -3373,7 +3597,7 @@ export async function deployAllArtifacts(
     let svcAvail: ServiceAvailabilityMap | null = null;
     try {
       svcAvail = await probeServiceAvailability();
-      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}`);
+      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}, Agents=${svcAvail.agents}`);
     } catch { /* non-critical — proceed without filtering */ }
 
     const infraProbe = await preflightInfraProbe(base, hdrs, config.folderId, config, svcAvail);
@@ -3471,6 +3695,9 @@ export async function deployAllArtifacts(
         allResults.push({ artifact: "Test Set", name: `${artifacts.testSets.length} test set(s)`, status: "skipped", message: "Test Manager project not available — test sets require an active TM project" });
       }
     }
+
+    const agentResults = await provisionAgentArtifacts(base, hdrs, artifacts.agents, artifacts.knowledgeBases, artifacts.promptTemplates);
+    allResults.push(...agentResults);
 
     const created = allResults.filter(r => r.status === "created").length;
     const existed = allResults.filter(r => r.status === "exists").length;

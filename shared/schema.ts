@@ -42,6 +42,9 @@ export const PIPELINE_STAGES = [
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
+export const AUTOMATION_TYPES = ["rpa", "agent", "hybrid"] as const;
+export type AutomationType = (typeof AUTOMATION_TYPES)[number];
+
 export const ideas = pgTable("ideas", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),
@@ -50,6 +53,9 @@ export const ideas = pgTable("ideas", {
   ownerEmail: text("owner_email").notNull(),
   stage: text("stage").notNull().default("Idea"),
   tag: text("tag"),
+  automationType: text("automation_type").notNull().default("rpa"),
+  automationTypeRationale: text("automation_type_rationale"),
+  agentConfig: text("agent_config"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

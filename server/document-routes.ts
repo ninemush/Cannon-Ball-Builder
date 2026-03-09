@@ -899,6 +899,7 @@ ${content}`
         usedPackages: allUsedPkgsForDhg,
         workflowNames: wfNamesForDhg,
         sddContent: sddContent || undefined,
+        automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
       });
       archive.append(dhgContent, { name: "DeveloperHandoffGuide.md" });
 

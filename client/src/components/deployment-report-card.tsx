@@ -18,6 +18,9 @@ import {
   TestTube,
   HandMetal,
   RefreshCw,
+  Brain,
+  BookOpen,
+  MessageSquare,
 } from "lucide-react";
 
 interface DeploymentResult {
@@ -50,6 +53,9 @@ const artifactIcon = (artifact: string) => {
   if (lower.includes("environment")) return <Server className="h-3.5 w-3.5" />;
   if (lower.includes("action")) return <FileText className="h-3.5 w-3.5" />;
   if (lower.includes("test")) return <TestTube className="h-3.5 w-3.5" />;
+  if (lower.includes("agent")) return <Brain className="h-3.5 w-3.5" />;
+  if (lower.includes("knowledge")) return <BookOpen className="h-3.5 w-3.5" />;
+  if (lower.includes("prompt")) return <MessageSquare className="h-3.5 w-3.5" />;
   return <Package className="h-3.5 w-3.5" />;
 };
 

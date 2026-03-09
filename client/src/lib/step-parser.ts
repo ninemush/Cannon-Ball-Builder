@@ -2,14 +2,14 @@ export interface ParsedStep {
   name: string;
   role: string;
   system: string;
-  nodeType: "task" | "decision" | "start" | "end";
+  nodeType: "task" | "decision" | "start" | "end" | "agent-task" | "agent-decision" | "agent-loop";
   from?: string;
   edgeLabel?: string;
   stepNumber?: string;
   fromStepNumber?: string;
 }
 
-const STEP_REGEX = /\[STEP:\s*([^|]+?)\s*\|\s*ROLE:\s*([^|]+?)\s*\|\s*SYSTEM:\s*([^|]+?)\s*\|\s*TYPE:\s*(task|decision|start|end)(?:\s*\|\s*FROM:\s*([^|]*?))?(?:\s*\|\s*LABEL:\s*([^\]]*?))?\s*\]/gi;
+const STEP_REGEX = /\[STEP:\s*([^|]+?)\s*\|\s*ROLE:\s*([^|]+?)\s*\|\s*SYSTEM:\s*([^|]+?)\s*\|\s*TYPE:\s*(task|decision|start|end|agent-task|agent-decision|agent-loop)(?:\s*\|\s*FROM:\s*([^|]*?))?(?:\s*\|\s*LABEL:\s*([^\]]*?))?\s*\]/gi;
 
 const STEP_NUMBER_PREFIX = /^(\d+\.\d+)\s+(.+)$/;
 const IS_STEP_NUMBER = /^\d+\.\d+$/;

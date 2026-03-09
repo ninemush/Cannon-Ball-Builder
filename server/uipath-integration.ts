@@ -642,6 +642,7 @@ ${depEntries}
       deploymentResults: pkg._deploymentResults || undefined,
       extractedArtifacts: orchestratorArtifacts || undefined,
       analysisReports,
+      automationType: pkg._automationType || undefined,
     });
     archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
     console.log(`[UiPath] Generated Developer Handoff Guide: ${allGaps.length} gaps, ~${(allGaps.reduce((s: number, g: XamlGap) => s + g.estimatedMinutes, 0) / 60).toFixed(1)}h effort, REFramework=${useReFramework}`);
@@ -1484,6 +1485,7 @@ type UnifiedProbeResult = {
     triggers: boolean;
     storageBuckets: boolean;
     aiCenter: boolean;
+    agents: boolean;
   };
   grantedScopes: string[];
   licenseInfo: LicenseInfo | null;
@@ -1509,7 +1511,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     flags: {
       orchestrator: false, actionCenter: false, testManager: false,
       documentUnderstanding: false, dataService: false, platformManagement: false,
-      environments: true, triggers: true, storageBuckets: false, aiCenter: false,
+      environments: true, triggers: true, storageBuckets: false, aiCenter: false, agents: false,
     },
     grantedScopes: [],
     licenseInfo: null,
@@ -1633,6 +1635,13 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (aiProbe && aiProbe.ok) aiAvailable = true;
     if (!duAvailable && aiAvailable) duAvailable = true;
 
+    let agentsAvailable = false;
+    const agentProbe = await fetch(`${base}/orchestrator_/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1`, { headers: hdrs }).catch(() => null);
+    if (agentProbe && agentProbe.ok) {
+      agentsAvailable = true;
+      console.log("[UiPath Probe] Agent provisioning available (Assets API accessible for agent config)");
+    }
+
     let pmAvailable = false;
     if (pmResult.status === "fulfilled" && pmResult.value.ok) pmAvailable = true;
 
@@ -1655,6 +1664,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         triggers: triggersAvailable,
         storageBuckets: bucketsAvailable,
         aiCenter: aiAvailable,
+        agents: agentsAvailable,
       },
       grantedScopes,
       licenseInfo,
@@ -1724,6 +1734,9 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
 
   if (avail.aiCenter) availNames.push("AI Center (custom ML models, model training, AI skill deployment)");
   else unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, or NLP tasks within the automation.");
+
+  if (probe.flags.agents) availNames.push("Agent Builder / Autopilot (AI agent definitions, knowledge bases, prompt templates, autonomous task execution)");
+  else unavailRecs.push("- **Agent Builder**: Agent artifact provisioning via Assets API. Agent definitions, knowledge bases, and prompt templates can be stored as Orchestrator assets for Autopilot/Agent Builder configuration.");
 
   const config = await getUiPathConfig();
   const orgTenant = config ? `${config.orgName}/${config.tenantName}` : "unknown";
@@ -2028,6 +2041,7 @@ export type ServiceAvailabilityMap = {
   platformManagement: boolean;
   environments: boolean;
   triggers: boolean;
+  agents: boolean;
 };
 
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
@@ -2042,6 +2056,7 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     platformManagement: probe.flags.platformManagement,
     environments: probe.flags.environments,
     triggers: probe.flags.triggers,
+    agents: probe.flags.agents,
   };
 }
 

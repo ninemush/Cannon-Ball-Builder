@@ -476,6 +476,7 @@ export function registerUiPathRoutes(app: Express): void {
     try {
       const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
       if (sdd?.content) pkg._sddContent = sdd.content;
+      if (idea.automationType) pkg._automationType = idea.automationType;
       const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
       const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
       const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
@@ -568,7 +569,8 @@ export function registerUiPathRoutes(app: Express): void {
               (artifacts.actionCenter?.length || 0) + (artifacts.documentUnderstanding?.length || 0) +
               (artifacts.testCases?.length || 0) + (artifacts.testDataQueues?.length || 0) +
               (artifacts.robotAccounts?.length || 0) + (artifacts.requirements?.length || 0) +
-              (artifacts.testSets?.length || 0);
+              (artifacts.testSets?.length || 0) + (artifacts.agents?.length || 0) +
+              (artifacts.knowledgeBases?.length || 0) + (artifacts.promptTemplates?.length || 0);
             console.log(`[UiPath] Found ${totalArtifacts} SDD artifacts, deploying... (releaseId=${releaseId}, releaseName=${releaseName})`);
 
             const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName);
