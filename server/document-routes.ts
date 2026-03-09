@@ -7,6 +7,7 @@ import { storage } from "./storage";
 import { getPlatformCapabilities } from "./uipath-integration";
 import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport } from "./xaml-generator";
 import { evaluateTransition } from "./stage-transition";
+import { approveDocument } from "./document-service";
 import { z } from "zod";
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
@@ -506,90 +507,22 @@ export function registerDocumentRoutes(app: Express): void {
     if (!doc || doc.ideaId !== ideaId) {
       return res.status(404).json({ message: "Document not found" });
     }
-    if (doc.status === "approved") {
-      return res.status(400).json({ message: "Already approved" });
-    }
-
-    const existingApproval = await documentStorage.getApproval(ideaId, doc.type);
-    if (existingApproval) {
-      if (existingApproval.documentId === docId) {
-        return res.status(400).json({ message: "Already approved" });
-      }
-      await documentStorage.deleteApproval(ideaId, doc.type);
-      const oldDoc = await documentStorage.getDocument(existingApproval.documentId);
-      if (oldDoc && oldDoc.status === "approved") {
-        await documentStorage.updateDocument(oldDoc.id, { status: "superseded" });
-      }
-    }
-
-    const user = await storage.getUser(req.session.userId!);
-    if (!user) return res.status(401).json({ message: "User not found" });
-
-    await documentStorage.updateDocument(docId, { status: "approved" });
-
-    const approval = await documentStorage.createApproval({
-      documentId: docId,
-      ideaId,
-      docType: doc.type,
-      userId: user.id,
-      userRole: (req.session.activeRole || user.role) as string,
-      userName: user.displayName,
-    });
-
-    if (doc.type === "PDD") {
-      await chatStorage.createMessage(
-        ideaId,
-        "assistant",
-        "PDD approved. I'll now generate the Solution Design Document (SDD)."
-      );
-    } else if (doc.type === "SDD") {
-      let deployPrompt = "SDD approved. You can now generate the UiPath automation package.";
-      try {
-        const idea = await storage.getIdea(ideaId);
-        const sddDoc = await documentStorage.getDocument(docId);
-        let artifactSummary = "";
-        if (sddDoc?.content) {
-          const artifactMatch = sddDoc.content.match(/```orchestrator_artifacts\s*([\s\S]*?)```/);
-          if (artifactMatch) {
-            try {
-              const artifacts = JSON.parse(artifactMatch[1]);
-              const parts: string[] = [];
-              if (artifacts.queues?.length) parts.push(`${artifacts.queues.length} queue(s)`);
-              if (artifacts.assets?.length) parts.push(`${artifacts.assets.length} asset(s)`);
-              if (artifacts.machines?.length) parts.push(`${artifacts.machines.length} machine template(s)`);
-              if (artifacts.triggers?.length) parts.push(`${artifacts.triggers.length} trigger(s)`);
-              if (artifacts.actionCenter?.length) parts.push(`${artifacts.actionCenter.length} Action Center catalog(s)`);
-              if (artifacts.documentUnderstanding?.length) parts.push(`${artifacts.documentUnderstanding.length} DU project(s)`);
-              if (artifacts.testCases?.length) parts.push(`${artifacts.testCases.length} test case(s)`);
-              if (artifacts.folder) artifactSummary += `Target folder: **${artifacts.folder}**\n`;
-              if (parts.length) artifactSummary += `Artifacts to provision: ${parts.join(", ")}`;
-            } catch {}
-          }
-        }
-        const ideaName = idea?.title || "this automation";
-        deployPrompt = `**SDD approved** for **${ideaName}**.\n\nThe Solution Design Document has been approved and the automation is ready for deployment to UiPath Orchestrator.\n\n${artifactSummary ? artifactSummary + "\n\n" : ""}This will:\n1. Generate a UiPath NuGet package\n2. Upload it to Orchestrator\n3. Create the process\n4. Auto-provision all orchestrator artifacts (queues, assets, machine templates, triggers, and more)\n\nWould you like me to **push this to UiPath now**? Just say "Push to UiPath" or "Deploy" and I'll start the deployment immediately.`;
-      } catch (promptErr: any) {
-        console.error("[Document Routes] Failed to build SDD deploy prompt:", promptErr.message);
-      }
-      await chatStorage.createMessage(ideaId, "assistant", deployPrompt);
-    }
 
     try {
-      const user2 = await storage.getUser(req.session.userId!);
-      const transitionResult = await evaluateTransition(
+      const result = await approveDocument({
         ideaId,
-        req.session.userId!,
-        user2?.displayName || "Unknown",
-        req.session.activeRole || "Process SME"
-      );
-      if (transitionResult.transitioned) {
-        return res.json({ approval, document: { ...doc, status: "approved" }, transition: transitionResult });
+        docType: doc.type as "PDD" | "SDD",
+        docId,
+        userId: req.session.userId!,
+        activeRole: req.session.activeRole,
+      });
+      if (result.alreadyApproved) {
+        return res.status(400).json({ message: "Already approved" });
       }
-    } catch (transErr: any) {
-      console.error("[Document Routes] Transition evaluation failed:", transErr?.message);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(400).json({ message: err.message });
     }
-
-    return res.json({ approval, document: { ...doc, status: "approved" } });
   });
 
   app.post("/api/ideas/:ideaId/documents/revise", async (req: Request, res: Response) => {

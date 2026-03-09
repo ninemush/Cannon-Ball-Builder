@@ -5,6 +5,7 @@ import { storage } from "../../storage";
 import { documentStorage } from "../../document-storage";
 import { processMapStorage } from "../../process-map-storage";
 import { evaluateTransition } from "../../stage-transition";
+import { approveDocument } from "../../document-service";
 import { PIPELINE_STAGES, type PipelineStage, type AutomationType } from "@shared/schema";
 import { probeServiceAvailability, type ServiceAvailabilityMap } from "../../uipath-integration";
 
@@ -414,31 +415,20 @@ export function registerChatRoutes(app: Express): void {
       let chatApprovalDone = false;
       if (approvalIntent) {
         try {
-          const latestDoc = await documentStorage.getLatestDocument(ideaId, approvalIntent);
-          if (latestDoc && latestDoc.status !== "approved") {
-            const existingApproval = await documentStorage.getApproval(ideaId, approvalIntent);
-            if (!existingApproval) {
-              const approveUser = await storage.getUser(req.session.userId!);
-              if (approveUser) {
-                await documentStorage.updateDocument(latestDoc.id, { status: "approved" });
-                await documentStorage.createApproval({
-                  documentId: latestDoc.id,
-                  ideaId,
-                  docType: approvalIntent,
-                  userId: approveUser.id,
-                  userRole: (req.session.activeRole || approveUser.role) as string,
-                  userName: approveUser.displayName,
-                });
-                await chatStorage.createMessage(ideaId, "system",
-                  `[CHAT_APPROVAL] ${approvalIntent} v${latestDoc.version} approved by ${approveUser.displayName} via chat confirmation.`
-                );
-                chatApprovalDone = true;
-                console.log(`[Chat] ${approvalIntent} approved via chat by ${approveUser.displayName}`);
-                try {
-                  await evaluateTransition(ideaId, req.session.userId!, approveUser.displayName, req.session.activeRole || "Process SME");
-                } catch {}
-              }
-            }
+          const result = await approveDocument({
+            ideaId,
+            docType: approvalIntent,
+            userId: req.session.userId!,
+            activeRole: req.session.activeRole,
+            skipChatMessages: true,
+          });
+          if (!result.alreadyApproved) {
+            chatApprovalDone = true;
+            const approveUser = await storage.getUser(req.session.userId!);
+            await chatStorage.createMessage(ideaId, "system",
+              `[CHAT_APPROVAL] ${approvalIntent} approved by ${approveUser?.displayName || "Unknown"} via chat confirmation.`
+            );
+            console.log(`[Chat] ${approvalIntent} approved via chat by ${approveUser?.displayName}`);
           }
         } catch (approvalErr: any) {
           console.error("[Chat] Chat-based approval failed:", approvalErr?.message);
