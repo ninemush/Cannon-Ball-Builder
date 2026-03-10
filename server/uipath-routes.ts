@@ -516,7 +516,7 @@ export function registerUiPathRoutes(app: Express): void {
       }
 
       sendEvent({ deployStatus: "Uploading package to Orchestrator..." });
-      const result = await pushToUiPath(pkg);
+      const result = await pushToUiPath(pkg, ideaId);
 
       if (!result.success) {
         sendEvent({ deployComplete: true, success: false, result });

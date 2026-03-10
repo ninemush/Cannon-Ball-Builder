@@ -23,6 +23,35 @@ import {
 import { enrichWithAI, type EnrichmentResult } from "./ai-xaml-enricher";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import { escapeXml } from "./lib/xml-utils";
+import { computePackageFingerprint } from "./lib/utils";
+
+type CachedBuild = {
+  fingerprint: string;
+  version: string;
+  buffer: Buffer;
+  gaps: XamlGap[];
+  usedPackages: string[];
+  enrichment: EnrichmentResult | null;
+};
+
+const packageBuildCache = new Map<string, CachedBuild>();
+const CACHE_MAX_ENTRIES = 20;
+
+function evictOldestCacheEntry(): void {
+  if (packageBuildCache.size >= CACHE_MAX_ENTRIES) {
+    const oldest = packageBuildCache.keys().next().value;
+    if (oldest) {
+      packageBuildCache.delete(oldest);
+      console.log(`[UiPath Cache] Evicted oldest entry: ${oldest}`);
+    }
+  }
+}
+
+export function clearPackageCache(ideaId: string): void {
+  if (packageBuildCache.delete(ideaId)) {
+    console.log(`[UiPath Cache] Cleared cache for ${ideaId}`);
+  }
+}
 
 export type UiPathConfig = {
   orgName: string;
@@ -315,15 +344,35 @@ function generateConfigXlsx(pkg: any, sddContent?: string, orchestratorArtifacts
   return `Settings\n${csvSettings}\n\nConstants\n${csvConstants}`;
 }
 
-async function buildNuGetPackage(pkg: any, version: string = "1.0.0"): Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[] }> {
+async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ideaId?: string): Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[]; cacheHit?: boolean }> {
   const projectName = (pkg.projectName || "Automation").replace(/\s+/g, "_");
   const sddContent = pkg._sddContent || "";
   const orchestratorArtifacts = pkg._orchestratorArtifacts || null;
   const processNodes = pkg._processNodes || [];
   const processEdges = pkg._processEdges || [];
 
+  let fingerprint: string | undefined;
+  if (ideaId) {
+    fingerprint = computePackageFingerprint(pkg, sddContent, processNodes, processEdges, orchestratorArtifacts);
+    const cached = packageBuildCache.get(ideaId);
+    if (cached && cached.fingerprint === fingerprint && cached.version === version) {
+      console.log(`[UiPath Cache] HIT for ${ideaId} — skipping AI enrichment and XAML generation`);
+      return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true };
+    }
+    if (cached && cached.fingerprint === fingerprint && cached.version !== version) {
+      console.log(`[UiPath Cache] PARTIAL HIT for ${ideaId} — reusing enrichment, rebuilding with v${version}`);
+    } else {
+      console.log(`[UiPath Cache] MISS for ${ideaId}${cached ? " (fingerprint changed)" : " (no cache)"}`);
+    }
+  }
+
   let enrichment: EnrichmentResult | null = null;
-  if (processNodes.length > 0 && sddContent) {
+  const cachedEntry = ideaId ? packageBuildCache.get(ideaId) : undefined;
+  const canReuseEnrichment = cachedEntry && fingerprint && cachedEntry.fingerprint === fingerprint;
+  if (canReuseEnrichment && cachedEntry.enrichment) {
+    enrichment = cachedEntry.enrichment;
+    console.log(`[UiPath] Reusing cached AI enrichment for ${ideaId} (${enrichment.nodes.length} nodes)`);
+  } else if (processNodes.length > 0 && sddContent) {
     try {
       console.log(`[UiPath] Requesting AI enrichment for ${processNodes.length} process nodes...`);
       enrichment = await enrichWithAI(
@@ -348,11 +397,19 @@ async function buildNuGetPackage(pkg: any, version: string = "1.0.0"): Promise<{
     || orchestratorArtifacts?.queues?.[0]?.name
     || "TransactionQueue";
 
-  return new Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[] }>((resolve, reject) => {
+  return new Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[]; cacheHit?: boolean }>((resolve, reject) => {
     const buffers: Buffer[] = [];
     const passthrough = new PassThrough();
     passthrough.on("data", (chunk: Buffer) => buffers.push(chunk));
-    passthrough.on("end", () => resolve({ buffer: Buffer.concat(buffers), gaps: allGaps, usedPackages: allUsedPkgs }));
+    passthrough.on("end", () => {
+      const buffer = Buffer.concat(buffers);
+      if (ideaId && fingerprint) {
+        evictOldestCacheEntry();
+        packageBuildCache.set(ideaId, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment });
+        console.log(`[UiPath Cache] Stored build for ${ideaId} (${buffer.length} bytes, v${version})`);
+      }
+      resolve({ buffer, gaps: allGaps, usedPackages: allUsedPkgs });
+    });
     passthrough.on("error", reject);
 
     const archive = archiver("zip", { zlib: { level: 9 } });
@@ -657,9 +714,10 @@ async function uploadToOrchestrator(
   token: string,
   pkg: any,
   projectName: string,
-  version: string
+  version: string,
+  ideaId?: string
 ): Promise<{ ok: boolean; status: number; responseText: string; gaps: XamlGap[] }> {
-  const buildResult = await buildNuGetPackage(pkg, version);
+  const buildResult = await buildNuGetPackage(pkg, version, ideaId);
   const nupkgBuffer = buildResult.buffer;
   console.log(`[UiPath] Built .nupkg for "${projectName}" v${version} — ${nupkgBuffer.length} bytes (${buildResult.gaps.length} gaps, ${buildResult.usedPackages.length} packages)`);
 
@@ -700,7 +758,7 @@ async function uploadToOrchestrator(
   return { ok: uploadRes.ok, status: uploadRes.status, responseText, gaps: buildResult.gaps };
 }
 
-export async function pushToUiPath(pkg: any): Promise<{ success: boolean; message: string; details?: any }> {
+export async function pushToUiPath(pkg: any, ideaId?: string): Promise<{ success: boolean; message: string; details?: any }> {
   const config = await getUiPathConfig();
   if (!config) {
     return { success: false, message: "UiPath Orchestrator is not configured. Go to Admin > Integrations to set it up." };
@@ -714,13 +772,13 @@ export async function pushToUiPath(pkg: any): Promise<{ success: boolean; messag
     const now = new Date();
     const patch = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
     let version = `1.0.${patch}`;
-    let result = await uploadToOrchestrator(config, token, pkg, projectName, version);
+    let result = await uploadToOrchestrator(config, token, pkg, projectName, version, ideaId);
 
     if (result.status === 409) {
       const hourMin = now.getHours() * 100 + now.getMinutes();
       version = `1.${hourMin}.${patch}`;
       console.log(`[UiPath] Version conflict — retrying with v${version}`);
-      result = await uploadToOrchestrator(config, token, pkg, projectName, version);
+      result = await uploadToOrchestrator(config, token, pkg, projectName, version, ideaId);
     }
 
     if (!result.ok) {
