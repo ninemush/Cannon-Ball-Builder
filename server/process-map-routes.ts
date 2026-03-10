@@ -323,7 +323,50 @@ async function cleanupUnreachableNodes(ideaId: string, viewType: string): Promis
   }
 }
 
-cleanupDuplicateProcessNodes().catch(() => {});
+async function migrateAsIsToToBeForIdea(ideaId: string): Promise<void> {
+  try {
+    const toBeCheck = await db.execute(sql`
+      SELECT COUNT(*) as cnt FROM process_nodes
+      WHERE idea_id = ${ideaId} AND view_type = 'to-be'
+    `);
+    const toBeCount = Number((toBeCheck.rows?.[0] as any)?.cnt || 0);
+    if (toBeCount > 0) return;
+
+    const asIsCheck = await db.execute(sql`
+      SELECT COUNT(*) as cnt FROM process_nodes
+      WHERE idea_id = ${ideaId} AND view_type = 'as-is'
+    `);
+    const asIsCount = Number((asIsCheck.rows?.[0] as any)?.cnt || 0);
+    if (asIsCount === 0) return;
+
+    await db.execute(sql`BEGIN`);
+    try {
+      await db.execute(sql`
+        UPDATE process_nodes SET view_type = 'to-be'
+        WHERE idea_id = ${ideaId} AND view_type = 'as-is'
+      `);
+      await db.execute(sql`
+        UPDATE process_edges SET view_type = 'to-be'
+        WHERE idea_id = ${ideaId} AND view_type = 'as-is'
+      `);
+      await db.execute(sql`
+        UPDATE process_approvals SET view_type = 'to-be'
+        WHERE idea_id = ${ideaId} AND view_type = 'as-is'
+      `);
+      await db.execute(sql`COMMIT`);
+      console.log(`[ProcessMap] Migrated ${asIsCount} nodes from as-is to to-be for idea ${ideaId}`);
+    } catch (txErr) {
+      await db.execute(sql`ROLLBACK`);
+      throw txErr;
+    }
+  } catch (err: any) {
+    console.error(`[ProcessMap] Migration error for ${ideaId}:`, err?.message);
+  }
+}
+
+migrateAsIsToToBeForIdea("75c35cb6-231b-4fab-98db-cf314d76e276").then(() => {
+  cleanupDuplicateProcessNodes().catch(() => {});
+});
 
 const createNodeSchema = z.object({
   viewType: z.string().default("as-is"),
