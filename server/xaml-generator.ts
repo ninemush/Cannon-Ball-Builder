@@ -2380,6 +2380,112 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   md += `---\n\n`;
 
   sectionNum++;
+  md += `## ${sectionNum}. Process Logic Validation\n\n`;
+  md += `Use this section to verify that the generated automation correctly implements the business rules defined in the SDD. Each item below should be confirmed against the live system before UAT.\n\n`;
+
+  const extractedRules: Array<{ category: string; rule: string }> = [];
+
+  if (sddContent) {
+    const sddSections3to5 = sddContent.match(/## [345][\.\s][^\n]+\n([\s\S]*?)(?=## [6-9]\.|## \d{2}\.|$)/g);
+    const sddRelevant = sddSections3to5 ? sddSections3to5.join("\n") : sddContent;
+
+    const percentageMatches = sddRelevant.match(/\d+(?:\.\d+)?%\s*[A-Za-z][^\n.;]*/g);
+    if (percentageMatches) {
+      for (const m of percentageMatches) {
+        extractedRules.push({ category: "Threshold / Tolerance", rule: m.trim() });
+      }
+    }
+
+    const currencyMatches = sddRelevant.match(/(?:\$|USD|EUR|GBP|£|€)\s*[\d,]+(?:\.\d{1,2})?[^\n.;]*/g);
+    if (currencyMatches) {
+      for (const m of currencyMatches) {
+        extractedRules.push({ category: "Threshold / Tolerance", rule: m.trim() });
+      }
+    }
+
+    const approvalPatterns = sddRelevant.match(/(?:approv|reject|escalat|deny|authorize)[^\n.;]{5,80}/gi);
+    if (approvalPatterns) {
+      for (const m of approvalPatterns) {
+        const cleaned = m.trim().replace(/^[-*]\s*/, "");
+        if (cleaned.length > 10 && !extractedRules.some(r => r.rule === cleaned)) {
+          extractedRules.push({ category: "Approval / Rejection Criteria", rule: cleaned });
+        }
+      }
+    }
+
+    const retryPatterns = sddRelevant.match(/(?:retry|retries|SLA|timeout|time.?out|within \d+|maximum \d+|up to \d+)[^\n.;]{5,80}/gi);
+    if (retryPatterns) {
+      for (const m of retryPatterns) {
+        const cleaned = m.trim().replace(/^[-*]\s*/, "");
+        if (cleaned.length > 10 && !extractedRules.some(r => r.rule === cleaned)) {
+          extractedRules.push({ category: "Retry / SLA Requirements", rule: cleaned });
+        }
+      }
+    }
+
+    const endpointPatterns = sddRelevant.match(/(?:https?:\/\/[^\s)>"]+)/gi);
+    if (endpointPatterns) {
+      for (const m of endpointPatterns) {
+        if (!extractedRules.some(r => r.rule === m.trim())) {
+          extractedRules.push({ category: "Integration Endpoint", rule: m.trim() });
+        }
+      }
+    }
+
+    const businessRuleSection = sddRelevant.match(/(?:business\s+rules?|functional\s+requirements?)[:\s]*\n((?:\s*[-*]\s+[^\n]+\n?)+)/gi);
+    if (businessRuleSection) {
+      for (const section of businessRuleSection) {
+        const bullets = section.match(/[-*]\s+([^\n]+)/g);
+        if (bullets) {
+          for (const b of bullets) {
+            const cleaned = b.replace(/^[-*]\s+/, "").trim();
+            if (cleaned.length > 10 && !extractedRules.some(r => r.rule === cleaned)) {
+              extractedRules.push({ category: "Business Rule", rule: cleaned });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (enrichment?.dhgNotes?.length) {
+    md += `### AI Architecture & Logic Notes\n\n`;
+    for (const note of enrichment.dhgNotes) {
+      md += `- ${note}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (painPoints && painPoints.length > 0) {
+    md += `### Process Risk Areas\n\n`;
+    md += `The following pain points were identified during process analysis. Verify that the automation handles these scenarios correctly:\n\n`;
+    md += `| # | Process Step | Risk / Pain Point | Verification Action |\n`;
+    md += `|---|-------------|-------------------|---------------------|\n`;
+    painPoints.forEach((pp, i) => {
+      md += `| ${i + 1} | ${pp.name} | ${pp.description || "Identified pain point"} | Confirm error handling and edge-case coverage in XAML |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (extractedRules.length > 0) {
+    md += `### Extracted Business Rules — Verification Checklist\n\n`;
+    md += `The following rules were extracted from the SDD. Verify each is correctly implemented in the generated workflows:\n\n`;
+    md += `| # | Category | Rule / Requirement | Verified |\n`;
+    md += `|---|----------|-------------------|----------|\n`;
+    extractedRules.forEach((r, i) => {
+      const displayRule = (r.rule.length > 120 ? r.rule.slice(0, 117) + "..." : r.rule).replace(/\|/g, "\\|").replace(/\n/g, " ");
+      md += `| ${i + 1} | ${r.category} | ${displayRule} | [ ] |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (extractedRules.length === 0 && !(enrichment?.dhgNotes?.length) && !(painPoints && painPoints.length > 0)) {
+    md += `> **Note:** No business rules were automatically extracted from the SDD. Please review the SDD (Sections 3–5) manually to identify thresholds, approval criteria, retry/SLA requirements, and integration endpoints that must be validated in the generated workflows.\n\n`;
+  }
+
+  md += `---\n\n`;
+
+  sectionNum++;
   md += `## ${sectionNum}. Tier 3 — Requires Human Access (Developer Work Required)\n\n`;
   md += `These items require a developer with access to target systems and UiPath Studio. **Every generated package requires this work.**\n\n`;
 

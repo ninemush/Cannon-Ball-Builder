@@ -1311,8 +1311,12 @@ function CustomEdge({
 
   const useBezier = simplified || totalNodes > 25;
 
-  const sourceOffset = simplified ? 0 : (sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * (useBezier ? 12 : 20) : 0);
-  const targetOffset = simplified ? 0 : (targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * (useBezier ? 12 : 20) : 0);
+  const sourceOffset = simplified ? 0 : (sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * (useBezier ? 20 : 28) : 0);
+  const targetOffset = simplified ? 0 : (targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * (useBezier ? 20 : 28) : 0);
+
+  const stepOffset = (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0)
+    ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) + sourceIndex * 8
+    : 20;
 
   const [edgePath, labelX, labelY] = useBezier
     ? getBezierPath({
@@ -1331,7 +1335,7 @@ function CustomEdge({
         targetY,
         targetPosition,
         borderRadius: 16,
-        offset: (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0) ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) : 20,
+        offset: stepOffset,
       });
 
   const label = data?.label || "";
@@ -1814,14 +1818,23 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     });
     const relNodeCount = dbNodes.length;
     const relSimplified = detailLevel !== "L2";
+    const relNodeTypeMap: Record<number, string> = {};
+    dbNodes.forEach(n => { relNodeTypeMap[n.id] = n.nodeType; });
+    const decisionHandles = ["bottom", "right", "left"];
     const rawEdges: Edge[] = validEdges.map((e) => {
       const srcS = relSrcGrp[String(e.sourceNodeId)] || [e];
       const tgtS = relTgtGrp[String(e.targetNodeId)] || [e];
+      const srcIdx = srcS.indexOf(e);
+      const srcType = relNodeTypeMap[e.sourceNodeId] || "task";
+      const isDecision = srcType === "decision" || srcType === "agent-decision";
+      const sourceHandle = isDecision && srcS.length > 1 ? decisionHandles[srcIdx % decisionHandles.length] : undefined;
       return {
         id: String(e.id), source: String(e.sourceNodeId), target: String(e.targetNodeId),
-        type: "custom", data: {
+        type: "custom",
+        ...(sourceHandle ? { sourceHandle } : {}),
+        data: {
           label: e.label, dbId: e.id, viewType: activeView,
-          sourceIndex: srcS.indexOf(e), sourceSiblings: srcS.length,
+          sourceIndex: srcIdx, sourceSiblings: srcS.length,
           targetIndex: tgtS.indexOf(e), targetSiblings: tgtS.length,
           totalNodes: relNodeCount,
           simplified: relSimplified,
@@ -1884,20 +1897,28 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
 
     const nodeCount = dbNodes.length;
     const isSimplified = detailLevel !== "L2";
+    const nodeTypeMap: Record<number, string> = {};
+    dbNodes.forEach(n => { nodeTypeMap[n.id] = n.nodeType; });
+    const decHandles = ["bottom", "right", "left"];
     const rawEdges: Edge[] = safeEdges.map((e) => {
       const srcSiblings = sourceGroups[String(e.sourceNodeId)] || [e];
       const tgtSiblings = targetGroups[String(e.targetNodeId)] || [e];
       const markerColor = activeView === "sdd" ? "rgba(249,115,22,0.5)" : activeView === "to-be" ? "rgba(34,197,94,0.5)" : "rgba(120,120,145,0.4)";
       const markerSize = isSimplified ? 16 : nodeCount > 25 ? 10 : 14;
+      const srcIdx = srcSiblings.indexOf(e);
+      const srcType = nodeTypeMap[e.sourceNodeId] || "task";
+      const isDecSrc = srcType === "decision" || srcType === "agent-decision";
+      const srcHandle = isDecSrc && srcSiblings.length > 1 ? decHandles[srcIdx % decHandles.length] : undefined;
 
       return {
         id: String(e.id),
         source: String(e.sourceNodeId),
         target: String(e.targetNodeId),
         type: "custom",
+        ...(srcHandle ? { sourceHandle: srcHandle } : {}),
         data: {
           label: e.label, dbId: e.id, viewType: activeView,
-          sourceIndex: srcSiblings.indexOf(e), sourceSiblings: srcSiblings.length,
+          sourceIndex: srcIdx, sourceSiblings: srcSiblings.length,
           targetIndex: tgtSiblings.indexOf(e), targetSiblings: tgtSiblings.length,
           totalNodes: nodeCount,
           simplified: isSimplified,

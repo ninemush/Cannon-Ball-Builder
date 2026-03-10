@@ -193,6 +193,18 @@ async function cleanupDuplicateProcessNodes(): Promise<void> {
       }
     }
 
+    const viewsResult = await db.execute(sql`
+      SELECT DISTINCT idea_id, view_type FROM process_nodes
+    `);
+    const viewsRows = viewsResult.rows || viewsResult || [];
+    if (Array.isArray(viewsRows)) {
+      for (const row of viewsRows) {
+        try {
+          await cleanupUnreachableNodes(row.idea_id as string, row.view_type as string);
+        } catch {}
+      }
+    }
+
     if (totalDeleted > 0) {
       console.log(`[ProcessMap] Cleanup: Removed ${totalDeleted} duplicate/orphaned nodes.`);
     }
@@ -246,24 +258,68 @@ async function cleanupOrphanedNodes(ideaId: string, viewType: string): Promise<v
     await consolidateDuplicateEndNodes(ideaId, viewType);
     await consolidateSuffixEndNodes(ideaId, viewType);
 
-    const orphanResult = await db.execute(sql`
-      SELECT n.id, n.name, n.node_type
-      FROM process_nodes n
-      LEFT JOIN process_edges e_in ON n.id = e_in.target_node_id
-      LEFT JOIN process_edges e_out ON n.id = e_out.source_node_id
-      WHERE n.idea_id = ${ideaId} AND n.view_type = ${viewType}
-        AND e_in.id IS NULL AND e_out.id IS NULL AND n.node_type != 'start'
-    `);
-
-    const rows = orphanResult.rows || orphanResult || [];
-    if (Array.isArray(rows) && rows.length > 0) {
-      for (const row of rows) {
-        await db.execute(sql`DELETE FROM process_nodes WHERE id = ${row.id}`);
-      }
-      console.log(`[ProcessMap] Removed ${rows.length} orphaned nodes from ${viewType} view of idea ${ideaId}`);
-    }
+    await cleanupUnreachableNodes(ideaId, viewType);
   } catch (err: any) {
     console.error("[ProcessMap] Orphan cleanup error:", err?.message);
+  }
+}
+
+async function cleanupUnreachableNodes(ideaId: string, viewType: string): Promise<void> {
+  const allNodesResult = await db.execute(sql`
+    SELECT id, node_type FROM process_nodes
+    WHERE idea_id = ${ideaId} AND view_type = ${viewType}
+  `);
+  const allNodes = (allNodesResult.rows || allNodesResult || []) as any[];
+  if (!Array.isArray(allNodes) || allNodes.length === 0) return;
+
+  const startNode = allNodes.find((n: any) => n.node_type === 'start');
+  if (!startNode) return;
+
+  const allEdgesResult = await db.execute(sql`
+    SELECT source_node_id, target_node_id FROM process_edges
+    WHERE idea_id = ${ideaId} AND view_type = ${viewType}
+  `);
+  const allEdges = (allEdgesResult.rows || allEdgesResult || []) as any[];
+
+  const adjacency = new Map<number, Set<number>>();
+  for (const node of allNodes) {
+    adjacency.set(node.id as number, new Set());
+  }
+  if (Array.isArray(allEdges)) {
+    for (const edge of allEdges) {
+      const src = edge.source_node_id as number;
+      const tgt = edge.target_node_id as number;
+      adjacency.get(src)?.add(tgt);
+      adjacency.get(tgt)?.add(src);
+    }
+  }
+
+  const reachable = new Set<number>();
+  const queue: number[] = [startNode.id as number];
+  reachable.add(startNode.id as number);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const neighbors = adjacency.get(current);
+    if (neighbors) {
+      Array.from(neighbors).forEach((neighbor) => {
+        if (!reachable.has(neighbor)) {
+          reachable.add(neighbor);
+          queue.push(neighbor);
+        }
+      });
+    }
+  }
+
+  const unreachableIds = allNodes
+    .map((n: any) => n.id as number)
+    .filter((id: number) => !reachable.has(id));
+
+  if (unreachableIds.length > 0) {
+    for (const nodeId of unreachableIds) {
+      await db.execute(sql`DELETE FROM process_edges WHERE source_node_id = ${nodeId} OR target_node_id = ${nodeId}`);
+      await db.execute(sql`DELETE FROM process_nodes WHERE id = ${nodeId}`);
+    }
+    console.log(`[ProcessMap] Removed ${unreachableIds.length} unreachable nodes from ${viewType} view of idea ${ideaId}`);
   }
 }
 
