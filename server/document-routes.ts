@@ -831,6 +831,27 @@ ${content}`
       const allGapsForDhg = aggGapsImport(allXamlResults);
       const allUsedPkgsForDhg = Object.keys(depMap);
       const wfNamesForDhg = workflows.map((wf: any) => (wf.name || "Workflow").replace(/\s+/g, "_"));
+
+      const zipEnrichment = pkg._enrichment || pkg.enrichment || null;
+      const zipUseReFramework = zipEnrichment?.useReFramework ?? pkg._useReFramework ?? pkg.useReFramework ?? false;
+      const zipPainPoints = (pkg._painPoints || pkg.painPoints || []).map((p: any) => ({
+        name: p.name || "",
+        description: p.description || "",
+      }));
+      const zipExtractedArtifacts = pkg._extractedArtifacts || pkg.extractedArtifacts || undefined;
+
+      const zipDeployReportMsg = [...messages].reverse().find((m) => m.content.includes("[DEPLOY_REPORT:"));
+      let zipDeploymentResults: any[] | undefined;
+      if (zipDeployReportMsg) {
+        const drMatch = zipDeployReportMsg.content.match(/\[DEPLOY_REPORT:([\s\S]*?)\]$/);
+        if (drMatch) {
+          try {
+            const drData = JSON.parse(drMatch[1]);
+            zipDeploymentResults = drData.results || [];
+          } catch {}
+        }
+      }
+
       const dhgContent = generateDeveloperHandoffGuide({
         projectName: pkg.projectName || idea.title.replace(/\s+/g, "_"),
         description: pkg.description || idea.description,
@@ -838,6 +859,11 @@ ${content}`
         usedPackages: allUsedPkgsForDhg,
         workflowNames: wfNamesForDhg,
         sddContent: sddContent || undefined,
+        enrichment: zipEnrichment,
+        useReFramework: zipUseReFramework,
+        painPoints: zipPainPoints,
+        deploymentResults: zipDeploymentResults,
+        extractedArtifacts: zipExtractedArtifacts,
         automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
         analysisReports,
       });
@@ -917,6 +943,27 @@ ${content}`
       for (const d of (pkg.dependencies || [])) depMap[d] = "*";
       const wfNamesForDhg = workflows.map((wf: any) => (wf.name || "Workflow").replace(/\s+/g, "_"));
 
+      const enrichment = pkg._enrichment || pkg.enrichment || null;
+      const useReFramework = enrichment?.useReFramework ?? pkg._useReFramework ?? pkg.useReFramework ?? false;
+      const painPoints = (pkg._painPoints || pkg.painPoints || []).map((p: any) => ({
+        name: p.name || "",
+        description: p.description || "",
+      }));
+
+      const deployReportMsg = [...messages].reverse().find((m) => m.content.includes("[DEPLOY_REPORT:"));
+      let deploymentResults: any[] | undefined;
+      if (deployReportMsg) {
+        const drMatch = deployReportMsg.content.match(/\[DEPLOY_REPORT:([\s\S]*?)\]$/);
+        if (drMatch) {
+          try {
+            const drData = JSON.parse(drMatch[1]);
+            deploymentResults = drData.results || [];
+          } catch {}
+        }
+      }
+
+      const extractedArtifacts = pkg._extractedArtifacts || pkg.extractedArtifacts || undefined;
+
       const dhgContent = generateDeveloperHandoffGuide({
         projectName: pkg.projectName || idea.title.replace(/\s+/g, "_"),
         description: pkg.description || idea.description,
@@ -924,6 +971,11 @@ ${content}`
         usedPackages: Object.keys(depMap),
         workflowNames: wfNamesForDhg,
         sddContent: sddContent || undefined,
+        enrichment,
+        useReFramework,
+        painPoints,
+        deploymentResults,
+        extractedArtifacts,
         automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
         analysisReports,
       });
