@@ -1,0 +1,91 @@
+CannonBall — Agent Artifact Enrichment (No Pipeline Changes)
+Do not change the deployment pipeline, API publishing flow, or Deployment Report structure. This is purely an enrichment of what gets packaged and how the Deployment Report communicates agent artifact status.
+
+Problem to fix
+When automation type is Agent or Hybrid, the Deployment Report currently shows Knowledge Bases, Prompt Templates, and Agents as "Created" -- but these are Orchestrator text assets, not real UiPath agent entities. This is misleading. The report needs to accurately reflect what was created and what still needs human action.
+
+Change 1 — Deployment Report status labels
+For agent artifacts (Knowledge Bases, Prompt Templates, Agents), replace the green "Created" badge with an amber "In Package" badge. Add a single line at the bottom of the report replacing the current success message:
+Current:
+
+"Core artifacts provisioned. 1 need manual setup."
+
+Replace with:
+
+"Agent artifacts generated in downloadable package. See Handoff Guide for import and configuration steps."
+
+The rest of the Deployment Report (RPA artifacts, credentials, versioning, counts) stays unchanged.
+
+Change 2 — Enrich the downloadable package
+When the user downloads the package, the zip should include these additional files alongside what already exists:
+/[ProjectName]/
+  ... existing files unchanged ...
+  prompts/
+    system_prompt.txt          ← Full generated system prompt from SDD
+    user_prompt_template.txt   ← Parameterized user prompt template
+  tools/
+    tool_definitions.json      ← Tool names, descriptions, input/output schemas, connection types
+  knowledge/
+    kb_placeholder.md          ← Instructions for what documents to upload and index
+  agents/
+    [AgentName]_config.json    ← Agent config (system prompt, tools, guardrails, escalation rules)
+                                  with inline CONFIGURE/TUNE/AUTHORIZE flags
+The content of these files should be fully generated from the SDD -- not generic placeholders. The system prompt should reflect the actual process. Tool definitions should reflect the actual systems involved. The kb_placeholder should list the specific document types relevant to the process.
+
+Change 3 — Handoff Guide additions
+Add one new section to the Developer Handoff Guide between the current Section 2 and Section 3. Do not change any existing sections.
+New Section: "Agent Artifacts — Import and Configure"
+## 2a. Agent Artifacts — Import and Configure
+
+Agent artifacts have been generated and are included in this package.
+They are NOT yet live in UiPath Agent Builder. Follow these steps in order.
+
+### What's in the package
+
+| File | What it is |
+|------|------------|
+| prompts/system_prompt.txt | Generated system prompt — review [REVIEW:] tags before use |
+| prompts/user_prompt_template.txt | Parameterized prompt template for runtime inputs |
+| tools/tool_definitions.json | Tool definitions — verify schemas match your system APIs |
+| knowledge/kb_placeholder.md | List of documents to upload and index in your knowledge base |
+| agents/[AgentName]_config.json | Full agent config ready to import into Agent Builder |
+
+### Import steps
+
+1. Open UiPath Agent Builder in your tenant
+2. Create a new agent named [AgentName]
+3. Import agents/[AgentName]_config.json as the agent configuration
+4. Upload and index the documents listed in knowledge/kb_placeholder.md
+5. Authorize any OAuth connections flagged with # AUTHORIZE: in the config
+
+### Configure checklist
+
+| # | File | Action |
+|---|------|--------|
+| 1 | system_prompt.txt | Validate all [REVIEW:] sections against your real process |
+| 2 | [AgentName]_config.json | Complete all AUTHORIZE flags with real connection credentials |
+| 3 | [AgentName]_config.json | Tune all TUNE flags (temperature, iterations) against test runs |
+| 4 | tool_definitions.json | Verify tool schemas match actual API responses from your systems |
+| 5 | knowledge/kb_placeholder.md | Upload all listed documents before first agent run |
+
+### What works out of the box
+- Agent structure, tool routing, and escalation logic
+- System prompt (generated from your actual process narrative)
+- RPA sequences and RPA-to-Agent handoff points
+
+### What requires human action before the agent will run
+- OAuth connection authorization (cannot be done programmatically)
+- Knowledge base document upload and indexing
+- Production prompt validation against real data
+
+What to leave completely unchanged
+
+Deployment pipeline and all API publishing logic
+RPA workflow generation
+Deployment Report structure, versioning, counts, and all RPA artifact statuses
+Config.xlsx generation
+Tier 1 / Tier 2 / Tier 3 structure and readiness score
+The existing download button and zip behavior (just add the new files to the zip)
+
+
+The only visible changes to the user are: amber "In Package" badges on agent artifacts in the Deployment Report, the updated bottom message, and the richer package contents when they download.
