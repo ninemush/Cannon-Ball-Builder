@@ -770,8 +770,22 @@ ${content}`
         } catch { /* fall through to regeneration */ }
       }
 
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+
+      const sendProgress = (message: string) => {
+        res.write(`data: ${JSON.stringify({ progress: message })}\n\n`);
+      };
+
+      sendProgress("Loading idea and documents...");
+
       const idea = await storage.getIdea(ideaId);
-      if (!idea) return res.status(404).json({ message: "Idea not found" });
+      if (!idea) {
+        res.write(`data: ${JSON.stringify({ error: "Idea not found" })}\n\n`);
+        return res.end();
+      }
 
       const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
       const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
@@ -787,30 +801,47 @@ ${content}`
         systemCtx += `\n\nProcess Map Steps:\n${JSON.stringify(mapSummary)}`;
       }
 
-      const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 16384,
-        system: systemCtx,
-        messages: [{ role: "user", content: UIPATH_PROMPT }],
-      });
+      sendProgress("Calling LLM to generate package specification...");
+
+      const keepAliveInterval = setInterval(() => {
+        sendProgress("Still generating package specification...");
+      }, 15000);
+
+      let response;
+      try {
+        response = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 16384,
+          system: systemCtx,
+          messages: [{ role: "user", content: UIPATH_PROMPT }],
+        });
+      } finally {
+        clearInterval(keepAliveInterval);
+      }
+
+      sendProgress("LLM response received, parsing JSON...");
 
       const textBlock = response.content.find((b) => b.type === "text");
       const rawText = textBlock?.text || "{}";
 
       if (response.stop_reason === "max_tokens") {
         console.warn(`[UiPath] LLM response truncated at max_tokens for ${ideaId} — attempting repair`);
+        sendProgress("Response truncated, attempting JSON repair...");
       }
 
       let packageJson;
       try {
         const parsed = sanitizeAndParseJson(rawText);
         packageJson = uipathPackageSchema.parse(parsed);
+        sendProgress("Package JSON parsed successfully");
       } catch (parseErr: any) {
+        sendProgress("Initial parse failed, attempting repair...");
         const repaired = repairTruncatedPackageJson(rawText);
         if (repaired) {
           try {
             packageJson = uipathPackageSchema.parse(repaired);
             console.log(`[UiPath] Repaired truncated JSON for ${ideaId}: ${(repaired.workflows || []).length} workflows recovered`);
+            sendProgress(`Repaired JSON: ${(repaired.workflows || []).length} workflows recovered`);
           } catch (repairErr: any) {
             console.error(`[UiPath] Repair also failed for ${ideaId}:`, repairErr?.message);
           }
@@ -818,14 +849,18 @@ ${content}`
         if (!packageJson) {
           console.error(`[UiPath] Package parse/validation failed for ${ideaId}:`, parseErr?.message || parseErr);
           console.error(`[UiPath] Raw LLM response (first 500 chars):`, rawText.slice(0, 500));
-          return res.status(500).json({ message: "Failed to parse AI-generated package. Please try again." });
+          res.write(`data: ${JSON.stringify({ error: "Failed to parse AI-generated package. Please try again." })}\n\n`);
+          return res.end();
         }
       }
 
       if (!packageJson.workflows || packageJson.workflows.length === 0) {
         console.error(`[UiPath] Generated package for ${ideaId} has 0 workflows — not storing`);
-        return res.status(500).json({ message: "AI generated a package with no workflows. Please try again." });
+        res.write(`data: ${JSON.stringify({ error: "AI generated a package with no workflows. Please try again." })}\n\n`);
+        return res.end();
       }
+
+      sendProgress(`Validating ${packageJson.workflows.length} workflow(s)...`);
 
       await chatStorage.createMessage(
         ideaId,
@@ -833,10 +868,16 @@ ${content}`
         `[UIPATH:${JSON.stringify(packageJson)}]`
       );
 
-      return res.json({ package: packageJson });
+      sendProgress("Package stored successfully");
+      res.write(`data: ${JSON.stringify({ done: true, package: packageJson })}\n\n`);
+      return res.end();
     } catch (error) {
       console.error("Error generating UiPath package:", error);
-      return res.status(500).json({ message: "Failed to generate UiPath package" });
+      if (!res.headersSent) {
+        return res.status(500).json({ message: "Failed to generate UiPath package" });
+      }
+      res.write(`data: ${JSON.stringify({ error: "Failed to generate UiPath package" })}\n\n`);
+      return res.end();
     }
   });
 

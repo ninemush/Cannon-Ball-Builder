@@ -35,7 +35,16 @@ function detectApprovalIntent(userMessage: string): "PDD" | "SDD" | null {
   if (/\bpdd\b/i.test(userMessage)) return "PDD";
   if (/\bsdd\b/i.test(userMessage)) return "SDD";
 
-  return "PDD";
+  return null;
+}
+
+async function resolveApprovalTarget(ideaId: string, explicitIntent: "PDD" | "SDD" | null): Promise<"PDD" | "SDD" | null> {
+  if (explicitIntent) return explicitIntent;
+  const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+  if (sdd && sdd.status === "draft") return "SDD";
+  const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
+  if (pdd && pdd.status === "draft") return "PDD";
+  return null;
 }
 
 function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null, automationType?: AutomationType | null): string {
@@ -176,6 +185,7 @@ BRANCHING RULES (CRITICAL — real processes are NOT linear):
 - PARALLEL PATHS: If two tasks happen simultaneously after a step, both FROM the same parent step number (no decision needed — just two children with no LABEL).
 - END NODES — MINIMIZE (CRITICAL): Use the FEWEST end nodes possible. Most processes have only 2 end nodes (success and failure). Use a separate End node ONLY for a genuinely distinct terminal business outcome — NOT for each branch path. If two branches both end in "invoice processed", they MUST merge into ONE end node, not two. Maximum 2-3 End nodes per process unless there are truly 4+ distinct outcomes. NEVER create end nodes with suffixes like "End B", "End C", "End 2" — each end node must have a unique, meaningful business outcome name.
 - NEVER output all steps in a linear chain when the process has decisions. EVERY process has decisions — insurance claims, invoice processing, onboarding, purchase orders, IT service requests — ALL of them branch.
+- DEAD-END BRANCHES ARE FORBIDDEN. Every branch from every decision MUST terminate — either by reaching an End node, by merging into another branch that reaches an End node, or by looping back to an earlier decision node using a FROM field. If a branch leads to a task node that has no subsequent step and is not an End node, you MUST add the missing connection (either to an End node or back to an earlier step).
 
 MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
 - The visual process map panel ONLY renders when you output [STEP:] tags. Text descriptions of steps do NOT build the map. If you say "here are the steps" but don't output [STEP:] tags, nothing appears.
@@ -201,6 +211,7 @@ SELF-CHECK (MANDATORY — run this mentally before finalizing your [STEP:] outpu
 5. Every End node is reachable — it has a chain of FROM references leading back to Start.
 6. Every decision node has 2+ children (steps that FROM it with different LABELs).
 7. Branches that lead to the same outcome MERGE into a shared path before the End node.
+8. Trace EVERY path from EVERY decision outcome forward. Each path must reach an End node or loop back to an earlier step. If any path dead-ends at a non-end node with no outgoing edge, add the missing connection.
 
 EXAMPLE 1 — Insurance claim with 3-way decision and loop:
 [STEP: 1.0 Customer Submits Claim | ROLE: Customer | SYSTEM: Claims Portal | TYPE: start]
@@ -426,7 +437,8 @@ export function registerChatRoutes(app: Express): void {
 
       await chatStorage.createMessage(ideaId, "user", content);
 
-      const approvalIntent = detectApprovalIntent(content);
+      const rawApprovalIntent = detectApprovalIntent(content);
+      const approvalIntent = rawApprovalIntent !== null ? await resolveApprovalTarget(ideaId, rawApprovalIntent) : null;
       let chatApprovalDone = false;
       if (approvalIntent) {
         try {
@@ -446,7 +458,71 @@ export function registerChatRoutes(app: Express): void {
             console.log(`[Chat] ${approvalIntent} approved via chat by ${approveUser?.displayName}`);
           }
         } catch (approvalErr: any) {
-          console.error("[Chat] Chat-based approval failed:", approvalErr?.message);
+          const errMsg = approvalErr?.message || "";
+          if (errMsg.includes("document found")) {
+            console.log(`[Chat] ${approvalIntent} not found in DB — attempting recovery from chat history`);
+            try {
+              const allMessages = await chatStorage.getRecentMessagesByIdeaId(ideaId, 200);
+              const docTag = `[DOC:${approvalIntent}:`;
+              let recoveredContent: string | null = null;
+              for (let i = allMessages.length - 1; i >= 0; i--) {
+                const msg = allMessages[i];
+                if (msg.role === "assistant" && msg.content.includes(docTag)) {
+                  const tagIdx = msg.content.indexOf(docTag);
+                  const closeBracket = msg.content.indexOf("]", tagIdx);
+                  recoveredContent = closeBracket >= 0 ? msg.content.slice(closeBracket + 1).trim() : msg.content.slice(tagIdx + docTag.length).trim();
+                  break;
+                }
+              }
+              if (!recoveredContent) {
+                for (let i = allMessages.length - 1; i >= 0; i--) {
+                  const msg = allMessages[i];
+                  if (msg.role !== "assistant" || msg.content.length < 2000) continue;
+                  const isPdd = approvalIntent === "PDD" && /Executive Summary/i.test(msg.content) && /Automation Opportunity/i.test(msg.content);
+                  const isSdd = approvalIntent === "SDD" && /Automation Architecture/i.test(msg.content) && /orchestrator_artifacts/i.test(msg.content);
+                  if (isPdd || isSdd) {
+                    recoveredContent = msg.content;
+                    break;
+                  }
+                }
+              }
+              if (recoveredContent && recoveredContent.length > 100) {
+                const existing = await documentStorage.getLatestDocument(ideaId, approvalIntent);
+                const version = existing ? existing.version + 1 : 1;
+                const doc = await documentStorage.createDocument({
+                  ideaId,
+                  type: approvalIntent,
+                  version,
+                  status: "draft",
+                  content: recoveredContent,
+                  snapshotJson: JSON.stringify({ generatedFrom: "chat-recovery" }),
+                });
+                console.log(`[Chat] Recovered unsaved ${approvalIntent} from chat history, created doc id ${doc.id}`);
+                const retryResult = await approveDocument({
+                  ideaId,
+                  docType: approvalIntent,
+                  docId: doc.id,
+                  userId: req.session.userId!,
+                  activeRole: req.session.activeRole,
+                  skipChatMessages: true,
+                });
+                if (!retryResult.alreadyApproved) {
+                  chatApprovalDone = true;
+                  const approveUser = await storage.getUser(req.session.userId!);
+                  await chatStorage.createMessage(ideaId, "system",
+                    `[CHAT_APPROVAL] ${approvalIntent} approved by ${approveUser?.displayName || "Unknown"} via chat confirmation.`
+                  );
+                  console.log(`[Chat] ${approvalIntent} approved via chat (recovered doc) by ${approveUser?.displayName}`);
+                }
+              } else {
+                console.error(`[Chat] Could not recover ${approvalIntent} from chat history — no matching content found`);
+              }
+            } catch (recoveryErr: any) {
+              console.error(`[Chat] ${approvalIntent} recovery failed:`, recoveryErr?.message);
+            }
+          } else {
+            console.error("[Chat] Chat-based approval failed:", errMsg);
+          }
         }
       }
 
@@ -564,10 +640,8 @@ export function registerChatRoutes(app: Express): void {
       }
 
       let earlyDocType: "PDD" | "SDD" | null = null;
-      if (chatApprovalDone && approvalIntent === "PDD") {
-        earlyDocType = "SDD";
-        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
-        console.log(`[Chat] PDD approved — emitting early docProgress.started for SDD auto-generation`);
+      if (chatApprovalDone) {
+        console.log(`[Chat] ${approvalIntent} approved via chat — skipping inline doc generation (client auto-chain will handle next step)`);
       } else if (classifiedIntent === "PDD" || classifiedIntent === "PDD_SDD") {
         earlyDocType = "PDD";
         try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch {}
@@ -614,7 +688,10 @@ export function registerChatRoutes(app: Express): void {
       }
 
       let intentOverride = "";
-      if (classifiedIntent === "PDD") {
+      if (chatApprovalDone && approvalIntent) {
+        const nextStep = approvalIntent === "PDD" ? "I'll now generate the SDD." : approvalIntent === "SDD" ? "I'll now generate the UiPath automation package." : "";
+        intentOverride = `\n\nAPPROVAL CONFIRMATION DIRECTIVE: The ${approvalIntent} has just been approved via the user's chat message. Respond with a brief confirmation (1-3 sentences). You MUST include the exact phrase "${approvalIntent} approved" in your response. ${nextStep} Do NOT generate any documents or use [DOC:] tags in this response — the next step will be triggered automatically.`;
+      } else if (classifiedIntent === "PDD") {
         intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting a PDD (Process Design Document). You MUST generate a PDD using the [DOC:PDD:0] tag. Do NOT generate an SDD. Start your response with [DOC:PDD:0] followed by the full PDD content.";
       } else if (classifiedIntent === "SDD") {
         intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting an SDD (Solution Design Document). You MUST generate an SDD using the [DOC:SDD:0] tag. Do NOT generate a PDD. Start your response with [DOC:SDD:0] followed by the full SDD content.";
@@ -937,6 +1014,34 @@ export function registerChatRoutes(app: Express): void {
               if (!genRes.ok) {
                 const genErr = await genRes.json().catch(() => ({}));
                 throw new Error(genErr.message || "Package generation failed");
+              }
+              const contentType = genRes.headers.get("content-type") || "";
+              if (contentType.includes("text/event-stream") && genRes.body) {
+                const reader = genRes.body.getReader();
+                const decoder = new TextDecoder();
+                let sseBuffer = "";
+                let genDone = false;
+                let genError: string | null = null;
+                while (true) {
+                  const { done: readDone, value } = await reader.read();
+                  if (readDone) break;
+                  sseBuffer += decoder.decode(value, { stream: true });
+                  const lines = sseBuffer.split("\n");
+                  sseBuffer = lines.pop() || "";
+                  for (const line of lines) {
+                    if (!line.startsWith("data: ")) continue;
+                    try {
+                      const evt = JSON.parse(line.slice(6));
+                      if (evt.done) genDone = true;
+                      if (evt.error) genError = evt.error;
+                      if (evt.progress) {
+                        try { res.write(`data: ${JSON.stringify({ deployStatus: evt.progress })}\n\n`); } catch {}
+                      }
+                    } catch {}
+                  }
+                }
+                if (genError) throw new Error(genError);
+                if (!genDone) throw new Error("Package generation stream ended without completion");
               }
               res.write(`data: ${JSON.stringify({ deployStatus: "Package generated. Starting deployment..." })}\n\n`);
             } catch (genErr: any) {

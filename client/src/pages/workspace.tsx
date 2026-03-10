@@ -595,7 +595,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
     }
 
     const hasPddApproval = savedMessages.some(
-      (m) => m.role === "assistant" && m.content.includes("PDD approved")
+      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("PDD approved")
     );
     const hasSdd = savedMessages.some(
       (m) => m.content.startsWith("[DOC:SDD:")
@@ -607,7 +607,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
     }
 
     const hasSddApproval = savedMessages.some(
-      (m) => m.role === "assistant" && m.content.includes("SDD approved")
+      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("SDD approved")
     );
     const hasUiPath = savedMessages.some(
       (m) => m.content.startsWith("[UIPATH:")
@@ -889,6 +889,26 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
           }));
           dedupedSteps = filteredSteps;
 
+          const edgeSources = new Set(remappedEdges.map(e => e.sourceIndex));
+          const firstEndIdx = dedupedSteps.findIndex(s => s.nodeType === "end");
+          if (firstEndIdx >= 0) {
+            let repairedCount = 0;
+            for (let idx = 0; idx < dedupedSteps.length; idx++) {
+              const s = dedupedSteps[idx];
+              if (s.nodeType === "end" || s.nodeType === "start") continue;
+              if (edgeSources.has(idx)) continue;
+              const pairKey = `${idx}->${firstEndIdx}`;
+              if (!seenEdgePairs.has(pairKey)) {
+                seenEdgePairs.add(pairKey);
+                remappedEdges.push({ sourceIndex: idx, targetIndex: firstEndIdx, label: "" });
+                repairedCount++;
+              }
+            }
+            if (repairedCount > 0) {
+              console.log(`[ProcessMap] Auto-repaired ${repairedCount} dead-end branch(es) for view=${viewType}`);
+            }
+          }
+
           const bulkNodes = dedupedSteps.map((step, i) => ({
             name: step.name,
             role: step.role,
@@ -944,9 +964,10 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
     }
     setIsGeneratingDoc(true);
     setGeneratingDocType("UiPath");
+    setDocProgressSection("");
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 180000);
+      const timeout = setTimeout(() => controller.abort(), 300000);
       const res = await fetch(`/api/ideas/${idea.id}/generate-uipath`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -963,10 +984,53 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
           variant: "destructive",
         });
       } else {
-        toast({
-          title: "UiPath Package Ready",
-          description: "Package generated successfully. You can now deploy to UiPath.",
-        });
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("text/event-stream")) {
+          const reader = res.body?.getReader();
+          const decoder = new TextDecoder();
+          if (reader) {
+            let buffer = "";
+            let success = false;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.progress) {
+                      setDocProgressSection(data.progress);
+                    }
+                    if (data.done) {
+                      success = true;
+                    }
+                    if (data.error) {
+                      toast({
+                        title: "Package generation failed",
+                        description: data.error,
+                        variant: "destructive",
+                      });
+                    }
+                  } catch {}
+                }
+              }
+            }
+            if (success) {
+              toast({
+                title: "UiPath Package Ready",
+                description: "Package generated successfully. You can now deploy to UiPath.",
+              });
+            }
+          }
+        } else {
+          toast({
+            title: "UiPath Package Ready",
+            description: "Package generated successfully. You can now deploy to UiPath.",
+          });
+        }
       }
     } catch (err: any) {
       if (err?.name === "AbortError") {
@@ -986,6 +1050,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
     } finally {
       setIsGeneratingDoc(false);
       setGeneratingDocType("");
+      setDocProgressSection("");
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
     }
   }, [idea.id, isGeneratingDoc, isStreaming]);

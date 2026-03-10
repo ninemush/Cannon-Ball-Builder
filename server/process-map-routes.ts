@@ -253,6 +253,56 @@ async function consolidateSuffixEndNodes(ideaId: string, viewType: string): Prom
   return merged;
 }
 
+async function repairDeadEndBranches(ideaId: string, viewType: string): Promise<number> {
+  let repaired = 0;
+  try {
+    const nodesResult = await db.execute(sql`
+      SELECT id, node_type FROM process_nodes
+      WHERE idea_id = ${ideaId} AND view_type = ${viewType}
+    `);
+    const nodes = (nodesResult.rows || nodesResult || []) as any[];
+    if (!Array.isArray(nodes) || nodes.length === 0) return 0;
+
+    const edgesResult = await db.execute(sql`
+      SELECT source_node_id, target_node_id FROM process_edges
+      WHERE idea_id = ${ideaId} AND view_type = ${viewType}
+    `);
+    const edges = (edgesResult.rows || edgesResult || []) as any[];
+
+    const sourceSet = new Set<number>();
+    if (Array.isArray(edges)) {
+      for (const edge of edges) {
+        sourceSet.add(edge.source_node_id as number);
+      }
+    }
+
+    const endNode = nodes.find((n: any) => n.node_type === 'end');
+    if (!endNode) return 0;
+
+    const leafNodes = nodes.filter((n: any) =>
+      n.node_type !== 'end' && n.node_type !== 'start' && !sourceSet.has(n.id as number)
+    );
+
+    for (const leaf of leafNodes) {
+      await processMapStorage.createEdge({
+        ideaId,
+        viewType,
+        sourceNodeId: leaf.id as number,
+        targetNodeId: endNode.id as number,
+        label: "",
+      });
+      repaired++;
+    }
+
+    if (repaired > 0) {
+      console.log(`[ProcessMap] Auto-repaired ${repaired} dead-end branch(es) for idea=${ideaId} view=${viewType}`);
+    }
+  } catch (err: any) {
+    console.error("[ProcessMap] Dead-end repair error:", err?.message);
+  }
+  return repaired;
+}
+
 async function cleanupOrphanedNodes(ideaId: string, viewType: string): Promise<void> {
   try {
     await consolidateDuplicateEndNodes(ideaId, viewType);
@@ -365,7 +415,21 @@ async function migrateAsIsToToBeForIdea(ideaId: string): Promise<void> {
 }
 
 migrateAsIsToToBeForIdea("75c35cb6-231b-4fab-98db-cf314d76e276").then(() => {
-  cleanupDuplicateProcessNodes().catch(() => {});
+  cleanupDuplicateProcessNodes().then(async () => {
+    try {
+      const viewsResult = await db.execute(sql`
+        SELECT DISTINCT idea_id, view_type FROM process_nodes
+      `);
+      const viewsRows = viewsResult.rows || viewsResult || [];
+      if (Array.isArray(viewsRows)) {
+        for (const row of viewsRows) {
+          await repairDeadEndBranches(row.idea_id as string, row.view_type as string);
+        }
+      }
+    } catch (err: any) {
+      console.error("[ProcessMap] Startup dead-end repair error:", err?.message);
+    }
+  }).catch(() => {});
 });
 
 const createNodeSchema = z.object({
@@ -802,6 +866,7 @@ export function registerProcessMapRoutes(app: Express): void {
       }
 
       await cleanupOrphanedNodes(ideaId, viewType);
+      await repairDeadEndBranches(ideaId, viewType);
 
       return res.status(201).json({ nodeIds: createdNodeIds, edgeIds: createdEdgeIds, indexToId });
     } catch (err: any) {
