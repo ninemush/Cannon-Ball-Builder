@@ -192,6 +192,21 @@ async function cleanupDuplicateProcessNodes(): Promise<void> {
       }
     }
 
+    const agentDowngrade = await db.execute(sql`
+      UPDATE process_nodes
+      SET node_type = CASE
+        WHEN node_type = 'agent-task' THEN 'task'
+        WHEN node_type = 'agent-decision' THEN 'decision'
+        WHEN node_type = 'agent-loop' THEN 'task'
+      END
+      WHERE view_type = 'as-is'
+        AND node_type IN ('agent-task', 'agent-decision', 'agent-loop')
+    `);
+    const downgraded = (agentDowngrade as any).rowCount || 0;
+    if (downgraded > 0) {
+      console.log(`[ProcessMap] Startup: Downgraded ${downgraded} agent node(s) in as-is views to standard types.`);
+    }
+
     const viewsResult = await db.execute(sql`
       SELECT DISTINCT idea_id, view_type FROM process_nodes
     `);
@@ -795,6 +810,21 @@ export function registerProcessMapRoutes(app: Express): void {
     }
 
     try {
+      if (viewType === "as-is") {
+        for (const node of nodes) {
+          if (node.nodeType === "agent-task") {
+            console.warn(`[ProcessMap] Downgrading agent-task to task in as-is bulk for idea=${ideaId}, node="${node.name}"`);
+            node.nodeType = "task";
+          } else if (node.nodeType === "agent-decision") {
+            console.warn(`[ProcessMap] Downgrading agent-decision to decision in as-is bulk for idea=${ideaId}, node="${node.name}"`);
+            node.nodeType = "decision";
+          } else if (node.nodeType === "agent-loop") {
+            console.warn(`[ProcessMap] Downgrading agent-loop to task in as-is bulk for idea=${ideaId}, node="${node.name}"`);
+            node.nodeType = "task";
+          }
+        }
+      }
+
       if (shouldClear) {
         await processMapStorage.clearAllForView(ideaId, viewType);
       }
@@ -969,35 +999,40 @@ export function registerProcessMapRoutes(app: Express): void {
         console.log(`[ProcessMap] Cascade invalidation: As-Is v${nextVersion} invalidated To-Be, PDD, SDD for idea=${ideaId}`);
       }
 
-      const idMap: Record<number, number> = {};
-      for (const node of nodes) {
-        const toBeNode = await processMapStorage.createNode({
-          ideaId,
-          name: node.name,
-          role: node.role,
-          system: node.system,
-          nodeType: node.nodeType,
-          description: node.isPainPoint
-            ? `[AUTOMATED] ${node.description || node.name}`
-            : node.description,
-          isGhost: node.isGhost,
-          isPainPoint: false,
-          viewType: "to-be",
-          orderIndex: node.orderIndex,
-          positionX: node.positionX,
-          positionY: node.positionY,
-        });
-        idMap[node.id] = toBeNode.id;
-      }
-      for (const edge of edges) {
-        if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
-          await processMapStorage.createEdge({
+      const existingToBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+      if (existingToBeNodes.length > 0) {
+        console.log(`[ProcessMap] Skipping as-is → to-be clone for idea=${ideaId}: to-be already has ${existingToBeNodes.length} nodes (likely AI-generated)`);
+      } else {
+        const idMap: Record<number, number> = {};
+        for (const node of nodes) {
+          const toBeNode = await processMapStorage.createNode({
             ideaId,
-            sourceNodeId: idMap[edge.sourceNodeId],
-            targetNodeId: idMap[edge.targetNodeId],
-            label: edge.label,
+            name: node.name,
+            role: node.role,
+            system: node.system,
+            nodeType: node.nodeType,
+            description: node.isPainPoint
+              ? `[AUTOMATED] ${node.description || node.name}`
+              : node.description,
+            isGhost: node.isGhost,
+            isPainPoint: false,
             viewType: "to-be",
+            orderIndex: node.orderIndex,
+            positionX: node.positionX,
+            positionY: node.positionY,
           });
+          idMap[node.id] = toBeNode.id;
+        }
+        for (const edge of edges) {
+          if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
+            await processMapStorage.createEdge({
+              ideaId,
+              sourceNodeId: idMap[edge.sourceNodeId],
+              targetNodeId: idMap[edge.targetNodeId],
+              label: edge.label,
+              viewType: "to-be",
+            });
+          }
         }
       }
     }

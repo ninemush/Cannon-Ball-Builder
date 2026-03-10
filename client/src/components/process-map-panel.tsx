@@ -561,9 +561,11 @@ interface ProcessMapPanelProps {
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
   if (nodeType === "start") return { width: 72, height: 72 };
   if (nodeType === "end") return { width: 72, height: 72 };
-  if (nodeType === "decision" || nodeType === "agent-decision") return { width: 100, height: 100 };
-  if (nodeType === "agent-loop") return { width: 280, height: 90 };
-  return { width: 280, height: 80 };
+  if (nodeType === "decision") return { width: 100, height: 100 };
+  if (nodeType === "agent-decision") return { width: 100, height: 120 };
+  if (nodeType === "agent-loop") return { width: 280, height: 110 };
+  if (nodeType === "agent-task") return { width: 280, height: 120 };
+  return { width: 280, height: 100 };
 }
 
 function applyDagreLayout(
@@ -597,7 +599,7 @@ function applyDagreLayout(
     edgesep = Math.round(40 + density * 15);
   } else {
     nodesep = 140;
-    ranksep = 180;
+    ranksep = 200;
     edgesep = 60;
   }
 

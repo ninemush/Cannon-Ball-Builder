@@ -105,13 +105,18 @@ function StreamingProgressIndicator({ mode, docType, currentSection, deployStep,
     );
   }
 
+  const isUiPath = docType === "UiPath";
   const statusText = mode === "deploy"
     ? (deployStep || "Preparing deployment...")
-    : (currentSection ? `Now writing: ${currentSection}` : fallbackStep);
+    : isUiPath
+      ? (currentSection || fallbackStep)
+      : (currentSection ? `Now writing: ${currentSection}` : fallbackStep);
 
   const title = mode === "deploy"
     ? "Deploying to UiPath..."
-    : `Generating ${docType || "document"}...`;
+    : isUiPath
+      ? "Generating UiPath..."
+      : `Generating ${docType || "document"}...`;
 
   return (
     <div className="flex justify-start" data-testid={mode === "deploy" ? "deploy-progress-indicator" : "doc-generation-loading"}>

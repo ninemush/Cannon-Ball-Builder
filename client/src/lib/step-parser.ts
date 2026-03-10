@@ -63,6 +63,43 @@ export interface ViewSteps {
   steps: ParsedStep[];
 }
 
+const AGENT_NODE_TYPES: Set<string> = new Set(["agent-task", "agent-decision", "agent-loop"]);
+
+function isAgentNode(step: ParsedStep): boolean {
+  return AGENT_NODE_TYPES.has(step.nodeType);
+}
+
+function splitAgentNodesFromAsIs(views: ViewSteps[]): ViewSteps[] {
+  const output: ViewSteps[] = [];
+  let extraToBeSteps: ParsedStep[] = [];
+
+  for (const group of views) {
+    if (group.viewType === "as-is") {
+      const standard = group.steps.filter((s) => !isAgentNode(s));
+      const agents = group.steps.filter((s) => isAgentNode(s));
+      if (standard.length > 0) {
+        output.push({ viewType: "as-is", steps: standard });
+      }
+      if (agents.length > 0) {
+        extraToBeSteps = extraToBeSteps.concat(agents);
+      }
+    } else {
+      output.push(group);
+    }
+  }
+
+  if (extraToBeSteps.length > 0) {
+    const existing = output.find((v) => v.viewType === "to-be");
+    if (existing) {
+      existing.steps = extraToBeSteps.concat(existing.steps);
+    } else {
+      output.push({ viewType: "to-be", steps: extraToBeSteps });
+    }
+  }
+
+  return output;
+}
+
 const AS_IS_HEADER = /\*{0,2}AS[-\s]IS\s+(?:Process\s*)?Map\*{0,2}/i;
 const TO_BE_HEADER = /\*{0,2}TO[-\s]BE\s+(?:Process\s*)?Map\*{0,2}/i;
 
@@ -74,7 +111,7 @@ export function parseStepsByView(text: string): ViewSteps[] {
   if (!asIsMatch && !toBeMatch) {
     const steps = parseStepsFromText(text);
     if (steps.length === 0) return [];
-    return [{ viewType: "as-is", steps }];
+    return splitAgentNodesFromAsIs([{ viewType: "as-is", steps }]);
   }
 
   const result: ViewSteps[] = [];
@@ -108,8 +145,8 @@ export function parseStepsByView(text: string): ViewSteps[] {
 
   if (result.length === 0) {
     const steps = parseStepsFromText(text);
-    if (steps.length > 0) return [{ viewType: "as-is", steps }];
+    if (steps.length > 0) return splitAgentNodesFromAsIs([{ viewType: "as-is", steps }]);
   }
 
-  return result;
+  return splitAgentNodesFromAsIs(result);
 }

@@ -3549,45 +3549,21 @@ export async function deployAllArtifacts(
     const infraResults = formatInfraProbeResults(infraProbe);
     allResults.push(...infraResults);
 
-    if ((artifacts.queues?.length || 0) > 0) {
-      onProgress?.(`Provisioning ${artifacts.queues!.length} queue(s)...`);
+    onProgress?.("Provisioning infrastructure artifacts...");
+    const [queueResults, bucketResults, assetResults, machineResults, envResults, robotResults] = await Promise.all([
+      provisionQueues(base, hdrs, artifacts.queues),
+      provisionStorageBuckets(base, hdrs, artifacts.storageBuckets),
+      provisionAssets(base, hdrs, artifacts.assets),
+      provisionMachines(base, hdrs, artifacts.machines),
+      (svcAvail && !svcAvail.environments && (artifacts.environments?.length || 0) > 0)
+        ? Promise.resolve([{ artifact: "Environment", name: `${artifacts.environments!.length} environment(s)`, status: "skipped" as const, message: "Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed." }])
+        : provisionEnvironments(base, hdrs, artifacts.environments),
+      provisionRobotAccounts(base, hdrs, config, artifacts.robotAccounts, infraProbe),
+    ]);
+    allResults.push(...queueResults, ...bucketResults, ...assetResults, ...machineResults, ...envResults, ...robotResults);
+    for (const r of [...queueResults, ...bucketResults, ...assetResults, ...machineResults, ...envResults, ...robotResults]) {
+      onProgress?.(`${r.artifact} "${r.name}" — ${r.status}`);
     }
-    const queueResults = await provisionQueues(base, hdrs, artifacts.queues);
-    allResults.push(...queueResults);
-    for (const r of queueResults) onProgress?.(`Queue "${r.name}" — ${r.status}`);
-
-    if ((artifacts.storageBuckets?.length || 0) > 0) {
-      onProgress?.(`Provisioning ${artifacts.storageBuckets!.length} storage bucket(s)...`);
-    }
-    const bucketResults = await provisionStorageBuckets(base, hdrs, artifacts.storageBuckets);
-    allResults.push(...bucketResults);
-    for (const r of bucketResults) onProgress?.(`Storage bucket "${r.name}" — ${r.status}`);
-
-    if ((artifacts.assets?.length || 0) > 0) {
-      onProgress?.(`Provisioning ${artifacts.assets!.length} asset(s)...`);
-    }
-    const assetResults = await provisionAssets(base, hdrs, artifacts.assets);
-    allResults.push(...assetResults);
-    for (const r of assetResults) onProgress?.(`Asset "${r.name}" — ${r.status}`);
-
-    if ((artifacts.machines?.length || 0) > 0) {
-      onProgress?.(`Provisioning ${artifacts.machines!.length} machine template(s)...`);
-    }
-    const machineResults = await provisionMachines(base, hdrs, artifacts.machines);
-    allResults.push(...machineResults);
-    for (const r of machineResults) onProgress?.(`Machine "${r.name}" — ${r.status}`);
-
-    if (svcAvail && !svcAvail.environments && (artifacts.environments?.length || 0) > 0) {
-      allResults.push({ artifact: "Environment", name: `${artifacts.environments!.length} environment(s)`, status: "skipped", message: "Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed." });
-    } else {
-      if ((artifacts.environments?.length || 0) > 0) onProgress?.(`Provisioning environments...`);
-      const envResults = await provisionEnvironments(base, hdrs, artifacts.environments);
-      allResults.push(...envResults);
-    }
-
-    if ((artifacts.robotAccounts?.length || 0) > 0) onProgress?.(`Provisioning robot accounts...`);
-    const robotResults = await provisionRobotAccounts(base, hdrs, config, artifacts.robotAccounts, infraProbe);
-    allResults.push(...robotResults);
 
     onProgress?.("Checking runtime availability...");
     const infraData: PreFetchedInfraData = { machines: infraProbe.machines, sessions: infraProbe.sessions, robots: infraProbe.robots };
@@ -3601,61 +3577,53 @@ export async function deployAllArtifacts(
       });
     }
 
-    if (svcAvail && !svcAvail.triggers && (artifacts.triggers?.length || 0) > 0) {
-      allResults.push({ artifact: "Trigger", name: `${artifacts.triggers!.length} trigger(s)`, status: "skipped", message: "Triggers API (QueueTriggers/ProcessSchedules) not available on this tenant. Triggers can be created manually in Orchestrator." });
-      onProgress?.(`Triggers skipped — API not available`);
-    } else {
-      if ((artifacts.triggers?.length || 0) > 0) onProgress?.(`Provisioning ${artifacts.triggers!.length} trigger(s)...`);
-      const triggerResults = await provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults, runtimeCheck);
-      allResults.push(...triggerResults);
-      for (const r of triggerResults) onProgress?.(`Trigger "${r.name}" — ${r.status}`);
-    }
+    onProgress?.("Provisioning services and test infrastructure...");
 
-    if ((artifacts.actionCenter?.length || 0) === 0) {
-      console.log("[UiPath Deploy] No Action Center artifacts extracted from SDD — skipping AC provisioning");
-    } else {
+    const triggerPromise = (svcAvail && !svcAvail.triggers && (artifacts.triggers?.length || 0) > 0)
+      ? Promise.resolve([{ artifact: "Trigger", name: `${artifacts.triggers!.length} trigger(s)`, status: "skipped" as const, message: "Triggers API not available on this tenant." }])
+      : provisionTriggers(base, hdrs, artifacts.triggers, releaseId, releaseKey, releaseName, queueResults, runtimeCheck);
+
+    if ((artifacts.actionCenter?.length || 0) > 0) {
       if (svcAvail && !svcAvail.actionCenter) {
         console.log("[UiPath Deploy] Probe says Action Center unavailable, but attempting provisioning anyway...");
       }
       console.log(`[UiPath Deploy] Provisioning ${artifacts.actionCenter!.length} Action Center task catalog(s): ${artifacts.actionCenter!.map(a => a.taskCatalog).join(", ")}`);
+    } else {
+      console.log("[UiPath Deploy] No Action Center artifacts extracted from SDD — skipping AC provisioning");
     }
-    if ((artifacts.actionCenter?.length || 0) > 0) onProgress?.(`Provisioning ${artifacts.actionCenter!.length} Action Center catalog(s)...`);
-    const actionCenterResults = await provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter);
-    allResults.push(...actionCenterResults);
-    for (const r of actionCenterResults) onProgress?.(`Action Center "${r.name}" — ${r.status}`);
-
     if (svcAvail && !svcAvail.documentUnderstanding && (artifacts.documentUnderstanding?.length || 0) > 0) {
       console.log("[UiPath Deploy] Probe says DU unavailable, but attempting provisioning anyway...");
     }
-    if ((artifacts.documentUnderstanding?.length || 0) > 0) onProgress?.(`Provisioning Document Understanding...`);
-    const duResults = await provisionDocUnderstanding(config, token, artifacts.documentUnderstanding);
-    allResults.push(...duResults);
-    for (const r of duResults) onProgress?.(`DU "${r.name}" — ${r.status}`);
-
     if (svcAvail && !svcAvail.testManager && ((artifacts.testCases?.length || 0) > 0 || (artifacts.testDataQueues?.length || 0) > 0)) {
       console.log("[UiPath Deploy] Probe says Test Manager unavailable, but attempting provisioning anyway...");
     }
-    if ((artifacts.testCases?.length || 0) > 0) onProgress?.(`Provisioning ${artifacts.testCases!.length} test case(s)...`);
-    const testProvision = await provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId);
-    allResults.push(...testProvision.results);
-    for (const r of testProvision.results) onProgress?.(`Test "${r.name}" — ${r.status}`);
+
+    const [triggerResults, actionCenterResults, duResults, testProvision, agentResults] = await Promise.all([
+      triggerPromise,
+      provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter),
+      provisionDocUnderstanding(config, token, artifacts.documentUnderstanding),
+      provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId),
+      provisionAgentArtifacts(base, hdrs, artifacts.agents, artifacts.knowledgeBases, artifacts.promptTemplates),
+    ]);
+    allResults.push(...triggerResults, ...actionCenterResults, ...duResults, ...testProvision.results, ...agentResults);
+    for (const r of [...triggerResults, ...actionCenterResults, ...duResults, ...testProvision.results, ...agentResults]) {
+      onProgress?.(`${r.artifact} "${r.name}" — ${r.status}`);
+    }
 
     if (testProvision.activeTmBase && testProvision.projectId) {
-      if ((artifacts.requirements?.length || 0) > 0) onProgress?.(`Provisioning ${artifacts.requirements!.length} requirement(s)...`);
-      const reqProvision = await provisionRequirements(
-        testProvision.activeTmBase, testProvision.tmHdrs, testProvision.projectId,
-        artifacts.requirements, config.tenantName,
-      );
-      allResults.push(...reqProvision.results);
-      for (const r of reqProvision.results) onProgress?.(`Requirement "${r.name}" — ${r.status}`);
-
-      if ((artifacts.testSets?.length || 0) > 0) onProgress?.(`Provisioning ${artifacts.testSets!.length} test set(s)...`);
-      const testSetResults = await provisionTestSets(
-        testProvision.activeTmBase, testProvision.tmHdrs, testProvision.projectId,
-        artifacts.testSets, testProvision.testCaseMap, config.tenantName,
-      );
-      allResults.push(...testSetResults);
-      for (const r of testSetResults) onProgress?.(`Test set "${r.name}" — ${r.status}`);
+      onProgress?.("Provisioning test sets and requirements...");
+      const [reqProvision, testSetResults] = await Promise.all([
+        provisionRequirements(
+          testProvision.activeTmBase, testProvision.tmHdrs, testProvision.projectId,
+          artifacts.requirements, config.tenantName,
+        ),
+        provisionTestSets(
+          testProvision.activeTmBase, testProvision.tmHdrs, testProvision.projectId,
+          artifacts.testSets, testProvision.testCaseMap, config.tenantName,
+        ),
+      ]);
+      allResults.push(...reqProvision.results, ...testSetResults);
+      for (const r of [...reqProvision.results, ...testSetResults]) onProgress?.(`${r.artifact} "${r.name}" — ${r.status}`);
 
       if (Object.keys(reqProvision.requirementMap).length > 0 && Object.keys(testProvision.testCaseMap).length > 0) {
         onProgress?.("Linking requirements to test cases...");
@@ -3673,13 +3641,6 @@ export async function deployAllArtifacts(
         allResults.push({ artifact: "Test Set", name: `${artifacts.testSets.length} test set(s)`, status: "skipped", message: "Test Manager project not available — test sets require an active TM project" });
       }
     }
-
-    if ((artifacts.agents?.length || 0) > 0 || (artifacts.knowledgeBases?.length || 0) > 0 || (artifacts.promptTemplates?.length || 0) > 0) {
-      onProgress?.("Provisioning agent artifacts...");
-    }
-    const agentResults = await provisionAgentArtifacts(base, hdrs, artifacts.agents, artifacts.knowledgeBases, artifacts.promptTemplates);
-    allResults.push(...agentResults);
-    for (const r of agentResults) onProgress?.(`Agent "${r.name}" — ${r.status}`);
 
     const created = allResults.filter(r => r.status === "created").length;
     const existed = allResults.filter(r => r.status === "exists").length;

@@ -193,6 +193,8 @@ BRANCHING RULES (CRITICAL — real processes are NOT linear):
 
 MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
 - The visual process map panel ONLY renders when you output [STEP:] tags. Text descriptions of steps do NOT build the map. If you say "here are the steps" but don't output [STEP:] tags, nothing appears.
+- AS-IS describes HOW THE PROCESS WORKS TODAY — before automation. Every AS-IS step must be a manual human action using only task/decision/start/end types. NEVER use agent-task or agent-decision in AS-IS.
+- ALWAYS output AS-IS Process Map first, then TO-BE Process Map. Never reverse this order.
 - When outputting both AS-IS and TO-BE maps, use these EXACT section headers:
   AS-IS Process Map
   TO-BE Process Map
@@ -217,7 +219,7 @@ SELF-CHECK (MANDATORY — run this mentally before finalizing your [STEP:] outpu
 6. Every decision node has 2+ children (steps that FROM it with different LABELs).
 7. Branches that lead to the same outcome MERGE into a shared path before the End node.
 8. Trace EVERY path from EVERY decision outcome forward. Each path must reach an End node or loop back to an earlier step. If any path dead-ends at a non-end node with no outgoing edge, add the missing connection.
-9. If outputting both AS-IS and TO-BE maps: EACH section has its own complete [STEP:] tags (not prose). AS-IS uses ONLY task/decision/start/end types. agent-task and agent-decision are ONLY in TO-BE.
+9. If outputting both AS-IS and TO-BE maps: EACH section has its own complete [STEP:] tags (not prose). AS-IS contains ZERO agent-task or agent-decision nodes — only task/decision/start/end. agent-task and agent-decision are ONLY permitted in TO-BE. If you find yourself placing an agent-task or agent-decision in AS-IS, STOP and convert it to task or decision.
 10. TO-BE map does NOT duplicate AS-IS manual steps. The TO-BE map shows the new automated workflow that replaces the manual process.
 
 EXAMPLE 1 — Insurance claim with 3-way decision and loop:
