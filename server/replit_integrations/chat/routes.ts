@@ -14,8 +14,10 @@ const anthropic = new Anthropic({
   baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
 });
 
-function detectApprovalIntent(userMessage: string): "PDD" | "SDD" | null {
+function hasApprovalIntent(userMessage: string): boolean {
   const msg = userMessage.toLowerCase().trim();
+  const mapExclusions = [/\bto[\s-]be\b/, /\bas[\s-]is\b/, /\bprocess\s+map\b/, /\bmap\b/];
+  if (mapExclusions.some(p => p.test(msg))) return false;
   const approvePatterns = [
     /\bapprove\b/,
     /\bapproved\b/,
@@ -26,15 +28,15 @@ function detectApprovalIntent(userMessage: string): "PDD" | "SDD" | null {
     /\bsign\s*off\b/,
     /\blgtm\b/,
   ];
-  const hasApprovalIntent = approvePatterns.some(p => p.test(msg));
-  if (!hasApprovalIntent) return null;
+  return approvePatterns.some(p => p.test(msg));
+}
 
+function getExplicitDocType(userMessage: string): "PDD" | "SDD" | null {
+  const msg = userMessage.toLowerCase().trim();
   if (/\bsdd\b/.test(msg) || /\bsolution\s+design\b/.test(msg)) return "SDD";
   if (/\bpdd\b/.test(msg) || /\bprocess\s+design\b/.test(msg)) return "PDD";
-
   if (/\bpdd\b/i.test(userMessage)) return "PDD";
   if (/\bsdd\b/i.test(userMessage)) return "SDD";
-
   return null;
 }
 
@@ -437,8 +439,8 @@ export function registerChatRoutes(app: Express): void {
 
       await chatStorage.createMessage(ideaId, "user", content);
 
-      const rawApprovalIntent = detectApprovalIntent(content);
-      const approvalIntent = rawApprovalIntent !== null ? await resolveApprovalTarget(ideaId, rawApprovalIntent) : null;
+      const isApproval = hasApprovalIntent(content);
+      const approvalIntent = isApproval ? await resolveApprovalTarget(ideaId, getExplicitDocType(content)) : null;
       let chatApprovalDone = false;
       if (approvalIntent) {
         try {

@@ -369,9 +369,13 @@ async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ideaId?: s
   let enrichment: EnrichmentResult | null = null;
   const cachedEntry = ideaId ? packageBuildCache.get(ideaId) : undefined;
   const canReuseEnrichment = cachedEntry && fingerprint && cachedEntry.fingerprint === fingerprint;
-  if (canReuseEnrichment && cachedEntry.enrichment) {
+  if (canReuseEnrichment) {
     enrichment = cachedEntry.enrichment;
-    console.log(`[UiPath] Reusing cached AI enrichment for ${ideaId} (${enrichment.nodes.length} nodes)`);
+    if (enrichment) {
+      console.log(`[UiPath] Reusing cached AI enrichment for ${ideaId} (${enrichment.nodes.length} nodes)`);
+    } else {
+      console.log(`[UiPath] Skipping AI enrichment for ${ideaId} (previously attempted, cached as null)`);
+    }
   } else if (processNodes.length > 0 && sddContent) {
     try {
       console.log(`[UiPath] Requesting AI enrichment for ${processNodes.length} process nodes...`);
@@ -709,18 +713,13 @@ ${depEntries}
   });
 }
 
-async function uploadToOrchestrator(
+async function uploadNupkgBuffer(
   config: UiPathConfig,
   token: string,
-  pkg: any,
+  nupkgBuffer: Buffer,
   projectName: string,
-  version: string,
-  ideaId?: string
-): Promise<{ ok: boolean; status: number; responseText: string; gaps: XamlGap[] }> {
-  const buildResult = await buildNuGetPackage(pkg, version, ideaId);
-  const nupkgBuffer = buildResult.buffer;
-  console.log(`[UiPath] Built .nupkg for "${projectName}" v${version} — ${nupkgBuffer.length} bytes (${buildResult.gaps.length} gaps, ${buildResult.usedPackages.length} packages)`);
-
+  version: string
+): Promise<{ ok: boolean; status: number; responseText: string }> {
   const fileName = `${projectName}.${version}.nupkg`;
   const boundary = `----FormBoundary${Date.now()}`;
   const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
@@ -745,17 +744,30 @@ async function uploadToOrchestrator(
     console.log(`[UiPath] Targeting folder: ${config.folderName || config.folderId} (ID: ${config.folderId})`);
   }
 
-  const uploadRes = await fetch(uploadUrl, {
-    method: "POST",
-    headers,
-    body,
-  });
+  const uploadController = new AbortController();
+  const uploadTimeout = setTimeout(() => uploadController.abort(), 120000);
+  try {
+    const uploadRes = await fetch(uploadUrl, {
+      method: "POST",
+      headers,
+      body,
+      signal: uploadController.signal,
+    });
 
-  const responseText = await uploadRes.text();
-  console.log(`[UiPath] Upload response status: ${uploadRes.status}`);
-  console.log(`[UiPath] Upload response body: ${responseText.slice(0, 1000)}`);
+    const responseText = await uploadRes.text();
+    console.log(`[UiPath] Upload response status: ${uploadRes.status}`);
+    console.log(`[UiPath] Upload response body: ${responseText.slice(0, 1000)}`);
 
-  return { ok: uploadRes.ok, status: uploadRes.status, responseText, gaps: buildResult.gaps };
+    return { ok: uploadRes.ok, status: uploadRes.status, responseText };
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      console.log(`[UiPath] Upload timed out after 120s`);
+      return { ok: false, status: 408, responseText: "Upload timed out after 120 seconds" };
+    }
+    throw err;
+  } finally {
+    clearTimeout(uploadTimeout);
+  }
 }
 
 export async function pushToUiPath(pkg: any, ideaId?: string): Promise<{ success: boolean; message: string; details?: any }> {
@@ -772,13 +784,19 @@ export async function pushToUiPath(pkg: any, ideaId?: string): Promise<{ success
     const now = new Date();
     const patch = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
     let version = `1.0.${patch}`;
-    let result = await uploadToOrchestrator(config, token, pkg, projectName, version, ideaId);
+
+    const buildResult = await buildNuGetPackage(pkg, version, ideaId);
+    console.log(`[UiPath] Built .nupkg for "${projectName}" v${version} — ${buildResult.buffer.length} bytes (${buildResult.gaps.length} gaps, ${buildResult.usedPackages.length} packages)`);
+
+    let result = { ...(await uploadNupkgBuffer(config, token, buildResult.buffer, projectName, version)), gaps: buildResult.gaps };
 
     if (result.status === 409) {
       const hourMin = now.getHours() * 100 + now.getMinutes();
       version = `1.${hourMin}.${patch}`;
-      console.log(`[UiPath] Version conflict — retrying with v${version}`);
-      result = await uploadToOrchestrator(config, token, pkg, projectName, version, ideaId);
+      console.log(`[UiPath] Version conflict — rebuilding with v${version} (reusing cached enrichment)`);
+      const retryBuild = await buildNuGetPackage(pkg, version, ideaId);
+      console.log(`[UiPath] Rebuilt .nupkg for "${projectName}" v${version} — ${retryBuild.buffer.length} bytes`);
+      result = { ...(await uploadNupkgBuffer(config, token, retryBuild.buffer, projectName, version)), gaps: retryBuild.gaps };
     }
 
     if (!result.ok) {

@@ -152,11 +152,13 @@ const DOC_PROGRESS_STEPS: Record<string, string[]> = {
   ],
   UiPath: [
     "Reading SDD content...",
+    "Generating package specification...",
+    "AI-enriching XAML workflows...",
+    "Applying Workflow Analyzer rules...",
     "Building project structure...",
     "Generating XAML sequences...",
-    "Writing project.json...",
-    "Creating README...",
-    "Packaging ZIP file...",
+    "Creating deployment artifacts...",
+    "Packaging .nupkg file...",
   ],
 };
 
@@ -583,7 +585,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
   useEffect(() => {
     if (!savedMessages || savedMessages.length === 0) return;
     const hasMapApproval = savedMessages.some(
-      (m) => m.role === "assistant" && m.content.includes("As-Is process map approved")
+      (m) => m.role === "assistant" && (m.content.includes("As-Is process map approved") || m.content.includes("To-Be process map approved"))
     );
     const hasPdd = savedMessages.some(
       (m) => m.content.startsWith("[DOC:PDD:")

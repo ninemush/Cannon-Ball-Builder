@@ -417,43 +417,50 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
   const pushMutation = useMutation({
     mutationFn: async () => {
       onDeployProgress?.("Deploying to Orchestrator...");
-      const res = await fetch(`/api/ideas/${ideaId}/push-uipath`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-      });
-      if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
-        const err = await res.json();
-        throw new Error(err.message || "Deploy failed");
-      }
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalResult: any = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.deployStatus) {
-              onDeployProgress?.(event.deployStatus);
-            }
-            if (event.deployComplete) {
-              finalResult = event;
-            }
-          } catch {}
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 600000);
+      try {
+        const res = await fetch(`/api/ideas/${ideaId}/push-uipath`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          signal: controller.signal,
+        });
+        if (!res.ok && res.headers.get("content-type")?.includes("application/json")) {
+          const err = await res.json();
+          throw new Error(err.message || "Deploy failed");
         }
-      }
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("No response stream");
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalResult: any = null;
 
-      if (!finalResult) throw new Error("Deploy stream ended without completion");
-      return finalResult;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.deployStatus) {
+                onDeployProgress?.(event.deployStatus);
+              }
+              if (event.deployComplete) {
+                finalResult = event;
+              }
+            } catch {}
+          }
+        }
+
+        if (!finalResult) throw new Error("Deploy stream ended without completion");
+        return finalResult;
+      } finally {
+        clearTimeout(timeoutId);
+      }
     },
     onSuccess: (data: any) => {
       onDeployProgress?.("");
@@ -472,7 +479,8 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
     onError: (error: Error) => {
       onDeployProgress?.("");
       onDeployComplete?.();
-      toast({ title: "Push failed", description: error.message, variant: "destructive" });
+      const msg = error.name === "AbortError" ? "Deployment timed out after 10 minutes. Please try again." : error.message;
+      toast({ title: "Push failed", description: msg, variant: "destructive" });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
     },
   });
