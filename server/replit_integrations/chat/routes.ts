@@ -611,29 +611,49 @@ export function registerChatRoutes(app: Express): void {
       }, 5000);
 
       let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "CHAT" = "CHAT";
-      try {
-        let recentMessages = chatMessages.slice(-4);
-        if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
-          recentMessages = recentMessages.slice(1);
+      const lowerContent = content.toLowerCase();
+      const hasPddKeyword = /\b(pdd|process\s+design\s+document)\b/.test(lowerContent);
+      const hasSddKeyword = /\b(sdd|solution\s+design\s+document)\b/.test(lowerContent);
+      const hasGenVerb = /\b(generate|write|create|regenerate|redo|produce|build|draft)\b/.test(lowerContent);
+      const hasDeployVerb = /\b(deploy|push)\b/.test(lowerContent) && /\b(uipath|orchestrator)\b/.test(lowerContent);
+
+      if (hasDeployVerb) {
+        classifiedIntent = "DEPLOY";
+        console.log(`[Chat] Keyword intent classification: DEPLOY`);
+      } else if (hasGenVerb && hasPddKeyword && hasSddKeyword) {
+        classifiedIntent = "PDD_SDD";
+        console.log(`[Chat] Keyword intent classification: PDD_SDD`);
+      } else if (hasGenVerb && hasSddKeyword) {
+        classifiedIntent = "SDD";
+        console.log(`[Chat] Keyword intent classification: SDD`);
+      } else if (hasGenVerb && hasPddKeyword) {
+        classifiedIntent = "PDD";
+        console.log(`[Chat] Keyword intent classification: PDD`);
+      } else {
+        try {
+          let recentMessages = chatMessages.slice(-4);
+          if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
+            recentMessages = recentMessages.slice(1);
+          }
+          if (recentMessages.length === 0) {
+            recentMessages = chatMessages.slice(-1);
+          }
+          const classifyRes = await anthropic.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 20,
+            system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, or CHAT. Only classify as PDD/SDD/PDD_SDD if the user is clearly requesting GENERATION or REGENERATION of a document (e.g. "generate the PDD", "write the SDD", "regenerate PDD"). If the user is APPROVING a document (e.g. "I approve", "looks good", "approved"), classify as CHAT — approvals are not generation requests. If both documents are being requested for generation, reply PDD_SDD.`,
+            messages: recentMessages,
+          });
+          const rawClassify = (classifyRes.content[0]?.type === "text" ? classifyRes.content[0].text : "").trim();
+          const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
+          if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY"].includes(classifyText)) {
+            const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
+            classifiedIntent = normalized as typeof classifiedIntent;
+          }
+          console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
+        } catch (classifyErr: any) {
+          console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
         }
-        if (recentMessages.length === 0) {
-          recentMessages = chatMessages.slice(-1);
-        }
-        const classifyRes = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 20,
-          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, or CHAT. Only classify as PDD/SDD/PDD_SDD if the user is clearly requesting GENERATION or REGENERATION of a document (e.g. "generate the PDD", "write the SDD", "regenerate PDD"). If the user is APPROVING a document (e.g. "I approve", "looks good", "approved"), classify as CHAT — approvals are not generation requests. If both documents are being requested for generation, reply PDD_SDD.`,
-          messages: recentMessages,
-        });
-        const rawClassify = (classifyRes.content[0]?.type === "text" ? classifyRes.content[0].text : "").trim();
-        const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
-        if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY"].includes(classifyText)) {
-          const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
-          classifiedIntent = normalized as typeof classifiedIntent;
-        }
-        console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
-      } catch (classifyErr: any) {
-        console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
       }
 
       if (chatApprovalDone && (classifiedIntent === "PDD" || classifiedIntent === "SDD" || classifiedIntent === "PDD_SDD")) {

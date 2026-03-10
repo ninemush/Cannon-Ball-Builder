@@ -48,15 +48,29 @@ import { formatEST, getStageBadgeClass } from "@/lib/utils";
 
 let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
 
+const STAGE_THINKING_MESSAGES: Record<string, string> = {
+  "Idea": "Analyzing your process...",
+  "Feasibility Assessment": "Assessing feasibility...",
+  "Validated Backlog": "Validating requirements...",
+  "Design": "Designing automation...",
+  "Build": "Building solution...",
+  "Test": "Preparing tests...",
+  "Governance / Security Scan": "Running compliance checks...",
+  "CoE Approval": "Processing approval...",
+  "Deploy": "Preparing deployment...",
+  "Maintenance": "Checking status...",
+};
+
 interface StreamingProgressProps {
   mode: "thinking" | "doc" | "deploy";
   docType?: string;
   currentSection?: string;
   deployStep?: string;
   onCancel?: () => void;
+  stage?: string;
 }
 
-function StreamingProgressIndicator({ mode, docType, currentSection, deployStep, onCancel }: StreamingProgressProps) {
+function StreamingProgressIndicator({ mode, docType, currentSection, deployStep, onCancel, stage }: StreamingProgressProps) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -71,7 +85,7 @@ function StreamingProgressIndicator({ mode, docType, currentSection, deployStep,
   const getThinkingMessage = () => {
     if (elapsed >= 15) return "This is taking longer than usual, hang tight...";
     if (elapsed >= 5) return "Still working on this...";
-    return "Thinking";
+    return stage ? (STAGE_THINKING_MESSAGES[stage] || "Thinking...") : "Thinking...";
   };
 
   if (mode === "thinking") {
@@ -596,8 +610,9 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
       return;
     }
 
+    const pddApprovalPatterns = ["PDD approved", "PDD has been approved", "approved the PDD", "[CHAT_APPROVAL] PDD approved"];
     const hasPddApproval = savedMessages.some(
-      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("PDD approved")
+      (m) => (m.role === "assistant" || m.role === "system") && pddApprovalPatterns.some(p => m.content.includes(p))
     );
     const hasSdd = savedMessages.some(
       (m) => m.content.startsWith("[DOC:SDD:")
@@ -608,8 +623,9 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
       return;
     }
 
+    const sddApprovalPatterns = ["SDD approved", "SDD has been approved", "approved the SDD", "[CHAT_APPROVAL] SDD approved"];
     const hasSddApproval = savedMessages.some(
-      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("SDD approved")
+      (m) => (m.role === "assistant" || m.role === "system") && sddApprovalPatterns.some(p => m.content.includes(p))
     );
     const hasUiPath = savedMessages.some(
       (m) => m.content.startsWith("[UIPATH:")
@@ -1390,7 +1406,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
               return <StreamingProgressIndicator key={`${msg.id}-doc-${generatingDocType}`} mode="doc" docType={generatingDocType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />;
             }
             if (!msg.content) {
-              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" />;
+              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" stage={idea.stage} />;
             }
           }
 
