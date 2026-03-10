@@ -5,9 +5,50 @@ import { storage } from "./storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { evaluateTransition } from "./stage-transition";
 import { z } from "zod";
+import { db } from "./db";
+import { sql } from "drizzle-orm";
 
 const toBeGenerationLocks = new Set<string>();
 const bulkCreatedToBeViews = new Set<string>();
+
+async function cleanupDuplicateProcessNodes(): Promise<void> {
+  try {
+    const dupResult = await db.execute(sql`
+      SELECT idea_id, view_type, LOWER(TRIM(name)) as norm_name, COUNT(*) as cnt,
+             array_agg(id ORDER BY id) as ids
+      FROM process_nodes
+      WHERE view_type IN ('to-be', 'sdd')
+      GROUP BY idea_id, view_type, LOWER(TRIM(name))
+      HAVING COUNT(*) > 1
+    `);
+
+    const rows = dupResult.rows || dupResult || [];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      console.log("[ProcessMap] Cleanup: No duplicate nodes found.");
+      return;
+    }
+
+    let totalDeleted = 0;
+    for (const row of rows) {
+      const ids: number[] = Array.isArray(row.ids) ? row.ids : [];
+      if (ids.length < 2) continue;
+      const keepId = ids[0];
+      const deleteIds = ids.slice(1);
+
+      for (const delId of deleteIds) {
+        await db.execute(sql`DELETE FROM process_edges WHERE source_node_id = ${delId} OR target_node_id = ${delId}`);
+        await db.execute(sql`DELETE FROM process_nodes WHERE id = ${delId}`);
+        totalDeleted++;
+      }
+    }
+
+    console.log(`[ProcessMap] Cleanup: Removed ${totalDeleted} duplicate nodes from to-be/sdd views.`);
+  } catch (err: any) {
+    console.error("[ProcessMap] Cleanup error:", err?.message);
+  }
+}
+
+cleanupDuplicateProcessNodes().catch(() => {});
 
 const createNodeSchema = z.object({
   viewType: z.string().default("as-is"),
@@ -363,12 +404,14 @@ export function registerProcessMapRoutes(app: Express): void {
 
     const { viewType = "as-is", nodes = [], edges = [], clearExisting = false } = req.body;
 
+    const shouldClear = clearExisting || viewType === "to-be" || viewType === "sdd";
+
     try {
-      if (clearExisting) {
+      if (shouldClear) {
         await processMapStorage.clearAllForView(ideaId, viewType);
       }
 
-      const existingNodes = clearExisting ? [] : await processMapStorage.getNodesByIdeaId(ideaId, viewType);
+      const existingNodes = shouldClear ? [] : await processMapStorage.getNodesByIdeaId(ideaId, viewType);
       const nameToId: Record<string, number> = {};
       for (const n of existingNodes) {
         nameToId[n.name.toLowerCase().replace(/\s+/g, " ").trim()] = n.id;
@@ -382,7 +425,7 @@ export function registerProcessMapRoutes(app: Express): void {
         const normName = (node.name || "").toLowerCase().replace(/\s+/g, " ").trim();
         const existingId = nameToId[normName];
 
-        if (existingId && !clearExisting) {
+        if (existingId && !shouldClear) {
           await processMapStorage.updateNode(existingId, {
             name: node.name,
             role: node.role || "",
