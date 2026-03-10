@@ -129,6 +129,7 @@ Examples:
 
 ${automationType && automationType !== "rpa" ? `CURRENT AUTOMATION TYPE: ${automationType.toUpperCase()}
 This idea has been assessed as "${automationType}" automation. All subsequent design, documentation, and deployment must reflect this:
+- AS-IS maps represent the CURRENT manual/human process BEFORE automation. NEVER use agent-task or agent-decision node types in AS-IS maps. AS-IS maps MUST only use: task, decision, start, end.
 ${automationType === "agent" ? `- Design the TO-BE as an AI Agent workflow. Steps should primarily use agent-task and agent-decision node types.
 - The agent handles unstructured reasoning, natural language interpretation, and context-dependent decisions autonomously.
 - RPA task nodes are only used for structured system interactions the agent delegates to (API calls, database updates, file operations).` : ""}${automationType === "hybrid" ? `- Design the TO-BE as a HYBRID workflow. Use standard task/decision nodes for structured RPA steps and agent-task/agent-decision nodes for judgment-heavy steps.
@@ -195,6 +196,7 @@ MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
   AS-IS Process Map
   TO-BE Process Map
 - After each header, IMMEDIATELY output the [STEP:] tags for that map. Do not write prose summaries of steps — output the tags.
+- BOTH sections MUST contain their own complete set of [STEP:] tags with a full Start-to-End step sequence. If you output a section header without [STEP:] tags after it, that map will be BLANK. Never write prose descriptions or commentary instead of [STEP:] tags for either section.
 - When the user asks you to "generate the map", "show the map", "rebuild the process map", or "output the steps", you MUST output [STEP:] tags. NEVER respond with a text summary instead.
 - If regenerating an existing map, output the COMPLETE set of [STEP:] tags for the full process — the system will clear and replace.
 
@@ -214,6 +216,7 @@ SELF-CHECK (MANDATORY — run this mentally before finalizing your [STEP:] outpu
 6. Every decision node has 2+ children (steps that FROM it with different LABELs).
 7. Branches that lead to the same outcome MERGE into a shared path before the End node.
 8. Trace EVERY path from EVERY decision outcome forward. Each path must reach an End node or loop back to an earlier step. If any path dead-ends at a non-end node with no outgoing edge, add the missing connection.
+9. If outputting both AS-IS and TO-BE maps: EACH section has its own complete [STEP:] tags (not prose). AS-IS uses ONLY task/decision/start/end types. agent-task and agent-decision are ONLY in TO-BE.
 
 EXAMPLE 1 — Insurance claim with 3-way decision and loop:
 [STEP: 1.0 Customer Submits Claim | ROLE: Customer | SYSTEM: Claims Portal | TYPE: start]

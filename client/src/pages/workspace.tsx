@@ -83,8 +83,8 @@ function StreamingProgressIndicator({ mode, docType, currentSection, deployStep,
   const fallbackStep = steps[Math.min(Math.floor(elapsed / stepDuration), steps.length - 1)];
 
   const getThinkingMessage = () => {
-    if (elapsed >= 15) return "This is taking longer than usual, hang tight...";
-    if (elapsed >= 5) return "Still working on this...";
+    if (elapsed >= 45) return "This is taking longer than usual, hang tight...";
+    if (elapsed >= 35) return "Still working on this...";
     return stage ? (STAGE_THINKING_MESSAGES[stage] || "Thinking...") : "Thinking...";
   };
 
