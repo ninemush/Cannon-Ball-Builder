@@ -540,20 +540,45 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
     };
   }, []);
 
+  const isGeneratingDocRef = useRef(false);
+  const generatingDocTypeRef = useRef("");
+
+  const startDocStreaming = useCallback((type: string) => {
+    setIsGeneratingDoc(true);
+    setGeneratingDocType(type);
+    isGeneratingDocRef.current = true;
+    generatingDocTypeRef.current = type;
+    setDocProgressSection("");
+    setStreamingDocContent("");
+    setStreamingDocElapsed(0);
+    if (streamingDocElapsedRef.current) clearInterval(streamingDocElapsedRef.current);
+    streamingDocElapsedRef.current = setInterval(() => setStreamingDocElapsed(p => p + 1), 1000);
+  }, []);
+
+  const stopDocStreaming = useCallback(() => {
+    setIsGeneratingDoc(false);
+    setGeneratingDocType("");
+    isGeneratingDocRef.current = false;
+    generatingDocTypeRef.current = "";
+    setDocProgressSection("");
+    setStreamingDocContent("");
+    setStreamingDocElapsed(0);
+    if (streamingDocElapsedRef.current) {
+      clearInterval(streamingDocElapsedRef.current);
+      streamingDocElapsedRef.current = null;
+    }
+  }, []);
+
   const cancelDocGeneration = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    setIsGeneratingDoc(false);
-    setGeneratingDocType("");
+    stopDocStreaming();
     setIsStreaming(false);
     setStreamingMsg(null);
     setPendingUserMsg(null);
-  }, []);
-
-  const isGeneratingDocRef = useRef(false);
-  const generatingDocTypeRef = useRef("");
+  }, [stopDocStreaming]);
   const pddTriggeredRef = useRef(false);
   const sddTriggeredRef = useRef(false);
   const uipathTriggeredRef = useRef(false);
@@ -740,14 +765,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
                 streamingMsgRef.current += data.token;
                 const docTagMatch = streamingMsgRef.current.match(/^\[DOC:(PDD|SDD):/);
                 if (docTagMatch && !isGeneratingDocRef.current) {
-                  setIsGeneratingDoc(true);
-                  setGeneratingDocType(docTagMatch[1]);
-                  isGeneratingDocRef.current = true;
-                  generatingDocTypeRef.current = docTagMatch[1];
-                  setStreamingDocContent("");
-                  setStreamingDocElapsed(0);
-                  if (streamingDocElapsedRef.current) clearInterval(streamingDocElapsedRef.current);
-                  streamingDocElapsedRef.current = setInterval(() => setStreamingDocElapsed(p => p + 1), 1000);
+                  startDocStreaming(docTagMatch[1]);
                 }
                 if (isGeneratingDocRef.current) {
                   const raw = streamingMsgRef.current;
@@ -767,17 +785,8 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
                 setDeployStep("");
               }
               if (data.docProgress) {
-                if (data.docProgress.started) {
-                  setIsGeneratingDoc(true);
-                  setGeneratingDocType(data.docProgress.docType || "PDD");
-                  isGeneratingDocRef.current = true;
-                  generatingDocTypeRef.current = data.docProgress.docType || "PDD";
-                  setDocProgressSection("");
-                  setStreamingDocContent("");
-                  setStreamingDocElapsed(0);
-                  if (streamingDocElapsedRef.current) clearInterval(streamingDocElapsedRef.current);
-                  streamingDocElapsedRef.current = setInterval(() => setStreamingDocElapsed(p => p + 1), 1000);
-                  setStreamingMsg((prev) => prev ? { ...prev } : prev);
+                if (data.docProgress.started && !isGeneratingDocRef.current) {
+                  startDocStreaming(data.docProgress.docType || "PDD");
                 }
                 if (data.docProgress.section) {
                   setDocProgressSection(data.docProgress.section);
@@ -815,17 +824,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
               if (data.error) {
                 streamingMsgRef.current = "";
                 setStreamingMsg(null);
-                setIsGeneratingDoc(false);
-                setGeneratingDocType("");
-                isGeneratingDocRef.current = false;
-                generatingDocTypeRef.current = "";
-                setDocProgressSection("");
-                setStreamingDocContent("");
-                setStreamingDocElapsed(0);
-                if (streamingDocElapsedRef.current) {
-                  clearInterval(streamingDocElapsedRef.current);
-                  streamingDocElapsedRef.current = null;
-                }
+                stopDocStreaming();
                 toast({
                   title: "Message failed",
                   description: "Something went wrong. Please try sending your message again.",
@@ -850,18 +849,8 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
       });
     } finally {
       setIsStreaming(false);
-      setIsGeneratingDoc(false);
-      setGeneratingDocType("");
-      isGeneratingDocRef.current = false;
-      generatingDocTypeRef.current = "";
-      setDocProgressSection("");
+      stopDocStreaming();
       setDeployStep("");
-      setStreamingDocContent("");
-      setStreamingDocElapsed(0);
-      if (streamingDocElapsedRef.current) {
-        clearInterval(streamingDocElapsedRef.current);
-        streamingDocElapsedRef.current = null;
-      }
       setPendingUserMsg(null);
       const finalContent = streamingMsgRef.current;
       setStreamingMsg(null);
@@ -1031,15 +1020,12 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
 
   const generateDocument = useCallback((type: "PDD" | "SDD") => {
     if (isGeneratingDoc || isStreaming) return;
-    setIsGeneratingDoc(true);
-    setGeneratingDocType(type);
-    isGeneratingDocRef.current = true;
-    generatingDocTypeRef.current = type;
+    startDocStreaming(type);
     const prompt = type === "PDD"
       ? "Generate the Process Design Document (PDD) now. Start your response with [DOC:PDD:0] followed by the full document. Include all sections: 1) Executive Summary, 2) Process Scope, 3) As-Is Process Description, 4) To-Be Process Description, 5) Pain Points and Inefficiencies, 6) Automation Opportunity Assessment, 7) Assumptions and Exceptions, 8) Data and System Requirements. Write as a professional document using ## headings."
       : "Generate the Solution Design Document (SDD) now. Start your response with [DOC:SDD:0] followed by the full document. Include the orchestrator_artifacts JSON block in Section 9 with all artifact definitions (queues, assets, machines, triggers, storageBuckets, environments, actionCenter, testCases). Write as a professional technical specification using ## headings.";
     sendMessageDirect(prompt);
-  }, [isGeneratingDoc, isStreaming, sendMessageDirect]);
+  }, [isGeneratingDoc, isStreaming, startDocStreaming, sendMessageDirect]);
 
   generateDocRef.current = generateDocument;
 
@@ -1472,7 +1458,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
               const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD";
-              if (streamingDocContent && streamingDocContent.includes("##")) {
+              if (streamingDocContent && streamingDocContent.length > 10) {
                 return (
                   <div key={`${msg.id}-streaming-doc`} className="flex justify-start" data-testid="streaming-doc-card">
                     <div className="max-w-[95%] w-full">
@@ -1549,7 +1535,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
           );
         })}
         {isGeneratingDoc && !streamingMsg && (
-          streamingDocContent && streamingDocContent.includes("##") ? (
+          streamingDocContent && streamingDocContent.length > 10 ? (
             <div className="flex justify-start" data-testid="streaming-doc-card-bottom">
               <div className="max-w-[95%] w-full">
                 <DocumentCard
