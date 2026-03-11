@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -83,9 +83,12 @@ interface DocumentCardProps {
   isApproved?: boolean;
   version?: number;
   onApproved?: () => void;
+  streaming?: boolean;
+  streamingElapsed?: number;
+  onCancelStreaming?: () => void;
 }
 
-export function DocumentCard({ docType, docId, content, ideaId, isApproved, version, onApproved }: DocumentCardProps) {
+export function DocumentCard({ docType, docId, content, ideaId, isApproved, version, onApproved, streaming, streamingElapsed, onCancelStreaming }: DocumentCardProps) {
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
   const [showReviseInput, setShowReviseInput] = useState(false);
@@ -94,14 +97,21 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
 
   const { data: versionHistory } = useQuery<{ id: number; version: number; status: string; createdAt: string }[]>({
     queryKey: ["/api/ideas", ideaId, "documents", "versions", docType],
+    enabled: !streaming,
   });
 
   const activeContent = viewingVersion ? viewingVersion.content : content;
   const activeVersion = viewingVersion ? viewingVersion.version : (version || 1);
   const sections = parseDocumentSections(activeContent);
 
-  const isDocApprovedFromHistory = versionHistory?.some(v => v.id === docId && v.status === "approved") ?? false;
-  const effectivelyApproved = isApproved || isDocApprovedFromHistory;
+  const isDocApprovedFromHistory = !streaming && (versionHistory?.some(v => v.id === docId && v.status === "approved") ?? false);
+  const effectivelyApproved = !streaming && (isApproved || isDocApprovedFromHistory);
+
+  useEffect(() => {
+    if (streaming && sections.length > 0) {
+      setExpandedSections(new Set([sections.length - 1]));
+    }
+  }, [streaming, sections.length]);
 
   const { toast } = useToast();
 
@@ -181,19 +191,40 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
           <h4 className="text-xs font-semibold text-foreground">{docTitle}</h4>
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] text-muted-foreground">
-              Version {activeVersion}
-              {effectivelyApproved && !viewingVersion && (
-                <span className="ml-2 text-cb-teal">
-                  <Check className="inline h-3 w-3 mr-0.5" />Approved
+              {streaming ? (
+                <span className="text-cb-teal font-medium">
+                  <Loader2 className="inline h-3 w-3 mr-1 animate-spin" />
+                  Generating...
+                  {typeof streamingElapsed === "number" && (
+                    <span className="text-muted-foreground/50 ml-1">({streamingElapsed}s)</span>
+                  )}
                 </span>
-              )}
-              {viewingVersion && (
-                <span className="ml-2 text-amber-400">
-                  (viewing older version)
-                </span>
+              ) : (
+                <>
+                  Version {activeVersion}
+                  {effectivelyApproved && !viewingVersion && (
+                    <span className="ml-2 text-cb-teal">
+                      <Check className="inline h-3 w-3 mr-0.5" />Approved
+                    </span>
+                  )}
+                  {viewingVersion && (
+                    <span className="ml-2 text-amber-400">
+                      (viewing older version)
+                    </span>
+                  )}
+                </>
               )}
             </span>
-            {versionHistory && versionHistory.length > 1 && (
+            {streaming && onCancelStreaming && (
+              <button
+                onClick={onCancelStreaming}
+                className="text-[10px] text-muted-foreground hover:text-foreground underline ml-1"
+                data-testid="button-cancel-streaming-doc"
+              >
+                Cancel
+              </button>
+            )}
+            {!streaming && versionHistory && versionHistory.length > 1 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -261,21 +292,23 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
             )}
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-[10px] text-muted-foreground"
-          onClick={() => {
-            if (expandedSections.size === sections.length) {
-              setExpandedSections(new Set());
-            } else {
-              setExpandedSections(new Set(sections.map((_, i) => i)));
-            }
-          }}
-          data-testid={`button-toggle-all-sections-${docType.toLowerCase()}`}
-        >
-          {expandedSections.size === sections.length ? "Collapse All" : "Expand All"}
-        </Button>
+        {!streaming && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[10px] text-muted-foreground"
+            onClick={() => {
+              if (expandedSections.size === sections.length) {
+                setExpandedSections(new Set());
+              } else {
+                setExpandedSections(new Set(sections.map((_, i) => i)));
+              }
+            }}
+            data-testid={`button-toggle-all-sections-${docType.toLowerCase()}`}
+          >
+            {expandedSections.size === sections.length ? "Collapse All" : "Expand All"}
+          </Button>
+        )}
       </div>
 
       <div className="divide-y divide-border/20">
@@ -299,6 +332,9 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {section.content}
                   </ReactMarkdown>
+                  {streaming && idx === sections.length - 1 && (
+                    <span className="inline-block w-1.5 h-3.5 bg-cb-teal ml-0.5 animate-pulse rounded-sm" />
+                  )}
                 </div>
               </div>
             )}
@@ -306,7 +342,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         ))}
       </div>
 
-      {!effectivelyApproved && (
+      {!effectivelyApproved && !streaming && (
         <div className="px-4 py-3 border-t border-border/30 space-y-2">
           {showApproveConfirm ? (
             <div className="flex items-center gap-2">

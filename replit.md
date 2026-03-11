@@ -39,7 +39,7 @@ The application employs a modern web stack for scalability and an intuitive user
 -   **Three-Tier Developer Handoff Guide (DHG)**: Restructured with an AI-first philosophy (Tier 1: AI Completed, Tier 2: Smart Defaults, Tier 3: Human Required), including readiness score, Workflow Analyzer compliance report, code review rubric, and Section 2a for agent artifact import/configuration. Includes process logic validation.
 -   **UiPath Integration Layer**: Manages UiPath's multi-resource token architecture with proactive refresh, typed Orchestrator API client, and robust artifact provisioning. Supports artifact upsert on re-deployment and SSE deploy streaming.
 -   **Unified Probe Architecture**: Single source of truth for platform service availability with caching and automated configuration changes.
--   **Consolidated Streaming Progress Indicator**: A unified component for displaying real-time progress during AI chat, document generation, and deployment.
+-   **Consolidated Streaming Progress Indicator**: A unified component for displaying real-time progress during AI chat, document generation, and deployment. During PDD/SDD generation, a live DocumentCard renders progressively as sections stream in (with pulsing write cursor, auto-expanding latest section, elapsed timer, and cancel button), transitioning seamlessly to the final saved card with Approve/Reject buttons on completion.
 -   **Document Approval**: Supports approval of PDD/SDD via dedicated buttons, chat phrases, or auto-chain detection.
 -   **Document Understanding — Discovery-Based Provisioning**: Manages DU project provisioning by discovering existing projects via API.
 -   **Integration Status Bar**: Displays live UiPath connection status, robot count, pending tasks, and latency.

@@ -499,6 +499,9 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
   const [docProgressSection, setDocProgressSection] = useState<string>("");
   const [deployStep, setDeployStep] = useState<string>("");
+  const [streamingDocContent, setStreamingDocContent] = useState<string>("");
+  const [streamingDocElapsed, setStreamingDocElapsed] = useState(0);
+  const streamingDocElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; text: string; imageData?: { base64: string; mediaType: string } }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialScrollDoneRef = useRef(false);
@@ -523,6 +526,19 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
     }).catch(() => {});
   }, [idea.id]);
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      if (streamingDocElapsedRef.current) {
+        clearInterval(streamingDocElapsedRef.current);
+        streamingDocElapsedRef.current = null;
+      }
+    };
+  }, []);
 
   const cancelDocGeneration = useCallback(() => {
     if (abortControllerRef.current) {
@@ -728,6 +744,16 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
                   setGeneratingDocType(docTagMatch[1]);
                   isGeneratingDocRef.current = true;
                   generatingDocTypeRef.current = docTagMatch[1];
+                  setStreamingDocContent("");
+                  setStreamingDocElapsed(0);
+                  if (streamingDocElapsedRef.current) clearInterval(streamingDocElapsedRef.current);
+                  streamingDocElapsedRef.current = setInterval(() => setStreamingDocElapsed(p => p + 1), 1000);
+                }
+                if (isGeneratingDocRef.current) {
+                  const raw = streamingMsgRef.current;
+                  const tagEnd = raw.match(/^\[DOC:(PDD|SDD):\d+\]/);
+                  const docText = tagEnd ? raw.slice(tagEnd[0].length) : raw;
+                  setStreamingDocContent(docText);
                 }
                 setStreamingMsg((prev) =>
                   prev ? { ...prev, content: prev.content + data.token } : prev
@@ -747,6 +773,10 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
                   isGeneratingDocRef.current = true;
                   generatingDocTypeRef.current = data.docProgress.docType || "PDD";
                   setDocProgressSection("");
+                  setStreamingDocContent("");
+                  setStreamingDocElapsed(0);
+                  if (streamingDocElapsedRef.current) clearInterval(streamingDocElapsedRef.current);
+                  streamingDocElapsedRef.current = setInterval(() => setStreamingDocElapsed(p => p + 1), 1000);
                   setStreamingMsg((prev) => prev ? { ...prev } : prev);
                 }
                 if (data.docProgress.section) {
@@ -785,6 +815,17 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
               if (data.error) {
                 streamingMsgRef.current = "";
                 setStreamingMsg(null);
+                setIsGeneratingDoc(false);
+                setGeneratingDocType("");
+                isGeneratingDocRef.current = false;
+                generatingDocTypeRef.current = "";
+                setDocProgressSection("");
+                setStreamingDocContent("");
+                setStreamingDocElapsed(0);
+                if (streamingDocElapsedRef.current) {
+                  clearInterval(streamingDocElapsedRef.current);
+                  streamingDocElapsedRef.current = null;
+                }
                 toast({
                   title: "Message failed",
                   description: "Something went wrong. Please try sending your message again.",
@@ -815,6 +856,12 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
       generatingDocTypeRef.current = "";
       setDocProgressSection("");
       setDeployStep("");
+      setStreamingDocContent("");
+      setStreamingDocElapsed(0);
+      if (streamingDocElapsedRef.current) {
+        clearInterval(streamingDocElapsedRef.current);
+        streamingDocElapsedRef.current = null;
+      }
       setPendingUserMsg(null);
       const finalContent = streamingMsgRef.current;
       setStreamingMsg(null);
@@ -1424,7 +1471,24 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
               return <StreamingProgressIndicator key={`${msg.id}-deploy`} mode="deploy" deployStep={deployStep} />;
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
-              const docType = generatingDocType || generatingDocTypeRef.current || "PDD";
+              const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD";
+              if (streamingDocContent && streamingDocContent.includes("##")) {
+                return (
+                  <div key={`${msg.id}-streaming-doc`} className="flex justify-start" data-testid="streaming-doc-card">
+                    <div className="max-w-[95%] w-full">
+                      <DocumentCard
+                        docType={docType}
+                        docId={0}
+                        content={streamingDocContent}
+                        ideaId={idea.id}
+                        streaming={true}
+                        streamingElapsed={streamingDocElapsed}
+                        onCancelStreaming={cancelDocGeneration}
+                      />
+                    </div>
+                  </div>
+                );
+              }
               return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="doc" docType={docType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />;
             }
             if (!msg.content) {
@@ -1485,7 +1549,23 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
           );
         })}
         {isGeneratingDoc && !streamingMsg && (
-          <StreamingProgressIndicator mode="doc" docType={generatingDocType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />
+          streamingDocContent && streamingDocContent.includes("##") ? (
+            <div className="flex justify-start" data-testid="streaming-doc-card-bottom">
+              <div className="max-w-[95%] w-full">
+                <DocumentCard
+                  docType={(generatingDocType || "PDD") as "PDD" | "SDD"}
+                  docId={0}
+                  content={streamingDocContent}
+                  ideaId={idea.id}
+                  streaming={true}
+                  streamingElapsed={streamingDocElapsed}
+                  onCancelStreaming={cancelDocGeneration}
+                />
+              </div>
+            </div>
+          ) : (
+            <StreamingProgressIndicator mode="doc" docType={generatingDocType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />
+          )
         )}
         {deployStep && !streamingMsg && (
           <StreamingProgressIndicator mode="deploy" deployStep={deployStep} />
