@@ -1790,16 +1790,16 @@ async function provisionActionCenter(
   if (!actionCenter?.length) return [];
   const results: DeploymentResult[] = [];
 
-  const acHdrs = { ...hdrs };
-  if (config.folderId && !acHdrs["X-UIPATH-OrganizationUnitId"]) {
-    acHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+  const acHdrs: Record<string, string> = { ...hdrs, "Accept": "application/json" };
+  if (config.folderId) {
+    acHdrs["X-UIPATH-OrganizationUnitId"] = String(config.folderId);
   }
 
-  const apiCatalogUrl = `${base}/api/TaskCatalogs`;
   const catalogUrl = `${base}/odata/TaskCatalogs`;
-  const odataCatalogUrl = catalogUrl;
-  const genericTaskUrl = `${base}/tasks/GenericTasks/CreateTask`;
-  const odataUnboundActionUrl = `${base}/odata/Tasks/UiPathODataSvc.CreateTask`;
+  const cloudBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+  const acServiceUrl = `${cloudBase}/actions_/api/v1/task-catalogs`;
+
+  console.log(`[UiPath Deploy] AC provisioning: folderId=${config.folderId || "none"}, X-UIPATH-OrganizationUnitId=${acHdrs["X-UIPATH-OrganizationUnitId"] || "not set"}`);
 
   let serviceAvailable = false;
 
@@ -1812,177 +1812,185 @@ async function provisionActionCenter(
     console.log(`[UiPath Deploy] AC probe: status=${catalogProbe.status}, genuine=${genuine.genuine}, reason=${genuine.reason || "OK"}`);
   } else {
     console.log(`[UiPath Deploy] AC probe failed: status=${catalogProbe.status}, body=${catalogProbe.text.slice(0, 300)}`);
-    const odataProbe = await uipathFetch(`${odataCatalogUrl}?$top=1`, {
-      headers: acHdrs, label: "AC OData Probe", maxRetries: 1,
-    });
-    if (odataProbe.ok) {
-      const genuine = isGenuineApiResponse(odataProbe.text);
-      serviceAvailable = genuine.genuine;
-      console.log(`[UiPath Deploy] AC OData fallback probe: status=${odataProbe.status}, genuine=${genuine.genuine}`);
-    }
   }
 
+  const orchUrl = `${cloudBase}/orchestrator_/actioncenter`;
+
   if (!serviceAvailable && !preProbed) {
-    return actionCenter.map(ac => ({
-      artifact: "Action Center",
-      name: ac.taskCatalog,
-      status: "skipped" as const,
-      message: "Action Center API not available on this tenant. Enable it in Admin > Tenant > Services, then assign it to the target folder.",
-    }));
+    console.log(`[UiPath Deploy] AC OData probe unavailable, but will still attempt Cloud Action Center service endpoint`);
   }
 
   for (const ac of actionCenter) {
-    const attemptedEndpoints: string[] = [];
     const failureDetails: string[] = [];
 
     try {
-      let alreadyExists = false;
-
-      const checkResult = await uipathFetch(
-        `${catalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-        { headers: acHdrs, label: "AC Check", maxRetries: 1 }
-      );
-      if (checkResult.ok && checkResult.data?.value?.length > 0) {
+      const checkResult = serviceAvailable
+        ? await uipathFetch(
+            `${catalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+            { headers: acHdrs, label: "AC Check", maxRetries: 1 }
+          )
+        : null;
+      if (checkResult && checkResult.ok && checkResult.data?.value?.length > 0) {
         const existing = checkResult.data.value[0];
         let msg = `Already exists (ID: ${existing.Id || existing.id})`;
         if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
         if (ac.sla) msg += `. SLA: ${ac.sla}`;
         results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: msg, id: existing.Id || existing.id });
-        alreadyExists = true;
+        continue;
       }
 
-      if (alreadyExists) continue;
-
-      let created = false;
-      const acDescParts = [ac.description || ""];
-      if (ac.priority) acDescParts.push(`Priority: ${ac.priority}`);
-      if (ac.sla) acDescParts.push(`SLA: ${ac.sla}`);
-      if (ac.escalation) acDescParts.push(`Escalation: ${ac.escalation}`);
-      if (ac.actions?.length) acDescParts.push(`Actions: ${ac.actions.join(", ")}`);
+      const descParts = [ac.description || ""];
+      if (ac.priority) descParts.push(`Priority: ${ac.priority}`);
+      if (ac.sla) descParts.push(`SLA: ${ac.sla}`);
+      if (ac.escalation) descParts.push(`Escalation: ${ac.escalation}`);
+      if (ac.actions?.length) descParts.push(`Actions: ${ac.actions.join(", ")}`);
       if (ac.formFields?.length) {
         const fieldList = ac.formFields.map(f => `${f.name} (${f.type}${f.required ? ", required" : ""})`).join("; ");
-        acDescParts.push(`Form Fields: ${fieldList}`);
+        descParts.push(`Form Fields: ${fieldList}`);
       }
-      const catalogBody = { Name: ac.taskCatalog, Description: truncDesc(acDescParts.filter(Boolean).join(" | ")) };
+      const descText = truncDesc(descParts.filter(Boolean).join(" | "));
+      const odataBody = { Name: ac.taskCatalog, Description: descText };
+      const restBody = { name: ac.taskCatalog, description: descText };
 
-      const catalogCreateAttempts = [
-        { url: apiCatalogUrl, label: "AC REST API Catalog Create" },
-        { url: catalogUrl, label: "AC OData Catalog Create" },
-      ];
+      let created = false;
+      let createdViaCloud = false;
+      let pendingResult: DeploymentResult | null = null;
+
+      const catalogCreateAttempts = serviceAvailable
+        ? [
+            { url: catalogUrl, body: odataBody, label: "AC OData Catalog Create", isCloud: false },
+            { url: `${base}/api/TaskCatalogs`, body: odataBody, label: "AC REST API Catalog Create", isCloud: false },
+            { url: acServiceUrl, body: restBody, label: "AC Cloud Service Catalog Create", isCloud: true },
+          ]
+        : [
+            { url: acServiceUrl, body: restBody, label: "AC Cloud Service Catalog Create", isCloud: true },
+          ];
 
       for (const attempt of catalogCreateAttempts) {
         if (created) break;
-        attemptedEndpoints.push(`POST ${attempt.url}`);
         const createResult = await uipathFetch(attempt.url, {
           method: "POST", headers: acHdrs,
-          body: JSON.stringify(catalogBody),
+          body: JSON.stringify(attempt.body),
           label: attempt.label, maxRetries: 1,
         });
         console.log(`[UiPath Deploy] ${attempt.label} "${ac.taskCatalog}" -> ${createResult.status}: ${createResult.text.slice(0, 300)}`);
         if (createResult.ok || createResult.status === 201) {
           const creation = isValidCreation(createResult.text);
           if (creation.valid) {
-            let msg = `Created via ${attempt.label} (ID: ${creation.data?.Id || creation.data?.id || "unknown"})`;
+            const createdId = creation.data?.Id || creation.data?.id;
+            let msg = `Created (ID: ${createdId || "unknown"})`;
             if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: creation.data?.Id || creation.data?.id });
+            pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: createdId };
             created = true;
-          }
-        } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists" });
-          created = true;
-        } else {
-          const detail = `POST ${attempt.url} -> ${createResult.status}: ${createResult.text.slice(0, 500)}`;
-          failureDetails.push(detail);
-        }
-      }
-
-      if (!created) {
-        attemptedEndpoints.push(`POST ${genericTaskUrl} (OData typed)`);
-        const genericTaskBody = {
-          "@odata.type": "#UiPath.Server.Configuration.OData.CreateTaskParameters",
-          Title: `${ac.taskCatalog} - Auto Provision`,
-          Type: "ExternalTask",
-          Priority: ac.priority || "Medium",
-        };
-        const taskResult = await uipathFetch(genericTaskUrl, {
-          method: "POST", headers: acHdrs,
-          body: JSON.stringify(genericTaskBody),
-          label: "AC GenericTask OData Typed", maxRetries: 1,
-        });
-        console.log(`[UiPath Deploy] AC GenericTask OData Typed "${ac.taskCatalog}" -> ${taskResult.status}: ${taskResult.text.slice(0, 500)}`);
-
-        if (taskResult.ok || taskResult.status === 201) {
-          await new Promise(r => setTimeout(r, 1500));
-          const recheck = await uipathFetch(
-            `${odataCatalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
-            { headers: acHdrs, label: "AC Recheck after GenericTask", maxRetries: 1 }
-          );
-          if (recheck.ok && recheck.data?.value?.length > 0) {
-            const verified = recheck.data.value[0];
-            let msg = `Task Catalog created via task provisioning (Catalog ID: ${verified.Id || verified.id})`;
-            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: verified.Id || verified.id });
+            createdViaCloud = attempt.isCloud;
+          } else if (!attempt.isCloud) {
+            console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but response body did not pass validation (${creation.error || "unknown"}) — will verify via GET`);
+            pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: "Created (pending verification)" };
             created = true;
           } else {
-            let taskId: string | undefined;
-            try { const td = JSON.parse(taskResult.text); taskId = td.Id || td.id; } catch {}
-            let msg = `ExternalTask created (Task ID: ${taskId || "unknown"}) referencing catalog "${ac.taskCatalog}". Direct catalog creation is not supported via API on this tenant — the catalog will auto-provision when the task is processed in Action Center, or you can create it manually in Orchestrator UI`;
-            if (ac.assignedRole) msg += `. Assign role: ${ac.assignedRole}`;
-            results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: taskId });
+            console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but sparse body — treating as created (Cloud endpoint)`);
+            let msg = "Created via Cloud Action Center service";
+            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+            pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg };
             created = true;
+            createdViaCloud = true;
           }
-        } else {
-          const detail = `GenericTask OData Typed POST -> ${taskResult.status}: ${taskResult.text.slice(0, 500)}`;
-          failureDetails.push(detail);
-        }
-      }
-
-      if (!created) {
-        attemptedEndpoints.push(`POST ${odataUnboundActionUrl}`);
-        const odataActionBody = {
-          taskDefinitionName: "ExternalTask",
-          taskCatalogName: ac.taskCatalog,
-          title: `${ac.taskCatalog} - Auto Provision`,
-          priority: "Medium",
-        };
-        const odataActionResult = await uipathFetch(odataUnboundActionUrl, {
-          method: "POST", headers: acHdrs,
-          body: JSON.stringify(odataActionBody),
-          label: "AC OData Unbound Action", maxRetries: 1,
-        });
-        console.log(`[UiPath Deploy] AC OData Unbound Action "${ac.taskCatalog}" -> ${odataActionResult.status}: ${odataActionResult.text.slice(0, 500)}`);
-
-        if (odataActionResult.ok || odataActionResult.status === 201) {
-          let msg = `Task created via OData unbound action referencing catalog "${ac.taskCatalog}"`;
-          if (ac.assignedRole) msg += `. Assign role: ${ac.assignedRole}`;
-          results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg });
+        } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
+          pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (detected via 409 conflict)" };
           created = true;
         } else {
-          const detail = `OData Unbound Action POST -> ${odataActionResult.status}: ${odataActionResult.text.slice(0, 500)}`;
-          failureDetails.push(detail);
+          failureDetails.push(`POST ${attempt.url} -> ${createResult.status}: ${createResult.text.slice(0, 300)}`);
+        }
+      }
+
+      if (created && pendingResult) {
+        if (pendingResult.status === "exists" || createdViaCloud) {
+          results.push(pendingResult);
+          if (createdViaCloud && serviceAvailable) {
+            const verify = await uipathFetch(
+              `${catalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+              { headers: acHdrs, label: "AC Cloud Verify (optional)", maxRetries: 1 }
+            );
+            if (verify.ok && verify.data?.value?.length > 0) {
+              const found = verify.data.value[0];
+              console.log(`[UiPath Deploy] AC cloud-created catalog also verified via OData (ID: ${found.Id || found.id})`);
+              if (found.Id || found.id) pendingResult.id = found.Id || found.id;
+            } else {
+              console.log(`[UiPath Deploy] AC cloud-created catalog not yet visible via OData (propagation delay expected)`);
+            }
+          }
+        } else {
+          let verified = false;
+          for (let verifyAttempt = 0; verifyAttempt < 3; verifyAttempt++) {
+            if (verifyAttempt > 0) {
+              await new Promise(r => setTimeout(r, 1500));
+              console.log(`[UiPath Deploy] AC verify retry ${verifyAttempt + 1}/3 for "${ac.taskCatalog}"...`);
+            }
+            const verifyResult = await uipathFetch(
+              `${catalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+              { headers: acHdrs, label: "AC Post-Create Verify", maxRetries: 1 }
+            );
+            if (verifyResult.ok && verifyResult.data?.value?.length > 0) {
+              const found = verifyResult.data.value[0];
+              const verifiedId = found.Id || found.id;
+              console.log(`[UiPath Deploy] AC post-creation verified: "${ac.taskCatalog}" exists with ID ${verifiedId} in folder ${acHdrs["X-UIPATH-OrganizationUnitId"] || "default"}`);
+              if (verifiedId && pendingResult.status === "created") {
+                pendingResult.id = verifiedId;
+                pendingResult.message = `Created (ID: ${verifiedId})${ac.assignedRole ? `. Assigned role: ${ac.assignedRole}` : ""}`;
+              }
+              results.push(pendingResult);
+              verified = true;
+              break;
+            }
+          }
+          if (!verified) {
+            console.log(`[UiPath Deploy] AC post-creation verification failed after 3 attempts: catalog "${ac.taskCatalog}" not found via GET — API may have returned success without creating the catalog`);
+            created = false;
+            failureDetails.push(`POST reported success but catalog "${ac.taskCatalog}" was not found after 3 GET verification attempts`);
+          }
         }
       }
 
       if (!created) {
-        const orchUrl = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_/actioncenter`;
         const statusCodes = failureDetails.map(d => { const m = d.match(/-> (\d+):/); return m ? m[1] : "unknown"; });
         const allAre405 = statusCodes.length > 0 && statusCodes.every(s => s === "405");
         const statusSummary = allAre405
-          ? `all ${attemptedEndpoints.length} endpoints returned 405 Method Not Allowed — this is a UiPath Cloud tenant restriction where Task Catalog creation is not exposed via API`
-          : `all ${attemptedEndpoints.length} endpoints failed (status codes: ${statusCodes.join(", ")})`;
-        const failuresList = failureDetails.map((d, i) => `  ${i + 1}. ${d}`).join("\n");
+          ? "Task Catalog creation is not available via API on this UiPath Cloud tenant (all endpoints returned 405 Method Not Allowed). Create it manually using the steps below."
+          : `Task Catalog creation failed (status codes: ${statusCodes.join(", ")}). Create it manually using the steps below.`;
+
+        const manualSteps = [
+          `Open Action Center in Orchestrator: ${orchUrl}`,
+          "Go to Task Catalogs",
+          'Click "+ Add Task Catalog"',
+          `Set Name to "${ac.taskCatalog}"`,
+        ];
+        if (ac.description) manualSteps.push(`Set Description to "${ac.description}"`);
+        if (ac.assignedRole) manualSteps.push(`Assign role: ${ac.assignedRole}`);
+
+        console.log(`[UiPath Deploy] AC Task Catalog "${ac.taskCatalog}" creation failed. Folder=${config.folderId || "none"}. Details: ${failureDetails.join(" | ")}`);
+
         results.push({
           artifact: "Action Center",
           name: ac.taskCatalog,
           status: "failed" as const,
-          message: `Task Catalog creation failed — ${statusSummary}.\n\nFailure details:\n${failuresList}\n\nCreate manually in Orchestrator UI: ${orchUrl}\n\n1. Go to Action Center > Task Catalogs\n2. Click "+ Add Task Catalog"\n3. Name: "${ac.taskCatalog}"${ac.description ? `\n4. Description: "${ac.description}"` : ""}${ac.assignedRole ? `\n5. Assign role: ${ac.assignedRole}` : ""}`,
+          message: statusSummary,
+          manualSteps,
         });
       }
     } catch (err: any) {
-      const endpointsList = attemptedEndpoints.length > 0
-        ? ` Attempted endpoints: ${attemptedEndpoints.join(", ")}.`
-        : "";
-      results.push({ artifact: "Action Center", name: ac.taskCatalog, status: "failed", message: `API error: ${err.message}.${endpointsList}` });
+      console.log(`[UiPath Deploy] AC Task Catalog "${ac.taskCatalog}" exception: ${err.message}`);
+      results.push({
+        artifact: "Action Center",
+        name: ac.taskCatalog,
+        status: "failed",
+        message: `API error: ${err.message}. Create the Task Catalog manually in Orchestrator.`,
+        manualSteps: [
+          `Open Action Center in Orchestrator: ${orchUrl}`,
+          "Go to Task Catalogs",
+          'Click "+ Add Task Catalog"',
+          `Set Name to "${ac.taskCatalog}"`,
+        ],
+      });
     }
   }
   return results;

@@ -268,7 +268,24 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
                           {msgExpanded && item.manualSteps?.length ? (
                             <ol className="mt-1 ml-1 space-y-0.5 list-decimal list-inside">
                               {item.manualSteps.map((step, si) => (
-                                <li key={si} className="text-[10px] text-muted-foreground leading-tight">{step}</li>
+                                <li key={si} className="text-[10px] text-muted-foreground leading-tight">
+                                  {step.includes("https://") ? (
+                                    <>
+                                      {step.slice(0, step.indexOf("https://"))}
+                                      <a
+                                        href={step.slice(step.indexOf("https://")).split(/\s/)[0]}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-primary underline hover:text-primary/80"
+                                        onClick={(e) => e.stopPropagation()}
+                                        data-testid={`link-manual-step-${si}`}
+                                      >
+                                        {step.slice(step.indexOf("https://")).split(/\s/)[0]}
+                                      </a>
+                                      {step.slice(step.indexOf("https://") + step.slice(step.indexOf("https://")).split(/\s/)[0].length)}
+                                    </>
+                                  ) : step}
+                                </li>
                               ))}
                             </ol>
                           ) : null}
