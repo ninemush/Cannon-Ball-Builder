@@ -487,7 +487,7 @@ function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: n
   return { displayContent: stripStepTags(content) };
 }
 
-function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProcessMapViewRef: MutableRefObject<((view: "as-is" | "to-be" | "sdd") => void) | null> }) {
+function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea: Idea; switchProcessMapViewRef: MutableRefObject<((view: "as-is" | "to-be" | "sdd") => void) | null>; onMapApprovalReady?: (fn: (approvedView: string) => void) => void }) {
   const { toast } = useToast();
   const [streamingMsg, setStreamingMsg] = useState<ChatMsg | null>(null);
   const [pendingUserMsg, setPendingUserMsg] = useState<ChatMsg | null>(null);
@@ -582,11 +582,13 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
     setStreamingMsg(null);
     setPendingUserMsg(null);
   }, [stopDocStreaming]);
+  const toBeTriggeredRef = useRef(false);
   const pddTriggeredRef = useRef(false);
   const sddTriggeredRef = useRef(false);
   const uipathTriggeredRef = useRef(false);
   const generateDocRef = useRef<((type: "PDD" | "SDD") => void) | null>(null);
   const generateUiPathRef = useRef<(() => void) | null>(null);
+  const generateToBeRef = useRef<(() => void) | null>(null);
 
   const guidance = STAGE_GUIDANCE[idea.stage];
 
@@ -650,13 +652,26 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
   useEffect(() => {
     if (!savedMessages || savedMessages.length === 0) return;
     if (isGeneratingDocRef.current) return;
-    const hasMapApproval = savedMessages.some(
-      (m) => m.role === "assistant" && (m.content.includes("As-Is process map approved") || m.content.includes("To-Be process map approved"))
+
+    const hasAsIsApproval = savedMessages.some(
+      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("As-Is process map approved")
+    );
+    const hasToBeSteps = savedMessages.some(
+      (m) => m.role === "assistant" && m.content.includes("TO-BE Process Map")
+    );
+    if (hasAsIsApproval && !hasToBeSteps && !toBeTriggeredRef.current && !isStreaming && !isGeneratingDoc) {
+      toBeTriggeredRef.current = true;
+      setTimeout(() => generateToBeRef.current?.(), 500);
+      return;
+    }
+
+    const hasToBeApproval = savedMessages.some(
+      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("To-Be process map approved")
     );
     const hasPdd = savedMessages.some(
       (m) => m.content.startsWith("[DOC:PDD:") || (m as any).docType === "PDD"
     );
-    if (hasMapApproval && !hasPdd && !pddTriggeredRef.current && !isGeneratingDoc) {
+    if (hasToBeApproval && !hasPdd && !pddTriggeredRef.current && !isGeneratingDoc) {
       pddTriggeredRef.current = true;
       generateDocRef.current?.("PDD");
       return;
@@ -812,6 +827,14 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-approval-history"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "approval-summary"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map"] });
+                if (data.mapApproval.nextAction === "generate-to-be" && !toBeTriggeredRef.current) {
+                  toBeTriggeredRef.current = true;
+                  setTimeout(() => generateToBeRef.current?.(), 500);
+                }
+                if (data.mapApproval.nextAction === "generate-pdd" && !pddTriggeredRef.current) {
+                  pddTriggeredRef.current = true;
+                  setTimeout(() => generateDocRef.current?.("PDD"), 500);
+                }
               }
               if (data.transition) {
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
@@ -905,9 +928,7 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
 
           const hasStartNode = dedupedSteps.some(s => s.nodeType === "start");
           const hasEndNode = dedupedSteps.some(s => s.nodeType === "end");
-          const clearExisting = viewType === "to-be"
-            ? true
-            : (hasStartNode && hasEndNode && dedupedSteps.length >= 3);
+          const clearExisting = hasStartNode && hasEndNode && dedupedSteps.length >= 3;
 
           const stepNumberToIndex: Record<string, number> = {};
           dedupedSteps.forEach((step, i) => {
@@ -1036,6 +1057,30 @@ function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProces
   }, [isGeneratingDoc, isStreaming, startDocStreaming, sendMessageDirect]);
 
   generateDocRef.current = generateDocument;
+
+  const generateToBeMap = useCallback(() => {
+    if (isStreaming || isGeneratingDoc) return;
+    sendMessageDirect(
+      "Generate the To-Be process map based on the approved As-Is map and the available UiPath services. " +
+      "Show the automated future state. Use the section header 'TO-BE Process Map' followed by [STEP:] tags."
+    );
+  }, [isStreaming, isGeneratingDoc, sendMessageDirect]);
+  generateToBeRef.current = generateToBeMap;
+
+  const handleMapApprovalFromPanel = useCallback((approvedView: string) => {
+    if (approvedView === "as-is" && !toBeTriggeredRef.current) {
+      toBeTriggeredRef.current = true;
+      setTimeout(() => generateToBeRef.current?.(), 500);
+    }
+    if (approvedView === "to-be" && !pddTriggeredRef.current) {
+      pddTriggeredRef.current = true;
+      setTimeout(() => generateDocRef.current?.("PDD"), 500);
+    }
+  }, []);
+
+  useEffect(() => {
+    onMapApprovalReady?.(handleMapApprovalFromPanel);
+  }, [onMapApprovalReady, handleMapApprovalFromPanel]);
 
   const generateUiPath = useCallback(async () => {
     if (isGeneratingDoc || isStreaming) {
@@ -1842,6 +1887,7 @@ export default function Workspace() {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const switchProcessMapViewRef = useRef<((view: "as-is" | "to-be" | "sdd") => void) | null>(null);
+  const mapApprovalHandlerRef = useRef<((approvedView: string) => void) | null>(null);
   const { toast } = useToast();
   const isMobile = useIsMobile();
   const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
@@ -1969,8 +2015,11 @@ export default function Workspace() {
   const mapPanel = (
     <ProcessMapPanel
       ideaId={idea.id}
-      onApproved={() => {
+      onApproved={(approvedView?: string) => {
         queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+        if (approvedView) {
+          mapApprovalHandlerRef.current?.(approvedView);
+        }
       }}
       onCompletenessChange={(pct) => {
         if (pct >= 85) {
@@ -1982,7 +2031,7 @@ export default function Workspace() {
     />
   );
 
-  const chatPanel = <ChatPanel idea={idea} switchProcessMapViewRef={switchProcessMapViewRef} />;
+  const chatPanel = <ChatPanel idea={idea} switchProcessMapViewRef={switchProcessMapViewRef} onMapApprovalReady={(fn) => { mapApprovalHandlerRef.current = fn; }} />;
 
   const mobileTabs = [
     { id: "stages" as MobileTab, label: "Stages", icon: ListChecks },

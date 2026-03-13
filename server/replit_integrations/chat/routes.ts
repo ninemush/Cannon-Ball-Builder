@@ -64,7 +64,7 @@ async function resolveApprovalTarget(ideaId: string, explicitIntent: "PDD" | "SD
   return null;
 }
 
-function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null, automationType?: AutomationType | null): string {
+function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null, automationType?: AutomationType | null, mapMode?: "to-be", asIsStepsContext?: string): string {
   let serviceContext = "";
   if (serviceAvailability && serviceAvailability.configured) {
     const available: string[] = [];
@@ -143,14 +143,8 @@ Examples:
 [AUTOMATION_TYPE: hybrid | The core invoice processing is structured RPA, but exception handling and vendor communication require judgment — a hybrid with agent nodes for exceptions is optimal.]
 
 ${automationType && automationType !== "rpa" ? `CURRENT AUTOMATION TYPE: ${automationType.toUpperCase()}
-This idea has been assessed as "${automationType}" automation. All subsequent design, documentation, and deployment must reflect this:
-- AS-IS maps represent the CURRENT manual/human process BEFORE automation. NEVER use agent-task or agent-decision node types in AS-IS maps. AS-IS maps MUST only use: task, decision, start, end.
-- TO-BE maps represent the AUTOMATED future state that REPLACES the manual process. Do NOT copy or duplicate AS-IS manual steps into the TO-BE map. The TO-BE map must show the new automated workflow, not a repeat of the current process with minor changes.
-${automationType === "agent" ? `- Design the TO-BE as an AI Agent workflow. Steps should primarily use agent-task and agent-decision node types.
-- The agent handles unstructured reasoning, natural language interpretation, and context-dependent decisions autonomously.
-- RPA task nodes are only used for structured system interactions the agent delegates to (API calls, database updates, file operations).` : ""}${automationType === "hybrid" ? `- Design the TO-BE as a HYBRID workflow. Use standard task/decision nodes for structured RPA steps and agent-task/agent-decision nodes for judgment-heavy steps.
-- Clearly label which steps are RPA-driven vs. Agent-driven so the process map visually distinguishes them.
-- The agent handles exceptions, natural language, and judgment calls. RPA handles the structured backbone.` : ""}` : ""}
+This idea has been assessed as "${automationType}" automation. All subsequent design, documentation, and deployment must reflect this.
+- AS-IS maps MUST only use: task, decision, start, end. NEVER use agent-task or agent-decision in AS-IS maps.` : ""}
 
 STEP TAG FORMAT — output one per line for every confirmed process step:
 [STEP: <number> <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end/agent-task/agent-decision> | FROM: <parent step number> | LABEL: <edge label>]
@@ -206,17 +200,30 @@ BRANCHING RULES (CRITICAL — real processes are NOT linear):
 - NEVER output all steps in a linear chain when the process has decisions. EVERY process has decisions — insurance claims, invoice processing, onboarding, purchase orders, IT service requests — ALL of them branch.
 - DEAD-END BRANCHES ARE FORBIDDEN. Every branch from every decision MUST terminate — either by reaching an End node, by merging into another branch that reaches an End node, or by looping back to an earlier decision node using a FROM field. If a branch leads to a task node that has no subsequent step and is not an End node, you MUST add the missing connection (either to an End node or back to an earlier step).
 
-MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
+${mapMode === "to-be" && asIsStepsContext ? `MAP OUTPUT FORMAT — TO-BE GENERATION (CRITICAL):
+You are generating the TO-BE (automated future state) process map. The AS-IS map has been approved by the user.
+
+Here is the approved AS-IS process, showing how the process works today:
+${asIsStepsContext}
+
+Design a TO-BE process map that shows the automated workflow replacing this manual process.
+${automationType === "agent" ? `- This is an AI Agent automation. Steps should primarily use agent-task and agent-decision node types.
+- The agent handles unstructured reasoning, natural language interpretation, and context-dependent decisions autonomously.
+- RPA task nodes are only used for structured system interactions the agent delegates to (API calls, database updates, file operations).` : automationType === "hybrid" ? `- This is a HYBRID automation. Use standard task/decision nodes for structured RPA steps and agent-task/agent-decision nodes for judgment-heavy steps.
+- Clearly label which steps are RPA-driven vs. Agent-driven so the process map visually distinguishes them.
+- The agent handles exceptions, natural language, and judgment calls. RPA handles the structured backbone.` : `- Use standard task/decision/start/end node types for all steps.`}
+- Use the section header "TO-BE Process Map" followed immediately by [STEP:] tags.
+- The TO-BE must show the NEW automated workflow, not a copy of AS-IS with minor changes.
+- Show which steps are automated, which are human-in-the-loop, and how UiPath services are leveraged.
+- Do NOT output AS-IS steps. Only output TO-BE.
+- If regenerating the TO-BE map, output the COMPLETE set of [STEP:] tags — the system will clear and replace.` : `MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
 - The visual process map panel ONLY renders when you output [STEP:] tags. Text descriptions of steps do NOT build the map. If you say "here are the steps" but don't output [STEP:] tags, nothing appears.
+- When generating a process map from user input (document, image, description), generate ONLY the AS-IS Process Map showing the current manual process.
+- Use the section header "AS-IS Process Map" followed immediately by [STEP:] tags.
 - AS-IS describes HOW THE PROCESS WORKS TODAY — before automation. Every AS-IS step must be a manual human action using only task/decision/start/end types. NEVER use agent-task or agent-decision in AS-IS.
-- ALWAYS output AS-IS Process Map first, then TO-BE Process Map. Never reverse this order.
-- When outputting both AS-IS and TO-BE maps, use these EXACT section headers:
-  AS-IS Process Map
-  TO-BE Process Map
-- After each header, IMMEDIATELY output the [STEP:] tags for that map. Do not write prose summaries of steps — output the tags.
-- BOTH sections MUST contain their own complete set of [STEP:] tags with a full Start-to-End step sequence. If you output a section header without [STEP:] tags after it, that map will be BLANK. Never write prose descriptions or commentary instead of [STEP:] tags for either section.
-- When the user asks you to "generate the map", "show the map", "rebuild the process map", or "output the steps", you MUST output [STEP:] tags. NEVER respond with a text summary instead.
-- If regenerating an existing map, output the COMPLETE set of [STEP:] tags for the full process — the system will clear and replace.
+- Do NOT generate a TO-BE map. The TO-BE will be generated automatically after AS-IS approval as a separate step.
+- When the user asks you to "generate the map", "show the map", "rebuild the process map", or "output the steps", you MUST output [STEP:] tags for AS-IS only. NEVER respond with a text summary instead.
+- If regenerating an existing AS-IS map, output the COMPLETE set of [STEP:] tags for the full process — the system will clear and replace.`}
 
 DUPLICATE PREVENTION (CRITICAL):
 - EXACTLY ONE Start node per process (always step 1.0). Never output multiple Start nodes.
@@ -234,8 +241,7 @@ SELF-CHECK (MANDATORY — run this mentally before finalizing your [STEP:] outpu
 6. Every decision node has 2+ children (steps that FROM it with different LABELs).
 7. Branches that lead to the same outcome MERGE into a shared path before the End node.
 8. Trace EVERY path from EVERY decision outcome forward. Each path must reach an End node or loop back to an earlier step. If any path dead-ends at a non-end node with no outgoing edge, add the missing connection.
-9. If outputting both AS-IS and TO-BE maps: EACH section has its own complete [STEP:] tags (not prose). AS-IS contains ZERO agent-task or agent-decision nodes — only task/decision/start/end. agent-task and agent-decision are ONLY permitted in TO-BE. If you find yourself placing an agent-task or agent-decision in AS-IS, STOP and convert it to task or decision.
-10. TO-BE map does NOT duplicate AS-IS manual steps. The TO-BE map shows the new automated workflow that replaces the manual process.
+9. AS-IS maps contain ZERO agent-task or agent-decision nodes — only task/decision/start/end. If you find yourself placing an agent-task or agent-decision in AS-IS, STOP and convert it to task or decision.
 
 EXAMPLE 1 — Insurance claim with 3-way decision and loop:
 [STEP: 1.0 Customer Submits Claim | ROLE: Customer | SYSTEM: Claims Portal | TYPE: start]
@@ -551,35 +557,88 @@ export function registerChatRoutes(app: Express): void {
       }
 
       let mapApprovalDone = false;
+      let asIsApprovalDone = false;
       let mapApprovalViews: string[] = [];
+      let mapApprovalNextAction: string | undefined;
       if (!chatApprovalDone && hasMapApprovalIntent(content)) {
         try {
           const user = await storage.getUser(req.session.userId!);
           if (user) {
-            const viewsToApprove: Array<"as-is" | "to-be"> = ["as-is", "to-be"];
-            for (const vt of viewsToApprove) {
-              const nodes = await processMapStorage.getNodesByIdeaId(ideaId, vt);
-              if (nodes.length < 3) continue;
-              const edges = await processMapStorage.getEdgesByIdeaId(ideaId, vt);
-              const existingApproval = await processMapStorage.getApproval(ideaId, vt);
-              if (existingApproval) {
-                const snapshot = existingApproval.snapshotJson;
+            const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
+            const asIsEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "as-is");
+            const existingAsIsApproval = await processMapStorage.getApproval(ideaId, "as-is");
+            const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+            const toBeEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
+            const existingToBeApproval = await processMapStorage.getApproval(ideaId, "to-be");
+
+            let viewToApprove: "as-is" | "to-be" | null = null;
+
+            if (asIsNodes.length >= 3) {
+              let asIsNeedsApproval = !existingAsIsApproval;
+              if (existingAsIsApproval) {
+                const snapshot = existingAsIsApproval.snapshotJson;
                 const oldData = typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot;
                 const oldNodes = oldData?.nodes || [];
                 const oldEdges = oldData?.edges || [];
-                const nodesChanged = oldNodes.length !== nodes.length || nodes.some((n: any, i: number) => oldNodes[i]?.name !== n.name || oldNodes[i]?.nodeType !== n.nodeType);
-                const edgesChanged = oldEdges.length !== edges.length;
-                if (!nodesChanged && !edgesChanged) {
-                  mapApprovalViews.push(vt);
-                  continue;
+                const nodesChanged = oldNodes.length !== asIsNodes.length || asIsNodes.some((n: any, i: number) => oldNodes[i]?.name !== n.name || oldNodes[i]?.nodeType !== n.nodeType);
+                const edgesChanged = oldEdges.length !== asIsEdges.length;
+                if (nodesChanged || edgesChanged) {
+                  asIsNeedsApproval = true;
                 }
-                await processMapStorage.invalidateApprovals(ideaId, vt, `Superseded by chat approval`);
               }
-              const nextVersion = await processMapStorage.getNextVersion(ideaId, vt);
+              if (asIsNeedsApproval) {
+                viewToApprove = "as-is";
+              }
+            }
+
+            if (!viewToApprove && toBeNodes.length >= 3) {
+              let toBeNeedsApproval = !existingToBeApproval;
+              if (existingToBeApproval) {
+                const snapshot = existingToBeApproval.snapshotJson;
+                const oldData = typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot;
+                const oldNodes = oldData?.nodes || [];
+                const oldEdges = oldData?.edges || [];
+                const nodesChanged = oldNodes.length !== toBeNodes.length || toBeNodes.some((n: any, i: number) => oldNodes[i]?.name !== n.name || oldNodes[i]?.nodeType !== n.nodeType);
+                const edgesChanged = oldEdges.length !== toBeEdges.length;
+                if (nodesChanged || edgesChanged) {
+                  toBeNeedsApproval = true;
+                }
+              }
+              if (toBeNeedsApproval) {
+                viewToApprove = "to-be";
+              }
+            }
+
+            if (viewToApprove) {
+              const nodes = viewToApprove === "as-is" ? asIsNodes : toBeNodes;
+              const edges = viewToApprove === "as-is" ? asIsEdges : toBeEdges;
+              const existingApproval = viewToApprove === "as-is" ? existingAsIsApproval : existingToBeApproval;
+
+              if (existingApproval) {
+                await processMapStorage.invalidateApprovals(ideaId, viewToApprove, `Superseded by chat approval`);
+              }
+
+              if (viewToApprove === "as-is" && existingApproval) {
+                await processMapStorage.invalidateApprovals(ideaId, "to-be", "As-Is map was re-approved via chat");
+                await processMapStorage.invalidateApprovals(ideaId, "sdd", "As-Is map was re-approved via chat");
+                await processMapStorage.clearAllForView(ideaId, "to-be");
+                await processMapStorage.clearAllForView(ideaId, "sdd");
+                try { await documentStorage.deleteApproval(ideaId, "PDD"); } catch {}
+                try { await documentStorage.deleteApproval(ideaId, "SDD"); } catch {}
+                console.log(`[Chat] Cascade invalidation: As-Is re-approved via chat, invalidated To-Be, PDD, SDD for idea=${ideaId}`);
+              }
+
+              if (viewToApprove === "to-be" && existingApproval) {
+                try { await documentStorage.deleteApproval(ideaId, "PDD"); } catch {}
+                try { await documentStorage.deleteApproval(ideaId, "SDD"); } catch {}
+                console.log(`[Chat] Cascade invalidation: To-Be re-approved via chat, invalidated PDD, SDD for idea=${ideaId}`);
+              }
+
+              const nextVersion = await processMapStorage.getNextVersion(ideaId, viewToApprove);
               const snapshot = JSON.stringify({ nodes, edges });
               await processMapStorage.createApproval({
                 ideaId,
-                viewType: vt,
+                viewType: viewToApprove,
                 version: nextVersion,
                 userId: user.id,
                 userRole: (req.session.activeRole || user.role) as string,
@@ -587,55 +646,26 @@ export function registerChatRoutes(app: Express): void {
                 snapshotJson: snapshot,
                 invalidated: false,
               });
-              mapApprovalViews.push(vt);
-              console.log(`[Chat] ${vt} map approved via chat by ${user.displayName} (v${nextVersion})`);
+              mapApprovalViews.push(viewToApprove);
+              console.log(`[Chat] ${viewToApprove} map approved via chat by ${user.displayName} (v${nextVersion})`);
 
-              if (vt === "as-is") {
-                const existingToBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-                if (existingToBeNodes.length === 0) {
-                  const idMap: Record<number, number> = {};
-                  for (const node of nodes) {
-                    const toBeNode = await processMapStorage.createNode({
-                      ideaId,
-                      name: node.name,
-                      role: node.role,
-                      system: node.system,
-                      nodeType: node.nodeType,
-                      description: node.isPainPoint ? `[AUTOMATED] ${node.description || node.name}` : node.description,
-                      isGhost: node.isGhost,
-                      isPainPoint: false,
-                      viewType: "to-be",
-                      orderIndex: node.orderIndex,
-                      positionX: node.positionX,
-                      positionY: node.positionY,
-                    });
-                    idMap[node.id] = toBeNode.id;
-                  }
-                  for (const edge of edges) {
-                    if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
-                      await processMapStorage.createEdge({
-                        ideaId,
-                        sourceNodeId: idMap[edge.sourceNodeId],
-                        targetNodeId: idMap[edge.targetNodeId],
-                        label: edge.label,
-                        viewType: "to-be",
-                      });
-                    }
-                  }
-                  console.log(`[Chat] Cloned ${nodes.length} as-is nodes to to-be for idea=${ideaId}`);
-                }
+              if (viewToApprove === "as-is") {
+                asIsApprovalDone = true;
+                mapApprovalNextAction = "generate-to-be";
+              } else {
+                mapApprovalDone = true;
+                mapApprovalNextAction = "generate-pdd";
               }
-            }
-            if (mapApprovalViews.length > 0) {
-              mapApprovalDone = true;
+
+              const viewLabel = viewToApprove === "as-is" ? "As-Is" : "To-Be";
               await chatStorage.createMessage(ideaId, "system",
-                `[MAP_APPROVAL] ${mapApprovalViews.map(v => v === "as-is" ? "As-Is" : "To-Be").join(" and ")} process map(s) approved by ${user.displayName} via chat.`
+                `[MAP_APPROVAL] ${viewLabel} process map approved by ${user.displayName} via chat.`
               );
               res.setHeader("Content-Type", "text/event-stream");
               res.setHeader("Cache-Control", "no-cache");
               res.setHeader("Connection", "keep-alive");
               res.flushHeaders();
-              res.write(`data: ${JSON.stringify({ mapApproval: { views: mapApprovalViews } })}\n\n`);
+              res.write(`data: ${JSON.stringify({ mapApproval: { views: mapApprovalViews, nextAction: mapApprovalNextAction } })}\n\n`);
             }
           }
         } catch (mapApprovalErr: any) {
@@ -834,11 +864,42 @@ CRITICAL RULES:
         console.warn("[Chat] Service probe failed:", (e as any)?.message);
       }
 
+      const isToBeGeneration = content.toLowerCase().includes("generate the to-be process map");
+      let toBeMapMode: "to-be" | undefined;
+      let asIsContextForToBe = "";
+
+      if (isToBeGeneration) {
+        const asIsNodesForContext = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
+        const asIsEdgesForContext = await processMapStorage.getEdgesByIdeaId(ideaId, "as-is");
+        if (asIsNodesForContext.length > 0) {
+          const edgeMap = new Map<number, Array<{ targetId: number; label: string }>>();
+          for (const e of asIsEdgesForContext) {
+            if (!edgeMap.has(e.sourceNodeId)) edgeMap.set(e.sourceNodeId, []);
+            edgeMap.get(e.sourceNodeId)!.push({ targetId: e.targetNodeId, label: e.label || "" });
+          }
+          const nodeById = new Map(asIsNodesForContext.map(n => [n.id, n]));
+          asIsContextForToBe = asIsNodesForContext
+            .sort((a, b) => a.orderIndex - b.orderIndex)
+            .map(n => {
+              const outgoing = edgeMap.get(n.id) || [];
+              const targets = outgoing.map(e => {
+                const tgt = nodeById.get(e.targetId);
+                return tgt ? `${e.label ? e.label + " → " : ""}${tgt.name}` : "";
+              }).filter(Boolean);
+              return `- ${n.name} | Role: ${n.role || "N/A"} | System: ${n.system || "N/A"} | Type: ${n.nodeType}${targets.length > 0 ? ` | Leads to: ${targets.join(", ")}` : ""}`;
+            })
+            .join("\n");
+          toBeMapMode = "to-be";
+        }
+      }
+
       let intentOverride = "";
-      if (mapApprovalDone && mapApprovalViews.length > 0) {
-        const approvedLabels = mapApprovalViews.map(v => v === "as-is" ? "As-Is" : "To-Be");
-        const phrases = approvedLabels.map(l => `${l} process map approved`).join(" and ");
-        intentOverride = `\n\nMAP APPROVAL CONFIRMATION DIRECTIVE — CRITICAL, FOLLOW EXACTLY:\nThe user approved process maps via chat. The following maps were approved: ${approvedLabels.join(", ")}.\n\nYou MUST respond with EXACTLY this format (2-3 sentences MAXIMUM):\n"${phrases}. The PDD is being generated now — you'll see it appear in the chat shortly."\n\nABSOLUTE RESTRICTIONS — VIOLATION OF ANY WILL CAUSE SYSTEM FAILURE:\n- Do NOT generate ANY document content (no PDD, no SDD, no sections, no headings)\n- Do NOT use [DOC:], [STEP:], [AUTOMATION_TYPE], or any other tags\n- Do NOT write process steps, executive summaries, or any structured content\n- Do NOT exceed 3 sentences\n- The PDD will be auto-generated by a separate system process — your ONLY job is to confirm the approval in 2-3 sentences`;
+      if (asIsApprovalDone) {
+        intentOverride = `\n\nAS-IS MAP APPROVAL CONFIRMATION DIRECTIVE — CRITICAL, FOLLOW EXACTLY:\nThe user approved the As-Is process map via chat.\n\nYou MUST respond with EXACTLY this format (2-3 sentences MAXIMUM):\n"As-Is process map approved. Generating the To-Be automated process map now — you'll see it appear shortly."\n\nABSOLUTE RESTRICTIONS — VIOLATION OF ANY WILL CAUSE SYSTEM FAILURE:\n- Do NOT generate ANY document content (no PDD, no SDD, no sections, no headings)\n- Do NOT use [DOC:], [STEP:], [AUTOMATION_TYPE], or any other tags\n- Do NOT write process steps or any structured content\n- Do NOT exceed 3 sentences\n- The To-Be map will be auto-generated by a separate process — your ONLY job is to confirm the As-Is approval`;
+      } else if (mapApprovalDone && mapApprovalViews.length > 0) {
+        intentOverride = `\n\nTO-BE MAP APPROVAL CONFIRMATION DIRECTIVE — CRITICAL, FOLLOW EXACTLY:\nThe user approved the To-Be process map via chat.\n\nYou MUST respond with EXACTLY this format (2-3 sentences MAXIMUM):\n"To-Be process map approved. The PDD is being generated now — you'll see it appear in the chat shortly."\n\nABSOLUTE RESTRICTIONS — VIOLATION OF ANY WILL CAUSE SYSTEM FAILURE:\n- Do NOT generate ANY document content (no PDD, no SDD, no sections, no headings)\n- Do NOT use [DOC:], [STEP:], [AUTOMATION_TYPE], or any other tags\n- Do NOT write process steps, executive summaries, or any structured content\n- Do NOT exceed 3 sentences\n- The PDD will be auto-generated by a separate system process — your ONLY job is to confirm the approval in 2-3 sentences`;
+      } else if (isToBeGeneration) {
+        intentOverride = "\n\nTO-BE GENERATION DIRECTIVE: Generate the TO-BE process map now. Use the header 'TO-BE Process Map' followed by [STEP:] tags. Show the automated future state based on the approved AS-IS map and available UiPath services. Do NOT regenerate the AS-IS map. Do NOT generate documents.";
       } else if (chatApprovalDone && approvalIntent) {
         const nextStep = approvalIntent === "PDD" ? "I'll now generate the SDD." : approvalIntent === "SDD" ? "I'll now generate the UiPath automation package." : "";
         intentOverride = `\n\nAPPROVAL CONFIRMATION DIRECTIVE: The ${approvalIntent} has just been approved via the user's chat message. Respond with a brief confirmation (1-3 sentences). You MUST include the exact phrase "${approvalIntent} approved" in your response. ${nextStep} Do NOT generate any documents or use [DOC:] tags in this response — the next step will be triggered automatically. IMPORTANT: You MUST NOT generate an SDD or PDD or any document in this response. Only confirm the approval. The client will handle the next step.`;
@@ -852,7 +913,7 @@ CRITICAL RULES:
         intentOverride = "\n\nDEPLOYMENT DIRECTIVE: The user is requesting deployment to UiPath Orchestrator. Proceed with the deployment flow.";
       }
 
-      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null) + intentOverride;
+      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null, toBeMapMode, asIsContextForToBe || undefined) + intentOverride;
 
       let finalMessages: Array<{ role: "user" | "assistant"; content: string | Array<{ type: string; [key: string]: any }> }> = chatMessages;
       if (imageData?.base64 && imageData?.mediaType) {
@@ -872,7 +933,7 @@ CRITICAL RULES:
 
       const stream = anthropic.messages.stream({
         model: "claude-sonnet-4-6",
-        max_tokens: mapApprovalDone ? 300 : 8192,
+        max_tokens: (mapApprovalDone || asIsApprovalDone) ? 300 : 8192,
         system: systemPrompt,
         messages: finalMessages as any,
       });

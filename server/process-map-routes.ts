@@ -387,49 +387,7 @@ async function cleanupUnreachableNodes(ideaId: string, viewType: string): Promis
   }
 }
 
-async function migrateAsIsToToBeForIdea(ideaId: string): Promise<void> {
-  try {
-    const toBeCheck = await db.execute(sql`
-      SELECT COUNT(*) as cnt FROM process_nodes
-      WHERE idea_id = ${ideaId} AND view_type = 'to-be'
-    `);
-    const toBeCount = Number((toBeCheck.rows?.[0] as any)?.cnt || 0);
-    if (toBeCount > 0) return;
-
-    const asIsCheck = await db.execute(sql`
-      SELECT COUNT(*) as cnt FROM process_nodes
-      WHERE idea_id = ${ideaId} AND view_type = 'as-is'
-    `);
-    const asIsCount = Number((asIsCheck.rows?.[0] as any)?.cnt || 0);
-    if (asIsCount === 0) return;
-
-    await db.execute(sql`BEGIN`);
-    try {
-      await db.execute(sql`
-        UPDATE process_nodes SET view_type = 'to-be'
-        WHERE idea_id = ${ideaId} AND view_type = 'as-is'
-      `);
-      await db.execute(sql`
-        UPDATE process_edges SET view_type = 'to-be'
-        WHERE idea_id = ${ideaId} AND view_type = 'as-is'
-      `);
-      await db.execute(sql`
-        UPDATE process_approvals SET view_type = 'to-be'
-        WHERE idea_id = ${ideaId} AND view_type = 'as-is'
-      `);
-      await db.execute(sql`COMMIT`);
-      console.log(`[ProcessMap] Migrated ${asIsCount} nodes from as-is to to-be for idea ${ideaId}`);
-    } catch (txErr) {
-      await db.execute(sql`ROLLBACK`);
-      throw txErr;
-    }
-  } catch (err: any) {
-    console.error(`[ProcessMap] Migration error for ${ideaId}:`, err?.message);
-  }
-}
-
-migrateAsIsToToBeForIdea("75c35cb6-231b-4fab-98db-cf314d76e276").then(() => {
-  cleanupDuplicateProcessNodes().then(async () => {
+cleanupDuplicateProcessNodes().then(async () => {
     try {
       const viewsResult = await db.execute(sql`
         SELECT DISTINCT idea_id, view_type FROM process_nodes
@@ -443,8 +401,7 @@ migrateAsIsToToBeForIdea("75c35cb6-231b-4fab-98db-cf314d76e276").then(() => {
     } catch (err: any) {
       console.error("[ProcessMap] Startup dead-end repair error:", err?.message);
     }
-  }).catch(() => {});
-});
+}).catch(() => {});
 
 const createNodeSchema = z.object({
   viewType: z.string().default("as-is"),
@@ -556,58 +513,6 @@ export function registerProcessMapRoutes(app: Express): void {
       if (recheckBulk.length > 0) {
         nodes = recheckBulk;
         edges = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
-      }
-      if (nodes.length === 0) {
-      const asIsApproval = await processMapStorage.getApproval(ideaId, "as-is");
-      if (asIsApproval) {
-        const recheck = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-        if (recheck.length === 0) {
-          if (!toBeGenerationLocks.has(ideaId)) {
-            toBeGenerationLocks.add(ideaId);
-            try {
-              const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-              const asIsEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "as-is");
-              if (asIsNodes.length > 0) {
-                const idMap: Record<number, number> = {};
-                for (const node of asIsNodes) {
-                  const toBeNode = await processMapStorage.createNode({
-                    ideaId,
-                    name: node.name,
-                    role: node.role,
-                    system: node.system,
-                    nodeType: node.nodeType,
-                    description: node.isPainPoint
-                      ? `[AUTOMATED] ${node.description || node.name}`
-                      : node.description,
-                    isGhost: node.isGhost,
-                    isPainPoint: false,
-                    viewType: "to-be",
-                    orderIndex: node.orderIndex,
-                    positionX: node.positionX,
-                    positionY: node.positionY,
-                  });
-                  idMap[node.id] = toBeNode.id;
-                }
-                for (const edge of asIsEdges) {
-                  if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
-                    await processMapStorage.createEdge({
-                      ideaId,
-                      sourceNodeId: idMap[edge.sourceNodeId],
-                      targetNodeId: idMap[edge.targetNodeId],
-                      label: edge.label,
-                      viewType: "to-be",
-                    });
-                  }
-                }
-              }
-            } finally {
-              toBeGenerationLocks.delete(ideaId);
-            }
-          }
-          nodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-          edges = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
-        }
-      }
       }
     }
 
@@ -793,7 +698,7 @@ export function registerProcessMapRoutes(app: Express): void {
 
     const { viewType = "as-is", nodes = [], edges = [], clearExisting = false } = req.body;
 
-    const shouldClear = clearExisting || viewType === "to-be" || viewType === "sdd";
+    const shouldClear = clearExisting || viewType === "sdd";
 
     const lockKey = `${ideaId}:${viewType}`;
     const existingLock = bulkWriteLocks.get(lockKey);
@@ -999,42 +904,6 @@ export function registerProcessMapRoutes(app: Express): void {
         console.log(`[ProcessMap] Cascade invalidation: As-Is v${nextVersion} invalidated To-Be, PDD, SDD for idea=${ideaId}`);
       }
 
-      const existingToBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-      if (existingToBeNodes.length > 0) {
-        console.log(`[ProcessMap] Skipping as-is → to-be clone for idea=${ideaId}: to-be already has ${existingToBeNodes.length} nodes (likely AI-generated)`);
-      } else {
-        const idMap: Record<number, number> = {};
-        for (const node of nodes) {
-          const toBeNode = await processMapStorage.createNode({
-            ideaId,
-            name: node.name,
-            role: node.role,
-            system: node.system,
-            nodeType: node.nodeType,
-            description: node.isPainPoint
-              ? `[AUTOMATED] ${node.description || node.name}`
-              : node.description,
-            isGhost: node.isGhost,
-            isPainPoint: false,
-            viewType: "to-be",
-            orderIndex: node.orderIndex,
-            positionX: node.positionX,
-            positionY: node.positionY,
-          });
-          idMap[node.id] = toBeNode.id;
-        }
-        for (const edge of edges) {
-          if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
-            await processMapStorage.createEdge({
-              ideaId,
-              sourceNodeId: idMap[edge.sourceNodeId],
-              targetNodeId: idMap[edge.targetNodeId],
-              label: edge.label,
-              viewType: "to-be",
-            });
-          }
-        }
-      }
     }
 
     if (viewType === "to-be" && existingApproval) {
@@ -1046,17 +915,26 @@ export function registerProcessMapRoutes(app: Express): void {
     }
 
     const isReapproval = existingApproval != null;
-    await chatStorage.createMessage(
-      ideaId,
-      "assistant",
-      viewType === "as-is"
-        ? isReapproval
-          ? `As-Is process map re-approved (v${nextVersion}). All downstream artifacts (To-Be map, PDD, SDD, UiPath package) have been invalidated and need to be redone. I've regenerated the To-Be map from the updated As-Is.`
-          : "Great \u2014 As-Is process map approved. I've generated a To-Be process map based on your current workflow. You can switch to the To-Be view to review and refine the optimized version. I'll also now prepare your Process Design Document."
-        : isReapproval
-          ? `To-Be process map re-approved (v${nextVersion}). Downstream documents (PDD, SDD) have been invalidated and need to be regenerated.`
-          : "To-Be process map approved. The optimized workflow has been locked in."
-    );
+    let nextAction: string | undefined;
+    if (viewType === "as-is") {
+      nextAction = "generate-to-be";
+      await chatStorage.createMessage(
+        ideaId,
+        "assistant",
+        isReapproval
+          ? `As-Is process map re-approved (v${nextVersion}). All downstream artifacts (To-Be map, PDD, SDD, UiPath package) have been invalidated. Generating the To-Be automated process map now...`
+          : "As-Is process map approved. Generating the To-Be automated process map now..."
+      );
+    } else {
+      nextAction = "generate-pdd";
+      await chatStorage.createMessage(
+        ideaId,
+        "assistant",
+        isReapproval
+          ? `To-Be process map re-approved (v${nextVersion}). Downstream documents (PDD, SDD) have been invalidated and need to be regenerated. Generating the Process Design Document now...`
+          : "To-Be process map approved. Generating the Process Design Document now..."
+      );
+    }
 
     try {
       await evaluateTransition(
@@ -1069,6 +947,6 @@ export function registerProcessMapRoutes(app: Express): void {
       console.error("[ProcessMap] Transition evaluation failed:", transErr?.message);
     }
 
-    return res.status(201).json(approval);
+    return res.status(201).json({ ...approval, nextAction });
   });
 }
