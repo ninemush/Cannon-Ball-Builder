@@ -256,9 +256,16 @@ export async function renderProcessMapImage(
       let lx: number, ly: number;
       if (edge.isDecisionSource && edge.points.length >= 2) {
         const srcPt = edge.points[0];
-        const nextPt = edge.points[1];
-        lx = srcPt.x + (nextPt.x > srcPt.x ? 30 : -30);
-        ly = srcPt.y + 20;
+        let divergePt = edge.points[edge.points.length - 1];
+        for (let pi = 1; pi < edge.points.length; pi++) {
+          if (Math.abs(edge.points[pi].x - srcPt.x) > 5) {
+            divergePt = edge.points[pi];
+            break;
+          }
+        }
+        const xDir = divergePt.x > srcPt.x ? 1 : divergePt.x < srcPt.x ? -1 : 0;
+        lx = srcPt.x + xDir * 35;
+        ly = srcPt.y + 25;
       } else {
         const midIdx = Math.floor(edge.points.length / 2);
         lx = edge.points[midIdx]?.x || 0;
