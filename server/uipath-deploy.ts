@@ -1,4 +1,4 @@
-import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap } from "./uipath-integration";
+import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap, type AICenterSkill } from "./uipath-integration";
 import { uipathFetch, isGenuineApiResponse, isValidCreation } from "./uipath-fetch";
 import { getToken as getSharedToken, getTmToken, getTestManagerBaseUrl, type UiPathAuthConfig } from "./uipath-auth";
 import Anthropic from "@anthropic-ai/sdk";
@@ -4009,6 +4009,31 @@ async function provisionAgentArtifacts(
   return results;
 }
 
+function extractReferencedMLSkillNames(artifacts: OrchestratorArtifacts): string[] {
+  const names: string[] = [];
+  try {
+    const { getReferencedMLSkillNames } = require("./xaml-generator");
+    const tracked = getReferencedMLSkillNames();
+    if (tracked && tracked.length > 0) {
+      for (const n of tracked) {
+        if (!names.includes(n)) names.push(n);
+      }
+    }
+  } catch { }
+
+  const artifactStr = JSON.stringify(artifacts || {}).toLowerCase();
+  const mlSkillPattern = /ml\s*skill[^"]*"([^"]+)"/gi;
+  let match;
+  while ((match = mlSkillPattern.exec(artifactStr)) !== null) {
+    const candidate = match[1];
+    if (candidate && !names.some(n => n.toLowerCase() === candidate.toLowerCase())) {
+      names.push(candidate);
+    }
+  }
+
+  return names;
+}
+
 export async function deployAllArtifacts(
   artifacts: OrchestratorArtifacts,
   releaseId: number | null,
@@ -4043,8 +4068,58 @@ export async function deployAllArtifacts(
     let svcAvail: ServiceAvailabilityMap | null = null;
     try {
       svcAvail = await probeServiceAvailability();
-      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, GenExtract=${svcAvail.generativeExtraction}, CommsMining=${svcAvail.communicationsMining}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}, Agents=${svcAvail.agents}`);
+      console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, GenExtract=${svcAvail.generativeExtraction}, CommsMining=${svcAvail.communicationsMining}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}, Agents=${svcAvail.agents}, AI=${svcAvail.aiCenter}`);
     } catch { /* non-critical — proceed without filtering */ }
+
+    const referencedSkillNames = extractReferencedMLSkillNames(artifacts);
+    if (referencedSkillNames.length > 0 && svcAvail?.aiCenter && svcAvail.aiCenterSkills && svcAvail.aiCenterSkills.length > 0) {
+      onProgress?.(`Validating ${referencedSkillNames.length} referenced AI Center ML Skill(s)...`);
+      const deployed: string[] = [];
+      const notDeployed: string[] = [];
+      for (const refName of referencedSkillNames) {
+        const matchedSkill = svcAvail.aiCenterSkills.find(s => s.name.toLowerCase() === refName.toLowerCase());
+        if (!matchedSkill) {
+          notDeployed.push(`${refName} [not found on tenant]`);
+          allResults.push({
+            artifact: "AI Skill Validation",
+            name: refName,
+            status: "failed",
+            message: `Referenced ML Skill "${refName}" was not found on the tenant. Create and deploy it in AI Center.`,
+          });
+          onProgress?.(`AI Skill "${refName}" — NOT found on tenant`);
+          continue;
+        }
+        const statusLower = matchedSkill.status.toLowerCase();
+        const isDeployed = statusLower === "deployed" || statusLower === "available";
+        if (isDeployed) {
+          deployed.push(matchedSkill.name);
+        } else {
+          notDeployed.push(`${matchedSkill.name} [${matchedSkill.status}]`);
+        }
+        allResults.push({
+          artifact: "AI Skill Validation",
+          name: matchedSkill.name,
+          status: isDeployed ? "exists" : "failed",
+          message: isDeployed
+            ? `Referenced ML Skill "${matchedSkill.name}" is deployed and accessible (package: ${matchedSkill.mlPackageName || "N/A"}, input: ${matchedSkill.inputType || "N/A"}, output: ${matchedSkill.outputType || "N/A"})`
+            : `Referenced ML Skill "${matchedSkill.name}" is NOT deployed (status: ${matchedSkill.status}). Deploy it in AI Center before the automation can invoke it.`,
+        });
+        onProgress?.(`AI Skill "${matchedSkill.name}" — ${isDeployed ? "deployed" : "NOT deployed (" + matchedSkill.status + ")"}`);
+      }
+      console.log(`[UiPath Deploy] AI Center validation (referenced only): ${deployed.length} deployed (${deployed.join(", ")}), ${notDeployed.length} not deployed (${notDeployed.join(", ")})`);
+    } else if (referencedSkillNames.length > 0 && svcAvail && !svcAvail.aiCenter) {
+      for (const refName of referencedSkillNames) {
+        allResults.push({
+          artifact: "AI Skill Validation",
+          name: refName,
+          status: "failed",
+          message: `Referenced ML Skill "${refName}" cannot be validated — AI Center is not accessible on this tenant.`,
+        });
+      }
+      console.log("[UiPath Deploy] AI Center not available but XAML references ML Skills — validation failed");
+    } else if (referencedSkillNames.length === 0) {
+      console.log("[UiPath Deploy] No ML Skills referenced in artifacts — skipping AI Center validation");
+    }
 
     onProgress?.("Running infrastructure probe...");
     const infraProbe = await preflightInfraProbe(base, hdrs, config.folderId, config, svcAvail);

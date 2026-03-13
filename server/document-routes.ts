@@ -4,8 +4,8 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { getPlatformCapabilities, buildNuGetPackage } from "./uipath-integration";
-import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport } from "./xaml-generator";
+import { getPlatformCapabilities, buildNuGetPackage, getAICenterSkills } from "./uipath-integration";
+import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport, setAICenterSkillsContext, getReferencedMLSkillNames } from "./xaml-generator";
 import { analyzeAndFix } from "./workflow-analyzer";
 import { evaluateTransition } from "./stage-transition";
 import { approveDocument } from "./document-service";
@@ -1090,6 +1090,13 @@ ${content}`
       const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
       const sddContent = sdd?.content || "";
 
+      let aiSkills: any[] = [];
+      try {
+        const aiResult = await getAICenterSkills();
+        if (aiResult.available) aiSkills = aiResult.skills;
+      } catch { }
+      setAICenterSkillsContext(aiSkills);
+
       const archiverModule = require("archiver") as typeof import("archiver");
       const archive = (archiverModule as any)("zip", { zlib: { level: 9 } });
 
@@ -1103,7 +1110,7 @@ ${content}`
 
       const workflows = pkg.workflows || [];
       for (const wf of workflows) {
-        const result = generateRichXamlFromSpec(wf, sddContent || undefined);
+        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills);
         allXamlResults.push(result);
         archive.append(result.xaml, { name: `${wf.name || "Workflow"}.xaml` });
       }
@@ -1302,11 +1309,18 @@ ${content}`
       const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
       const sddContent = sdd?.content || "";
 
+      let aiSkills2: any[] = [];
+      try {
+        const aiResult2 = await getAICenterSkills();
+        if (aiResult2.available) aiSkills2 = aiResult2.skills;
+      } catch { }
+      setAICenterSkillsContext(aiSkills2);
+
       const aggGaps = aggGapsImport;
       const workflows = pkg.workflows || [];
       const allXamlResults: any[] = [];
       for (const wf of workflows) {
-        const result = generateRichXamlFromSpec(wf, sddContent || undefined);
+        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills2);
         allXamlResults.push(result);
       }
 

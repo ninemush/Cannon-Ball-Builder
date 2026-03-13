@@ -9,6 +9,19 @@ import {
 } from "./workflow-analyzer";
 import { escapeXml } from "./lib/xml-utils";
 import type { DeploymentResult } from "@shared/models/deployment";
+import type { AICenterSkill } from "./uipath-integration";
+
+let _aiCenterSkillsCtx: AICenterSkill[] = [];
+
+export function setAICenterSkillsContext(skills: AICenterSkill[]): void {
+  _aiCenterSkillsCtx = skills || [];
+}
+
+export function getReferencedMLSkillNames(): string[] {
+  return [..._referencedMLSkillNames];
+}
+
+const _referencedMLSkillNames: string[] = [];
 
 export type XamlGap = {
   category: "selector" | "credential" | "endpoint" | "logic" | "config" | "manual" | "agent";
@@ -222,6 +235,9 @@ function classifyActivity(ctx: ActivityContext): {
   }
   if (combined.includes("action center") || combined.includes("human task") || combined.includes("create task") || combined.includes("wait for task") || combined.includes("approval task") || combined.includes("task catalog")) {
     return classifyActionCenterTask(ctx, combined);
+  }
+  if (combined.includes("ml skill") || combined.includes("ml model") || combined.includes("ai center") || combined.includes("ai skill") || combined.includes("predict") || combined.includes("classify") || combined.includes("classification") || combined.includes("anomaly detect") || combined.includes("nlp") || combined.includes("sentiment") || combined.includes("machine learning")) {
+    return classifyMLSkill(ctx, combined);
   }
 
   if (combined.includes("browser") || combined.includes("web") || combined.includes("click") || combined.includes("type") || combined.includes("navigate") || combined.includes("login") || combined.includes("portal") || combined.includes("screen") || combined.includes("ui ") || combined.includes("application")) {
@@ -796,6 +812,100 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     variables,
     gaps,
   };
+}
+
+function classifyMLSkill(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
+  const gaps: XamlGap[] = [];
+
+  const matchedSkill = findMatchingAICenterSkill(ctx.name, ctx.description || "", combined);
+  const skillName = matchedSkill ? matchedSkill.name : "";
+  const inputType = matchedSkill?.inputType || "String";
+  const outputType = matchedSkill?.outputType || "String";
+
+  if (matchedSkill) {
+    if (!_referencedMLSkillNames.includes(matchedSkill.name)) {
+      _referencedMLSkillNames.push(matchedSkill.name);
+    }
+  }
+
+  const variables: VariableDecl[] = [
+    { name: "str_MLInput", type: "String", defaultValue: '""' },
+    { name: "str_MLOutput", type: "String", defaultValue: '""' },
+    { name: "str_MLSkillName", type: "String", defaultValue: skillName ? `"${skillName}"` : '""' },
+  ];
+
+  if (!matchedSkill) {
+    gaps.push({
+      category: "config",
+      activity: "MLSkill",
+      description: `Configure ML Skill name and endpoint for "${ctx.name}" — no matching deployed skill found on the tenant. Deploy the skill in AI Center first.`,
+      placeholder: "ML_Skill_Name from AI Center",
+      estimatedMinutes: 15,
+    });
+  }
+
+  gaps.push({
+    category: "config",
+    activity: "MLSkill",
+    description: matchedSkill
+      ? `Map input (${inputType}) / output (${outputType}) schema for ML Skill "${matchedSkill.name}" in "${ctx.name}" (package: ${matchedSkill.mlPackageName})`
+      : `Map input/output schema for ML Skill invocation in "${ctx.name}"`,
+    placeholder: matchedSkill
+      ? `Input: ${inputType}, Output: ${outputType}`
+      : "Define input JSON and parse output prediction",
+    estimatedMinutes: matchedSkill ? 10 : 20,
+  });
+
+  return {
+    activityType: "ui:MLSkill",
+    activityPackage: "UiPath.MLActivities",
+    properties: {
+      MLSkillName: skillName || "[TODO: Set ML Skill name from AI Center]",
+      Input: "str_MLInput",
+      Output: "str_MLOutput",
+      Timeout: "120000",
+    },
+    errorHandling: "catch",
+    variables,
+    gaps,
+  };
+}
+
+function findMatchingAICenterSkill(stepName: string, description: string, combined: string): AICenterSkill | null {
+  if (_aiCenterSkillsCtx.length === 0) return null;
+
+  const deployed = _aiCenterSkillsCtx.filter(s => {
+    const st = s.status.toLowerCase();
+    return st === "deployed" || st === "available";
+  });
+  if (deployed.length === 0) return _aiCenterSkillsCtx[0] || null;
+
+  const stepLower = stepName.toLowerCase();
+  const descLower = description.toLowerCase();
+
+  for (const skill of deployed) {
+    const skillNameLower = skill.name.toLowerCase();
+    if (stepLower.includes(skillNameLower) || descLower.includes(skillNameLower) || combined.includes(skillNameLower)) {
+      return skill;
+    }
+  }
+
+  for (const skill of deployed) {
+    const pkgLower = (skill.mlPackageName || "").toLowerCase();
+    if (pkgLower && (stepLower.includes(pkgLower) || descLower.includes(pkgLower) || combined.includes(pkgLower))) {
+      return skill;
+    }
+  }
+
+  if (deployed.length === 1) return deployed[0];
+
+  for (const skill of deployed) {
+    const skillWords = skill.name.toLowerCase().split(/[\s_-]+/);
+    const matchCount = skillWords.filter(w => w.length > 2 && combined.includes(w)).length;
+    if (matchCount >= Math.ceil(skillWords.length / 2)) return skill;
+  }
+
+  return deployed[0];
 }
 
 function classifyGeneral(ctx: ActivityContext, _combined: string): ReturnType<typeof classifyActivity> {
@@ -1485,8 +1595,10 @@ export function generateRichXamlFromNodes(
 
 export function generateRichXamlFromSpec(
   workflow: WorkflowSpec,
-  sddContent?: string
+  sddContent?: string,
+  aiCenterSkills?: AICenterSkill[]
 ): XamlGeneratorResult {
+  if (aiCenterSkills) setAICenterSkillsContext(aiCenterSkills);
   const allGaps: XamlGap[] = [];
   const allVariables: VariableDecl[] = [];
   const usedPackages = new Set<string>(["UiPath.System.Activities"]);

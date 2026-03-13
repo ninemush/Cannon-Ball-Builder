@@ -1554,6 +1554,30 @@ export type PlatformCapabilityProfile = {
   unavailableRecommendations: string;
   licenseInfo?: LicenseInfo | null;
   integrationService?: IntegrationServiceDiscovery;
+  aiCenterSkills?: AICenterSkill[];
+  aiCenterPackages?: AICenterPackage[];
+};
+
+export type AICenterSkill = {
+  id: string;
+  name: string;
+  mlPackageName: string;
+  mlPackageVersionId: string;
+  status: string;
+  inputType: string;
+  outputType: string;
+  gpu: boolean;
+  projectName: string;
+};
+
+export type AICenterPackage = {
+  id: string;
+  name: string;
+  description: string;
+  inputType: string;
+  outputType: string;
+  trainingStatus: string;
+  projectName: string;
 };
 
 type AgentCapabilities = {
@@ -1590,6 +1614,8 @@ type UnifiedProbeResult = {
   agentCapabilities?: AgentCapabilities;
   grantedScopes: string[];
   licenseInfo: LicenseInfo | null;
+  aiCenterSkills: AICenterSkill[];
+  aiCenterPackages: AICenterPackage[];
   cachedAt: number;
   probeFailed?: boolean;
   probeError?: string;
@@ -1620,6 +1646,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     },
     grantedScopes: [],
     licenseInfo: null,
+    aiCenterSkills: [],
+    aiCenterPackages: [],
     cachedAt: Date.now(),
   };
 
@@ -1651,7 +1679,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (!orchOk) {
       const result: UnifiedProbeResult = {
         configured: true, flags: { ...empty.flags, environments: false, triggers: false, apps: false },
-        grantedScopes, licenseInfo: null, cachedAt: Date.now(),
+        grantedScopes, licenseInfo: null, aiCenterSkills: [], aiCenterPackages: [], cachedAt: Date.now(),
       };
       _probeCache = result;
       return result;
@@ -1773,8 +1801,50 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     } catch {}
 
     let aiAvailable = false;
+    let aiCenterSkills: AICenterSkill[] = [];
+    let aiCenterPackages: AICenterPackage[] = [];
     const aiProbe = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: hdrs }).catch(() => null);
-    if (aiProbe && aiProbe.ok) aiAvailable = true;
+    if (aiProbe && aiProbe.ok) {
+      aiAvailable = true;
+      try {
+        const [skillsRes, pkgsRes] = await Promise.all([
+          fetch(`${base}/aifabric_/ai-deployer/v1/mlskills?$top=50`, { headers: hdrs }).catch(() => null),
+          fetch(`${base}/aifabric_/ai-deployer/v1/mlpackages?$top=50`, { headers: hdrs }).catch(() => null),
+        ]);
+        if (skillsRes && skillsRes.ok) {
+          const skillsData = await skillsRes.json();
+          const items = skillsData.dataList || skillsData.value || skillsData.items || [];
+          aiCenterSkills = items.filter((s: any) => s.name).map((s: any) => ({
+            id: s.id || s.mlSkillId || "",
+            name: s.name,
+            mlPackageName: s.mlPackageName || s.packageName || "",
+            mlPackageVersionId: s.mlPackageVersionId || "",
+            status: s.deploymentStatus || s.status || "unknown",
+            inputType: s.inputType || s.inputDescription || "",
+            outputType: s.outputType || s.outputDescription || "",
+            gpu: s.requiresGpu || false,
+            projectName: s.projectName || "",
+          }));
+          console.log(`[UiPath Probe] AI Center: ${aiCenterSkills.length} ML skill(s) discovered`);
+        }
+        if (pkgsRes && pkgsRes.ok) {
+          const pkgsData = await pkgsRes.json();
+          const items = pkgsData.dataList || pkgsData.value || pkgsData.items || [];
+          aiCenterPackages = items.filter((p: any) => p.name).map((p: any) => ({
+            id: p.id || p.mlPackageId || "",
+            name: p.name,
+            description: p.description || "",
+            inputType: p.inputType || "",
+            outputType: p.outputType || "",
+            trainingStatus: p.trainingStatus || "",
+            projectName: p.projectName || "",
+          }));
+          console.log(`[UiPath Probe] AI Center: ${aiCenterPackages.length} ML package(s) discovered`);
+        }
+      } catch (aiErr: any) {
+        console.warn(`[UiPath Probe] AI Center skills/packages fetch failed: ${aiErr.message}`);
+      }
+    }
 
     let agentsAvailable = false;
     let agentCapabilities: { autonomous: boolean; conversational: boolean; coded: boolean } = { autonomous: false, conversational: false, coded: false };
@@ -1898,6 +1968,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       agentCapabilities: agentsAvailable ? agentCapabilities : undefined,
       grantedScopes,
       licenseInfo,
+      aiCenterSkills,
+      aiCenterPackages,
       cachedAt: Date.now(),
     };
 
@@ -1910,6 +1982,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       ...empty,
       configured: true,
       flags: { ...empty.flags, environments: false, triggers: false, apps: false },
+      aiCenterSkills: [],
+      aiCenterPackages: [],
       cachedAt: Date.now(),
       probeFailed: true,
       probeError: err.message,
@@ -1992,8 +2066,20 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
   if (avail.storageBuckets) availNames.push("Storage Buckets (file storage for input/output documents, templates, logs)");
   else unavailRecs.push("- **Storage Buckets**: Not available. If enabled, it could provide centralized cloud storage for automation input files, output documents, templates, and audit logs.");
 
-  if (avail.aiCenter) availNames.push("AI Center (custom ML models, model training, AI skill deployment)");
-  else unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, or NLP tasks within the automation.");
+  if (avail.aiCenter) {
+    const deployedSkills = probe.aiCenterSkills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
+    if (deployedSkills.length > 0) {
+      const skillsList = deployedSkills.map(s => `${s.name} (package: ${s.mlPackageName || "N/A"}, input: ${s.inputType || "N/A"}, output: ${s.outputType || "N/A"})`).join("; ");
+      availNames.push(`AI Center (${deployedSkills.length} deployed ML skill(s): ${skillsList})`);
+    } else if (probe.aiCenterSkills.length > 0) {
+      const allSkills = probe.aiCenterSkills.map(s => `${s.name} [${s.status}]`).join("; ");
+      availNames.push(`AI Center (${probe.aiCenterSkills.length} ML skill(s) found but none deployed: ${allSkills}). ${probe.aiCenterPackages.length} ML package(s) available.`);
+    } else {
+      availNames.push(`AI Center (available, ${probe.aiCenterPackages.length} ML package(s) found, no ML skills deployed yet)`);
+    }
+  } else {
+    unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, NLP, or anomaly detection within the automation. Deploy ML Skills in AI Center and reference them by name in the workflow.");
+  }
 
   if (probe.flags.agents) {
     const caps = probe.agentCapabilities;
@@ -2070,6 +2156,8 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       : "All major UiPath platform services are available.",
     licenseInfo: probe.licenseInfo,
     integrationService: isDiscovery,
+    aiCenterSkills: probe.aiCenterSkills,
+    aiCenterPackages: probe.aiCenterPackages,
   };
 }
 
@@ -2373,6 +2461,18 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       ? { available: true, message: "Accessible" }
       : { available: false, message: "Not accessible or not provisioned" };
 
+    if (probe.flags.aiCenter) {
+      const deployed = probe.aiCenterSkills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
+      serviceChecks["AI Center"] = {
+        available: true,
+        message: deployed.length > 0
+          ? `${deployed.length} ML skill(s) deployed: ${deployed.map(s => s.name).join(", ")}`
+          : `Available (${probe.aiCenterPackages.length} packages, no skills deployed)`,
+      };
+    } else {
+      serviceChecks["AI Center"] = { available: false, message: "Not accessible" };
+    }
+
     const availableCount = Object.values(serviceChecks).filter(s => s.available).length;
     const totalCount = Object.keys(serviceChecks).length;
 
@@ -2412,6 +2512,9 @@ export type ServiceAvailabilityMap = {
   automationStore: boolean;
   apps: boolean;
   assistant: boolean;
+  aiCenter?: boolean;
+  aiCenterSkills?: AICenterSkill[];
+  aiCenterPackages?: AICenterPackage[];
 };
 
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
@@ -2445,6 +2548,18 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     automationStore: probe.flags.automationStore,
     apps: probe.flags.apps,
     assistant: probe.flags.assistant,
+    aiCenter: probe.flags.aiCenter,
+    aiCenterSkills: probe.aiCenterSkills,
+    aiCenterPackages: probe.aiCenterPackages,
+  };
+}
+
+export async function getAICenterSkills(): Promise<{ available: boolean; skills: AICenterSkill[]; packages: AICenterPackage[] }> {
+  const probe = await probeAllServices();
+  return {
+    available: probe.flags.aiCenter,
+    skills: probe.aiCenterSkills,
+    packages: probe.aiCenterPackages,
   };
 }
 

@@ -348,6 +348,17 @@ export function registerUiPathRoutes(app: Express): void {
     return res.json(result);
   });
 
+  app.get("/api/settings/uipath/ai-center", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { getAICenterSkills } = await import("./uipath-integration");
+      const result = await getAICenterSkills();
+      return res.json(result);
+    } catch (err: any) {
+      return res.json({ available: false, skills: [], packages: [], error: err.message });
+    }
+  });
+
   app.get("/api/settings/uipath/robots", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const result = await listRobots();
@@ -1341,6 +1352,35 @@ export function registerUiPathRoutes(app: Express): void {
             name: "Queue access",
             status: "warning",
             detail: "Could not list queues",
+          });
+        }
+
+        try {
+          const { getAICenterSkills } = await import("./uipath-integration");
+          const aiResult = await getAICenterSkills();
+          if (aiResult.available) {
+            const deployed = aiResult.skills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
+            const skillNames = deployed.map(s => s.name).join(", ");
+            checks.push({
+              name: "AI Center reachable",
+              status: "pass",
+              detail: deployed.length > 0
+                ? `${deployed.length} deployed ML skill(s): ${skillNames}. ${aiResult.packages.length} ML package(s) available.`
+                : `AI Center accessible. ${aiResult.packages.length} ML package(s) found, no skills deployed yet.`,
+            });
+          } else {
+            checks.push({
+              name: "AI Center reachable",
+              status: "warning",
+              detail: "AI Center not available on this tenant",
+              remediation: "AI Center enables custom ML models for classification, prediction, NLP, and anomaly detection. Enable it via UiPath Automation Cloud.",
+            });
+          }
+        } catch {
+          checks.push({
+            name: "AI Center reachable",
+            status: "warning",
+            detail: "Could not probe AI Center",
           });
         }
       }

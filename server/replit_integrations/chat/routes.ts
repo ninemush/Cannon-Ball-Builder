@@ -122,6 +122,18 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     else unavailable.push("Apps");
     if (serviceAvailability.assistant) available.push("Assistant (attended automation launcher)");
     else unavailable.push("Assistant");
+    if (serviceAvailability.aiCenter) {
+      const skills = serviceAvailability.aiCenterSkills || [];
+      const deployed = skills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
+      if (deployed.length > 0) {
+        const skillDetail = deployed.map(s => `"${s.name}" (package: ${s.mlPackageName || "N/A"}, input: ${s.inputType || "N/A"}, output: ${s.outputType || "N/A"})`).join("; ");
+        available.push(`AI Center (${deployed.length} deployed ML skill(s): ${skillDetail})`);
+      } else {
+        available.push(`AI Center (available, ${skills.length} skill(s) found but none deployed)`);
+      }
+    } else {
+      unavailable.push("AI Center (ML models, skills)");
+    }
 
     let integrationServiceContext = "";
     if (serviceAvailability.integrationServiceDiscovery?.available) {
@@ -166,6 +178,14 @@ BEHAVIORAL RULES (non-negotiable):
 6. NEVER blame the platform, the deployment system, or the infrastructure for any issue. NEVER suggest the user contact a platform administrator. If something went wrong, acknowledge it and immediately offer to fix it (e.g. regenerate the document). You are part of the platform — you fix things, you don't blame things.
 7. When asked to regenerate a document, do it immediately. Do not question whether it will help, do not suggest alternatives, do not explain why it might not work. Just regenerate it.
 8. INTEGRITY IS NON-NEGOTIABLE: Never fabricate deployment results, artifact statuses, or service availability. If the system provides verified deployment results (VERIFIED DEPLOYMENT RESULTS messages), you MUST use those exact facts. Never claim something was "created" or "deployed" unless the verified results confirm it. If an artifact was skipped or failed, say so honestly. Discrepancies between your narrative and actual results destroy user trust.
+
+AI CENTER KNOWLEDGE:
+When the process involves classification, prediction, NLP, sentiment analysis, anomaly detection, or any ML-driven decision, recommend using UiPath AI Center ML Skills. AI Center provides:
+- **ML Packages**: Pre-built or custom ML models (e.g., document classification, invoice extraction, sentiment analysis, fraud detection)
+- **ML Skills**: Deployed instances of ML packages that can be invoked directly from UiPath workflows using the ML Skill activity (UiPath.MLActivities package)
+- **Workflow integration**: Use the "ML Skill" activity in UiPath Studio to call a deployed skill by name, pass input data (text, JSON, or file), and receive prediction output
+- **Best practices**: Reference deployed ML Skills by their exact name from AI Center. Map input/output schemas to match the skill's expected format. Always include error handling for ML Skill invocations (timeout, model unavailable).
+When AI Center is available with deployed skills, proactively recommend using those specific skills by name in the solution design. When it's available but no skills are deployed, suggest which ML packages could benefit the automation. When unavailable, note it as a future enhancement.
 
 FILE UPLOAD HANDLING:
 - When you see [UPLOADED_FILE: ...] in a user message, the content has been extracted from a document they uploaded (DOCX, PDF, XLSX, TXT, CSV).
