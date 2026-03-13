@@ -1,0 +1,658 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import {
+  Map,
+  FileText,
+  Package,
+  BookOpen,
+  Download,
+  Eye,
+  Loader2,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  AlertCircle,
+  Clock,
+  Archive,
+  XCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ProcessMapViewerModal } from "./process-map-viewer-modal";
+
+interface ArtifactSummary {
+  type: "as-is" | "to-be" | "pdd" | "sdd" | "uipath" | "dhg";
+  label: string;
+  exists: boolean;
+  status: string;
+  version: number | null;
+  nodeCount?: number;
+  meta?: {
+    projectName?: string;
+    workflowCount?: number;
+    dependencyCount?: number;
+  } | null;
+}
+
+const ARTIFACT_ICONS: Record<string, typeof Map> = {
+  "as-is": Map,
+  "to-be": Map,
+  pdd: FileText,
+  sdd: FileText,
+  uipath: Package,
+  dhg: BookOpen,
+};
+
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case "Approved":
+      return "bg-emerald-500/15 text-emerald-400 border-emerald-500/25";
+    case "Draft":
+      return "bg-amber-500/15 text-amber-400 border-amber-500/25";
+    case "Generated":
+    case "Available":
+      return "bg-blue-500/15 text-blue-400 border-blue-500/25";
+    default:
+      return "bg-muted/50 text-muted-foreground border-border/50";
+  }
+}
+
+function statusIcon(status: string) {
+  switch (status) {
+    case "Approved":
+      return <Check className="h-3 w-3" />;
+    case "Draft":
+      return <Clock className="h-3 w-3" />;
+    case "Generated":
+    case "Available":
+      return <Check className="h-3 w-3" />;
+    default:
+      return <AlertCircle className="h-3 w-3" />;
+  }
+}
+
+function ErrorMessage({ message }: { message: string }) {
+  return (
+    <div className="flex items-center justify-center py-12 gap-2">
+      <XCircle className="h-5 w-5 text-destructive" />
+      <span className="text-sm text-destructive">{message}</span>
+    </div>
+  );
+}
+
+function DocumentViewerModal({ open, onClose, title, ideaId, artifactType }: { open: boolean; onClose: () => void; title: string; ideaId: string; artifactType: string }) {
+  const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
+
+  const { data: docData, isLoading, isError } = useQuery<{ content: string; version: number; status: string }>({
+    queryKey: ["/api/ideas", ideaId, "artifacts-view", artifactType],
+    queryFn: async () => {
+      const type = artifactType.toUpperCase();
+      const res = await fetch(`/api/ideas/${ideaId}/documents/versions/${type}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load document");
+      const versions: { content: string; version: number; status: string }[] = await res.json();
+      if (!versions || versions.length === 0) throw new Error("No document found");
+      return { content: versions[0].content, version: versions[0].version, status: versions[0].status };
+    },
+    enabled: open && (artifactType === "pdd" || artifactType === "sdd"),
+  });
+
+  if (!open) return null;
+
+  const sections = docData ? parseDocumentSections(docData.content) : [];
+
+  function toggleSection(index: number) {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" data-testid={`modal-view-${artifactType}`} onClick={onClose}>
+      <div className="relative w-[90vw] max-w-4xl max-h-[85vh] bg-card rounded-xl border border-border shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-cb-teal" />
+            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+            {docData && (
+              <Badge variant="outline" className="text-[10px]">v{docData.version}</Badge>
+            )}
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors" data-testid={`button-close-modal-${artifactType}`}>
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-cb-teal" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading document...</span>
+            </div>
+          ) : isError ? (
+            <ErrorMessage message="Failed to load document." />
+          ) : sections.length > 0 ? (
+            <div className="divide-y divide-border/20">
+              {sections.map((section, idx) => (
+                <div key={idx}>
+                  <button
+                    className="w-full flex items-center gap-2 px-5 py-2.5 text-left hover:bg-white/5 transition-colors"
+                    onClick={() => toggleSection(idx)}
+                    data-testid={`button-hub-section-toggle-${idx}`}
+                  >
+                    {expandedSections.has(idx) ? (
+                      <ChevronDown className="h-3 w-3 text-cb-teal shrink-0" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                    )}
+                    <span className="text-xs font-medium text-foreground">{section.title}</span>
+                  </button>
+                  {expandedSections.has(idx) && (
+                    <div className="px-5 pb-3 pl-10">
+                      <div className="text-[11px] text-muted-foreground/90 leading-relaxed prose-doc">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {section.content}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">No content available.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DhgViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: () => void; ideaId: string }) {
+  const { data: dhgData, isLoading, isError } = useQuery<{ content: string }>({
+    queryKey: ["/api/ideas", ideaId, "dhg"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ideas/${ideaId}/dhg`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load DHG");
+      return res.json();
+    },
+    enabled: open,
+  });
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" data-testid="modal-view-dhg" onClick={onClose}>
+      <div className="relative w-[90vw] max-w-4xl max-h-[85vh] bg-card rounded-xl border border-border shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-cb-teal" />
+            <h3 className="text-sm font-semibold text-foreground">Developer Handoff Guide</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            {dhgData?.content && (
+              <button
+                onClick={() => {
+                  const blob = new Blob([dhgData.content], { type: "text/markdown" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "DeveloperHandoffGuide.md";
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                data-testid="button-hub-download-dhg-md"
+              >
+                <Download className="h-3 w-3" />
+                Download .md
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors" data-testid="button-close-modal-dhg">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-cb-teal" />
+              <span className="ml-2 text-sm text-muted-foreground">Generating Handoff Guide...</span>
+            </div>
+          ) : isError ? (
+            <ErrorMessage message="Failed to load Developer Handoff Guide." />
+          ) : dhgData?.content ? (
+            <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-foreground prose-p:text-muted-foreground prose-strong:text-foreground prose-code:text-cb-teal prose-code:bg-muted/50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-li:text-muted-foreground prose-table:text-xs" data-testid="hub-dhg-content">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{dhgData.content}</ReactMarkdown>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">No content available.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface UiPathWorkflowStep {
+  activity: string;
+  notes?: string;
+}
+
+interface UiPathWorkflow {
+  name: string;
+  description: string;
+  steps?: UiPathWorkflowStep[];
+}
+
+interface UiPathPackageData {
+  projectName: string;
+  description: string;
+  dependencies?: string[];
+  workflows?: UiPathWorkflow[];
+}
+
+interface ChatMessage {
+  id: number;
+  content: string;
+  role: string;
+}
+
+function UiPathViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: () => void; ideaId: string }) {
+  const [expandedWf, setExpandedWf] = useState(true);
+
+  const { data: packageData, isLoading, isError } = useQuery<UiPathPackageData>({
+    queryKey: ["/api/ideas", ideaId, "artifacts-view", "uipath-meta"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ideas/${ideaId}/messages`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load messages");
+      const messages: ChatMessage[] = await res.json();
+      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+      if (!uipathMsg) throw new Error("No UiPath package found");
+      return JSON.parse(uipathMsg.content.slice(8, -1)) as UiPathPackageData;
+    },
+    enabled: open,
+  });
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" data-testid="modal-view-uipath" onClick={onClose}>
+      <div className="relative w-[90vw] max-w-3xl max-h-[85vh] bg-card rounded-xl border border-border shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
+          <div className="flex items-center gap-2">
+            <Package className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">UiPath Automation Package</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors" data-testid="button-close-modal-uipath">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading package data...</span>
+            </div>
+          ) : isError ? (
+            <ErrorMessage message="Failed to load UiPath package data." />
+          ) : packageData ? (
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-xs font-semibold text-foreground">{packageData.projectName}</h4>
+                <p className="text-[11px] text-muted-foreground/90 mt-1">{packageData.description}</p>
+              </div>
+
+              {packageData.dependencies && packageData.dependencies.length > 0 && (
+                <div>
+                  <h5 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Dependencies</h5>
+                  <div className="flex flex-wrap gap-1">
+                    {packageData.dependencies.map((dep, i) => (
+                      <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                        {dep}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {packageData.workflows && packageData.workflows.length > 0 && (
+                <div>
+                  <button
+                    className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5"
+                    onClick={() => setExpandedWf(!expandedWf)}
+                    data-testid="button-hub-toggle-workflows"
+                  >
+                    {expandedWf ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    Workflows ({packageData.workflows.length})
+                  </button>
+                  {expandedWf && (
+                    <div className="space-y-2">
+                      {packageData.workflows.map((wf, i) => (
+                        <div key={i} className="p-2.5 rounded bg-[#1a1a1a] border border-border/20">
+                          <p className="text-[11px] font-medium text-foreground">{wf.name}</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">{wf.description}</p>
+                          {wf.steps && wf.steps.length > 0 && (
+                            <div className="mt-1.5 space-y-0.5">
+                              {wf.steps.map((step, j) => (
+                                <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
+                                  {step.activity}{step.notes ? ` — ${step.notes}` : ""}
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">No package data available.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function parseDocumentSections(content: string): { title: string; content: string }[] {
+  const cleaned = content
+    .replace(/\[AUTOMATION_TYPE:\s*[^\]]+\]/gi, "")
+    .replace(/\[STEP:\s*[\d.]+\s+[^\]]*\]/g, "")
+    .replace(/\[DOC:(PDD|SDD):\d+\]/g, "")
+    .replace(/\[DEPLOY_UIPATH\]/g, "")
+    .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "");
+  const lines = cleaned.split("\n");
+  const sections: { title: string; content: string }[] = [];
+  let currentTitle = "";
+  let currentContent: string[] = [];
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^##\s+\d*\.?\s*(.*)/);
+    if (headingMatch) {
+      if (currentTitle) {
+        sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
+      }
+      currentTitle = headingMatch[1].trim();
+      currentContent = [];
+    } else {
+      currentContent.push(line);
+    }
+  }
+
+  if (currentTitle) {
+    sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
+  }
+
+  if (sections.length === 0 && cleaned.trim()) {
+    sections.push({ title: "Document Content", content: cleaned.trim() });
+  }
+
+  return sections;
+}
+
+interface ArtifactHubProps {
+  ideaId: string;
+  ideaTitle: string;
+}
+
+export function ArtifactHub({ ideaId, ideaTitle }: ArtifactHubProps) {
+  const { toast } = useToast();
+  const [viewingArtifact, setViewingArtifact] = useState<string | null>(null);
+  const [downloadingAll, setDownloadingAll] = useState(false);
+
+  const { data, isLoading } = useQuery<{ artifacts: ArtifactSummary[] }>({
+    queryKey: ["/api/ideas", ideaId, "artifacts"],
+    staleTime: 10000,
+  });
+
+  const artifacts = data?.artifacts || [];
+
+  async function downloadArtifact(type: string) {
+    try {
+      if (type === "uipath") {
+        const a = document.createElement("a");
+        a.href = `/api/ideas/${ideaId}/download-uipath`;
+        a.download = "UiPathPackage.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
+
+      if (type === "dhg") {
+        const res = await fetch(`/api/ideas/${ideaId}/dhg`, { credentials: "include" });
+        if (!res.ok) throw new Error("Failed to download DHG");
+        const dhgJson = await res.json();
+        const blob = new Blob([dhgJson.content], { type: "text/markdown" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "DeveloperHandoffGuide.md";
+        a.click();
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      const resp = await fetch(`/api/ideas/${ideaId}/export?types=${type}`, { credentials: "include" });
+      if (!resp.ok) throw new Error("Export failed");
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${ideaTitle.replace(/[^a-zA-Z0-9_-]/g, "_")}_${type}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Download started" });
+    } catch {
+      toast({ title: "Download failed", variant: "destructive" });
+    }
+  }
+
+  async function downloadAll() {
+    setDownloadingAll(true);
+    try {
+      const hasUipath = artifacts.find(a => a.type === "uipath")?.exists;
+      const hasDhg = artifacts.find(a => a.type === "dhg")?.exists;
+
+      const resp = await fetch(`/api/ideas/${ideaId}/export?types=as-is,to-be,pdd,sdd`, { credentials: "include" });
+      if (resp.ok) {
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${ideaTitle.replace(/[^a-zA-Z0-9_-]/g, "_")}_full_export.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      if (hasUipath) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const a = document.createElement("a");
+        a.href = `/api/ideas/${ideaId}/download-uipath`;
+        a.download = "UiPathPackage.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      if (hasDhg) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        try {
+          const dhgRes = await fetch(`/api/ideas/${ideaId}/dhg`, { credentials: "include" });
+          if (dhgRes.ok) {
+            const dhgJson: { content: string } = await dhgRes.json();
+            const blob = new Blob([dhgJson.content], { type: "text/markdown" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "DeveloperHandoffGuide.md";
+            a.click();
+            URL.revokeObjectURL(url);
+          }
+        } catch { /* best effort for DHG */ }
+      }
+
+      toast({ title: "Downloads started" });
+    } catch {
+      toast({ title: "Download failed", variant: "destructive" });
+    }
+    setDownloadingAll(false);
+  }
+
+  const anyExists = artifacts.some(a => a.exists);
+
+  return (
+    <div className="flex flex-col h-full" data-testid="panel-artifact-hub">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Archive className="h-4 w-4 text-primary" />
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Artifacts
+          </h3>
+        </div>
+        {anyExists && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-[10px] gap-1"
+            onClick={downloadAll}
+            disabled={downloadingAll}
+            data-testid="button-download-all-artifacts"
+          >
+            {downloadingAll ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Download className="h-3 w-3" />
+            )}
+            Download All
+          </Button>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-2">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          artifacts.map((artifact) => {
+            const Icon = ARTIFACT_ICONS[artifact.type] || FileText;
+            const isDisabled = !artifact.exists;
+
+            return (
+              <div
+                key={artifact.type}
+                className={`rounded-lg border p-3 transition-colors ${
+                  isDisabled
+                    ? "border-border/30 bg-muted/10 opacity-50"
+                    : "border-border/50 bg-card hover:border-border"
+                }`}
+                data-testid={`artifact-card-${artifact.type}`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`p-2 rounded-md shrink-0 ${isDisabled ? "bg-muted/20" : "bg-primary/10"}`}>
+                    <Icon className={`h-4 w-4 ${isDisabled ? "text-muted-foreground/40" : "text-primary"}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className={`text-xs font-medium ${isDisabled ? "text-muted-foreground/60" : "text-foreground"}`}>
+                        {artifact.label}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`text-[9px] px-1.5 py-0 h-4 ${statusBadgeClass(artifact.status)}`}
+                        data-testid={`badge-status-${artifact.type}`}
+                      >
+                        {statusIcon(artifact.status)}
+                        <span className="ml-0.5">{artifact.status}</span>
+                      </Badge>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground/70">
+                      {artifact.version !== null && <span>Version {artifact.version}</span>}
+                      {artifact.nodeCount !== undefined && artifact.nodeCount > 0 && (
+                        <span>{artifact.version ? " · " : ""}{artifact.nodeCount} steps</span>
+                      )}
+                      {artifact.meta?.projectName && (
+                        <span>{artifact.meta.projectName} · {artifact.meta.workflowCount} workflows</span>
+                      )}
+                      {!artifact.exists && <span>Not yet generated</span>}
+                    </div>
+                  </div>
+                  {!isDisabled && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setViewingArtifact(artifact.type)}
+                        data-testid={`button-view-${artifact.type}`}
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => downloadArtifact(artifact.type)}
+                        data-testid={`button-download-${artifact.type}`}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {(viewingArtifact === "as-is" || viewingArtifact === "to-be") && (
+        <ProcessMapViewerModal
+          open={true}
+          onClose={() => setViewingArtifact(null)}
+          ideaId={ideaId}
+          viewType={viewingArtifact}
+        />
+      )}
+
+      {(viewingArtifact === "pdd" || viewingArtifact === "sdd") && (
+        <DocumentViewerModal
+          open={true}
+          onClose={() => setViewingArtifact(null)}
+          title={viewingArtifact === "pdd" ? "Process Design Document" : "Solution Design Document"}
+          ideaId={ideaId}
+          artifactType={viewingArtifact}
+        />
+      )}
+
+      {viewingArtifact === "dhg" && (
+        <DhgViewerModal
+          open={true}
+          onClose={() => setViewingArtifact(null)}
+          ideaId={ideaId}
+        />
+      )}
+
+      {viewingArtifact === "uipath" && (
+        <UiPathViewerModal
+          open={true}
+          onClose={() => setViewingArtifact(null)}
+          ideaId={ideaId}
+        />
+      )}
+    </div>
+  );
+}

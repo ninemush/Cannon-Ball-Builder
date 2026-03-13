@@ -512,6 +512,93 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
 }
 
 export function registerDocumentRoutes(app: Express): void {
+  app.get("/api/ideas/:ideaId/artifacts", async (req: Request, res: Response) => {
+    const ideaId = await verifyIdeaAccess(req, res);
+    if (!ideaId) return;
+
+    try {
+      const idea = await storage.getIdea(ideaId);
+      if (!idea) return res.status(404).json({ message: "Idea not found" });
+
+      const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
+      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+      const pddApproval = await documentStorage.getApproval(ideaId, "PDD");
+      const sddApproval = await documentStorage.getApproval(ideaId, "SDD");
+
+      const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
+      const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+      const asIsApproval = await processMapStorage.getApproval(ideaId, "as-is");
+      const toBeApproval = await processMapStorage.getApproval(ideaId, "to-be");
+
+      const messages = await chatStorage.getMessagesByIdeaId(ideaId);
+      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+      let uipathData: { projectName?: string; workflowCount?: number; dependencyCount?: number } | null = null;
+      if (uipathMsg) {
+        try {
+          const pkg = JSON.parse(uipathMsg.content.slice(8, -1));
+          uipathData = {
+            projectName: pkg.projectName,
+            workflowCount: pkg.workflows?.length || 0,
+            dependencyCount: pkg.dependencies?.length || 0,
+          };
+        } catch {}
+      }
+
+      const artifacts = [
+        {
+          type: "as-is" as const,
+          label: "As-Is Process Map",
+          exists: asIsNodes.length > 0,
+          status: asIsApproval && !asIsApproval.invalidated ? "Approved" : asIsNodes.length > 0 ? "Draft" : "Not Generated",
+          version: asIsApproval?.version || null,
+          nodeCount: asIsNodes.length,
+        },
+        {
+          type: "to-be" as const,
+          label: "To-Be Process Map",
+          exists: toBeNodes.length > 0,
+          status: toBeApproval && !toBeApproval.invalidated ? "Approved" : toBeNodes.length > 0 ? "Draft" : "Not Generated",
+          version: toBeApproval?.version || null,
+          nodeCount: toBeNodes.length,
+        },
+        {
+          type: "pdd" as const,
+          label: "Process Design Document",
+          exists: !!pdd,
+          status: pddApproval ? "Approved" : pdd ? (pdd.status === "approved" ? "Approved" : "Draft") : "Not Generated",
+          version: pdd?.version || null,
+        },
+        {
+          type: "sdd" as const,
+          label: "Solution Design Document",
+          exists: !!sdd,
+          status: sddApproval ? "Approved" : sdd ? (sdd.status === "approved" ? "Approved" : "Draft") : "Not Generated",
+          version: sdd?.version || null,
+        },
+        {
+          type: "uipath" as const,
+          label: "UiPath Package",
+          exists: !!uipathMsg,
+          status: uipathMsg ? "Generated" : "Not Generated",
+          version: null,
+          meta: uipathData,
+        },
+        {
+          type: "dhg" as const,
+          label: "Developer Handoff Guide",
+          exists: !!uipathMsg,
+          status: uipathMsg ? "Available" : "Not Generated",
+          version: null,
+        },
+      ];
+
+      return res.json({ artifacts });
+    } catch (error) {
+      console.error("Error fetching artifacts summary:", error);
+      return res.status(500).json({ message: "Failed to fetch artifacts" });
+    }
+  });
+
   app.get("/api/ideas/:ideaId/documents", async (req: Request, res: Response) => {
     const ideaId = await verifyIdeaAccess(req, res);
     if (!ideaId) return;

@@ -26,6 +26,7 @@ import {
   Download,
   Trash2,
   Brain,
+  Archive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,7 @@ import { PIPELINE_STAGES, type Idea, type PipelineStage, type ChatMessage as DBC
 import ProcessMapPanel from "@/components/process-map-panel";
 import { parseStepsFromText, parseStepsByView } from "@/lib/step-parser";
 import { DocumentCard, UiPathPackageCard } from "@/components/document-card";
+import { ArtifactHub } from "@/components/artifact-hub";
 import { formatEST, getStageBadgeClass } from "@/lib/utils";
 
 let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
@@ -896,6 +898,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
         } catch { /* best-effort */ }
       }
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "artifacts"] });
 
       if (isOwnGeneration && wasGeneratingDoc) {
         stopDocStreaming({ force: true });
@@ -1890,7 +1893,7 @@ function ExportDialog({ ideaId, ideaTitle }: { ideaId: string; ideaTitle: string
   );
 }
 
-type MobileTab = "stages" | "map" | "chat";
+type MobileTab = "stages" | "map" | "chat" | "artifacts";
 
 export default function Workspace() {
   const [, params] = useRoute("/workspace/:id");
@@ -1900,6 +1903,7 @@ export default function Workspace() {
   >(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
+  const [showArtifactHub, setShowArtifactHub] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const switchProcessMapViewRef = useRef<((view: "as-is" | "to-be" | "sdd") => void) | null>(null);
@@ -2053,6 +2057,7 @@ export default function Workspace() {
     { id: "stages" as MobileTab, label: "Stages", icon: ListChecks },
     { id: "map" as MobileTab, label: "Map", icon: MapIcon },
     { id: "chat" as MobileTab, label: "Chat", icon: MessageSquare },
+    { id: "artifacts" as MobileTab, label: "Artifacts", icon: Archive },
   ];
 
   return (
@@ -2144,6 +2149,24 @@ export default function Workspace() {
               </>
             )}
           </div>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={showArtifactHub ? "default" : "ghost"}
+                  size="icon"
+                  className={`h-8 w-8 ${showArtifactHub ? "bg-primary/20 text-primary" : ""}`}
+                  onClick={() => setShowArtifactHub(!showArtifactHub)}
+                  data-testid="button-toggle-artifact-hub"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <p className="text-xs">Artifact Hub</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <ExportDialog ideaId={idea.id} ideaTitle={idea.title} />
           {canDeleteIdea && (
             <div className="relative shrink-0">
@@ -2191,6 +2214,7 @@ export default function Workspace() {
             {mobileTab === "stages" && stagePanel}
             {mobileTab === "map" && <div className="h-full">{mapPanel}</div>}
             {mobileTab === "chat" && chatPanel}
+            {mobileTab === "artifacts" && <ArtifactHub ideaId={idea.id} ideaTitle={idea.title} />}
           </div>
           <div className="flex items-center border-t border-border bg-card shrink-0" data-testid="mobile-tab-bar">
             {mobileTabs.map((tab) => (
@@ -2218,7 +2242,7 @@ export default function Workspace() {
             data-testid="workspace-panels"
           >
             <ResizablePanel
-              defaultSize={15}
+              defaultSize={showArtifactHub ? 12 : 15}
               minSize={12}
               maxSize={25}
               className="bg-card/20"
@@ -2228,19 +2252,33 @@ export default function Workspace() {
 
             <ResizableHandle withHandle />
 
-            <ResizablePanel defaultSize={50} minSize={30}>
+            <ResizablePanel defaultSize={showArtifactHub ? 38 : 50} minSize={25}>
               {mapPanel}
             </ResizablePanel>
 
             <ResizableHandle withHandle />
 
             <ResizablePanel
-              defaultSize={35}
-              minSize={25}
+              defaultSize={showArtifactHub ? 30 : 35}
+              minSize={20}
               maxSize={50}
             >
               {chatPanel}
             </ResizablePanel>
+
+            {showArtifactHub && (
+              <>
+                <ResizableHandle withHandle />
+                <ResizablePanel
+                  defaultSize={20}
+                  minSize={15}
+                  maxSize={30}
+                  className="bg-card/20"
+                >
+                  <ArtifactHub ideaId={idea.id} ideaTitle={idea.title} />
+                </ResizablePanel>
+              </>
+            )}
           </ResizablePanelGroup>
         </div>
       )}
