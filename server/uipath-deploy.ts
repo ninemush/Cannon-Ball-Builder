@@ -91,7 +91,7 @@ export type OrchestratorArtifacts = {
   storageBuckets?: Array<{ name: string; description?: string; storageProvider?: string }>;
   environments?: Array<{ name: string; type?: string; description?: string }>;
   robotAccounts?: Array<{ name: string; type?: string; description?: string; role?: string }>;
-  actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string; priority?: string; actions?: string[]; formFields?: Array<{ name: string; type: string; required?: boolean }> }>;
+  actionCenter?: Array<{ taskCatalog: string; assignedRole?: string; sla?: string; escalation?: string; description?: string; priority?: string; actions?: string[]; formFields?: Array<{ name: string; type: string; required?: boolean; defaultValue?: string; validationRule?: string }>; slaConfig?: { dueInHours?: number; warningThresholdHours?: number; escalationPolicy?: string; autoEscalate?: boolean }; dataFabricEntity?: string }>;
   documentUnderstanding?: Array<{ name: string; documentTypes: string[]; description?: string; extractionApproach?: string; taxonomyFields?: Array<{ documentType: string; fields: Array<{ name: string; type: string }> }>; classifierType?: string; validationRules?: Array<{ field: string; rule: string; action: string }> }>;
   communicationsMining?: Array<{ name: string; sourceType?: string; description?: string; intents?: string[]; entities?: string[]; routingRules?: Array<{ intent: string; action: string; target: string }> }>;
   testCases?: Array<{ name: string; description?: string; labels?: string[]; testType?: string; priority?: string; preconditions?: string[]; postconditions?: string[]; testData?: Array<{ field: string; value: string; dataType: string }>; automationWorkflow?: string; expectedDuration?: number; steps?: Array<{ action: string; expected: string }> }>;
@@ -101,6 +101,8 @@ export type OrchestratorArtifacts = {
   agents?: AgentDef[];
   knowledgeBases?: KnowledgeBaseDef[];
   promptTemplates?: PromptTemplateDef[];
+  dataFabricEntities?: Array<{ name: string; description?: string; fields: Array<{ name: string; type: string; required?: boolean; isKey?: boolean; description?: string }>; referencedBy?: string[] }>;
+  apps?: Array<{ name: string; description?: string; appId?: string; linkedProcesses?: string[]; linkedEntities?: string[] }>;
 };
 
 export type { DeploymentResult, DeployReport } from "@shared/models/deployment";
@@ -123,7 +125,7 @@ export function parseArtifactsFromSDD(sddContent: string): OrchestratorArtifacts
       const inner = fence.replace(/```json\s*\n/, "").replace(/\n```$/, "").trim();
       try {
         const parsed = JSON.parse(sanitizeJsonString(inner));
-        if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents || parsed.communicationsMining) {
+        if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents || parsed.communicationsMining || parsed.dataFabricEntities || parsed.apps) {
           console.log("[parseArtifacts] Found artifacts in json fence block");
           return parsed;
         }
@@ -144,7 +146,7 @@ export function parseArtifactsFromSDD(sddContent: string): OrchestratorArtifacts
       }
       const jsonStr = sddContent.slice(braceStart, end);
       const parsed = JSON.parse(sanitizeJsonString(jsonStr));
-      if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents || parsed.communicationsMining || parsed.documentUnderstanding) {
+      if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents || parsed.communicationsMining || parsed.documentUnderstanding || parsed.dataFabricEntities || parsed.apps) {
         console.log("[parseArtifacts] Found artifacts in raw JSON");
         return parsed;
       }
@@ -185,7 +187,7 @@ ARTIFACT RULES:
 - triggers: Include timezone (e.g. "America/New_York" from the SDD business context), startStrategy ("Specific"|"ModernJobs"), maxJobsCount. All triggers MUST be included — never treat them as manual steps.
 - storageBuckets: Include storageProvider ("Orchestrator"|"Azure"|"AWS"|"GCP") derived from the SDD tech stack.
 - robotAccounts: Include role (specific role name like "InvoiceProcessor" not generic "Executor"). At least one robot per machine.
-- actionCenter: Include priority ("Critical"|"High"|"Normal"|"Low"), actions array (e.g. ["Approve","Reject","Escalate"]), formFields array with field definitions. CRITICAL: Any human approval/review/escalation step MUST generate an entry.
+- actionCenter: Include priority ("Critical"|"High"|"Normal"|"Low"), actions array (e.g. ["Approve","Reject","Escalate"]), formFields array with field definitions including defaultValue and validationRule where applicable. Include slaConfig with dueInHours, warningThresholdHours, escalationPolicy, and autoEscalate. If the task writes results to a Data Fabric entity, set dataFabricEntity to the entity name. CRITICAL: Any human approval/review/escalation step MUST generate an entry.
 - documentUnderstanding: Include extractionApproach ("classic_du" for structured forms, "generative" for unstructured documents, "hybrid" for mixed). Include taxonomyFields (extraction fields per document type with name+type), classifierType ("Keyword"|"ML"|"Regex"), validationRules [{field, rule (e.g. "confidence >= 0.85"), action ("flag_for_review"|"reject"|"auto_accept")}].
 - communicationsMining: Include sourceType ("email"|"chat"|"ticket"), intents (array of intent labels the model should detect), entities (array of entity names to extract), routingRules [{intent, action ("escalate"|"auto_reply"|"route"|"archive"), target (team/person/queue)}].
 - testCases: AUTOMATION-GRADE quality required:
@@ -203,9 +205,11 @@ ARTIFACT RULES:
 - agents: Include agentType ("autonomous"|"conversational"|"coded"), tools with processReference (exact Orchestrator process name), contextGrounding with storageBucket (exact bucket name from storageBuckets), escalationRules with actionCenterCatalog (exact catalog name from actionCenter). Cross-references are resolved to IDs during deployment.
 - knowledgeBases: Include documentSources and refreshFrequency.
 - promptTemplates: Include template text with {{variable}} placeholders and variables array.
+- dataFabricEntities: Define structured data entities for process data persistence. Each entity needs a name, description, and fields array with field name, type (String|Int32|Int64|Boolean|DateTime|Decimal|Guid), required flag, isKey flag, and description. Include referencedBy array listing which artifacts reference this entity (e.g. ["InvoiceApproval_TaskCatalog", "Main.xaml"]). Use Data Fabric entities for any process data that needs to persist across workflow runs or be shared between processes.
+- apps: Reference existing UiPath Apps that serve as user-facing interfaces for this automation. Include name, description, and linkedProcesses array (process names), linkedEntities array (Data Fabric entity names). Only include apps that are relevant to this specific automation.
 
 Expected JSON shape:
-{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true,"jsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{...}}","outputSchema":"..."}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"Usage context"}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"runtimeType":"Unattended","description":"Purpose"}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"0 0 8 ? * MON-FRI","timezone":"America/New_York","startStrategy":"Specific","maxJobsCount":1,"description":"..."}],"storageBuckets":[{"name":"...","storageProvider":"Orchestrator","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended","role":"SpecificRole","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"4h","escalation":"Manager","priority":"High","actions":["Approve","Reject"],"formFields":[{"name":"...","type":"String|Number|Boolean","required":true}],"description":"..."}],"documentUnderstanding":[{"name":"...","documentTypes":["Invoice"],"extractionApproach":"classic_du","taxonomyFields":[{"documentType":"Invoice","fields":[{"name":"InvoiceNumber","type":"String"}]}],"classifierType":"ML","validationRules":[{"field":"TotalAmount","rule":"confidence >= 0.85","action":"flag_for_review"}],"description":"..."}],"communicationsMining":[{"name":"...","sourceType":"email","intents":["Request","Complaint"],"entities":["CustomerName","OrderNumber"],"routingRules":[{"intent":"Complaint","action":"escalate","target":"SeniorAgent"}],"description":"..."}],"testCases":[{"name":"TC_001_TestName","testType":"Functional","priority":"Critical","description":"...","preconditions":["Precondition 1"],"postconditions":["Postcondition 1"],"testData":[{"field":"FieldName","value":"TestValue","dataType":"String"}],"automationWorkflow":"Main.xaml","expectedDuration":60,"labels":["Critical","Smoke"],"steps":[{"action":"Specific action with field names and values","expected":"Specific expected result with values"}]}],"testDataQueues":[{"name":"...","description":"...","jsonSchema":"...","items":[{"name":"Record_1","content":"..."}]}],"requirements":[{"name":"REQ-001: Name","type":"Functional","priority":"Critical","description":"...","source":"SDD Section X","acceptanceCriteria":["Criteria 1"]}],"testSets":[{"name":"Happy Path Tests","description":"...","executionMode":"Sequential","environment":"Production","triggerType":"Manual","testCaseNames":["TC_001_TestName"]}]}
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true,"jsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{...}}","outputSchema":"..."}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"Usage context"}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"runtimeType":"Unattended","description":"Purpose"}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"0 0 8 ? * MON-FRI","timezone":"America/New_York","startStrategy":"Specific","maxJobsCount":1,"description":"..."}],"storageBuckets":[{"name":"...","storageProvider":"Orchestrator","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended","role":"SpecificRole","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"4h","escalation":"Manager","priority":"High","actions":["Approve","Reject"],"formFields":[{"name":"...","type":"String|Number|Boolean","required":true,"defaultValue":"...","validationRule":"..."}],"slaConfig":{"dueInHours":4,"warningThresholdHours":3,"escalationPolicy":"Manager","autoEscalate":true},"dataFabricEntity":"EntityName","description":"..."}],"dataFabricEntities":[{"name":"...","description":"...","fields":[{"name":"Id","type":"Guid","required":true,"isKey":true,"description":"Primary key"},{"name":"FieldName","type":"String","required":true,"description":"..."}],"referencedBy":["TaskCatalog_Name","Main.xaml"]}],"apps":[{"name":"...","description":"...","linkedProcesses":["ProcessName"],"linkedEntities":["EntityName"]}],"documentUnderstanding":[{"name":"...","documentTypes":["Invoice"],"extractionApproach":"classic_du","taxonomyFields":[{"documentType":"Invoice","fields":[{"name":"InvoiceNumber","type":"String"}]}],"classifierType":"ML","validationRules":[{"field":"TotalAmount","rule":"confidence >= 0.85","action":"flag_for_review"}],"description":"..."}],"communicationsMining":[{"name":"...","sourceType":"email","intents":["Request","Complaint"],"entities":["CustomerName","OrderNumber"],"routingRules":[{"intent":"Complaint","action":"escalate","target":"SeniorAgent"}],"description":"..."}],"testCases":[{"name":"TC_001_TestName","testType":"Functional","priority":"Critical","description":"...","preconditions":["Precondition 1"],"postconditions":["Postcondition 1"],"testData":[{"field":"FieldName","value":"TestValue","dataType":"String"}],"automationWorkflow":"Main.xaml","expectedDuration":60,"labels":["Critical","Smoke"],"steps":[{"action":"Specific action with field names and values","expected":"Specific expected result with values"}]}],"testDataQueues":[{"name":"...","description":"...","jsonSchema":"...","items":[{"name":"Record_1","content":"..."}]}],"requirements":[{"name":"REQ-001: Name","type":"Functional","priority":"Critical","description":"...","source":"SDD Section X","acceptanceCriteria":["Criteria 1"]}],"testSets":[{"name":"Happy Path Tests","description":"...","executionMode":"Sequential","environment":"Production","triggerType":"Manual","testCaseNames":["TC_001_TestName"]}]}
 
 SDD content:
 ${sddContent.slice(0, 12000)}`
@@ -330,6 +334,12 @@ ${sddContent.slice(0, 12000)}`
     if (Array.isArray(raw.promptTemplates)) {
       validated.promptTemplates = raw.promptTemplates.filter((p: any) => typeof p?.name === "string" && p.name.length > 0);
     }
+    if (Array.isArray(raw.dataFabricEntities)) {
+      validated.dataFabricEntities = raw.dataFabricEntities.filter((e: any) => typeof e?.name === "string" && e.name.length > 0 && Array.isArray(e.fields));
+    }
+    if (Array.isArray(raw.apps)) {
+      validated.apps = raw.apps.filter((a: any) => typeof a?.name === "string" && a.name.length > 0);
+    }
 
     const hasContent = (validated.queues?.length || 0) + (validated.assets?.length || 0) +
       (validated.triggers?.length || 0) + (validated.machines?.length || 0) +
@@ -339,10 +349,12 @@ ${sddContent.slice(0, 12000)}`
       (validated.testCases?.length || 0) + (validated.testDataQueues?.length || 0) +
       (validated.requirements?.length || 0) + (validated.testSets?.length || 0) +
       (validated.agents?.length || 0) + (validated.knowledgeBases?.length || 0) +
-      (validated.promptTemplates?.length || 0);
+      (validated.promptTemplates?.length || 0) +
+      (validated.dataFabricEntities?.length || 0) + (validated.apps?.length || 0);
 
     if (hasContent > 0) {
-      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, commsMining:${validated.communicationsMining?.length||0}, testCases:${validated.testCases?.length||0}, testDataQueues:${validated.testDataQueues?.length||0}, requirements:${validated.requirements?.length||0}, testSets:${validated.testSets?.length||0}, agents:${validated.agents?.length||0}, knowledgeBases:${validated.knowledgeBases?.length||0}, promptTemplates:${validated.promptTemplates?.length||0})`);
+      console.log(`[UiPath Deploy] LLM extracted ${hasContent} validated artifacts (queues:${validated.queues?.length||0}, assets:${validated.assets?.length||0}, machines:${validated.machines?.length||0}, triggers:${validated.triggers?.length||0}, buckets:${validated.storageBuckets?.length||0}, robots:${validated.robotAccounts?.length||0}, actionCenter:${validated.actionCenter?.length||0}, DU:${validated.documentUnderstanding?.length||0}, commsMining:${validated.communicationsMining?.length||0}, testCases:${validated.testCases?.length||0}, testDataQueues:${validated.testDataQueues?.length||0}, requirements:${validated.requirements?.length||0}, testSets:${validated.testSets?.length||0}, agents:${validated.agents?.length||0}, knowledgeBases:${validated.knowledgeBases?.length||0}, promptTemplates:${validated.promptTemplates?.length||0}, dataFabric:${validated.dataFabricEntities?.length||0}, apps:${validated.apps?.length||0})`);
+
       return validated;
     }
     console.warn("[UiPath Deploy] LLM returned JSON but no valid artifacts after validation. Raw keys:", Object.keys(raw));
@@ -1869,15 +1881,57 @@ async function provisionActionCenter(
       const descParts = [ac.description || ""];
       if (ac.priority) descParts.push(`Priority: ${ac.priority}`);
       if (ac.sla) descParts.push(`SLA: ${ac.sla}`);
+      if (ac.slaConfig) {
+        const slaParts: string[] = [];
+        if (ac.slaConfig.dueInHours) slaParts.push(`Due: ${ac.slaConfig.dueInHours}h`);
+        if (ac.slaConfig.warningThresholdHours) slaParts.push(`Warn: ${ac.slaConfig.warningThresholdHours}h`);
+        if (ac.slaConfig.escalationPolicy) slaParts.push(`Escalation: ${ac.slaConfig.escalationPolicy}`);
+        if (ac.slaConfig.autoEscalate) slaParts.push("Auto-escalate: Yes");
+        if (slaParts.length > 0) descParts.push(`SLA Config: ${slaParts.join(", ")}`);
+      }
       if (ac.escalation) descParts.push(`Escalation: ${ac.escalation}`);
       if (ac.actions?.length) descParts.push(`Actions: ${ac.actions.join(", ")}`);
+      if (ac.dataFabricEntity) descParts.push(`Data Entity: ${ac.dataFabricEntity}`);
       if (ac.formFields?.length) {
-        const fieldList = ac.formFields.map(f => `${f.name} (${f.type}${f.required ? ", required" : ""})`).join("; ");
+        const fieldList = ac.formFields.map(f => {
+          let desc = `${f.name} (${f.type}${f.required ? ", required" : ""}`;
+          if (f.validationRule) desc += `, rule: ${f.validationRule}`;
+          if (f.defaultValue) desc += `, default: ${f.defaultValue}`;
+          desc += ")";
+          return desc;
+        }).join("; ");
         descParts.push(`Form Fields: ${fieldList}`);
       }
       const descText = truncDesc(descParts.filter(Boolean).join(" | "));
-      const odataBody = { Name: ac.taskCatalog, Description: descText };
-      const restBody = { name: ac.taskCatalog, description: descText };
+
+      let formSchemaJson: string | undefined;
+      if (ac.formFields?.length) {
+        const formSchema: Record<string, any> = {
+          type: "object",
+          properties: {} as Record<string, any>,
+          required: [] as string[],
+        };
+        for (const field of ac.formFields) {
+          const prop: Record<string, any> = {};
+          const fieldType = (field.type || "String").toLowerCase();
+          if (fieldType === "number" || fieldType === "integer" || fieldType === "int32") prop.type = "number";
+          else if (fieldType === "boolean" || fieldType === "bool") prop.type = "boolean";
+          else if (fieldType === "datetime" || fieldType === "date") { prop.type = "string"; prop.format = "date-time"; }
+          else prop.type = "string";
+          if (field.defaultValue) prop.default = field.defaultValue;
+          if (field.validationRule) prop.description = `Validation: ${field.validationRule}`;
+          formSchema.properties[field.name] = prop;
+          if (field.required) (formSchema.required as string[]).push(field.name);
+        }
+        try {
+          formSchemaJson = JSON.stringify(formSchema);
+        } catch {}
+      }
+
+      const odataBody: Record<string, any> = { Name: ac.taskCatalog, Description: descText };
+      if (formSchemaJson) odataBody.TaskFormDefinition = formSchemaJson;
+      const restBody: Record<string, any> = { name: ac.taskCatalog, description: descText };
+      if (formSchemaJson) restBody.taskFormDefinition = formSchemaJson;
 
       let created = false;
       let createdViaCloud = false;
@@ -2016,6 +2070,207 @@ async function provisionActionCenter(
           "Go to Task Catalogs",
           'Click "+ Add Task Catalog"',
           `Set Name to "${ac.taskCatalog}"`,
+        ],
+      });
+    }
+  }
+  return results;
+}
+
+async function provisionDataFabricEntities(
+  config: UiPathConfig,
+  token: string,
+  entities: OrchestratorArtifacts["dataFabricEntities"],
+  svcAvail?: boolean
+): Promise<DeploymentResult[]> {
+  if (!entities?.length) return [];
+  const results: DeploymentResult[] = [];
+
+  const cloudBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+  const entityServiceBase = `${cloudBase}/dataservice_/api/EntityService`;
+  const hdrs: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+
+  let serviceReachable = false;
+  try {
+    const probe = await fetch(`${entityServiceBase}/Entity`, { headers: hdrs });
+    serviceReachable = probe.ok || probe.status === 401 || probe.status === 403;
+    console.log(`[UiPath Deploy] Data Fabric Entity API probe: ${probe.status} (reachable=${serviceReachable})`);
+  } catch {
+    console.log("[UiPath Deploy] Data Fabric Entity API not reachable");
+  }
+
+  for (const entity of entities) {
+    try {
+      if (!serviceReachable) {
+        const fieldDesc = entity.fields.map(f => `${f.name} (${f.type}${f.required ? ", required" : ""}${f.isKey ? ", key" : ""})`).join("; ");
+        const refsDesc = entity.referencedBy?.length ? ` Referenced by: ${entity.referencedBy.join(", ")}` : "";
+        results.push({
+          artifact: "Data Fabric Entity",
+          name: entity.name,
+          status: "manual" as const,
+          message: `Data Fabric not reachable via API. Entity schema: ${fieldDesc}.${refsDesc}`,
+          manualSteps: [
+            `Open Data Service in UiPath: ${cloudBase}/dataservice_`,
+            `Create entity "${entity.name}"`,
+            ...entity.fields.map(f => `Add field "${f.name}" (${f.type}${f.required ? ", required" : ""}${f.isKey ? ", primary key" : ""})`),
+          ],
+        });
+        continue;
+      }
+
+      const checkRes = await fetch(`${entityServiceBase}/Entity?$filter=Name eq '${odataEscape(entity.name)}'`, { headers: hdrs });
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        const items = checkData.value || checkData;
+        if (Array.isArray(items) && items.length > 0) {
+          const existing = items[0];
+          results.push({
+            artifact: "Data Fabric Entity",
+            name: entity.name,
+            status: "exists",
+            message: `Already exists (ID: ${existing.Id || existing.id || "unknown"})`,
+            id: existing.Id || existing.id,
+          });
+          continue;
+        }
+      }
+
+      const dfFields = entity.fields.map(f => {
+        const field: Record<string, any> = {
+          Name: f.name,
+          Type: f.type || "String",
+          IsRequired: f.required ?? false,
+          IsKey: f.isKey ?? false,
+        };
+        if (f.description) field.Description = f.description;
+        return field;
+      });
+
+      const createBody = {
+        Name: entity.name,
+        Description: truncDesc(entity.description),
+        Fields: dfFields,
+      };
+
+      const createRes = await fetch(`${entityServiceBase}/Entity`, {
+        method: "POST",
+        headers: hdrs,
+        body: JSON.stringify(createBody),
+      });
+      const createText = await createRes.text();
+      console.log(`[UiPath Deploy] Data Fabric Entity "${entity.name}" -> ${createRes.status}: ${createText.slice(0, 300)}`);
+
+      if (createRes.ok || createRes.status === 201) {
+        let createdId: any;
+        try {
+          const parsed = JSON.parse(createText);
+          createdId = parsed.Id || parsed.id;
+        } catch {}
+        const refsNote = entity.referencedBy?.length ? ` Referenced by: ${entity.referencedBy.join(", ")}` : "";
+        results.push({
+          artifact: "Data Fabric Entity",
+          name: entity.name,
+          status: "created",
+          message: `Created with ${entity.fields.length} fields${createdId ? ` (ID: ${createdId})` : ""}.${refsNote}`,
+          id: createdId,
+        });
+      } else if (createRes.status === 409 || createText.includes("already exists")) {
+        results.push({ artifact: "Data Fabric Entity", name: entity.name, status: "exists", message: "Already exists" });
+      } else {
+        results.push({
+          artifact: "Data Fabric Entity",
+          name: entity.name,
+          status: "failed",
+          message: sanitizeErrorMessage(createRes.status, createText),
+          manualSteps: [
+            `Open Data Service: ${cloudBase}/dataservice_`,
+            `Create entity "${entity.name}" with ${entity.fields.length} fields`,
+          ],
+        });
+      }
+    } catch (err: any) {
+      results.push({ artifact: "Data Fabric Entity", name: entity.name, status: "failed", message: err.message });
+    }
+  }
+  return results;
+}
+
+async function discoverAndReferenceApps(
+  config: UiPathConfig,
+  token: string,
+  apps: OrchestratorArtifacts["apps"]
+): Promise<DeploymentResult[]> {
+  if (!apps?.length) return [];
+  const results: DeploymentResult[] = [];
+
+  const cloudBase = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+  const hdrs: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+
+  let existingApps: Array<{ id: string; name: string; description?: string }> = [];
+  try {
+    const appsRes = await fetch(`${cloudBase}/apps_/api/v2/apps?$top=100`, { headers: hdrs });
+    if (appsRes.ok) {
+      const data = await appsRes.json();
+      existingApps = (data.value || data.apps || data || []).map((a: any) => ({
+        id: a.Id || a.id || a.appId,
+        name: a.Name || a.name || a.displayName,
+        description: a.Description || a.description,
+      })).filter((a: any) => a.name);
+      console.log(`[UiPath Deploy] Discovered ${existingApps.length} existing UiPath Apps`);
+    } else {
+      const altRes = await fetch(`${cloudBase}/apps_/api/v1/apps?pageSize=100`, { headers: hdrs });
+      if (altRes.ok) {
+        const data = await altRes.json();
+        existingApps = (data.value || data.apps || data || []).map((a: any) => ({
+          id: a.Id || a.id || a.appId,
+          name: a.Name || a.name || a.displayName,
+          description: a.Description || a.description,
+        })).filter((a: any) => a.name);
+        console.log(`[UiPath Deploy] Discovered ${existingApps.length} existing UiPath Apps (v1 API)`);
+      }
+    }
+  } catch (err: any) {
+    console.log(`[UiPath Deploy] Apps discovery failed: ${err.message}`);
+  }
+
+  for (const app of apps) {
+    const match = existingApps.find(
+      (e) => e.name.toLowerCase() === app.name.toLowerCase() || (app.appId && e.id === app.appId)
+    );
+
+    if (match) {
+      const linkedInfo: string[] = [];
+      if (app.linkedProcesses?.length) linkedInfo.push(`Linked processes: ${app.linkedProcesses.join(", ")}`);
+      if (app.linkedEntities?.length) linkedInfo.push(`Linked entities: ${app.linkedEntities.join(", ")}`);
+      results.push({
+        artifact: "App Reference",
+        name: app.name,
+        status: "exists",
+        message: `Found existing app "${match.name}" (ID: ${match.id}). ${linkedInfo.join(". ")}`,
+        id: typeof match.id === "number" ? match.id : undefined,
+      });
+    } else {
+      const linkedInfo: string[] = [];
+      if (app.linkedProcesses?.length) linkedInfo.push(`Should link to processes: ${app.linkedProcesses.join(", ")}`);
+      if (app.linkedEntities?.length) linkedInfo.push(`Should link to entities: ${app.linkedEntities.join(", ")}`);
+      results.push({
+        artifact: "App Reference",
+        name: app.name,
+        status: "manual" as const,
+        message: `App "${app.name}" not found. ${app.description || ""}. ${linkedInfo.join(". ")}`,
+        manualSteps: [
+          `Open UiPath Apps: ${cloudBase}/apps_`,
+          `Create or find the app "${app.name}"`,
+          ...(app.linkedProcesses?.map(p => `Link app to process "${p}"`) || []),
+          ...(app.linkedEntities?.map(e => `Connect app to Data Fabric entity "${e}"`) || []),
         ],
       });
     }
@@ -3850,16 +4105,24 @@ export async function deployAllArtifacts(
     if (svcAvail && !svcAvail.testManager && ((artifacts.testCases?.length || 0) > 0 || (artifacts.testDataQueues?.length || 0) > 0)) {
       console.log("[UiPath Deploy] Probe says Test Manager unavailable, but attempting provisioning anyway...");
     }
+    if ((artifacts.dataFabricEntities?.length || 0) > 0) {
+      console.log(`[UiPath Deploy] Provisioning ${artifacts.dataFabricEntities!.length} Data Fabric entity(ies): ${artifacts.dataFabricEntities!.map(e => e.name).join(", ")}`);
+    }
+    if ((artifacts.apps?.length || 0) > 0) {
+      console.log(`[UiPath Deploy] Discovering/referencing ${artifacts.apps!.length} App(s): ${artifacts.apps!.map(a => a.name).join(", ")}`);
+    }
 
-    const [triggerResults, actionCenterResults, duResults, cmResults, testProvision] = await Promise.all([
+    const [triggerResults, actionCenterResults, duResults, cmResults, testProvision, dfResults, appResults] = await Promise.all([
       triggerPromise,
       provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter),
       provisionDocUnderstanding(config, token, artifacts.documentUnderstanding),
       provisionCommunicationsMining(config, token, artifacts.communicationsMining),
       provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId),
+      provisionDataFabricEntities(config, token, artifacts.dataFabricEntities, svcAvail?.dataService),
+      discoverAndReferenceApps(config, token, artifacts.apps),
     ]);
-    allResults.push(...triggerResults, ...actionCenterResults, ...duResults, ...cmResults, ...testProvision.results);
-    for (const r of [...triggerResults, ...actionCenterResults, ...duResults, ...cmResults, ...testProvision.results]) {
+    allResults.push(...triggerResults, ...actionCenterResults, ...duResults, ...cmResults, ...testProvision.results, ...dfResults, ...appResults);
+    for (const r of [...triggerResults, ...actionCenterResults, ...duResults, ...cmResults, ...testProvision.results, ...dfResults, ...appResults]) {
       onProgress?.(`${r.artifact} "${r.name}" — ${r.status}`);
     }
 

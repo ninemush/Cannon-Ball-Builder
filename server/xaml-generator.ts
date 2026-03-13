@@ -217,6 +217,13 @@ function classifyActivity(ctx: ActivityContext): {
   if (combined.includes("file") || combined.includes("folder") || combined.includes("directory") || combined.includes("read") || combined.includes("write") || combined.includes("download") || combined.includes("upload")) {
     return classifyFile(ctx, combined);
   }
+  if (combined.includes("data fabric") || combined.includes("data service") || combined.includes("data entity") || combined.includes("entity record") || combined.includes("dataservice")) {
+    return classifyDataFabric(ctx, combined);
+  }
+  if (combined.includes("action center") || combined.includes("human task") || combined.includes("create task") || combined.includes("wait for task") || combined.includes("approval task") || combined.includes("task catalog")) {
+    return classifyActionCenterTask(ctx, combined);
+  }
+
   if (combined.includes("browser") || combined.includes("web") || combined.includes("click") || combined.includes("type") || combined.includes("navigate") || combined.includes("login") || combined.includes("portal") || combined.includes("screen") || combined.includes("ui ") || combined.includes("application")) {
     return classifyUI(ctx, combined);
   }
@@ -226,6 +233,111 @@ function classifyActivity(ctx: ActivityContext): {
   }
 
   return classifyGeneral(ctx, combined);
+}
+
+function classifyDataFabric(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
+  const gaps: XamlGap[] = [];
+  const variables: VariableDecl[] = [];
+
+  if (combined.includes("write") || combined.includes("create") || combined.includes("insert") || combined.includes("add") || combined.includes("save") || combined.includes("update") || combined.includes("upsert")) {
+    variables.push({ name: "str_EntityName", type: "String", defaultValue: '"TODO_EntityName"' });
+    variables.push({ name: "str_RecordId", type: "String", defaultValue: '""' });
+    variables.push({ name: "str_EntityPayload", type: "String", defaultValue: '""' });
+    gaps.push({
+      category: "config",
+      activity: "HttpClient",
+      description: `Configure Data Fabric entity name and field mappings for "${ctx.name}"`,
+      placeholder: "Entity name and JSON field-value payload",
+      estimatedMinutes: 15,
+    });
+    return {
+      activityType: "ui:HttpClient",
+      activityPackage: "UiPath.Web.Activities",
+      properties: {
+        EndPoint: "TODO: Set Data Fabric Entity Service URL — {base}/dataservice_/api/EntityService/{EntityName}",
+        Method: combined.includes("update") || combined.includes("upsert") ? "PUT" : "POST",
+        AcceptFormat: "JSON",
+        Body: "[str_EntityPayload]",
+      },
+      errorHandling: "catch",
+      variables,
+      gaps,
+    };
+  }
+
+  variables.push({ name: "str_EntityResponse", type: "String", defaultValue: '""' });
+  variables.push({ name: "dt_EntityData", type: "System.Data.DataTable" });
+  gaps.push({
+    category: "config",
+    activity: "HttpClient",
+    description: `Configure Data Fabric entity name and query for "${ctx.name}"`,
+    placeholder: "Entity name and OData filter query",
+    estimatedMinutes: 15,
+  });
+  return {
+    activityType: "ui:HttpClient",
+    activityPackage: "UiPath.Web.Activities",
+    properties: {
+      EndPoint: "TODO: Set Data Fabric Entity Service URL — {base}/dataservice_/api/EntityService/{EntityName}",
+      Method: "GET",
+      AcceptFormat: "JSON",
+    },
+    errorHandling: "catch",
+    variables,
+    gaps,
+  };
+}
+
+function classifyActionCenterTask(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
+  const gaps: XamlGap[] = [];
+  const variables: VariableDecl[] = [];
+
+  if (combined.includes("wait") || combined.includes("complete") || combined.includes("resume")) {
+    variables.push({ name: "formTask", type: "UiPath.Persistence.Activities.FormTask" });
+    variables.push({ name: "taskOutput", type: "System.Collections.Generic.Dictionary(System.String,System.Object)" });
+    variables.push({ name: "taskAction", type: "String", defaultValue: '""' });
+    gaps.push({
+      category: "config",
+      activity: "WaitForFormTaskAndResume",
+      description: `Configure task completion handling for "${ctx.name}" — map output fields`,
+      placeholder: "Map form output fields to workflow variables",
+      estimatedMinutes: 15,
+    });
+    return {
+      activityType: "ui:WaitForFormTaskAndResume",
+      activityPackage: "UiPath.Persistence.Activities",
+      properties: {
+        TaskObject: "[formTask]",
+        TaskAction: "[taskAction]",
+      },
+      errorHandling: "catch",
+      variables,
+      gaps,
+    };
+  }
+
+  variables.push({ name: "formTask", type: "UiPath.Persistence.Activities.FormTask" });
+  variables.push({ name: "str_TaskTitle", type: "String", defaultValue: `"${escapeXml(ctx.name)}"` });
+  variables.push({ name: "str_TaskCatalog", type: "String", defaultValue: '"TODO_TaskCatalogName"' });
+  gaps.push({
+    category: "config",
+    activity: "CreateFormTask",
+    description: `Configure Action Center task catalog, form data, and SLA for "${ctx.name}"`,
+    placeholder: "Task catalog name, form field mappings, priority, SLA hours",
+    estimatedMinutes: 20,
+  });
+  return {
+    activityType: "ui:CreateFormTask",
+    activityPackage: "UiPath.Persistence.Activities",
+    properties: {
+      TaskCatalog: "[str_TaskCatalog]",
+      TaskTitle: "[str_TaskTitle]",
+      TaskPriority: "Normal",
+    },
+    errorHandling: "catch",
+    variables,
+    gaps,
+  };
 }
 
 function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {

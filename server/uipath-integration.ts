@@ -1650,7 +1650,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     const orchOk = orchRes.ok;
     if (!orchOk) {
       const result: UnifiedProbeResult = {
-        configured: true, flags: { ...empty.flags, environments: false, triggers: false },
+        configured: true, flags: { ...empty.flags, environments: false, triggers: false, apps: false },
         grantedScopes, licenseInfo: null, cachedAt: Date.now(),
       };
       _probeCache = result;
@@ -1822,6 +1822,13 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (dfResult.status === "fulfilled" && dfResult.value.ok) {
       const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { redirect: "manual" }).catch(() => null);
       if (dfSwagger && dfSwagger.status === 200) dsAvailable = true;
+      if (!dsAvailable) {
+        const dfEntityProbe = await fetch(`${base}/dataservice_/api/EntityService/Entity`, { headers: hdrs }).catch(() => null);
+        if (dfEntityProbe && (dfEntityProbe.ok || dfEntityProbe.status === 401)) {
+          dsAvailable = true;
+          console.log("[UiPath Probe] Data Fabric Entity API reachable");
+        }
+      }
     }
 
     const [maestroProbe, integrationServiceProbe, ixpProbe, automationHubProbe, automationOpsProbe, automationStoreProbe, appsProbe, assistantHttpProbe] = await Promise.all([
@@ -1902,7 +1909,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     const result: UnifiedProbeResult = {
       ...empty,
       configured: true,
-      flags: { ...empty.flags, environments: false, triggers: false },
+      flags: { ...empty.flags, environments: false, triggers: false, apps: false },
       cachedAt: Date.now(),
       probeFailed: true,
       probeError: err.message,
@@ -2020,6 +2027,14 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
 
   if (avail.assistant) availNames.push("Assistant (robot tray, attended automation triggers, process launcher for end users)");
   else unavailRecs.push("- **Assistant**: Not available. If enabled, it would provide an end-user interface for launching attended automations and interacting with robot processes.");
+
+  if (probe.flags.apps) availNames.push("Apps (citizen-developer UIs, form-based interfaces for human interaction, process-connected web apps)");
+  else unavailRecs.push("- **Apps**: Not available. If enabled, it would allow building citizen-developer web interfaces for manual input, oversight dashboards, and human-in-the-loop form interactions directly connected to automation workflows.");
+
+  if (probe.flags.dataService) {
+    const dsIdx = availNames.findIndex(n => n.startsWith("Data Service"));
+    if (dsIdx === -1) availNames.push("Data Service / Data Fabric (structured data entities, schema-driven storage, cross-process data persistence)");
+  }
 
   const config = await getUiPathConfig();
   const orgTenant = config ? `${config.orgName}/${config.tenantName}` : "unknown";

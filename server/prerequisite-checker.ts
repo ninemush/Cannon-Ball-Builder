@@ -217,6 +217,85 @@ export async function checkTestManagerLicense(): Promise<CheckResult> {
   }
 }
 
+export async function checkDataFabricAvailability(): Promise<CheckResult> {
+  try {
+    const config = await getConfig();
+    if (!config) {
+      return {
+        name: "Data Fabric",
+        status: "warning",
+        detail: "UiPath is not configured",
+      };
+    }
+    const headers = await getHeaders();
+    const base = getBaseUrl(config as any);
+    const res = await fetch(`${base}/dataservice_/api/EntityService/Entity`, { headers });
+    if (res.ok) {
+      return {
+        name: "Data Fabric",
+        status: "pass",
+        detail: "Data Fabric Entity API is reachable",
+      };
+    }
+    return {
+      name: "Data Fabric",
+      status: "warning",
+      detail: `Data Fabric returned ${res.status}`,
+      remediation: "Data Fabric may not be enabled on this tenant. Entity provisioning will use manual steps.",
+    };
+  } catch (err: any) {
+    return {
+      name: "Data Fabric",
+      status: "warning",
+      detail: `Could not check Data Fabric: ${err.message}`,
+      remediation: "Data Fabric entity provisioning will fall back to manual steps.",
+    };
+  }
+}
+
+export async function checkAppsAvailability(): Promise<CheckResult> {
+  try {
+    const config = await getConfig();
+    if (!config) {
+      return {
+        name: "Apps",
+        status: "warning",
+        detail: "UiPath is not configured",
+      };
+    }
+    const headers = await getHeaders();
+    const base = getBaseUrl(config as any);
+    const res = await fetch(`${base}/apps_/api/v2/apps?$top=1`, { headers });
+    if (res.ok) {
+      return {
+        name: "Apps",
+        status: "pass",
+        detail: "UiPath Apps service is reachable",
+      };
+    }
+    const altRes = await fetch(`${base}/apps_/api/v1/apps?pageSize=1`, { headers });
+    if (altRes.ok) {
+      return {
+        name: "Apps",
+        status: "pass",
+        detail: "UiPath Apps service is reachable (v1 API)",
+      };
+    }
+    return {
+      name: "Apps",
+      status: "warning",
+      detail: `Apps service returned ${res.status}`,
+      remediation: "UiPath Apps may not be available on this tenant.",
+    };
+  } catch (err: any) {
+    return {
+      name: "Apps",
+      status: "warning",
+      detail: `Could not check Apps: ${err.message}`,
+    };
+  }
+}
+
 export async function checkAll(): Promise<PrerequisiteReport> {
   const results = await Promise.all([
     checkMachineAvailability(),
@@ -225,6 +304,8 @@ export async function checkAll(): Promise<PrerequisiteReport> {
     checkPackageFeedWritable(),
     checkActionCenterLicense(),
     checkTestManagerLicense(),
+    checkDataFabricAvailability(),
+    checkAppsAvailability(),
   ]);
 
   const blockingCount = results.filter((r) => r.status === "blocking").length;

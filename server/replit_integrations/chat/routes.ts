@@ -75,7 +75,7 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     const available: string[] = [];
     const unavailable: string[] = [];
     if (serviceAvailability.orchestrator) available.push("Orchestrator (queues, assets, machines, storage buckets)");
-    if (serviceAvailability.actionCenter) available.push("Action Center (task catalogs, human-in-the-loop)");
+    if (serviceAvailability.actionCenter) available.push("Action Center (task catalogs with form schemas, human-in-the-loop approvals, SLA management, escalation workflows)");
     else unavailable.push("Action Center");
     if (serviceAvailability.testManager) available.push("Test Manager (test cases, test projects)");
     else unavailable.push("Test Manager");
@@ -85,8 +85,10 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     else unavailable.push("Generative Extraction (IXP)");
     if (serviceAvailability.communicationsMining) available.push("Communications Mining (email/message stream analysis, intent detection, routing)");
     else unavailable.push("Communications Mining");
-    if (serviceAvailability.dataService) available.push("Data Service (Data Fabric)");
-    else unavailable.push("Data Service");
+    if (serviceAvailability.dataService) available.push("Data Service / Data Fabric (structured data entities with schema-driven storage, cross-process data persistence, entity read/write via API)");
+    else unavailable.push("Data Service / Data Fabric");
+    if (serviceAvailability.apps) available.push("Apps (citizen-developer UIs, form-based web interfaces, process-connected dashboards)");
+    else unavailable.push("Apps");
     if (serviceAvailability.platformManagement) available.push("Platform Management (robot accounts, security)");
     else unavailable.push("Platform Management");
     if (serviceAvailability.environments) available.push("Environments");
