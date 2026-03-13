@@ -21,7 +21,7 @@ import {
   type XamlGap,
 } from "./xaml-generator";
 import { enrichWithAI, type EnrichmentResult } from "./ai-xaml-enricher";
-import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
+import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
 import { escapeXml } from "./lib/xml-utils";
 import { computePackageFingerprint } from "./lib/utils";
 
@@ -1152,6 +1152,239 @@ export async function listProcesses(): Promise<{ success: boolean; processes?: a
   }
 }
 
+export type GovernancePolicy = {
+  id: string;
+  name: string;
+  description: string;
+  type: "naming" | "activity-restriction" | "error-handling" | "security" | "general";
+  severity: "error" | "warning" | "info";
+  pattern?: string;
+  restrictedActivities?: string[];
+  requiredPatterns?: string[];
+};
+
+export type AutomationOpsResult = {
+  available: boolean;
+  policies: GovernancePolicy[];
+  message: string;
+};
+
+export async function discoverGovernancePolicies(): Promise<AutomationOpsResult> {
+  const config = await getUiPathConfig();
+  if (!config) return { available: false, policies: [], message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+
+    const policiesRes = await fetch(`${base}/automationops_/api/v1/policies?$top=100`, { headers }).catch(() => null);
+    if (!policiesRes || !policiesRes.ok) {
+      if (policiesRes && policiesRes.status === 404) {
+        return { available: false, policies: [], message: "Automation Ops is not enabled on this tenant." };
+      }
+      if (policiesRes && policiesRes.status === 403) {
+        return { available: false, policies: [], message: "Access denied to Automation Ops. Check app scopes." };
+      }
+
+      const rulesRes = await fetch(`${base}/automationops_/api/rules?$top=50`, { headers }).catch(() => null);
+      if (rulesRes && rulesRes.ok) {
+        const rulesData = await rulesRes.json();
+        const rules = (rulesData.value || rulesData.items || []);
+        const policies: GovernancePolicy[] = rules.map((r: any) => ({
+          id: r.Id || r.id || r.RuleId,
+          name: r.Name || r.name || r.RuleName || "Unknown Rule",
+          description: r.Description || r.description || "",
+          type: classifyPolicyType(r.Name || r.name || r.Category || ""),
+          severity: mapPolicySeverity(r.Severity || r.severity || r.DefaultAction || "warning"),
+          pattern: r.Pattern || r.pattern || undefined,
+          restrictedActivities: r.RestrictedActivities || undefined,
+          requiredPatterns: r.RequiredPatterns || undefined,
+        }));
+        console.log(`[Automation Ops] Discovered ${policies.length} governance rules via rules API`);
+        return { available: true, policies, message: `${policies.length} governance rules active.` };
+      }
+
+      return { available: false, policies: [], message: "Automation Ops API not accessible." };
+    }
+
+    const data = await policiesRes.json();
+    const rawPolicies = data.value || data.items || data.policies || [];
+    const policies: GovernancePolicy[] = rawPolicies.map((p: any) => ({
+      id: p.Id || p.id || p.PolicyId,
+      name: p.Name || p.name || p.PolicyName || "Unknown Policy",
+      description: p.Description || p.description || "",
+      type: classifyPolicyType(p.Name || p.name || p.Type || p.Category || ""),
+      severity: mapPolicySeverity(p.Severity || p.severity || p.DefaultAction || "warning"),
+      pattern: p.Pattern || p.pattern || undefined,
+      restrictedActivities: p.RestrictedActivities || p.restrictedActivities || undefined,
+      requiredPatterns: p.RequiredPatterns || p.requiredPatterns || undefined,
+    }));
+
+    console.log(`[Automation Ops] Discovered ${policies.length} governance policies`);
+    return { available: true, policies, message: `${policies.length} governance policies active.` };
+  } catch (err: any) {
+    console.warn(`[Automation Ops] Discovery failed: ${err.message}`);
+    return { available: false, policies: [], message: `Discovery failed: ${err.message}` };
+  }
+}
+
+function classifyPolicyType(nameOrCategory: string): GovernancePolicy["type"] {
+  const lower = nameOrCategory.toLowerCase();
+  if (lower.includes("naming") || lower.includes("convention") || lower.includes("nmg")) return "naming";
+  if (lower.includes("restrict") || lower.includes("block") || lower.includes("forbidden") || lower.includes("activity")) return "activity-restriction";
+  if (lower.includes("error") || lower.includes("catch") || lower.includes("exception") || lower.includes("dbp")) return "error-handling";
+  if (lower.includes("secur") || lower.includes("credential") || lower.includes("password") || lower.includes("sec")) return "security";
+  return "general";
+}
+
+function mapPolicySeverity(severity: string): GovernancePolicy["severity"] {
+  const lower = severity.toLowerCase();
+  if (lower === "error" || lower === "block" || lower === "reject") return "error";
+  if (lower === "info" || lower === "informational") return "info";
+  return "warning";
+}
+
+export type AttendedRobotInfo = {
+  available: boolean;
+  attendedRobots: Array<{ id: number; name: string; machineName: string; status: string; userName?: string }>;
+  unattendedRobots: Array<{ id: number; name: string; machineName: string; status: string }>;
+  hasAttended: boolean;
+  hasUnattended: boolean;
+  message: string;
+};
+
+export async function discoverAttendedRobots(): Promise<AttendedRobotInfo> {
+  const config = await getUiPathConfig();
+  if (!config) return { available: false, attendedRobots: [], unattendedRobots: [], hasAttended: false, hasUnattended: false, message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const res = await fetch(`${base}/odata/Sessions?$top=100&$expand=Robot`, { headers });
+    if (!res.ok) {
+      return { available: false, attendedRobots: [], unattendedRobots: [], hasAttended: false, hasUnattended: false, message: `Sessions API returned ${res.status}` };
+    }
+
+    const data = await res.json();
+    const sessions = data.value || [];
+    const attended: AttendedRobotInfo["attendedRobots"] = [];
+    const unattended: AttendedRobotInfo["unattendedRobots"] = [];
+
+    for (const s of sessions) {
+      const robotType = s.Robot?.Type || s.Type || "";
+      const entry = {
+        id: s.Robot?.Id || s.Id,
+        name: s.Robot?.Name || "Unknown",
+        machineName: s.Robot?.MachineName || s.HostMachineName || "Unknown",
+        status: s.Status || "Unknown",
+      };
+      if (robotType === "Attended" || robotType === "Development" || robotType === "CitizenDeveloper") {
+        attended.push({ ...entry, userName: s.Robot?.Username });
+      } else {
+        unattended.push(entry);
+      }
+    }
+
+    console.log(`[Assistant Discovery] ${attended.length} attended, ${unattended.length} unattended robots`);
+    return {
+      available: true,
+      attendedRobots: attended,
+      unattendedRobots: unattended,
+      hasAttended: attended.length > 0,
+      hasUnattended: unattended.length > 0,
+      message: `${attended.length} attended, ${unattended.length} unattended robots discovered.`,
+    };
+  } catch (err: any) {
+    console.warn(`[Assistant Discovery] Failed: ${err.message}`);
+    return { available: false, attendedRobots: [], unattendedRobots: [], hasAttended: false, hasUnattended: false, message: `Discovery failed: ${err.message}` };
+  }
+}
+
+export type StudioProject = {
+  id: string;
+  name: string;
+  description: string;
+  projectType: string;
+  lastModified?: string;
+  feedId?: string;
+};
+
+export type StudioProcessesResult = {
+  available: boolean;
+  projects: StudioProject[];
+  existingNames: string[];
+  message: string;
+};
+
+export async function discoverStudioProjects(): Promise<StudioProcessesResult> {
+  const config = await getUiPathConfig();
+  if (!config) return { available: false, projects: [], existingNames: [], message: "UiPath is not configured." };
+
+  try {
+    const token = await getAccessToken(config);
+    const headers = folderHeaders(config, token);
+    const base = orchBaseUrl(config);
+
+    const [releasesRes, packagesRes] = await Promise.all([
+      fetch(`${base}/odata/Releases?$top=200&$orderby=Name&$select=Id,Name,ProcessKey,ProcessVersion,Description`, { headers }).catch(() => null),
+      fetch(`${base}/odata/Processes?$top=200&$orderby=Title&$select=Id,Title,Version,Description,IsActive`, { headers }).catch(() => null),
+    ]);
+
+    const projects: StudioProject[] = [];
+    const nameSet = new Set<string>();
+
+    if (releasesRes && releasesRes.ok) {
+      const data = await releasesRes.json();
+      for (const r of (data.value || [])) {
+        const name = r.Name || r.ProcessKey;
+        if (name && !nameSet.has(name)) {
+          nameSet.add(name);
+          projects.push({
+            id: String(r.Id),
+            name,
+            description: r.Description || "",
+            projectType: "release",
+            feedId: r.ProcessKey,
+          });
+        }
+      }
+    }
+
+    if (packagesRes && packagesRes.ok) {
+      const data = await packagesRes.json();
+      for (const p of (data.value || [])) {
+        const name = p.Title || p.Id;
+        if (name && !nameSet.has(name)) {
+          nameSet.add(name);
+          projects.push({
+            id: String(p.Id),
+            name,
+            description: p.Description || "",
+            projectType: "package",
+          });
+        }
+      }
+    }
+
+    console.log(`[Studio Discovery] ${projects.length} existing projects/processes found`);
+    return {
+      available: projects.length > 0 || (releasesRes?.ok ?? false),
+      projects,
+      existingNames: Array.from(nameSet),
+      message: `${projects.length} existing processes discovered.`,
+    };
+  } catch (err: any) {
+    console.warn(`[Studio Discovery] Failed: ${err.message}`);
+    return { available: false, projects: [], existingNames: [], message: `Discovery failed: ${err.message}` };
+  }
+}
+
 export async function startJob(
   processReleaseKey: string,
   robotIds?: number[]
@@ -1610,12 +1843,17 @@ type UnifiedProbeResult = {
     automationStore: boolean;
     apps: boolean;
     assistant: boolean;
+    attendedRobots: boolean;
+    studioProjects: boolean;
   };
   agentCapabilities?: AgentCapabilities;
   grantedScopes: string[];
   licenseInfo: LicenseInfo | null;
   aiCenterSkills: AICenterSkill[];
   aiCenterPackages: AICenterPackage[];
+  governancePolicies?: GovernancePolicy[];
+  attendedRobotInfo?: AttendedRobotInfo;
+  studioProjectInfo?: StudioProcessesResult;
   cachedAt: number;
   probeFailed?: boolean;
   probeError?: string;
@@ -1643,6 +1881,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       maestro: false, integrationService: false, ixp: false,
       automationHub: false, automationOps: false, automationStore: false,
       apps: false, assistant: false,
+      attendedRobots: false, studioProjects: false,
     },
     grantedScopes: [],
     licenseInfo: null,
@@ -1679,7 +1918,9 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (!orchOk) {
       const result: UnifiedProbeResult = {
         configured: true, flags: { ...empty.flags, environments: false, triggers: false, apps: false },
-        grantedScopes, licenseInfo: null, aiCenterSkills: [], aiCenterPackages: [], cachedAt: Date.now(),
+        grantedScopes, licenseInfo: null, aiCenterSkills: [], aiCenterPackages: [],
+        governancePolicies: [],
+        cachedAt: Date.now(),
       };
       _probeCache = result;
       return result;
@@ -1940,6 +2181,16 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (appsAvailable) console.log("[UiPath Probe] Apps available");
     if (assistantAvailable) console.log("[UiPath Probe] Assistant available");
 
+    const [govResult, attendedResult, studioResult] = await Promise.allSettled([
+      discoverGovernancePolicies(),
+      discoverAttendedRobots(),
+      discoverStudioProjects(),
+    ]);
+
+    const govData = govResult.status === "fulfilled" ? govResult.value : null;
+    const attendedData = attendedResult.status === "fulfilled" ? attendedResult.value : null;
+    const studioData = studioResult.status === "fulfilled" ? studioResult.value : null;
+
     const result: UnifiedProbeResult = {
       configured: true,
       flags: {
@@ -1960,18 +2211,28 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         integrationService: integrationServiceAvailable,
         ixp: ixpAvailable,
         automationHub: automationHubAvailable,
-        automationOps: automationOpsAvailable,
+        automationOps: automationOpsAvailable || (govData?.available ?? false),
         automationStore: automationStoreAvailable,
         apps: appsAvailable,
         assistant: assistantAvailable,
+        attendedRobots: attendedData?.available ?? false,
+        studioProjects: studioData?.available ?? false,
       },
       agentCapabilities: agentsAvailable ? agentCapabilities : undefined,
       grantedScopes,
       licenseInfo,
       aiCenterSkills,
       aiCenterPackages,
+      governancePolicies: govData?.policies,
+      attendedRobotInfo: attendedData ?? undefined,
+      studioProjectInfo: studioData ?? undefined,
       cachedAt: Date.now(),
     };
+
+    setGovernancePolicies(result.governancePolicies ?? []);
+    if (result.governancePolicies && result.governancePolicies.length > 0) {
+      console.log(`[UiPath Probe] Synced ${result.governancePolicies.length} governance policies to Workflow Analyzer`);
+    }
 
     _probeCache = result;
     console.log(`[UiPath Probe] Unified probe complete — ${Object.entries(result.flags).filter(([, v]) => v).map(([k]) => k).join(", ")}`);
@@ -1984,6 +2245,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       flags: { ...empty.flags, environments: false, triggers: false, apps: false },
       aiCenterSkills: [],
       aiCenterPackages: [],
+      governancePolicies: [],
       cachedAt: Date.now(),
       probeFailed: true,
       probeError: err.message,
@@ -2122,6 +2384,52 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     if (dsIdx === -1) availNames.push("Data Service / Data Fabric (structured data entities, schema-driven storage, cross-process data persistence)");
   }
 
+  if (probe.flags.automationOps && probe.governancePolicies && probe.governancePolicies.length > 0) {
+    const policyNames = probe.governancePolicies.map(p => p.name).slice(0, 10).join(", ");
+    availNames.push(`Automation Ops (${probe.governancePolicies.length} active governance policies: ${policyNames})`);
+  }
+
+  if (probe.attendedRobotInfo) {
+    if (probe.attendedRobotInfo.hasAttended) {
+      availNames.push(`Attended Robots / Assistant (${probe.attendedRobotInfo.attendedRobots.length} attended robots available for human-assisted desktop automation)`);
+    }
+    if (probe.attendedRobotInfo.hasUnattended) {
+      availNames.push(`Unattended Robots (${probe.attendedRobotInfo.unattendedRobots.length} unattended robots for background processing)`);
+    }
+  }
+
+  if (probe.studioProjectInfo && probe.studioProjectInfo.projects.length > 0) {
+    const projectNames = probe.studioProjectInfo.existingNames.slice(0, 10).join(", ");
+    availNames.push(`Existing Processes (${probe.studioProjectInfo.projects.length} deployed: ${projectNames})`);
+  }
+
+  let governanceContext = "";
+  if (probe.governancePolicies && probe.governancePolicies.length > 0) {
+    governanceContext = `\n\nGOVERNANCE COMPLIANCE (Automation Ops):\nThe following governance policies are ACTIVE and all generated artifacts MUST comply:\n`;
+    for (const p of probe.governancePolicies) {
+      governanceContext += `- [${p.severity.toUpperCase()}] ${p.name}: ${p.description || "No description"}`;
+      if (p.restrictedActivities?.length) governanceContext += ` (restricted activities: ${p.restrictedActivities.join(", ")})`;
+      if (p.requiredPatterns?.length) governanceContext += ` (required patterns: ${p.requiredPatterns.join(", ")})`;
+      governanceContext += `\n`;
+    }
+  }
+
+  let attendedContext = "";
+  if (probe.attendedRobotInfo) {
+    if (probe.attendedRobotInfo.hasAttended && probe.attendedRobotInfo.hasUnattended) {
+      attendedContext = `\n\nATTENDED/UNATTENDED ROBOT LANDSCAPE:\nBoth attended (${probe.attendedRobotInfo.attendedRobots.length}) and unattended (${probe.attendedRobotInfo.unattendedRobots.length}) robots are available.\n- Use ATTENDED execution for: human-assisted tasks, desktop interaction, real-time user decisions, tasks requiring user's logged-in session\n- Use UNATTENDED execution for: scheduled background processing, high-volume transactions, tasks that run without human presence\n- Consider HYBRID: unattended for the main processing loop, attended triggers or Action Center for exception handling`;
+    } else if (probe.attendedRobotInfo.hasAttended) {
+      attendedContext = `\n\nATTENDED ROBOT LANDSCAPE:\nOnly attended robots (${probe.attendedRobotInfo.attendedRobots.length}) are available. Design for attended execution — the robot runs alongside the user on their workstation. Include user interaction points and desktop-aware activities.`;
+    } else if (probe.attendedRobotInfo.hasUnattended) {
+      attendedContext = `\n\nUNATTENDED ROBOT LANDSCAPE:\nOnly unattended robots (${probe.attendedRobotInfo.unattendedRobots.length}) are available. Design for fully autonomous background execution with no user interaction.`;
+    }
+  }
+
+  let existingProcessContext = "";
+  if (probe.studioProjectInfo && probe.studioProjectInfo.existingNames.length > 0) {
+    existingProcessContext = `\n\nEXISTING DEPLOYED PROCESSES (avoid naming conflicts, consider reuse):\n${probe.studioProjectInfo.existingNames.map(n => `- ${n}`).join("\n")}\nWhen naming new processes, ensure unique names that don't conflict with the above. Where applicable, reference existing processes for orchestration or sub-process reuse.`;
+  }
+
   const config = await getUiPathConfig();
   const orgTenant = config ? `${config.orgName}/${config.tenantName}` : "unknown";
 
@@ -2148,9 +2456,9 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     available: avail,
     grantedScopes: probe.grantedScopes,
     summary: `Connected to ${orgTenant}. ${availNames.length} services available.`,
-    availableDescription: availNames.length > 0
+    availableDescription: (availNames.length > 0
       ? `The following UiPath platform services are AVAILABLE and should be used in the solution design:\n${availNames.map(n => `- ${n}`).join("\n")}`
-      : "No UiPath services detected.",
+      : "No UiPath services detected.") + governanceContext + attendedContext + existingProcessContext,
     unavailableRecommendations: unavailRecs.length > 0
       ? `The following services are NOT currently available on this tenant. Include a "Platform Recommendations" section explaining how each would enhance the solution if enabled:\n${unavailRecs.join("\n")}`
       : "All major UiPath platform services are available.",
@@ -2446,7 +2754,7 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       : { available: false, message: "Not accessible or not provisioned" };
 
     serviceChecks["Automation Ops"] = probe.flags.automationOps
-      ? { available: true, message: "Accessible" }
+      ? { available: true, message: `Accessible — ${probe.governancePolicies?.length ?? 0} governance policies active` }
       : { available: false, message: "Not accessible or not provisioned" };
 
     serviceChecks["Automation Store"] = probe.flags.automationStore
@@ -2472,6 +2780,14 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
     } else {
       serviceChecks["AI Center"] = { available: false, message: "Not accessible" };
     }
+
+    serviceChecks["Attended Robots"] = probe.flags.attendedRobots
+      ? { available: true, message: `${probe.attendedRobotInfo?.attendedRobots.length ?? 0} attended robots discovered` }
+      : { available: false, message: "No attended robots found" };
+
+    serviceChecks["Studio Projects"] = probe.flags.studioProjects
+      ? { available: true, message: `${probe.studioProjectInfo?.projects.length ?? 0} existing processes` }
+      : { available: false, message: "No existing processes found" };
 
     const availableCount = Object.values(serviceChecks).filter(s => s.available).length;
     const totalCount = Object.keys(serviceChecks).length;
@@ -2515,6 +2831,11 @@ export type ServiceAvailabilityMap = {
   aiCenter?: boolean;
   aiCenterSkills?: AICenterSkill[];
   aiCenterPackages?: AICenterPackage[];
+  attendedRobots: boolean;
+  studioProjects: boolean;
+  governancePolicies?: GovernancePolicy[];
+  attendedRobotInfo?: AttendedRobotInfo;
+  studioProjectInfo?: StudioProcessesResult;
 };
 
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
@@ -2551,6 +2872,11 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     aiCenter: probe.flags.aiCenter,
     aiCenterSkills: probe.aiCenterSkills,
     aiCenterPackages: probe.aiCenterPackages,
+    attendedRobots: probe.flags.attendedRobots,
+    studioProjects: probe.flags.studioProjects,
+    governancePolicies: probe.governancePolicies,
+    attendedRobotInfo: probe.attendedRobotInfo,
+    studioProjectInfo: probe.studioProjectInfo,
   };
 }
 

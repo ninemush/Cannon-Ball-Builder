@@ -574,6 +574,9 @@ function OrchestratorHealthPanel() {
   const [machinesOpen, setMachinesOpen] = useState(false);
   const [robotsOpen, setRobotsOpen] = useState(false);
   const [processesOpen, setProcessesOpen] = useState(false);
+  const [governanceOpen, setGovernanceOpen] = useState(false);
+  const [attendedOpen, setAttendedOpen] = useState(false);
+  const [studioOpen, setStudioOpen] = useState(false);
 
   const { data: diagnostics, isLoading: diagLoading, refetch: refetchDiag } = useQuery<{
     configured: boolean;
@@ -640,12 +643,46 @@ function OrchestratorHealthPanel() {
     enabled: false,
   });
 
+  const { data: governanceData, isLoading: governanceLoading, refetch: refetchGovernance } = useQuery<{
+    available: boolean;
+    policies: Array<{ id: string; name: string; description: string; type: string; severity: string; restrictedActivities?: string[] }>;
+    message: string;
+  }>({
+    queryKey: ["/api/settings/uipath/governance-policies"],
+    enabled: false,
+  });
+
+  const { data: attendedData, isLoading: attendedLoading, refetch: refetchAttended } = useQuery<{
+    available: boolean;
+    attendedRobots: Array<{ id: number; name: string; machineName: string; status: string; userName?: string }>;
+    unattendedRobots: Array<{ id: number; name: string; machineName: string; status: string }>;
+    hasAttended: boolean;
+    hasUnattended: boolean;
+    message: string;
+  }>({
+    queryKey: ["/api/settings/uipath/attended-robots"],
+    enabled: false,
+  });
+
+  const { data: studioData, isLoading: studioLoading, refetch: refetchStudio } = useQuery<{
+    available: boolean;
+    projects: Array<{ id: string; name: string; description: string; projectType: string }>;
+    existingNames: string[];
+    message: string;
+  }>({
+    queryKey: ["/api/settings/uipath/studio-projects"],
+    enabled: false,
+  });
+
   const runDiagnostics = () => {
     setDiagExpanded(true);
     refetchDiag();
     refetchMachines();
     refetchRobots();
     refetchProcesses();
+    refetchGovernance();
+    refetchAttended();
+    refetchStudio();
   };
 
   const statusIcon = (status: string) => {
@@ -719,9 +756,9 @@ function OrchestratorHealthPanel() {
 
       {diagExpanded && diagnostics && (
         <div className="space-y-2" data-testid="diagnostics-checklist">
-          {diagnostics.checks.map((check, i) => (
+          {diagnostics.checks.map((check) => (
             <div
-              key={i}
+              key={`diag-${check.name}`}
               className={`flex items-start gap-2.5 p-2.5 rounded-md border ${statusColor(check.status)}`}
               data-testid={`diag-check-${check.name.toLowerCase().replace(/\s/g, "-")}`}
             >
@@ -832,6 +869,140 @@ function OrchestratorHealthPanel() {
                 <div key={machine.id} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-machine-${machine.id}`}>
                   <span className="font-medium text-foreground">{machine.name}</span>
                   <span className="text-muted-foreground">{machine.type || "Standard"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+            onClick={() => { setGovernanceOpen(!governanceOpen); if (!governanceData) refetchGovernance(); }}
+            aria-expanded={governanceOpen}
+            aria-controls="governance-list-panel"
+            data-testid="toggle-governance-list"
+          >
+            {governanceOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <ShieldAlert className="h-3.5 w-3.5 text-[#e65100]" />
+            Governance Policies ({governanceData?.policies?.length ?? "..."})
+          </button>
+          {governanceOpen && (
+            <div id="governance-list-panel" className="ml-6 space-y-1" data-testid="governance-list">
+              {governanceLoading && <Skeleton className="h-8 w-full" />}
+              {governanceData && !governanceData.available && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  {governanceData.message || "Automation Ops not available on this tenant."}
+                </p>
+              )}
+              {governanceData?.policies?.length === 0 && governanceData.available && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  No active governance policies found.
+                </p>
+              )}
+              {governanceData?.policies?.map((policy, pi) => (
+                <div key={`gov-${policy.id}-${pi}`} className="p-2 rounded bg-card border border-border text-xs" data-testid={`row-policy-${policy.id}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground">{policy.name}</span>
+                    <Badge variant={policy.severity === "error" ? "destructive" : policy.severity === "warning" ? "secondary" : "outline"} className="text-[10px] py-0">
+                      {policy.severity}
+                    </Badge>
+                    <Badge variant="outline" className="text-[10px] py-0">
+                      {policy.type}
+                    </Badge>
+                  </div>
+                  {policy.description && <p className="text-muted-foreground mt-1">{policy.description}</p>}
+                  {policy.restrictedActivities && policy.restrictedActivities.length > 0 && (
+                    <p className="text-amber-400 mt-1">Restricted: {policy.restrictedActivities.join(", ")}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+            onClick={() => { setAttendedOpen(!attendedOpen); if (!attendedData) refetchAttended(); }}
+            aria-expanded={attendedOpen}
+            aria-controls="attended-list-panel"
+            data-testid="toggle-attended-list"
+          >
+            {attendedOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <Monitor className="h-3.5 w-3.5 text-[#2e7d32]" />
+            Attended / Assistant ({attendedData ? `${attendedData.attendedRobots?.length ?? 0} attended, ${attendedData.unattendedRobots?.length ?? 0} unattended` : "..."})
+          </button>
+          {attendedOpen && (
+            <div id="attended-list-panel" className="ml-6 space-y-1" data-testid="attended-list">
+              {attendedLoading && <Skeleton className="h-8 w-full" />}
+              {attendedData && !attendedData.available && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  {attendedData.message || "Robot session discovery not available."}
+                </p>
+              )}
+              {attendedData?.attendedRobots?.length === 0 && attendedData?.unattendedRobots?.length === 0 && attendedData.available && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  No active robot sessions found.
+                </p>
+              )}
+              {attendedData?.attendedRobots?.map((robot, ri) => (
+                <div key={`attended-${robot.id}-${ri}`} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-attended-${robot.id}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground">{robot.name}</span>
+                    <Badge variant="default" className="text-[10px] py-0 bg-green-600">Attended</Badge>
+                    <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
+                      {robot.status}
+                    </Badge>
+                  </div>
+                  <span className="text-muted-foreground">{robot.machineName}{robot.userName ? ` (${robot.userName})` : ""}</span>
+                </div>
+              ))}
+              {attendedData?.unattendedRobots?.map((robot, ri) => (
+                <div key={`unattended-${robot.id}-${ri}`} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-unattended-${robot.id}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground">{robot.name}</span>
+                    <Badge variant="secondary" className="text-[10px] py-0">Unattended</Badge>
+                    <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
+                      {robot.status}
+                    </Badge>
+                  </div>
+                  <span className="text-muted-foreground">{robot.machineName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
+            onClick={() => { setStudioOpen(!studioOpen); if (!studioData) refetchStudio(); }}
+            aria-expanded={studioOpen}
+            aria-controls="studio-list-panel"
+            data-testid="toggle-studio-list"
+          >
+            {studioOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <FolderOpen className="h-3.5 w-3.5 text-[#1565c0]" />
+            Studio Projects ({studioData?.projects?.length ?? "..."})
+          </button>
+          {studioOpen && (
+            <div id="studio-list-panel" className="ml-6 space-y-1" data-testid="studio-list">
+              {studioLoading && <Skeleton className="h-8 w-full" />}
+              {studioData && !studioData.available && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  {studioData.message || "Studio project discovery not available."}
+                </p>
+              )}
+              {studioData?.projects?.length === 0 && studioData.available && (
+                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
+                  No existing projects found.
+                </p>
+              )}
+              {studioData?.projects?.map((project, pi) => (
+                <div key={`studio-${project.id}-${pi}`} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-studio-${project.id}`}>
+                  <div>
+                    <span className="font-medium text-foreground">{project.name}</span>
+                    <Badge variant="outline" className="ml-2 text-[10px] py-0">{project.projectType}</Badge>
+                  </div>
+                  {project.description && <span className="text-muted-foreground max-w-[200px] truncate">{project.description}</span>}
                 </div>
               ))}
             </div>

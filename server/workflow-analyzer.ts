@@ -1,3 +1,5 @@
+import type { GovernancePolicy } from "./uipath-integration";
+
 export type AnalysisViolation = {
   ruleId: string;
   ruleName: string;
@@ -529,8 +531,105 @@ const ALL_RULES: Array<{ ruleId: string; ruleName: string; category: string }> =
   { ruleId: "ST-SEC-005", ruleName: "Plaintext credential in property", category: "security" },
 ];
 
+let _governancePolicies: GovernancePolicy[] = [];
+
+export function setGovernancePolicies(policies: GovernancePolicy[]): void {
+  _governancePolicies = policies;
+}
+
+export function getGovernancePolicies(): GovernancePolicy[] {
+  return _governancePolicies;
+}
+
+function checkGovernancePolicies(xaml: string): AnalysisViolation[] {
+  const violations: AnalysisViolation[] = [];
+
+  for (const policy of _governancePolicies) {
+    if (policy.type === "activity-restriction" && policy.restrictedActivities?.length) {
+      for (const activity of policy.restrictedActivities) {
+        const escaped = activity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = new RegExp(`<${escaped}[\\s/>]`, "gi");
+        let match;
+        while ((match = pattern.exec(xaml)) !== null) {
+          const lineNum = xaml.substring(0, match.index).split("\n").length;
+          violations.push({
+            ruleId: `GOV-${policy.id}`,
+            ruleName: `Governance: ${policy.name}`,
+            category: "best-practice",
+            severity: policy.severity,
+            message: `Activity "${activity}" is restricted by governance policy "${policy.name}"${policy.description ? `: ${policy.description}` : ""}`,
+            location: `line ${lineNum}`,
+            autoFixed: false,
+          });
+        }
+      }
+    }
+
+    if (policy.type === "naming" && policy.pattern) {
+      try {
+        const regex = new RegExp(policy.pattern);
+        const variables = extractVariables(xaml);
+        for (const v of variables) {
+          if (!regex.test(v.name)) {
+            violations.push({
+              ruleId: `GOV-${policy.id}`,
+              ruleName: `Governance: ${policy.name}`,
+              category: "naming",
+              severity: policy.severity,
+              message: `Variable "${v.name}" does not match governance naming pattern "${policy.pattern}" (policy: ${policy.name})`,
+              location: `line ${v.line}`,
+              autoFixed: false,
+            });
+          }
+        }
+      } catch {}
+    }
+
+    if (policy.type === "error-handling" && policy.requiredPatterns?.length) {
+      for (const requiredPattern of policy.requiredPatterns) {
+        try {
+          const regex = new RegExp(requiredPattern, "i");
+          if (!regex.test(xaml)) {
+            violations.push({
+              ruleId: `GOV-${policy.id}`,
+              ruleName: `Governance: ${policy.name}`,
+              category: "best-practice",
+              severity: policy.severity,
+              message: `Required pattern "${requiredPattern}" not found (governance policy: ${policy.name})`,
+              autoFixed: false,
+            });
+          }
+        } catch {}
+      }
+    }
+
+    if (policy.type === "security") {
+      if (policy.pattern) {
+        try {
+          const regex = new RegExp(policy.pattern, "gi");
+          let match;
+          while ((match = regex.exec(xaml)) !== null) {
+            const lineNum = xaml.substring(0, match.index).split("\n").length;
+            violations.push({
+              ruleId: `GOV-${policy.id}`,
+              ruleName: `Governance: ${policy.name}`,
+              category: "security",
+              severity: policy.severity,
+              message: `Security governance violation: ${policy.description || policy.name}`,
+              location: `line ${lineNum}`,
+              autoFixed: false,
+            });
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return violations;
+}
+
 function buildRuleSummaries(violations: AnalysisViolation[]): AnalysisRuleSummary[] {
-  return ALL_RULES.map((rule) => {
+  const summaries = ALL_RULES.map((rule) => {
     const ruleViolations = violations.filter((v) => v.ruleId === rule.ruleId);
     const autoFixed = ruleViolations.filter((v) => v.autoFixed).length;
     const remaining = ruleViolations.filter((v) => !v.autoFixed).length;
@@ -547,6 +646,42 @@ function buildRuleSummaries(violations: AnalysisViolation[]): AnalysisRuleSummar
       autoFixedCount: autoFixed,
     };
   });
+
+  const govRuleIds = new Set<string>();
+  for (const v of violations) {
+    if (v.ruleId.startsWith("GOV-") && !govRuleIds.has(v.ruleId)) {
+      govRuleIds.add(v.ruleId);
+      const ruleViolations = violations.filter((vv) => vv.ruleId === v.ruleId);
+      const autoFixed = ruleViolations.filter((vv) => vv.autoFixed).length;
+      const remaining = ruleViolations.filter((vv) => !vv.autoFixed).length;
+      summaries.push({
+        ruleId: v.ruleId,
+        ruleName: v.ruleName,
+        category: v.category,
+        status: remaining > 0 ? "violation" : autoFixed > 0 ? "auto-fixed" : "passed",
+        violationCount: remaining,
+        autoFixedCount: autoFixed,
+      });
+    }
+  }
+
+  if (_governancePolicies.length > 0) {
+    for (const policy of _governancePolicies) {
+      const govId = `GOV-${policy.id}`;
+      if (!govRuleIds.has(govId)) {
+        summaries.push({
+          ruleId: govId,
+          ruleName: `Governance: ${policy.name}`,
+          category: policy.type === "naming" ? "naming" : policy.type === "security" ? "security" : "best-practice",
+          status: "passed",
+          violationCount: 0,
+          autoFixedCount: 0,
+        });
+      }
+    }
+  }
+
+  return summaries;
 }
 
 export function analyzeXaml(xamlContent: string): AnalysisReport {
@@ -555,6 +690,7 @@ export function analyzeXaml(xamlContent: string): AnalysisReport {
     ...checkBestPractices(xamlContent),
     ...checkUsage(xamlContent),
     ...checkSecurity(xamlContent),
+    ...checkGovernancePolicies(xamlContent),
   ];
 
   const ruleSummaries = buildRuleSummaries(violations);
@@ -562,7 +698,7 @@ export function analyzeXaml(xamlContent: string): AnalysisReport {
   return {
     violations,
     rulesChecked: ruleSummaries,
-    totalChecked: ALL_RULES.length,
+    totalChecked: ruleSummaries.length,
     totalPassed: ruleSummaries.filter((r) => r.status === "passed").length,
     totalAutoFixed: 0,
     totalRemaining: violations.length,
@@ -589,6 +725,7 @@ export function analyzeAndFix(xamlContent: string): { fixed: string; report: Ana
     ...checkBestPractices(fixed),
     ...checkUsage(fixed),
     ...checkSecurity(fixed),
+    ...checkGovernancePolicies(fixed),
   ];
   allViolations.push(...postFixViolations);
 
@@ -601,7 +738,7 @@ export function analyzeAndFix(xamlContent: string): { fixed: string; report: Ana
     report: {
       violations: allViolations,
       rulesChecked: ruleSummaries,
-      totalChecked: ALL_RULES.length,
+      totalChecked: ruleSummaries.length,
       totalPassed: ruleSummaries.filter((r) => r.status === "passed").length,
       totalAutoFixed: autoFixedCount,
       totalRemaining: remainingCount,

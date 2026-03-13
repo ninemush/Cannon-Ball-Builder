@@ -265,13 +265,14 @@ CROSS-SERVICE INTEGRATION RULES (CRITICAL):
 
 Include these sections:
 
-1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.). Explain how Action Center, Data Fabric, and Apps work together in this solution.
-2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses. For each human-in-the-loop step, specify the complete form schema and SLA configuration.
+1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.). Explain how Action Center, Data Fabric, and Apps work together in this solution. If attended robots are available, explicitly recommend attended vs unattended execution for each component with justification.
+2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses. For each human-in-the-loop step, specify the complete form schema and SLA configuration. Reference existing deployed processes that can be reused if applicable.
 3) UiPath Activities and Packages Required — list specific UiPath packages and activities. Include Integration Service connectors if applicable. Include UiPath.Persistence.Activities for Action Center tasks and Data Fabric HTTP activities for entity operations.
 4) Integration Points and API/System Connections — all external systems, APIs, databases, and how they connect (Integration Service connectors, custom HTTP, direct DB, etc.). Include Data Fabric entity service endpoints for data persistence.
 5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling
 6) Security Considerations — credential management via Orchestrator assets, role-based access, data encryption, audit trail
 7) Test Strategy — unit tests, integration tests, UAT approach. Reference Test Manager if available
+7a) Governance Compliance — if governance policies are active, include a section confirming compliance with each active policy and how the solution design adheres to naming conventions, restricted activity rules, and required error handling patterns
 8) Data Model and Entity Design — define all Data Fabric entities with their complete field schemas, relationships between entities, and which workflows/Action Center tasks reference each entity
 
 AGENT ARCHITECTURE (MANDATORY when automation type is agent or hybrid):

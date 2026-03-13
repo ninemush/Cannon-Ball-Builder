@@ -135,6 +135,16 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
       unavailable.push("AI Center (ML models, skills)");
     }
 
+    if (serviceAvailability.automationOps && serviceAvailability.governancePolicies?.length) {
+      available.push(`Automation Ops (${serviceAvailability.governancePolicies.length} governance policies active)`);
+    }
+    if (serviceAvailability.attendedRobots && serviceAvailability.attendedRobotInfo) {
+      available.push(`Attended Robots / Assistant (${serviceAvailability.attendedRobotInfo.attendedRobots.length} attended)`);
+    }
+    if (serviceAvailability.studioProjects && serviceAvailability.studioProjectInfo) {
+      available.push(`Existing Processes (${serviceAvailability.studioProjectInfo.projects.length} deployed)`);
+    }
+
     let integrationServiceContext = "";
     if (serviceAvailability.integrationServiceDiscovery?.available) {
       const is = serviceAvailability.integrationServiceDiscovery;
@@ -162,6 +172,31 @@ Always specify: (1) which extraction approach for each document/communication ty
 - NOT AVAILABLE: ${unavailable.length > 0 ? unavailable.join(", ") : "All services available"}
 ${integrationServiceContext}
 CRITICAL OVERRIDE: This service availability data was probed LIVE from the connected Orchestrator seconds ago. It is the authoritative, current truth. Previous messages in this conversation may contain older document versions that claimed different service availability — those are OUTDATED and WRONG. You MUST use ONLY the current probe results above. Do NOT copy or reproduce service availability claims from previous SDD versions in the chat history.${allMajorAvailable ? "\nAll major platform services (Action Center, Document Understanding, Test Manager) are AVAILABLE and WORKING. You MUST design the solution to USE them. Do NOT generate a 'Future Enhancements — Additional Services' section for any service listed as AVAILABLE above. Only mention genuinely unavailable services (if any) in Future Enhancements." : ""}${ixpContext}`;
+
+    if (serviceAvailability.governancePolicies?.length) {
+      serviceContext += `\n\nAUTOMATION OPS GOVERNANCE (ACTIVE POLICIES — compliance is mandatory):\nThe following governance policies are enforced on this tenant. All automation designs and artifacts MUST comply:\n`;
+      for (const p of serviceAvailability.governancePolicies) {
+        serviceContext += `- [${p.severity.toUpperCase()}] ${p.name}: ${p.description || "No description"}`;
+        if (p.restrictedActivities?.length) serviceContext += ` — RESTRICTED: ${p.restrictedActivities.join(", ")}`;
+        serviceContext += `\n`;
+      }
+      serviceContext += `When advising on automation design, proactively flag any approach that would violate these governance policies. Suggest compliant alternatives.`;
+    }
+
+    if (serviceAvailability.attendedRobotInfo) {
+      const ari = serviceAvailability.attendedRobotInfo;
+      if (ari.hasAttended && ari.hasUnattended) {
+        serviceContext += `\n\nROBOT LANDSCAPE: Both attended (${ari.attendedRobots.length}) and unattended (${ari.unattendedRobots.length}) robots are available. Recommend attended execution for human-assisted tasks and unattended for background processing. Consider hybrid approaches.`;
+      } else if (ari.hasAttended) {
+        serviceContext += `\n\nROBOT LANDSCAPE: Only attended robots (${ari.attendedRobots.length}) are available via UiPath Assistant. Design for attended execution with user interaction points.`;
+      } else if (ari.hasUnattended) {
+        serviceContext += `\n\nROBOT LANDSCAPE: Only unattended robots (${ari.unattendedRobots.length}) available. Design for fully autonomous background execution.`;
+      }
+    }
+
+    if (serviceAvailability.studioProjectInfo && serviceAvailability.studioProjectInfo.existingNames.length > 0) {
+      serviceContext += `\n\nEXISTING PROCESSES (${serviceAvailability.studioProjectInfo.existingNames.length} deployed — avoid naming conflicts, consider reuse):\n${serviceAvailability.studioProjectInfo.existingNames.slice(0, 20).map(n => `- ${n}`).join("\n")}`;
+    }
   }
 
   return `You are the CannonBall automation design assistant. Your job is to guide Process SMEs through designing business process automations. You are AI-first — you lead, you draft, you build. The SME's job is to give you information, refine your output, and approve it. They should never have to figure out what to do next — you always tell them.

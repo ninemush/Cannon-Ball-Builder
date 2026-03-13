@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache, discoverIntegrationService, clearIntegrationServiceCache } from "./uipath-integration";
+import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache, discoverIntegrationService, clearIntegrationServiceCache, discoverGovernancePolicies, discoverAttendedRobots, discoverStudioProjects } from "./uipath-integration";
 import { parseArtifactsFromSDD, extractArtifactsWithLLM, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
 import { getPreviousManifest, reconcileArtifacts, saveManifest, formatReconciliationSummary } from "./artifact-reconciliation";
 import { documentStorage } from "./document-storage";
@@ -369,6 +369,24 @@ export function registerUiPathRoutes(app: Express): void {
   app.get("/api/settings/uipath/processes", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const result = await listProcesses();
+    return res.json(result);
+  });
+
+  app.get("/api/settings/uipath/governance-policies", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await discoverGovernancePolicies();
+    return res.json(result);
+  });
+
+  app.get("/api/settings/uipath/attended-robots", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await discoverAttendedRobots();
+    return res.json(result);
+  });
+
+  app.get("/api/settings/uipath/studio-projects", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await discoverStudioProjects();
     return res.json(result);
   });
 
