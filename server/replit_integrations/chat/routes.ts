@@ -89,6 +89,22 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     else unavailable.push("Environments (deprecated on modern folders — machine templates used instead)");
     if (serviceAvailability.triggers) available.push("Triggers (queue and time-based)");
     else unavailable.push("Triggers API");
+    if (serviceAvailability.maestro) available.push("Maestro (process orchestration, PIMS)");
+    else unavailable.push("Maestro");
+    if (serviceAvailability.integrationService) available.push("Integration Service (connectors, API integrations)");
+    else unavailable.push("Integration Service");
+    if (serviceAvailability.ixp) available.push("IXP / Communications Mining");
+    else unavailable.push("IXP / Communications Mining");
+    if (serviceAvailability.automationHub) available.push("Automation Hub (idea management, CoE)");
+    else unavailable.push("Automation Hub");
+    if (serviceAvailability.automationOps) available.push("Automation Ops (governance, deployment rules)");
+    else unavailable.push("Automation Ops");
+    if (serviceAvailability.automationStore) available.push("Automation Store (reusable components)");
+    else unavailable.push("Automation Store");
+    if (serviceAvailability.apps) available.push("Apps (low-code app builder)");
+    else unavailable.push("Apps");
+    if (serviceAvailability.assistant) available.push("Assistant (attended automation launcher)");
+    else unavailable.push("Assistant");
 
     const allMajorAvailable = serviceAvailability.actionCenter && serviceAvailability.documentUnderstanding && serviceAvailability.testManager;
     serviceContext = `\n\nUIPath SERVICE AVAILABILITY (LIVE PROBE — just now from the connected Orchestrator):

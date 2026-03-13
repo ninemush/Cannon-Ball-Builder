@@ -2033,6 +2033,7 @@ function IntegrationsTab() {
                         "Du": "Document Understanding",
                         "PM": "Platform Management",
                         "DataFabric": "Data Service",
+                        "PIMS": "Maestro",
                       };
                       for (const scope of scopeVerification.grantedScopes) {
                         const prefix = scope.startsWith("OR.") ? "OR"
@@ -2040,6 +2041,7 @@ function IntegrationsTab() {
                           : scope.startsWith("Du.") ? "Du"
                           : scope.startsWith("PM.") ? "PM"
                           : scope.startsWith("DataFabric.") ? "DataFabric"
+                          : scope.startsWith("PIMS.") ? "PIMS"
                           : "Other";
                         if (!groups[prefix]) groups[prefix] = [];
                         groups[prefix].push(scope);
@@ -2050,6 +2052,7 @@ function IntegrationsTab() {
                         "Du": "bg-amber-500/10 text-amber-400",
                         "PM": "bg-cyan-500/10 text-cyan-400",
                         "DataFabric": "bg-emerald-500/10 text-emerald-400",
+                        "PIMS": "bg-rose-500/10 text-rose-400",
                         "Other": "bg-primary/10 text-primary",
                       };
                       return Object.entries(groups).map(([prefix, scopes]) => (

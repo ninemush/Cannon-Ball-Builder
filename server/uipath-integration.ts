@@ -1537,6 +1537,14 @@ export type PlatformCapabilityProfile = {
     testManager: boolean;
     storageBuckets: boolean;
     aiCenter: boolean;
+    maestro: boolean;
+    integrationService: boolean;
+    ixp: boolean;
+    automationHub: boolean;
+    automationOps: boolean;
+    automationStore: boolean;
+    apps: boolean;
+    assistant: boolean;
   };
   grantedScopes: string[];
   summary: string;
@@ -1559,6 +1567,14 @@ type UnifiedProbeResult = {
     storageBuckets: boolean;
     aiCenter: boolean;
     agents: boolean;
+    maestro: boolean;
+    integrationService: boolean;
+    ixp: boolean;
+    automationHub: boolean;
+    automationOps: boolean;
+    automationStore: boolean;
+    apps: boolean;
+    assistant: boolean;
   };
   grantedScopes: string[];
   licenseInfo: LicenseInfo | null;
@@ -1585,6 +1601,9 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       orchestrator: false, actionCenter: false, testManager: false,
       documentUnderstanding: false, dataService: false, platformManagement: false,
       environments: true, triggers: true, storageBuckets: false, aiCenter: false, agents: false,
+      maestro: false, integrationService: false, ixp: false,
+      automationHub: false, automationOps: false, automationStore: false,
+      apps: false, assistant: false,
     },
     grantedScopes: [],
     licenseInfo: null,
@@ -1720,6 +1739,45 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       if (dfSwagger && dfSwagger.status === 200) dsAvailable = true;
     }
 
+    const [maestroProbe, integrationServiceProbe, ixpProbe, automationHubProbe, automationOpsProbe, automationStoreProbe, appsProbe, assistantHttpProbe] = await Promise.all([
+      fetch(`${base}/maestro_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/integrationservice_/api/v1/connections?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/ixp_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/automationhub_/api/v1/ideas?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/automationops_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/automationstore_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/apps_/api/v1/apps?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/assistant_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+    ]);
+
+    const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[] }));
+
+    const isServiceReachable = (res: Response | null) => {
+      if (!res) return false;
+      if (res.ok) return true;
+      if (res.status === 403 || res.status === 401) return true;
+      if (res.status >= 300 && res.status < 400) return true;
+      return false;
+    };
+
+    const maestroAvailable = isServiceReachable(maestroProbe) || pimsResult.ok;
+    const integrationServiceAvailable = isServiceReachable(integrationServiceProbe);
+    const ixpAvailable = isServiceReachable(ixpProbe);
+    const automationHubAvailable = isServiceReachable(automationHubProbe);
+    const automationOpsAvailable = isServiceReachable(automationOpsProbe);
+    const appsAvailable = isServiceReachable(appsProbe);
+    const assistantAvailable = isServiceReachable(assistantHttpProbe);
+    const automationStoreAvailable = isServiceReachable(automationStoreProbe);
+
+    if (maestroAvailable) console.log("[UiPath Probe] Maestro available");
+    if (integrationServiceAvailable) console.log("[UiPath Probe] Integration Service available");
+    if (ixpAvailable) console.log("[UiPath Probe] IXP available");
+    if (automationHubAvailable) console.log("[UiPath Probe] Automation Hub available");
+    if (automationOpsAvailable) console.log("[UiPath Probe] Automation Ops available");
+    if (automationStoreAvailable) console.log("[UiPath Probe] Automation Store available");
+    if (appsAvailable) console.log("[UiPath Probe] Apps available");
+    if (assistantAvailable) console.log("[UiPath Probe] Assistant available");
+
     const result: UnifiedProbeResult = {
       configured: true,
       flags: {
@@ -1734,6 +1792,14 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         storageBuckets: bucketsAvailable,
         aiCenter: aiAvailable,
         agents: agentsAvailable,
+        maestro: maestroAvailable,
+        integrationService: integrationServiceAvailable,
+        ixp: ixpAvailable,
+        automationHub: automationHubAvailable,
+        automationOps: automationOpsAvailable,
+        automationStore: automationStoreAvailable,
+        apps: appsAvailable,
+        assistant: assistantAvailable,
       },
       grantedScopes,
       licenseInfo,
@@ -1761,7 +1827,13 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
 export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfile> {
   const empty: PlatformCapabilityProfile = {
     configured: false,
-    available: { orchestrator: false, actionCenter: false, documentUnderstanding: false, testManager: false, storageBuckets: false, aiCenter: false },
+    available: {
+      orchestrator: false, actionCenter: false, documentUnderstanding: false,
+      testManager: false, storageBuckets: false, aiCenter: false,
+      maestro: false, integrationService: false, ixp: false,
+      automationHub: false, automationOps: false, automationStore: false,
+      apps: false, assistant: false,
+    },
     grantedScopes: [],
     summary: "UiPath is not configured. The SDD will be generated with general best practices.",
     availableDescription: "",
@@ -1781,6 +1853,14 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     testManager: probe.flags.testManager,
     storageBuckets: probe.flags.storageBuckets,
     aiCenter: probe.flags.aiCenter,
+    maestro: probe.flags.maestro,
+    integrationService: probe.flags.integrationService,
+    ixp: probe.flags.ixp,
+    automationHub: probe.flags.automationHub,
+    automationOps: probe.flags.automationOps,
+    automationStore: probe.flags.automationStore,
+    apps: probe.flags.apps,
+    assistant: probe.flags.assistant,
   };
 
   const availNames: string[] = [];
@@ -1806,6 +1886,30 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
 
   if (probe.flags.agents) availNames.push("Agent Builder / Autopilot (AI agent definitions, knowledge bases, prompt templates, autonomous task execution)");
   else unavailRecs.push("- **Agent Builder**: Agent artifact provisioning via Assets API. Agent definitions, knowledge bases, and prompt templates can be stored as Orchestrator assets for Autopilot/Agent Builder configuration.");
+
+  if (avail.maestro) availNames.push("Maestro (process orchestration, long-running workflows, human-in-the-loop coordination via PIMS)");
+  else unavailRecs.push("- **Maestro**: Not available. If enabled, it would provide advanced process orchestration with human-in-the-loop coordination for complex, long-running workflows.");
+
+  if (avail.integrationService) availNames.push("Integration Service (pre-built connectors, API integrations, third-party system connections)");
+  else unavailRecs.push("- **Integration Service**: Not available. If enabled, it would provide pre-built connectors and API integrations for seamless third-party system connectivity.");
+
+  if (avail.ixp) availNames.push("IXP / Communications Mining (email and message analysis, intent detection, sentiment analysis)");
+  else unavailRecs.push("- **IXP / Communications Mining**: Not available. If enabled, it could analyze emails, tickets, and messages for intent detection, sentiment analysis, and automated triage.");
+
+  if (avail.automationHub) availNames.push("Automation Hub (idea management, ROI estimation, automation pipeline, CoE collaboration)");
+  else unavailRecs.push("- **Automation Hub**: Not available. If enabled, it would centralize automation idea management, ROI estimation, and CoE collaboration for pipeline governance.");
+
+  if (avail.automationOps) availNames.push("Automation Ops (governance policies, deployment rules, environment management)");
+  else unavailRecs.push("- **Automation Ops**: Not available. If enabled, it would provide governance policies, deployment rules, and environment management for automation lifecycle control.");
+
+  if (avail.automationStore) availNames.push("Automation Store (reusable components, workflow templates, marketplace)");
+  else unavailRecs.push("- **Automation Store**: Not available. If enabled, it would offer a marketplace of reusable components and workflow templates to accelerate development.");
+
+  if (avail.apps) availNames.push("Apps (low-code app builder, custom UIs for automations, forms and dashboards)");
+  else unavailRecs.push("- **Apps**: Not available. If enabled, it would allow building custom UIs, forms, and dashboards to trigger and monitor automations without Studio.");
+
+  if (avail.assistant) availNames.push("Assistant (robot tray, attended automation triggers, process launcher for end users)");
+  else unavailRecs.push("- **Assistant**: Not available. If enabled, it would provide an end-user interface for launching attended automations and interacting with robot processes.");
 
   const config = await getUiPathConfig();
   const orgTenant = config ? `${config.orgName}/${config.tenantName}` : "unknown";
@@ -2028,10 +2132,11 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       tryAcquireResourceToken("DU"),
       tryAcquireResourceToken("PM"),
       tryAcquireResourceToken("DF"),
+      tryAcquireResourceToken("PIMS"),
     ]);
 
     const resources: Record<string, { ok: boolean; scopes: string[]; error?: string }> = {};
-    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF"> = ["OR", "TM", "DU", "PM", "DF"];
+    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF" | "PIMS"> = ["OR", "TM", "DU", "PM", "DF", "PIMS"];
     for (let i = 0; i < resourceNames.length; i++) {
       const r = resourceResults[i];
       resources[resourceNames[i]] = r.status === "fulfilled" ? r.value : { ok: false, scopes: [], error: "Token request failed" };
@@ -2084,6 +2189,38 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       ? { available: true, message: "Data Service provisioned" }
       : { available: false, message: `DF unavailable: ${resources.DF.error || "scopes not configured"}` };
 
+    serviceChecks["Maestro"] = probe.flags.maestro
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible — PIMS scope may be needed" };
+
+    serviceChecks["Integration Service"] = probe.flags.integrationService
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
+    serviceChecks["IXP / Communications Mining"] = probe.flags.ixp
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
+    serviceChecks["Automation Hub"] = probe.flags.automationHub
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
+    serviceChecks["Automation Ops"] = probe.flags.automationOps
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
+    serviceChecks["Automation Store"] = probe.flags.automationStore
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
+    serviceChecks["Apps"] = probe.flags.apps
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
+    serviceChecks["Assistant"] = probe.flags.assistant
+      ? { available: true, message: "Accessible" }
+      : { available: false, message: "Not accessible or not provisioned" };
+
     const availableCount = Object.values(serviceChecks).filter(s => s.available).length;
     const totalCount = Object.keys(serviceChecks).length;
 
@@ -2111,6 +2248,14 @@ export type ServiceAvailabilityMap = {
   environments: boolean;
   triggers: boolean;
   agents: boolean;
+  maestro: boolean;
+  integrationService: boolean;
+  ixp: boolean;
+  automationHub: boolean;
+  automationOps: boolean;
+  automationStore: boolean;
+  apps: boolean;
+  assistant: boolean;
 };
 
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
@@ -2126,6 +2271,14 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     environments: probe.flags.environments,
     triggers: probe.flags.triggers,
     agents: probe.flags.agents,
+    maestro: probe.flags.maestro,
+    integrationService: probe.flags.integrationService,
+    ixp: probe.flags.ixp,
+    automationHub: probe.flags.automationHub,
+    automationOps: probe.flags.automationOps,
+    automationStore: probe.flags.automationStore,
+    apps: probe.flags.apps,
+    assistant: probe.flags.assistant,
   };
 }
 

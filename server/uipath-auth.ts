@@ -24,7 +24,7 @@ type CachedToken = {
   expiresAt: number;
 };
 
-export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF";
+export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS";
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 const TOKEN_ENDPOINT = "https://cloud.uipath.com/identity_/connect/token";
@@ -60,6 +60,9 @@ const RESOURCE_SCOPES: Record<ResourceType, string> = {
   ].join(" "),
   DF: [
     "DataFabric.Schema.Read", "DataFabric.Data.Read", "DataFabric.Data.Write",
+  ].join(" "),
+  PIMS: [
+    "PIMS.Default", "PIMS.Read", "PIMS.Write",
   ].join(" "),
 };
 
