@@ -228,7 +228,7 @@ CRITICAL RULES:
 ARTIFACT RULES:
 - queues: Include jsonSchema (JSON Schema for SpecificContent fields from the SDD data model) and outputSchema where applicable. maxRetries and uniqueReference must reflect the SDD's error handling requirements.
 - assets: For credential assets use value "". For text/integer/bool assets provide REAL values from the SDD. Descriptions must explain usage context (e.g. "SMTP server for invoice notification emails").
-- machines: Include runtimeType (Unattended|NonProduction|TestAutomation|Headless). Description must state the machine's purpose.
+- machines: Include runtimeType (Unattended|NonProduction|TestAutomation|Headless|Serverless). For Serverless runtime, machine templates are not required — omit the machines array entirely. Description must state the machine's purpose.
 - triggers: Include timezone (e.g. "America/New_York" from the SDD business context), startStrategy ("Specific"|"ModernJobs"), maxJobsCount. All triggers MUST be included — never treat them as manual steps.
 - storageBuckets: Include storageProvider ("Orchestrator"|"Azure"|"AWS"|"GCP") derived from the SDD tech stack.
 - robotAccounts: Include role (specific role name like "InvoiceProcessor" not generic "Executor"). At least one robot per machine.
@@ -261,7 +261,7 @@ ARTIFACT RULES:
   - Service tasks MUST reference Orchestrator process names. User tasks MUST reference Action Center catalogs. Gateway conditions MUST have real expressions.
 
 Expected JSON shape:
-{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true,"jsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{...}}","outputSchema":"..."}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"Usage context"}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"runtimeType":"Unattended","description":"Purpose"}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"0 0 8 ? * MON-FRI","timezone":"America/New_York","startStrategy":"Specific","maxJobsCount":1,"description":"..."}],"storageBuckets":[{"name":"...","storageProvider":"Orchestrator","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended","role":"SpecificRole","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"4h","escalation":"Manager","priority":"High","actions":["Approve","Reject"],"formFields":[{"name":"...","type":"String|Number|Boolean","required":true,"defaultValue":"...","validationRule":"..."}],"slaConfig":{"dueInHours":4,"warningThresholdHours":3,"escalationPolicy":"Manager","autoEscalate":true},"dataFabricEntity":"EntityName","description":"..."}],"dataFabricEntities":[{"name":"...","description":"...","fields":[{"name":"Id","type":"Guid","required":true,"isKey":true,"description":"Primary key"},{"name":"FieldName","type":"String","required":true,"description":"..."}],"referencedBy":["TaskCatalog_Name","Main.xaml"]}],"apps":[{"name":"...","description":"...","linkedProcesses":["ProcessName"],"linkedEntities":["EntityName"]}],"documentUnderstanding":[{"name":"...","documentTypes":["Invoice"],"extractionApproach":"classic_du","taxonomyFields":[{"documentType":"Invoice","fields":[{"name":"InvoiceNumber","type":"String"}]}],"classifierType":"ML","validationRules":[{"field":"TotalAmount","rule":"confidence >= 0.85","action":"flag_for_review"}],"description":"..."}],"communicationsMining":[{"name":"...","sourceType":"email","intents":["Request","Complaint"],"entities":["CustomerName","OrderNumber"],"routingRules":[{"intent":"Complaint","action":"escalate","target":"SeniorAgent"}],"description":"..."}],"testCases":[{"name":"TC_001_TestName","testType":"Functional","priority":"Critical","description":"...","preconditions":["Precondition 1"],"postconditions":["Postcondition 1"],"testData":[{"field":"FieldName","value":"TestValue","dataType":"String"}],"automationWorkflow":"Main.xaml","expectedDuration":60,"labels":["Critical","Smoke"],"steps":[{"action":"Specific action with field names and values","expected":"Specific expected result with values"}]}],"testDataQueues":[{"name":"...","description":"...","jsonSchema":"...","items":[{"name":"Record_1","content":"..."}]}],"requirements":[{"name":"REQ-001: Name","type":"Functional","priority":"Critical","description":"...","source":"SDD Section X","acceptanceCriteria":["Criteria 1"]}],"testSets":[{"name":"Happy Path Tests","description":"...","executionMode":"Sequential","environment":"Production","triggerType":"Manual","testCaseNames":["TC_001_TestName"]}]}
+{"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true,"jsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{...}}","outputSchema":"..."}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"Usage context"}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"runtimeType":"Unattended|NonProduction|TestAutomation|Headless|Serverless","description":"Purpose"}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"0 0 8 ? * MON-FRI","timezone":"America/New_York","startStrategy":"Specific","maxJobsCount":1,"description":"..."}],"storageBuckets":[{"name":"...","storageProvider":"Orchestrator","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended","role":"SpecificRole","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"4h","escalation":"Manager","priority":"High","actions":["Approve","Reject"],"formFields":[{"name":"...","type":"String|Number|Boolean","required":true,"defaultValue":"...","validationRule":"..."}],"slaConfig":{"dueInHours":4,"warningThresholdHours":3,"escalationPolicy":"Manager","autoEscalate":true},"dataFabricEntity":"EntityName","description":"..."}],"dataFabricEntities":[{"name":"...","description":"...","fields":[{"name":"Id","type":"Guid","required":true,"isKey":true,"description":"Primary key"},{"name":"FieldName","type":"String","required":true,"description":"..."}],"referencedBy":["TaskCatalog_Name","Main.xaml"]}],"apps":[{"name":"...","description":"...","linkedProcesses":["ProcessName"],"linkedEntities":["EntityName"]}],"documentUnderstanding":[{"name":"...","documentTypes":["Invoice"],"extractionApproach":"classic_du","taxonomyFields":[{"documentType":"Invoice","fields":[{"name":"InvoiceNumber","type":"String"}]}],"classifierType":"ML","validationRules":[{"field":"TotalAmount","rule":"confidence >= 0.85","action":"flag_for_review"}],"description":"..."}],"communicationsMining":[{"name":"...","sourceType":"email","intents":["Request","Complaint"],"entities":["CustomerName","OrderNumber"],"routingRules":[{"intent":"Complaint","action":"escalate","target":"SeniorAgent"}],"description":"..."}],"testCases":[{"name":"TC_001_TestName","testType":"Functional","priority":"Critical","description":"...","preconditions":["Precondition 1"],"postconditions":["Postcondition 1"],"testData":[{"field":"FieldName","value":"TestValue","dataType":"String"}],"automationWorkflow":"Main.xaml","expectedDuration":60,"labels":["Critical","Smoke"],"steps":[{"action":"Specific action with field names and values","expected":"Specific expected result with values"}]}],"testDataQueues":[{"name":"...","description":"...","jsonSchema":"...","items":[{"name":"Record_1","content":"..."}]}],"requirements":[{"name":"REQ-001: Name","type":"Functional","priority":"Critical","description":"...","source":"SDD Section X","acceptanceCriteria":["Criteria 1"]}],"testSets":[{"name":"Happy Path Tests","description":"...","executionMode":"Sequential","environment":"Production","triggerType":"Manual","testCaseNames":["TC_001_TestName"]}]}
 
 SDD content:
 ${sddContent.slice(0, 12000)}`
@@ -1258,6 +1258,7 @@ type RuntimeDetectionResult = {
   runtimeType: string;
   verified: boolean;
   hasUnattendedSlots: boolean;
+  hasServerless: boolean;
   availableTypes: string[];
   warning?: string;
 };
@@ -1268,11 +1269,12 @@ type PreFetchedInfraData = {
   robots: InfraProbeResult['robots'];
 };
 
-async function detectAvailableRuntimeType(base: string, hdrs: Record<string, string>, prefetched?: PreFetchedInfraData): Promise<RuntimeDetectionResult> {
+export async function detectAvailableRuntimeType(base: string, hdrs: Record<string, string>, prefetched?: PreFetchedInfraData): Promise<RuntimeDetectionResult> {
   const result: RuntimeDetectionResult = {
     runtimeType: "Unattended",
     verified: false,
     hasUnattendedSlots: false,
+    hasServerless: false,
     availableTypes: [],
   };
 
@@ -1338,6 +1340,11 @@ async function detectAvailableRuntimeType(base: string, hdrs: Record<string, str
       const uniqueTypes = Array.from(new Set(types as string[]));
       result.availableTypes = Array.from(new Set([...result.availableTypes, ...uniqueTypes]));
 
+      if (types.includes("Serverless")) {
+        result.hasServerless = true;
+        console.log(`[UiPath Deploy] Runtime detection: Found Serverless session(s)`);
+      }
+
       if (types.includes("Unattended")) {
         result.runtimeType = "Unattended";
         result.verified = true;
@@ -1350,6 +1357,13 @@ async function detectAvailableRuntimeType(base: string, hdrs: Record<string, str
         result.runtimeType = "Production";
         result.verified = true;
         result.warning = undefined;
+        return result;
+      }
+      if (result.hasServerless && !result.hasUnattendedSlots) {
+        result.runtimeType = "Serverless";
+        result.verified = true;
+        result.warning = undefined;
+        console.log(`[UiPath Deploy] Runtime detection: No Unattended slots, using Serverless runtime`);
         return result;
       }
       if (uniqueTypes.length > 0) {
@@ -1379,11 +1393,23 @@ async function detectAvailableRuntimeType(base: string, hdrs: Record<string, str
       const uniqueTypes = Array.from(new Set(types as string[]));
       result.availableTypes = Array.from(new Set([...result.availableTypes, ...uniqueTypes]));
 
+      if (types.includes("Serverless") || types.includes("ServerlessRuntime")) {
+        result.hasServerless = true;
+        console.log(`[UiPath Deploy] Runtime detection: Found Serverless robot(s)`);
+      }
+
       if (types.includes("Unattended")) {
         result.runtimeType = "Unattended";
         result.verified = true;
         result.hasUnattendedSlots = true;
         result.warning = undefined;
+        return result;
+      }
+      if (result.hasServerless && !result.hasUnattendedSlots) {
+        result.runtimeType = "Serverless";
+        result.verified = true;
+        result.warning = undefined;
+        console.log(`[UiPath Deploy] Runtime detection: No Unattended robots, using Serverless runtime from robot types`);
         return result;
       }
       if (uniqueTypes.length > 0) {
@@ -1425,8 +1451,8 @@ async function provisionTriggers(
 
   const runtimeDetection = precomputedRuntime || await detectAvailableRuntimeType(base, hdrs);
   const runtimeType = runtimeDetection.runtimeType;
-  const createDisabled = !runtimeDetection.verified || !runtimeDetection.hasUnattendedSlots;
-  console.log(`[UiPath Deploy] Using RuntimeType: ${runtimeType}, verified: ${runtimeDetection.verified}, hasUnattendedSlots: ${runtimeDetection.hasUnattendedSlots}, createDisabled: ${createDisabled}`);
+  const createDisabled = !runtimeDetection.verified || (!runtimeDetection.hasUnattendedSlots && !runtimeDetection.hasServerless);
+  console.log(`[UiPath Deploy] Using RuntimeType: ${runtimeType}, verified: ${runtimeDetection.verified}, hasUnattendedSlots: ${runtimeDetection.hasUnattendedSlots}, hasServerless: ${runtimeDetection.hasServerless}, createDisabled: ${createDisabled}`);
   if (runtimeDetection.warning) {
     console.warn(`[UiPath Deploy] Runtime warning: ${runtimeDetection.warning}`);
   }
@@ -4382,11 +4408,17 @@ export async function deployAllArtifacts(
     allResults.push(...infraResults);
 
     onProgress?.("Provisioning infrastructure artifacts...");
+    const isServerlessDeploy = artifacts.machines?.every(m => {
+      const rt = (m.runtimeType || m.type || "").toLowerCase();
+      return rt.includes("serverless");
+    }) && (artifacts.machines?.length || 0) > 0;
     const [queueResults, bucketResults, assetResults, machineResults, envResults, robotResults] = await Promise.all([
       provisionQueues(base, hdrs, artifacts.queues),
       provisionStorageBuckets(base, hdrs, artifacts.storageBuckets),
       provisionAssets(base, hdrs, artifacts.assets),
-      provisionMachines(base, hdrs, artifacts.machines),
+      isServerlessDeploy
+        ? Promise.resolve([{ artifact: "Machine Template", name: `${artifacts.machines!.length} machine(s)`, status: "skipped" as const, message: "Serverless runtime does not require machine template provisioning. Machines are auto-managed by the cloud infrastructure." }])
+        : provisionMachines(base, hdrs, artifacts.machines),
       (svcAvail && !svcAvail.environments && (artifacts.environments?.length || 0) > 0)
         ? Promise.resolve([{ artifact: "Environment", name: `${artifacts.environments!.length} environment(s)`, status: "skipped" as const, message: "Environments API not available on modern folder tenants (deprecated Oct 2023). Modern folders use machine templates and runtime slots instead. No action needed." }])
         : provisionEnvironments(base, hdrs, artifacts.environments),
@@ -4403,9 +4435,17 @@ export async function deployAllArtifacts(
     if (runtimeCheck.warning && (artifacts.triggers?.length || 0) > 0) {
       allResults.push({
         artifact: "Runtime Check",
-        name: "Unattended Runtime",
-        status: runtimeCheck.verified && runtimeCheck.hasUnattendedSlots ? "exists" : "failed",
+        name: runtimeCheck.hasServerless ? "Serverless Runtime" : "Unattended Runtime",
+        status: runtimeCheck.verified && (runtimeCheck.hasUnattendedSlots || runtimeCheck.hasServerless) ? "exists" : "failed",
         message: runtimeCheck.warning || (runtimeCheck.verified ? `Runtime type "${runtimeCheck.runtimeType}" verified` : "No runtimes detected"),
+      });
+    }
+    if (runtimeCheck.hasServerless && !runtimeCheck.warning) {
+      allResults.push({
+        artifact: "Runtime Check",
+        name: "Serverless Runtime",
+        status: "exists",
+        message: `Serverless runtime detected. Triggers will be created ENABLED with RuntimeType "Serverless". Cross-Platform packages required.`,
       });
     }
 

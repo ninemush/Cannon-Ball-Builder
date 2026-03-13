@@ -38,6 +38,8 @@ export type XamlGeneratorResult = {
   variables: VariableDecl[];
 };
 
+export type TargetFramework = "Windows" | "Portable";
+
 const UIPATH_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
@@ -47,6 +49,17 @@ const UIPATH_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/a
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"`;
+
+const UIPATH_CROSS_PLATFORM_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:s="clr-namespace:System;assembly=System.Runtime"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Runtime"
+  xmlns:scg2="clr-namespace:System.Data;assembly=System.Data.Common"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Runtime"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"`;
 
@@ -89,9 +102,36 @@ const UIPATH_VB_SETTINGS = `
     </sco:Collection>
   </TextExpression.ReferencesForImplementation>`;
 
-export function makeUiPathCompliant(rawXaml: string): string {
+const UIPATH_CSHARP_SETTINGS = `
+  <sap2010:WorkflowViewState.IdRef>__ROOT_ID__</sap2010:WorkflowViewState.IdRef>
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>System.IO</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>System.Xml</x:String>
+      <x:String>System.Xml.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Runtime</AssemblyReference>
+      <AssemblyReference>System.Data.Common</AssemblyReference>
+      <AssemblyReference>System.Xml.Linq</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>`;
+
+export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFramework = "Windows"): string {
   let idCounter = 0;
   const viewStateEntries: { id: string; width: number; height: number }[] = [];
+  const isCrossPlatform = targetFramework === "Portable";
 
   function nextId(prefix: string): string {
     idCounter++;
@@ -110,9 +150,10 @@ export function makeUiPathCompliant(rawXaml: string): string {
 
   let xml = rawXaml;
 
+  const targetNamespaces = isCrossPlatform ? UIPATH_CROSS_PLATFORM_NAMESPACES : UIPATH_NAMESPACES;
   const oldNsBlock = xml.match(/xmlns="http:\/\/schemas\.microsoft\.com\/netfx\/2009\/xaml\/activities"[\s\S]*?xmlns:x="http:\/\/schemas\.microsoft\.com\/winfx\/2006\/xaml"/);
   if (oldNsBlock) {
-    xml = xml.replace(oldNsBlock[0], UIPATH_NAMESPACES);
+    xml = xml.replace(oldNsBlock[0], targetNamespaces);
   }
 
   const classMatch = xml.match(/x:Class="([^"]+)"/);
@@ -136,11 +177,13 @@ export function makeUiPathCompliant(rawXaml: string): string {
     viewStateEntries.push({ id: rootId, width: rootHint.w, height: rootHint.h });
   }
 
-  const vbSettingsBlock = UIPATH_VB_SETTINGS.replace("__ROOT_ID__", rootId);
+  const settingsBlock = isCrossPlatform
+    ? UIPATH_CSHARP_SETTINGS.replace("__ROOT_ID__", rootId)
+    : UIPATH_VB_SETTINGS.replace("__ROOT_ID__", rootId);
 
   const firstTag = xml.match(/<(Sequence|StateMachine|Flowchart)\s/);
   if (firstTag && firstTag.index !== undefined) {
-    xml = xml.slice(0, firstTag.index) + vbSettingsBlock + "\n  " + xml.slice(firstTag.index);
+    xml = xml.slice(0, firstTag.index) + settingsBlock + "\n  " + xml.slice(firstTag.index);
   }
 
   let viewStateManager = `\n  <sap2010:WorkflowViewState.ViewStateManager>\n    <sap2010:ViewStateManager>`;
@@ -160,6 +203,22 @@ export function makeUiPathCompliant(rawXaml: string): string {
   xml = xml.replace(/scg:DataTable/g, "scg2:DataTable");
   xml = xml.replace(/scg:DataRow/g, "scg2:DataRow");
 
+  if (isCrossPlatform) {
+    xml = xml.replace(/Message="'([^']*)'"/g, 'Message="[&quot;$1&quot;]"');
+
+    xml = xml.replace(/Condition="\[(\w+) IsNot Nothing\]"/g, 'Condition="[$1 != null]"');
+    xml = xml.replace(/Condition="\[(\w+) Is Nothing\]"/g, 'Condition="[$1 == null]"');
+    xml = xml.replace(/Condition="\[Not (\w+)\]"/g, 'Condition="[!$1]"');
+
+    xml = xml.replace(/Condition="\[(\w+) = &quot;([^&]*)&quot;\]"/g, 'Condition="[$1 == &quot;$2&quot;]"');
+
+    xml = xml.replace(/\.ToString(?!\()/g, ".ToString()");
+
+    xml = xml.replace(/ &amp; /g, " + ");
+
+    xml = xml.replace(/Default="'([^']*)'"/g, 'Default="[&quot;$1&quot;]"');
+  }
+
   return xml;
 }
 
@@ -176,6 +235,8 @@ type ActivityContext = {
   description: string;
   role: string;
   isPainPoint: boolean;
+  targetFramework?: TargetFramework;
+  autopilotEnabled?: boolean;
 };
 
 type WorkflowStep = {
@@ -359,18 +420,19 @@ function classifyActionCenterTask(ctx: ActivityContext, combined: string): Retur
 function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
   const variables: VariableDecl[] = [];
+  const isCrossPlatform = ctx.targetFramework === "Portable";
 
   if (combined.includes("read") || combined.includes("extract") || combined.includes("get") || combined.includes("open")) {
     variables.push({ name: "dt_ExcelData", type: "System.Data.DataTable" });
     gaps.push({
       category: "config",
-      activity: "ExcelReadRange",
+      activity: isCrossPlatform ? "UseExcel" : "ExcelReadRange",
       description: `Configure Excel file path for "${ctx.name}"`,
       placeholder: "C:\\Data\\Input.xlsx",
       estimatedMinutes: 10,
     });
     return {
-      activityType: "ui:ExcelApplicationScope",
+      activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
       activityPackage: "UiPath.Excel.Activities",
       properties: { WorkbookPath: "TODO: Set Excel file path" },
       errorHandling: "retry",
@@ -383,13 +445,13 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
     variables.push({ name: "dt_OutputData", type: "System.Data.DataTable" });
     gaps.push({
       category: "config",
-      activity: "ExcelWriteRange",
+      activity: isCrossPlatform ? "UseExcel" : "ExcelWriteRange",
       description: `Configure output Excel file path for "${ctx.name}"`,
       placeholder: "C:\\Data\\Output.xlsx",
       estimatedMinutes: 10,
     });
     return {
-      activityType: "ui:ExcelApplicationScope",
+      activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
       activityPackage: "UiPath.Excel.Activities",
       properties: { WorkbookPath: "TODO: Set output Excel file path" },
       errorHandling: "retry",
@@ -401,13 +463,13 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
   variables.push({ name: "dt_ExcelData", type: "System.Data.DataTable" });
   gaps.push({
     category: "config",
-    activity: "ExcelApplicationScope",
+    activity: isCrossPlatform ? "UseExcel" : "ExcelApplicationScope",
     description: `Configure Excel file path for "${ctx.name}"`,
     placeholder: "C:\\Data\\Workbook.xlsx",
     estimatedMinutes: 10,
   });
   return {
-    activityType: "ui:ExcelApplicationScope",
+    activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
     activityPackage: "UiPath.Excel.Activities",
     properties: { WorkbookPath: "TODO: Set Excel file path" },
     errorHandling: "retry",
@@ -419,6 +481,7 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
 function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
   const variables: VariableDecl[] = [];
+  const isCrossPlatform = ctx.targetFramework === "Portable";
 
   if (combined.includes("send") || combined.includes("notify") || combined.includes("forward") || combined.includes("reply")) {
     variables.push({ name: "str_EmailTo", type: "String", defaultValue: '""' });
@@ -426,28 +489,24 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
     variables.push({ name: "str_EmailBody", type: "String", defaultValue: '""' });
     gaps.push({
       category: "credential",
-      activity: "SendSmtpMailMessage",
-      description: `Configure SMTP credentials for "${ctx.name}"`,
+      activity: isCrossPlatform ? "SendMail" : "SendSmtpMailMessage",
+      description: `Configure ${isCrossPlatform ? "mail" : "SMTP"} credentials for "${ctx.name}"`,
       placeholder: "Use Orchestrator Credential asset",
       estimatedMinutes: 15,
     });
     gaps.push({
       category: "config",
-      activity: "SendSmtpMailMessage",
-      description: `Set SMTP server and port for "${ctx.name}"`,
-      placeholder: "smtp.office365.com:587",
+      activity: isCrossPlatform ? "SendMail" : "SendSmtpMailMessage",
+      description: `Set ${isCrossPlatform ? "mail account" : "SMTP server and port"} for "${ctx.name}"`,
+      placeholder: isCrossPlatform ? "Use Integration Service mail connector" : "smtp.office365.com:587",
       estimatedMinutes: 5,
     });
     return {
-      activityType: "ui:SendSmtpMailMessage",
+      activityType: isCrossPlatform ? "ui:SendMail" : "ui:SendSmtpMailMessage",
       activityPackage: "UiPath.Mail.Activities",
-      properties: {
-        To: "TODO: Set recipient email",
-        Subject: "TODO: Set email subject",
-        Body: "TODO: Set email body",
-        Server: "TODO: Set SMTP server",
-        Port: "587",
-      },
+      properties: isCrossPlatform
+        ? { To: "TODO: Set recipient email", Subject: "TODO: Set email subject", Body: "TODO: Set email body" }
+        : { To: "TODO: Set recipient email", Subject: "TODO: Set email subject", Body: "TODO: Set email body", Server: "TODO: Set SMTP server", Port: "587" },
       errorHandling: "retry",
       variables,
       gaps,
@@ -457,19 +516,17 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
   variables.push({ name: "list_Emails", type: "System.Collections.Generic.List(System.Net.Mail.MailMessage)" });
   gaps.push({
     category: "credential",
-    activity: "GetImapMailMessage",
-    description: `Configure IMAP credentials for "${ctx.name}"`,
+    activity: isCrossPlatform ? "GetMail" : "GetImapMailMessage",
+    description: `Configure ${isCrossPlatform ? "mail account" : "IMAP"} credentials for "${ctx.name}"`,
     placeholder: "Use Orchestrator Credential asset",
     estimatedMinutes: 15,
   });
   return {
-    activityType: "ui:GetImapMailMessage",
+    activityType: isCrossPlatform ? "ui:GetMail" : "ui:GetImapMailMessage",
     activityPackage: "UiPath.Mail.Activities",
-    properties: {
-      Server: "TODO: Set IMAP server",
-      Port: "993",
-      Top: "10",
-    },
+    properties: isCrossPlatform
+      ? { Top: "10" }
+      : { Server: "TODO: Set IMAP server", Port: "993", Top: "10" },
     errorHandling: "retry",
     variables,
     gaps,
@@ -711,23 +768,29 @@ function classifyFile(ctx: ActivityContext, combined: string): ReturnType<typeof
 function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
   const variables: VariableDecl[] = [];
+  const isCrossPlatform = ctx.targetFramework === "Portable";
+  const autopilotProps: Record<string, string> = {};
+  if (ctx.autopilotEnabled) {
+    autopilotProps["InformativeScreenshot"] = "True";
+  }
 
   const selectorBase = `<html app='${escapeXml(ctx.system || "application")}' />`;
 
   if (combined.includes("open") || combined.includes("launch") || combined.includes("navigate") || combined.includes("browser") || combined.includes("url")) {
     gaps.push({
       category: "selector",
-      activity: "OpenBrowser",
+      activity: isCrossPlatform ? "UseBrowser" : "OpenBrowser",
       description: `Set target URL for "${ctx.name}"`,
       placeholder: "https://application.example.com",
       estimatedMinutes: 5,
     });
     return {
-      activityType: "ui:OpenBrowser",
+      activityType: isCrossPlatform ? "ui:UseBrowser" : "ui:OpenBrowser",
       activityPackage: "UiPath.UIAutomation.Activities",
       properties: {
         Url: "TODO: Set application URL",
         BrowserType: "Chrome",
+        ...autopilotProps,
       },
       selectorHint: selectorBase,
       errorHandling: "retry",
@@ -739,7 +802,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   if (combined.includes("type") || combined.includes("enter") || combined.includes("input") || combined.includes("fill")) {
     gaps.push({
       category: "selector",
-      activity: "TypeInto",
+      activity: isCrossPlatform ? "TypeInto (Modern)" : "TypeInto",
       description: `Configure UI selector for input field in "${ctx.name}"`,
       placeholder: `<webctrl tag='INPUT' name='TODO' />`,
       estimatedMinutes: 15,
@@ -749,6 +812,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
       activityPackage: "UiPath.UIAutomation.Activities",
       properties: {
         Text: "TODO: Set text to type",
+        ...autopilotProps,
       },
       selectorHint: `${selectorBase}<webctrl tag='INPUT' name='TODO_field_name' />`,
       errorHandling: "retry",
@@ -760,7 +824,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   if (combined.includes("click") || combined.includes("press") || combined.includes("button") || combined.includes("submit") || combined.includes("select")) {
     gaps.push({
       category: "selector",
-      activity: "Click",
+      activity: isCrossPlatform ? "Click (Modern)" : "Click",
       description: `Configure UI selector for clickable element in "${ctx.name}"`,
       placeholder: `<webctrl tag='BUTTON' name='TODO' />`,
       estimatedMinutes: 15,
@@ -768,7 +832,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     return {
       activityType: "ui:Click",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: {},
+      properties: { ...autopilotProps },
       selectorHint: `${selectorBase}<webctrl tag='BUTTON' name='TODO_button_name' />`,
       errorHandling: "retry",
       variables,
@@ -780,7 +844,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     variables.push({ name: "str_ExtractedText", type: "String", defaultValue: '""' });
     gaps.push({
       category: "selector",
-      activity: "GetText",
+      activity: isCrossPlatform ? "GetText (Modern)" : "GetText",
       description: `Configure UI selector for text extraction in "${ctx.name}"`,
       placeholder: `<webctrl tag='SPAN' id='TODO' />`,
       estimatedMinutes: 15,
@@ -788,7 +852,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     return {
       activityType: "ui:GetText",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: {},
+      properties: { ...autopilotProps },
       selectorHint: `${selectorBase}<webctrl tag='SPAN' id='TODO_element_id' />`,
       errorHandling: "retry",
       variables,
@@ -798,7 +862,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
 
   gaps.push({
     category: "selector",
-    activity: "ClickOnText",
+    activity: isCrossPlatform ? "Click (Modern)" : "ClickOnText",
     description: `Configure UI selector for "${ctx.name}"`,
     placeholder: `<webctrl tag='*' aaname='TODO' />`,
     estimatedMinutes: 15,
@@ -806,7 +870,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   return {
     activityType: "ui:Click",
     activityPackage: "UiPath.UIAutomation.Activities",
-    properties: {},
+    properties: { ...autopilotProps },
     selectorHint: `${selectorBase}<webctrl tag='*' aaname='TODO_element' />`,
     errorHandling: "retry",
     variables,
@@ -962,11 +1026,16 @@ function classifyAgent(ctx: ActivityContext, _combined: string): ReturnType<type
   };
 }
 
-function renderVariablesBlock(variables: VariableDecl[]): string {
-  if (variables.length === 0) return "<Sequence.Variables />";
+function renderVariablesBlock(variables: VariableDecl[], targetFramework?: TargetFramework): string {
+  const isCSharp = targetFramework === "Portable";
+  const screenshotDefault = isCSharp
+    ? '"screenshots/error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png"'
+    : '"screenshots/error_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".png"';
+  const withScreenshot = [...variables, { name: "str_ScreenshotPath", type: "String", defaultValue: screenshotDefault }];
+  if (withScreenshot.length === 0) return "<Sequence.Variables />";
 
   const uniqueVars = new Map<string, VariableDecl>();
-  for (const v of variables) {
+  for (const v of withScreenshot) {
     if (!uniqueVars.has(v.name)) {
       uniqueVars.set(v.name, v);
     }
@@ -1024,15 +1093,17 @@ function renderActivity(
   properties: Record<string, string>,
   selectorHint?: string,
   operationalProps?: { timeout?: number; continueOnError?: boolean; delayBefore?: number; delayAfter?: number },
-  annotationOpts?: { stepNumber?: number; stepName?: string; businessContext?: string; errorStrategy?: string; placeholders?: string[]; aiReasoning?: string }
+  annotationOpts?: { stepNumber?: number; stepName?: string; businessContext?: string; errorStrategy?: string; placeholders?: string[]; aiReasoning?: string },
+  targetFramework?: TargetFramework
 ): string {
   const enforced = enforceDisplayName(activityType, displayName);
+  const isCrossPlatform = targetFramework === "Portable";
   let propAttrs = "";
   for (const [key, value] of Object.entries(properties)) {
     propAttrs += ` ${key}="${escapeXml(value)}"`;
   }
 
-  if (selectorHint) {
+  if (selectorHint && !isCrossPlatform) {
     propAttrs += ` Selector="${escapeXml(selectorHint)}"`;
   }
 
@@ -1058,12 +1129,44 @@ function renderActivity(
     }
   }
 
+  if (isCrossPlatform && (activityType === "ui:UseBrowser" || activityType === "ui:UseApplication")) {
+    const url = properties["Url"] || "TODO: Set application URL";
+    return `
+          <${activityType} DisplayName="${escapeXml(enforced)}" Url="${escapeXml(url)}"${selectorHint ? ` Selector="${escapeXml(selectorHint)}"` : ""}>
+            <${activityType}.Body>
+              <Sequence DisplayName="Actions: ${escapeXml(enforced)}">
+              </Sequence>
+            </${activityType}.Body>
+          </${activityType}>`;
+  }
+
+  const innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+
+  if (isCrossPlatform && isUiActivity(activityType) && selectorHint) {
+    const appSelector = selectorHint.match(/<html[^>]*\/>/)
+      ? escapeXml(selectorHint.match(/<html[^>]*\/>/)![0])
+      : "";
+    const targetSelector = selectorHint.replace(/<html[^>]*\/>\s*/, "");
+    const useAppType = selectorHint.includes("app=") ? "ui:UseApplication" : "ui:UseBrowser";
+    return `
+          <${useAppType} DisplayName="Scope: ${escapeXml(enforced)}" Url="TODO: Set target URL" Selector="${appSelector}">
+            <${useAppType}.Body>
+              <Sequence DisplayName="Actions: ${escapeXml(enforced)}">
+                <${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} Target.Selector="${escapeXml(targetSelector)}" />
+              </Sequence>
+            </${useAppType}.Body>
+          </${useAppType}>`;
+  }
+
   return `
-          <${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+          ${innerActivity}`;
 }
 
-function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retry" | "catch" | "escalate" | "none"): string {
+function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retry" | "catch" | "escalate" | "none", targetFramework?: TargetFramework): string {
   if (errorHandling === "none") return innerXml;
+
+  const isCSharp = targetFramework === "Portable";
+  const concat = isCSharp ? " + " : " &amp; ";
 
   const strategyDesc = errorHandling === "retry" ? "Retry up to 3 times with 5s interval"
     : errorHandling === "escalate" ? "Log escalation and rethrow for manual intervention"
@@ -1072,26 +1175,104 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
   const annotAttr = ` sap2010:Annotation.AnnotationText="${escapeXml(annotation)}"`;
 
   if (errorHandling === "retry") {
+    const escapedStep = escapeXml(stepName);
+    const retryScreenshot = `
+                        <TryCatch DisplayName="Safe Screenshot on Retry Failure">
+                          <TryCatch.Try>
+                            <Sequence DisplayName="Capture Screenshot">
+                              <ui:TakeScreenshot DisplayName="Screenshot on Retry Failure: ${escapedStep}" OutputPath="[str_ScreenshotPath]" />
+                              <ui:LogMessage Level="Warn" Message="[&quot;Retry exhausted for ${escapedStep}, screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Retry Screenshot" />
+                            </Sequence>
+                          </TryCatch.Try>
+                          <TryCatch.Catches>
+                            <Catch x:TypeArguments="s:Exception">
+                              <ActivityAction x:TypeArguments="s:Exception">
+                                <ActivityAction.Argument>
+                                  <DelegateInArgument x:TypeArguments="s:Exception" Name="ssEx" />
+                                </ActivityAction.Argument>
+                                <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}ssEx.Message]" DisplayName="Log Screenshot Failure" />
+                              </ActivityAction>
+                            </Catch>
+                          </TryCatch.Catches>
+                        </TryCatch>`;
     return `
-          <ui:RetryScope DisplayName="Retry: ${escapeXml(stepName)}" NumberOfRetries="3" RetryInterval="00:00:05"${annotAttr}>
-            <ui:RetryScope.Body>
-              <Sequence DisplayName="Retry Body: ${escapeXml(stepName)}">${innerXml}
-              </Sequence>
-            </ui:RetryScope.Body>
-            <ui:RetryScope.Condition>
-              <ui:ShouldRetry />
-            </ui:RetryScope.Condition>
-          </ui:RetryScope>`;
+          <TryCatch DisplayName="Try Retry: ${escapedStep}"${annotAttr}>
+            <TryCatch.Try>
+              <ui:RetryScope DisplayName="Retry: ${escapedStep}" NumberOfRetries="3" RetryInterval="00:00:05">
+                <ui:RetryScope.Body>
+                  <Sequence DisplayName="Retry Body: ${escapedStep}">${innerXml}
+                  </Sequence>
+                </ui:RetryScope.Body>
+                <ui:RetryScope.Condition>
+                  <ui:ShouldRetry />
+                </ui:RetryScope.Condition>
+              </ui:RetryScope>
+            </TryCatch.Try>
+            <TryCatch.Catches>
+              <Catch x:TypeArguments="s:Exception">
+                <ActivityAction x:TypeArguments="s:Exception">
+                  <ActivityAction.Argument>
+                    <DelegateInArgument x:TypeArguments="s:Exception" Name="retryEx" />
+                  </ActivityAction.Argument>
+                  <Sequence DisplayName="Handle Retry Failure: ${escapedStep}">${retryScreenshot}
+                    <ui:LogMessage Level="Error" Message="[&quot;[Retry Exhausted] ${escapedStep} failed after retries — &quot;${concat}retryEx.Message]" DisplayName="Log Retry Failure" />
+                    <Rethrow DisplayName="Rethrow" />
+                  </Sequence>
+                </ActivityAction>
+              </Catch>
+            </TryCatch.Catches>
+          </TryCatch>`;
   }
 
+  const escapedStep = escapeXml(stepName);
+  const screenshotCapture = `
+                    <TryCatch DisplayName="Safe Screenshot Capture">
+                      <TryCatch.Try>
+                        <Sequence DisplayName="Capture Screenshot">
+                          <ui:TakeScreenshot DisplayName="Screenshot on Error: ${escapedStep}" OutputPath="[str_ScreenshotPath]" />
+                          <ui:LogMessage Level="Info" Message="[&quot;Screenshot saved: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Screenshot Path" />
+                        </Sequence>
+                      </TryCatch.Try>
+                      <TryCatch.Catches>
+                        <Catch x:TypeArguments="s:Exception">
+                          <ActivityAction x:TypeArguments="s:Exception">
+                            <ActivityAction.Argument>
+                              <DelegateInArgument x:TypeArguments="s:Exception" Name="screenshotEx" />
+                            </ActivityAction.Argument>
+                            <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}screenshotEx.Message]" DisplayName="Log Screenshot Failure" />
+                          </ActivityAction>
+                        </Catch>
+                      </TryCatch.Catches>
+                    </TryCatch>`;
+
+  const timestampExpr = isCSharp
+    ? `[DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ")]`
+    : `[DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ")]`;
+  const stackTraceExpr = isCSharp
+    ? `[exception.StackTrace != null ? exception.StackTrace.Substring(0, Math.Min(exception.StackTrace.Length, 500)) : ""]`
+    : `[If(exception.StackTrace IsNot Nothing, exception.StackTrace.Substring(0, Math.Min(exception.StackTrace.Length, 500)), "")]`;
+  const addLogFields = `
+                    <ui:AddLogFields DisplayName="Add Diagnostic Fields: ${escapedStep}">
+                      <ui:AddLogFields.Fields>
+                        <scg:Dictionary x:TypeArguments="x:String, ui:InArgument">
+                          <InArgument x:TypeArguments="x:String" x:Key="ErrorStep">"${escapedStep}"</InArgument>
+                          <InArgument x:TypeArguments="x:String" x:Key="ErrorMessage">[exception.Message]</InArgument>
+                          <InArgument x:TypeArguments="x:String" x:Key="ErrorType">[exception.GetType().Name]</InArgument>
+                          <InArgument x:TypeArguments="x:String" x:Key="ErrorTimestamp">${timestampExpr}</InArgument>
+                          <InArgument x:TypeArguments="x:String" x:Key="StackTraceSummary">${stackTraceExpr}</InArgument>
+                          <InArgument x:TypeArguments="x:String" x:Key="ScreenshotPath">[str_ScreenshotPath]</InArgument>
+                        </scg:Dictionary>
+                      </ui:AddLogFields.Fields>
+                    </ui:AddLogFields>`;
+
   const catchAction = errorHandling === "escalate"
-    ? `<ui:LogMessage Level="Error" Message="[Escalation Required] ${escapeXml(stepName)} failed — manual intervention needed" DisplayName="Log Escalation" />`
-    : `<ui:LogMessage Level="Error" Message="[Error] ${escapeXml(stepName)} failed" DisplayName="Log Error" />`;
+    ? `<ui:LogMessage Level="Error" Message="[&quot;[Escalation Required] ${escapedStep} failed — &quot;${concat}exception.Message${concat}&quot; | Screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Escalation" />`
+    : `<ui:LogMessage Level="Error" Message="[&quot;[Error] ${escapedStep} failed — &quot;${concat}exception.Message${concat}&quot; | Screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Error" />`;
 
   return `
-          <TryCatch DisplayName="Try: ${escapeXml(stepName)}"${annotAttr}>
+          <TryCatch DisplayName="Try: ${escapedStep}"${annotAttr}>
             <TryCatch.Try>
-              <Sequence DisplayName="Execute: ${escapeXml(stepName)}">${innerXml}
+              <Sequence DisplayName="Execute: ${escapedStep}">${innerXml}
               </Sequence>
             </TryCatch.Try>
             <TryCatch.Catches>
@@ -1100,7 +1281,7 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
                   <ActivityAction.Argument>
                     <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
                   </ActivityAction.Argument>
-                  <Sequence DisplayName="Handle Exception: ${escapeXml(stepName)}">
+                  <Sequence DisplayName="Handle Exception: ${escapedStep}">${screenshotCapture}${addLogFields}
                     ${catchAction}
                     <Rethrow DisplayName="Rethrow" />
                   </Sequence>
@@ -1192,7 +1373,7 @@ function wrapInIf(innerXml: string, condition: string, displayName: string): str
           </If>`;
 }
 
-function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec): {
+function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec, targetFramework?: TargetFramework): {
   xml: string;
   packages: string[];
   variables: VariableDecl[];
@@ -1240,7 +1421,7 @@ function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec): {
       aiReasoning: `Selected ${act.activityType} from ${act.package}`,
     };
 
-    innerXml += renderActivity(act.activityType, act.displayName, props, act.selectorHint, operationalProps, annotationOpts).replace(/\n          /, "\n            ");
+    innerXml += renderActivity(act.activityType, act.displayName, props, act.selectorHint, operationalProps, annotationOpts, targetFramework).replace(/\n          /, "\n            ");
   }
 
   for (const gap of enrichedNode.gaps || []) {
@@ -1252,12 +1433,12 @@ function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec): {
 
   let xml: string;
   if (enrichedNode.activities.length === 1) {
-    xml = wrapInTryCatch(innerXml, enrichedNode.nodeName, errorHandling);
+    xml = wrapInTryCatch(innerXml, enrichedNode.nodeName, errorHandling, targetFramework);
   } else {
     const sequenceXml = `
           <Sequence DisplayName="${escapeXml(enrichedNode.nodeName)}">${innerXml}
           </Sequence>`;
-    xml = wrapInTryCatch(sequenceXml, enrichedNode.nodeName, errorHandling);
+    xml = wrapInTryCatch(sequenceXml, enrichedNode.nodeName, errorHandling, targetFramework);
   }
 
   return { xml, packages, variables, gaps };
@@ -1268,7 +1449,9 @@ export function generateRichXamlFromNodes(
   edges: ProcessEdge[],
   workflowName: string,
   projectDescription: string,
-  enrichment?: EnrichmentResult | null
+  enrichment?: EnrichmentResult | null,
+  targetFramework?: TargetFramework,
+  autopilotEnabled?: boolean
 ): XamlGeneratorResult {
   const allGaps: XamlGap[] = [];
   const allVariables: VariableDecl[] = [];
@@ -1340,7 +1523,7 @@ export function generateRichXamlFromNodes(
       activities += `
         <!-- Agent Step: ${nodeTrace} -->`;
       const agentXml = renderAgentTaskSequence(node.name, node.description || "", node.role || "");
-      const wrappedAgent = wrapInTryCatch(agentXml, node.name, "catch");
+      const wrappedAgent = wrapInTryCatch(agentXml, node.name, "catch", targetFramework);
       activities += wrappedAgent;
       allVariables.push({ name: "str_AgentInput", type: "String", defaultValue: '""' });
       allVariables.push({ name: "str_AgentOutput", type: "String", defaultValue: '""' });
@@ -1368,14 +1551,14 @@ export function generateRichXamlFromNodes(
         const targetEnriched = enrichedMap.get(outEdge.target);
         let branchXml: string;
         if (targetEnriched && targetEnriched.activities.length > 0) {
-          const rendered = renderEnrichedActivities(targetEnriched);
+          const rendered = renderEnrichedActivities(targetEnriched, targetFramework);
           branchXml = rendered.xml;
           rendered.packages.forEach(p => usedPackages.add(p));
           allVariables.push(...rendered.variables);
           allGaps.push(...rendered.gaps);
         } else {
-          const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false });
-          branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
+          const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false, targetFramework });
+          branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint, undefined, undefined, targetFramework);
         }
         const label = (outEdge.label || "").toLowerCase();
         if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
@@ -1386,7 +1569,7 @@ export function generateRichXamlFromNodes(
       }
 
       const agentDecisionXml = renderAgentDecision(node.name, node.description || "", node.role || "", thenActivities, elseActivities);
-      const wrappedDecision = wrapInTryCatch(agentDecisionXml, node.name, "catch");
+      const wrappedDecision = wrapInTryCatch(agentDecisionXml, node.name, "catch", targetFramework);
       activities += wrappedDecision;
       allVariables.push({ name: "bool_AgentDecisionResult", type: "Boolean", defaultValue: "False" });
       allVariables.push({ name: "str_AgentDecisionInput", type: "String", defaultValue: '""' });
@@ -1418,14 +1601,14 @@ export function generateRichXamlFromNodes(
           const label = (outEdge.label || "").toLowerCase();
           let branchXml: string;
           if (targetEnriched && targetEnriched.activities.length > 0) {
-            const rendered = renderEnrichedActivities(targetEnriched);
+            const rendered = renderEnrichedActivities(targetEnriched, targetFramework);
             branchXml = rendered.xml;
             rendered.packages.forEach(p => usedPackages.add(p));
             allVariables.push(...rendered.variables);
             allGaps.push(...rendered.gaps);
           } else {
-            const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false });
-            branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
+            const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false, targetFramework });
+            branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint, undefined, undefined, targetFramework);
           }
           if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
             thenActivities += branchXml;
@@ -1453,7 +1636,7 @@ export function generateRichXamlFromNodes(
 
       activities += `
         <!-- Source: ${nodeTrace} | AI-Enriched: ${enrichedSpec.activities.length} activities -->`;
-      const rendered = renderEnrichedActivities(enrichedSpec);
+      const rendered = renderEnrichedActivities(enrichedSpec, targetFramework);
       rendered.packages.forEach(p => usedPackages.add(p));
       allVariables.push(...rendered.variables);
       allGaps.push(...rendered.gaps);
@@ -1468,6 +1651,8 @@ export function generateRichXamlFromNodes(
       description: node.description || "",
       role: node.role || "",
       isPainPoint: node.isPainPoint || false,
+      targetFramework,
+      autopilotEnabled,
     };
 
     if (node.nodeType === "decision") {
@@ -1498,9 +1683,10 @@ export function generateRichXamlFromNodes(
           description: targetNode.description || "",
           role: targetNode.role || "",
           isPainPoint: targetNode.isPainPoint || false,
+          targetFramework,
         };
         const classified = classifyActivity(branchCtx);
-        const branchActivity = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
+        const branchActivity = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint, undefined, undefined, targetFramework);
         const label = (outEdge.label || "").toLowerCase();
         if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
           thenActivities += branchActivity;
@@ -1550,12 +1736,13 @@ export function generateRichXamlFromNodes(
         stepName: node.name,
         businessContext: node.description || node.name,
         placeholders: classifiedPlaceholders.length > 0 ? classifiedPlaceholders : undefined,
-      }
+      },
+      targetFramework
     );
 
     activities += `
         <!-- Source: ${nodeTrace} | Activity: ${classified.activityType}${node.isPainPoint ? " | ⚠ Pain Point" : ""} -->`;
-    const wrappedXml = wrapInTryCatch(activityXml, node.name, classified.errorHandling);
+    const wrappedXml = wrapInTryCatch(activityXml, node.name, classified.errorHandling, targetFramework);
     activities += wrappedXml;
   }
 
@@ -1567,7 +1754,7 @@ export function generateRichXamlFromNodes(
   activities += `
         <ui:LogMessage Level="Info" Message="'=== Completed: ${escapeXml(workflowName)} ==='" DisplayName="Log Completion" />`;
 
-  const variablesBlock = renderVariablesBlock(allVariables);
+  const variablesBlock = renderVariablesBlock(allVariables, targetFramework);
 
   const xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(workflowName.replace(/\s+/g, "_"))}"
@@ -1596,7 +1783,9 @@ export function generateRichXamlFromNodes(
 export function generateRichXamlFromSpec(
   workflow: WorkflowSpec,
   sddContent?: string,
-  aiCenterSkills?: AICenterSkill[]
+  aiCenterSkills?: AICenterSkill[],
+  targetFramework?: TargetFramework,
+  autopilotEnabled?: boolean
 ): XamlGeneratorResult {
   if (aiCenterSkills) setAICenterSkillsContext(aiCenterSkills);
   const allGaps: XamlGap[] = [];
@@ -1636,7 +1825,7 @@ export function generateRichXamlFromSpec(
       activities += `
         <!-- Agent Step: ${escapeXml(stepName)} -->`;
       const agentXml = renderAgentTaskSequence(stepName, step.notes || "", step.role || "");
-      const wrappedAgent = wrapInTryCatch(agentXml, stepName, "catch");
+      const wrappedAgent = wrapInTryCatch(agentXml, stepName, "catch", targetFramework);
       activities += wrappedAgent;
       allVariables.push({ name: "str_AgentInput", type: "String", defaultValue: '""' });
       allVariables.push({ name: "str_AgentOutput", type: "String", defaultValue: '""' });
@@ -1654,7 +1843,7 @@ export function generateRichXamlFromSpec(
       activities += `
         <!-- Agent Decision: ${escapeXml(stepName)} -->`;
       const agentDecisionXml = renderAgentDecision(stepName, step.notes || "", step.role || "", "", "");
-      const wrappedDecision = wrapInTryCatch(agentDecisionXml, stepName, "catch");
+      const wrappedDecision = wrapInTryCatch(agentDecisionXml, stepName, "catch", targetFramework);
       activities += wrappedDecision;
       allVariables.push({ name: "bool_AgentDecisionResult", type: "Boolean", defaultValue: "False" });
       allVariables.push({ name: "str_AgentDecisionInput", type: "String", defaultValue: '""' });
@@ -1685,7 +1874,10 @@ export function generateRichXamlFromSpec(
         step.activityType,
         stepName,
         props,
-        step.selectorHint
+        step.selectorHint,
+        undefined,
+        undefined,
+        targetFramework
       );
 
       if (step.selectorHint) {
@@ -1699,7 +1891,7 @@ export function generateRichXamlFromSpec(
       }
 
       const errorHandling = step.errorHandling || "none";
-      const wrappedXml = wrapInTryCatch(activityXml, stepName, errorHandling);
+      const wrappedXml = wrapInTryCatch(activityXml, stepName, errorHandling, targetFramework);
       activities += wrappedXml;
     } else {
       const ctx: ActivityContext = {
@@ -1709,6 +1901,8 @@ export function generateRichXamlFromSpec(
         description: step.notes || "",
         role: "",
         isPainPoint: false,
+        targetFramework,
+        autopilotEnabled,
       };
 
       const classified = classifyActivity(ctx);
@@ -1720,10 +1914,13 @@ export function generateRichXamlFromSpec(
         classified.activityType,
         stepName,
         classified.properties,
-        classified.selectorHint
+        classified.selectorHint,
+        undefined,
+        undefined,
+        targetFramework
       );
 
-      const wrappedXml = wrapInTryCatch(activityXml, stepName, classified.errorHandling);
+      const wrappedXml = wrapInTryCatch(activityXml, stepName, classified.errorHandling, targetFramework);
       activities += wrappedXml;
     }
   }
@@ -1731,7 +1928,7 @@ export function generateRichXamlFromSpec(
   activities += `
         <ui:LogMessage Level="Info" Message="'=== Completed: ${escapeXml(wfName)} ==='" DisplayName="Log Completion" />`;
 
-  const variablesBlock = renderVariablesBlock(allVariables);
+  const variablesBlock = renderVariablesBlock(allVariables, targetFramework);
 
   const xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(wfName.replace(/\s+/g, "_"))}"
@@ -1763,7 +1960,10 @@ function extractSddSection(sddContent: string, sectionNumber: number): string | 
   return match ? match[1].trim() : null;
 }
 
-export function generateInitAllSettingsXaml(orchestratorArtifacts?: any): string {
+export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetFramework?: TargetFramework): string {
+  const isCSharp = targetFramework === "Portable";
+  const initConcat = isCSharp ? " + " : " &amp; ";
+  const toStringCall = isCSharp ? ".ToString()" : ".ToString";
   const assetCount = orchestratorArtifacts?.assets?.length || 0;
   const queueCount = orchestratorArtifacts?.queues?.length || 0;
   let assetActivities = `
@@ -1793,14 +1993,36 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any): string
     }
   }
 
+  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
+  const sq = isCSharp ? `&quot;` : `'`;
+
+  const excelBlock = isCSharp
+    ? `<ui:UseExcel DisplayName="Read Config File" ExcelFile="[str_ConfigPath]">
+      <ui:UseExcel.Body>
+        <Sequence DisplayName="Read Config Sheets">
+          <ui:ReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
+          <ui:ReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
+        </Sequence>
+      </ui:UseExcel.Body>
+    </ui:UseExcel>`
+    : `<ui:ExcelApplicationScope DisplayName="Read Config File" WorkbookPath="[str_ConfigPath]">
+      <ui:ExcelApplicationScope.Body>
+        <Sequence DisplayName="Read Config Sheets">
+          <ui:ExcelReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
+          <ui:ExcelReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
+        </Sequence>
+      </ui:ExcelApplicationScope.Body>
+    </ui:ExcelApplicationScope>`;
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="InitAllSettings"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -1814,20 +2036,13 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any): string
       <Variable x:TypeArguments="x:String" Name="sec_TempPass" />
       <Variable x:TypeArguments="scg2:DataRow" Name="row_Current" />
     </Sequence.Variables>
-    <ui:LogMessage Level="Info" Message="'Reading configuration from Config.xlsx...'" DisplayName="Log Config Start" />
-    <ui:ExcelApplicationScope DisplayName="Read Config File" WorkbookPath="[str_ConfigPath]">
-      <ui:ExcelApplicationScope.Body>
-        <Sequence DisplayName="Read Config Sheets">
-          <ui:ExcelReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
-          <ui:ExcelReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
-        </Sequence>
-      </ui:ExcelApplicationScope.Body>
-    </ui:ExcelApplicationScope>
+    <ui:LogMessage Level="Info" Message="[${sq}Reading configuration from Config.xlsx...${sq}]" DisplayName="Log Config Start" />
+    ${excelBlock}
     <ForEach x:TypeArguments="scg2:DataRow" DisplayName="Process Settings Rows" Values="[dt_Settings.Rows]">
       <ActivityAction x:TypeArguments="scg2:DataRow">
         <Argument x:TypeArguments="scg2:DataRow" x:Name="row" />
         <Sequence DisplayName="Process Setting Row">
-          <ui:LogMessage Level="Trace" Message="[&quot;Processing setting: &quot; &amp; row(&quot;Name&quot;).ToString]" DisplayName="Log Setting" />
+          <ui:LogMessage Level="Trace" Message="[&quot;Processing setting: &quot;${initConcat}row(&quot;Name&quot;)${toStringCall}]" DisplayName="Log Setting" />
         </Sequence>
       </ActivityAction>
     </ForEach>${assetActivities}
@@ -1835,7 +2050,7 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any): string
       <ActivityAction x:TypeArguments="scg2:DataRow">
         <Argument x:TypeArguments="scg2:DataRow" x:Name="constRow" />
         <Sequence DisplayName="Store Constant">
-          <ui:LogMessage Level="Trace" Message="[&quot;Loaded constant: &quot; &amp; constRow(&quot;Name&quot;).ToString]" DisplayName="Log Constant" />
+          <ui:LogMessage Level="Trace" Message="[&quot;Loaded constant: &quot;${initConcat}constRow(&quot;Name&quot;)${toStringCall}]" DisplayName="Log Constant" />
         </Sequence>
       </ActivityAction>
     </ForEach>
@@ -1844,7 +2059,9 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any): string
 </Activity>`;
 }
 
-export function generateReframeworkMainXaml(projectName: string, queueName: string): string {
+export function generateReframeworkMainXaml(projectName: string, queueName: string, targetFramework?: TargetFramework): string {
+  const isCSharp = targetFramework === "Portable";
+  const concat = isCSharp ? " + " : " &amp; ";
   const safeName = escapeXml(projectName.replace(/\s+/g, "_"));
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- REFramework Main.xaml — Auto-generated by CannonBall -->
@@ -1889,7 +2106,7 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
         <Transition.Condition>[bool_SystemReady]</Transition.Condition>
       </Transition>
       <Transition DisplayName="Init -> End (Failed)" To="{x:Reference State_End}">
-        <Transition.Condition>[Not bool_SystemReady]</Transition.Condition>
+        <Transition.Condition>[${isCSharp ? "!bool_SystemReady" : "Not bool_SystemReady"}]</Transition.Condition>
       </Transition>
     </State>
 
@@ -1906,10 +2123,10 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
         </Sequence>
       </State.Entry>
       <Transition DisplayName="Has Transaction -> Process" To="{x:Reference State_Process}">
-        <Transition.Condition>[qi_TransactionItem IsNot Nothing]</Transition.Condition>
+        <Transition.Condition>[${isCSharp ? "qi_TransactionItem != null" : "qi_TransactionItem IsNot Nothing"}]</Transition.Condition>
       </Transition>
       <Transition DisplayName="No Transaction -> End" To="{x:Reference State_End}">
-        <Transition.Condition>[qi_TransactionItem Is Nothing]</Transition.Condition>
+        <Transition.Condition>[${isCSharp ? "qi_TransactionItem == null" : "qi_TransactionItem Is Nothing"}]</Transition.Condition>
       </Transition>
     </State>
 
@@ -1940,7 +2157,32 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
               <ActivityAction x:TypeArguments="s:Exception">
                 <Argument x:TypeArguments="s:Exception" x:Name="exception" />
                 <Sequence DisplayName="Handle Exception">
-                  <ui:LogMessage Level="Error" Message="[&quot;Transaction failed: &quot; &amp; exception.Message]" DisplayName="Log Error" />
+                  <Sequence.Variables>
+                    <Variable x:TypeArguments="x:String" Name="str_ErrorScreenshotPath" Default="[&quot;screenshots/error_tx_&quot;${concat}int_TransactionNumber.ToString${isCSharp ? "()" : ""}${concat}&quot;_&quot;${concat}DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;)${concat}&quot;.png&quot;]" />
+                  </Sequence.Variables>
+                  <TryCatch DisplayName="Safe Screenshot Capture">
+                    <TryCatch.Try>
+                      <ui:TakeScreenshot DisplayName="Screenshot on Transaction Error" OutputPath="[str_ErrorScreenshotPath]" />
+                    </TryCatch.Try>
+                    <TryCatch.Catches>
+                      <Catch x:TypeArguments="s:Exception">
+                        <ActivityAction x:TypeArguments="s:Exception">
+                          <Argument x:TypeArguments="s:Exception" x:Name="ssEx" />
+                          <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}ssEx.Message]" DisplayName="Log Screenshot Failure" />
+                        </ActivityAction>
+                      </Catch>
+                    </TryCatch.Catches>
+                  </TryCatch>
+                  <ui:AddLogFields DisplayName="Add Error Diagnostic Fields">
+                    <ui:AddLogFields.Fields>
+                      <scg:Dictionary x:TypeArguments="x:String, ui:InArgument">
+                        <InArgument x:TypeArguments="x:String" x:Key="TransactionNumber">[int_TransactionNumber.ToString]</InArgument>
+                        <InArgument x:TypeArguments="x:String" x:Key="ErrorMessage">[exception.Message]</InArgument>
+                        <InArgument x:TypeArguments="x:String" x:Key="ScreenshotPath">[str_ErrorScreenshotPath]</InArgument>
+                      </scg:Dictionary>
+                    </ui:AddLogFields.Fields>
+                  </ui:AddLogFields>
+                  <ui:LogMessage Level="Error" Message="[&quot;Transaction #&quot;${concat}int_TransactionNumber.ToString${isCSharp ? "()" : ""}${concat}&quot; failed: &quot;${concat}exception.Message${concat}&quot; | Screenshot: &quot;${concat}str_ErrorScreenshotPath]" DisplayName="Log Error" />
                   <ui:InvokeWorkflowFile DisplayName="Set Transaction Status - Failed" WorkflowFileName="SetTransactionStatus.xaml">
                     <ui:InvokeWorkflowFile.Arguments>
                       <InArgument x:TypeArguments="ui:QueueItem" x:Key="in_TransactionItem">[qi_TransactionItem]</InArgument>
@@ -1961,7 +2203,7 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
       <State.Entry>
         <Sequence DisplayName="Cleanup">
           <ui:InvokeWorkflowFile DisplayName="Close All Applications" WorkflowFileName="CloseAllApplications.xaml" />
-          <ui:LogMessage Level="Info" Message="[&quot;=== ${safeName} Complete. Transactions processed: &quot; &amp; int_TransactionNumber.ToString]" DisplayName="Log End" />
+          <ui:LogMessage Level="Info" Message="[&quot;=== ${safeName} Complete. Transactions processed: &quot;${concat}int_TransactionNumber.ToString${isCSharp ? "()" : ""}]" DisplayName="Log End" />
         </Sequence>
       </State.Entry>
     </State>
@@ -1973,7 +2215,9 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
 </Activity>`;
 }
 
-export function generateGetTransactionDataXaml(queueName: string): string {
+export function generateGetTransactionDataXaml(queueName: string, targetFramework?: TargetFramework): string {
+  const isCSharp = targetFramework === "Portable";
+  const concat = isCSharp ? " + " : " &amp; ";
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- GetTransactionData.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Retrieves next queue item from "${escapeXml(queueName)}" -->
@@ -1994,14 +2238,14 @@ export function generateGetTransactionDataXaml(queueName: string): string {
       <Variable x:TypeArguments="x:Int32" Name="io_TransactionNumber" Default="0" />
     </Sequence.Variables>
     <ui:GetTransactionItem DisplayName="Get Queue Item" QueueName="[in_QueueName]" TransactionItem="[out_TransactionItem]" />
-    <If DisplayName="Check Transaction Item" Condition="[out_TransactionItem IsNot Nothing]">
+    <If DisplayName="Check Transaction Item" Condition="[${isCSharp ? "out_TransactionItem != null" : "out_TransactionItem IsNot Nothing"}]">
       <If.Then>
         <Sequence DisplayName="Transaction Found">
           <Assign DisplayName="Increment Transaction Counter">
             <Assign.To><OutArgument x:TypeArguments="x:Int32">[io_TransactionNumber]</OutArgument></Assign.To>
             <Assign.Value><InArgument x:TypeArguments="x:Int32">[io_TransactionNumber + 1]</InArgument></Assign.Value>
           </Assign>
-          <ui:LogMessage Level="Info" Message="[&quot;Processing transaction #&quot; &amp; io_TransactionNumber.ToString &amp; &quot; - Ref: &quot; &amp; out_TransactionItem.Reference]" DisplayName="Log Transaction" />
+          <ui:LogMessage Level="Info" Message="[&quot;Processing transaction #&quot;${concat}io_TransactionNumber.ToString${isCSharp ? "()" : ""}${concat}&quot; - Ref: &quot;${concat}out_TransactionItem.Reference]" DisplayName="Log Transaction" />
         </Sequence>
       </If.Then>
       <If.Else>
@@ -2012,7 +2256,14 @@ export function generateGetTransactionDataXaml(queueName: string): string {
 </Activity>`;
 }
 
-export function generateSetTransactionStatusXaml(): string {
+export function generateSetTransactionStatusXaml(targetFramework?: TargetFramework): string {
+  const isCSharp = targetFramework === "Portable";
+  const concat = isCSharp ? " + " : " &amp; ";
+  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
+  const screenshotDefault = isCSharp
+    ? `"Screenshots/Error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png"`
+    : `"Screenshots/Error_" &amp; DateTime.Now.ToString("yyyyMMdd_HHmmss") &amp; ".png"`;
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- SetTransactionStatus.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Marks queue item as Successful or Failed with retry logic -->
@@ -2020,10 +2271,10 @@ export function generateSetTransactionStatusXaml(): string {
 <Activity mc:Ignorable="sap sap2010" x:Class="SetTransactionStatus"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Set Transaction Status">
@@ -2031,6 +2282,7 @@ export function generateSetTransactionStatusXaml(): string {
       <Variable x:TypeArguments="ui:QueueItem" Name="in_TransactionItem" />
       <Variable x:TypeArguments="x:String" Name="in_Status" Default="'Successful'" />
       <Variable x:TypeArguments="x:String" Name="in_ErrorMessage" />
+      <Variable x:TypeArguments="x:String" Name="str_ScreenshotPath" Default="[${screenshotDefault}]" />
     </Sequence.Variables>
     <If DisplayName="Check Status" Condition="[in_Status = &quot;Successful&quot;]">
       <If.Then>
@@ -2038,8 +2290,26 @@ export function generateSetTransactionStatusXaml(): string {
       </If.Then>
       <If.Else>
         <Sequence DisplayName="Set Failed">
+          <TryCatch DisplayName="Safe Screenshot on Transaction Failure">
+            <TryCatch.Try>
+              <Sequence DisplayName="Capture Screenshot">
+                <ui:TakeScreenshot DisplayName="Screenshot on Transaction Failure" OutputPath="[str_ScreenshotPath]" />
+                <ui:LogMessage Level="Info" Message="[&quot;Transaction failure screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Failure Screenshot" />
+              </Sequence>
+            </TryCatch.Try>
+            <TryCatch.Catches>
+              <Catch x:TypeArguments="s:Exception">
+                <ActivityAction x:TypeArguments="s:Exception">
+                  <ActivityAction.Argument>
+                    <DelegateInArgument x:TypeArguments="s:Exception" Name="ssEx" />
+                  </ActivityAction.Argument>
+                  <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}ssEx.Message]" DisplayName="Log Screenshot Failure" />
+                </ActivityAction>
+              </Catch>
+            </TryCatch.Catches>
+          </TryCatch>
           <ui:SetTransactionStatus DisplayName="Set Failed" TransactionItem="[in_TransactionItem]" Status="Failed" ErrorType="Application" Reason="[in_ErrorMessage]" />
-          <ui:LogMessage Level="Error" Message="[&quot;Transaction failed: &quot; &amp; in_ErrorMessage]" DisplayName="Log Failure" />
+          <ui:LogMessage Level="Error" Message="[&quot;Transaction failed: &quot;${concat}in_ErrorMessage]" DisplayName="Log Failure" />
         </Sequence>
       </If.Else>
     </If>
@@ -2047,33 +2317,43 @@ export function generateSetTransactionStatusXaml(): string {
 </Activity>`;
 }
 
-export function generateCloseAllApplicationsXaml(): string {
+export function generateCloseAllApplicationsXaml(targetFramework: TargetFramework = "Windows"): string {
+  const isCrossPlatform = targetFramework === "Portable";
+  const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
+  const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
+
+  const closeBody = isCrossPlatform
+    ? `<ui:LogMessage Level="Info" Message="'Closing all applications (Cross-Platform mode)...'" DisplayName="Log Cleanup Start" />
+          <ui:LogMessage Level="Info" Message="'Application cleanup completed'" DisplayName="Log Cleanup Complete" />`
+    : `<ui:LogMessage Level="Info" Message="'Closing all applications...'" DisplayName="Log Cleanup Start" />
+          <ui:CloseApplication DisplayName="Close Browser" />
+          <ui:LogMessage Level="Info" Message="'All applications closed'" DisplayName="Log Cleanup Complete" />`;
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- CloseAllApplications.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Gracefully closes all open applications before ending -->
+${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not available, using log-only cleanup -->" : ""}
 <Activity mc:Ignorable="sap sap2010" x:Class="CloseAllApplications"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Close All Applications">
     <TryCatch DisplayName="Safe Cleanup">
       <TryCatch.Try>
         <Sequence DisplayName="Close Applications">
-          <ui:LogMessage Level="Info" Message="'Closing all applications...'" DisplayName="Log Cleanup Start" />
-          <ui:CloseApplication DisplayName="Close Browser" />
-          <ui:LogMessage Level="Info" Message="'All applications closed'" DisplayName="Log Cleanup Complete" />
+          ${closeBody}
         </Sequence>
       </TryCatch.Try>
       <TryCatch.Catches>
         <Catch x:TypeArguments="s:Exception">
           <ActivityAction x:TypeArguments="s:Exception">
             <Argument x:TypeArguments="s:Exception" x:Name="closeEx" />
-            <ui:LogMessage Level="Warn" Message="[&quot;Error during cleanup: &quot; &amp; closeEx.Message]" DisplayName="Log Cleanup Error" />
+            <ui:LogMessage Level="Warn" Message="[&quot;Error during cleanup: &quot;${isCrossPlatform ? " + " : " &amp; "}closeEx.Message]" DisplayName="Log Cleanup Error" />
           </ActivityAction>
         </Catch>
       </TryCatch.Catches>
@@ -2082,25 +2362,35 @@ export function generateCloseAllApplicationsXaml(): string {
 </Activity>`;
 }
 
-export function generateKillAllProcessesXaml(): string {
-  return `<?xml version="1.0" encoding="utf-8"?>
-<!-- KillAllProcesses.xaml — Auto-generated by CannonBall -->
-<!-- REFramework: Force-kills application processes on unrecoverable errors -->
-<Activity mc:Ignorable="sap sap2010" x:Class="KillAllProcesses"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
-  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
-  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <Sequence DisplayName="Kill All Processes">
-    <ui:LogMessage Level="Warn" Message="'Force killing all application processes...'" DisplayName="Log Kill Start" />
+export function generateKillAllProcessesXaml(targetFramework: TargetFramework = "Windows"): string {
+  const isCrossPlatform = targetFramework === "Portable";
+  const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
+  const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
+
+  const killBody = isCrossPlatform
+    ? `<ui:LogMessage Level="Warn" Message="'Process cleanup requested (Cross-Platform mode — KillProcess not available on Serverless)'" DisplayName="Log Kill Start" />
+    <ui:LogMessage Level="Info" Message="'Process cleanup completed'" DisplayName="Log Kill Complete" />`
+    : `<ui:LogMessage Level="Warn" Message="'Force killing all application processes...'" DisplayName="Log Kill Start" />
     <ui:KillProcess DisplayName="Kill Chrome" ProcessName="chrome" />
     <ui:KillProcess DisplayName="Kill IE" ProcessName="iexplore" />
     <ui:KillProcess DisplayName="Kill Excel" ProcessName="EXCEL" />
-    <ui:LogMessage Level="Info" Message="'All processes terminated'" DisplayName="Log Kill Complete" />
+    <ui:LogMessage Level="Info" Message="'All processes terminated'" DisplayName="Log Kill Complete" />`;
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+<!-- KillAllProcesses.xaml — Auto-generated by CannonBall -->
+<!-- REFramework: Force-kills application processes on unrecoverable errors -->
+${isCrossPlatform ? "<!-- Cross-Platform (Portable) — KillProcess not available on Serverless, using log-only cleanup -->" : ""}
+<Activity mc:Ignorable="sap sap2010" x:Class="KillAllProcesses"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:s="clr-namespace:System;assembly=${nsS}"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Kill All Processes">
+    ${killBody}
   </Sequence>
 </Activity>`;
 }
@@ -2154,6 +2444,8 @@ export type DhgOptions = {
   extractedArtifacts?: DhgExtractedArtifacts;
   analysisReports?: Array<{ fileName: string; report: AnalysisReport }>;
   automationType?: "rpa" | "agent" | "hybrid";
+  targetFramework?: TargetFramework;
+  autopilotEnabled?: boolean;
 };
 
 export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
@@ -2171,6 +2463,8 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     extractedArtifacts,
     analysisReports,
     automationType,
+    targetFramework,
+    autopilotEnabled,
   } = opts;
 
   const selectorGaps = gaps.filter((g) => g.category === "selector");
@@ -2188,10 +2482,16 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   if (description) md += `**Description:** ${description}\n`;
   md += `**Generated:** ${new Date().toISOString().split("T")[0]}\n`;
   md += `**Architecture:** ${useReFramework ? "REFramework (Queue-based transactional)" : "Sequential (Linear workflow)"}\n`;
+  if (targetFramework === "Portable") {
+    md += `**Target Framework:** Cross-Platform (Portable) — Serverless robot compatible\n`;
+    md += `**Expression Language:** C# (CSharp)\n`;
+    md += `**Runtime:** .NET 6.0 (lib/net6.0)\n`;
+  }
   if (automationType && automationType !== "rpa") {
     const atLabel = automationType === "agent" ? "UiPath Agent (AI-driven autonomous)" : "Hybrid (RPA + Agent)";
     md += `**Automation Type:** ${atLabel}\n`;
   }
+  if (autopilotEnabled) md += `**Autopilot:** Enabled — self-healing selectors and AI-assisted recovery active\n`;
   if (enrichment) md += `**AI Enrichment:** Applied — activities use system-specific selectors and real property values\n`;
 
   const tier2Items = [...endpointGaps, ...configGaps];
@@ -3173,6 +3473,26 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   md += `- [ ] Triggers/schedules active\n`;
   md += `- [ ] Monitoring and alerting configured\n`;
   md += `- [ ] Runbook documentation completed\n`;
+
+  if (targetFramework === "Portable") {
+    sectionNum++;
+    md += `\n## ${sectionNum}. Serverless / Cross-Platform Notes\n\n`;
+    md += `This project targets **Cross-Platform (Portable)** and is designed to run on **Serverless robots**.\n\n`;
+    md += `**Key Differences from Windows:**\n`;
+    md += `- **Expression Language:** CSharp (not VB.NET) — all expressions use C# syntax\n`;
+    md += `- **Target Runtime:** .NET 6.0 (lib/net6.0 in the nupkg)\n`;
+    md += `- **Modern Design Activities:** Uses \`UseExcel\`, \`UseBrowser\`, \`SendMail\`, \`GetMail\` instead of legacy equivalents\n`;
+    md += `- **No Desktop Interaction:** \`CloseApplication\` and \`KillProcess\` are not available — cleanup uses log-only fallbacks\n`;
+    md += `- **Screenshot-on-Error:** All error handlers capture a screenshot before logging for diagnostic purposes\n`;
+    if (autopilotEnabled) {
+      md += `- **Autopilot/Self-Healing:** Enabled — selectors use AI-assisted recovery to adapt to UI changes automatically\n`;
+    }
+    md += `\n**Testing Considerations:**\n`;
+    md += `- Test in UiPath Studio with Cross-Platform profile selected\n`;
+    md += `- Verify all expressions compile under CSharp language\n`;
+    md += `- Ensure no Windows-only activities are referenced\n`;
+    md += `- Validate Serverless robot execution in Orchestrator test environment\n`;
+  }
 
   return md;
 }

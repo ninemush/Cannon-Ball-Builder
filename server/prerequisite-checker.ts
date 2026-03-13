@@ -19,7 +19,15 @@ export interface PrerequisiteReport {
   passCount: number;
 }
 
-export async function checkMachineAvailability(): Promise<CheckResult> {
+export async function checkMachineAvailability(hasServerless?: boolean): Promise<CheckResult> {
+  if (hasServerless) {
+    return {
+      name: "Machine Availability",
+      status: "pass",
+      detail: "Serverless runtime detected — machine templates are not required for Serverless robots",
+    };
+  }
+
   try {
     const machines = await orch.getMachines();
     if (machines.length === 0) {
@@ -27,7 +35,7 @@ export async function checkMachineAvailability(): Promise<CheckResult> {
         name: "Machine Availability",
         status: "blocking",
         detail: "No machines registered in the target folder",
-        remediation: "Register at least one machine in Orchestrator > Machines before deploying.",
+        remediation: "Register at least one machine in Orchestrator > Machines before deploying, or use Serverless robots which don't require machine templates.",
       };
     }
 
@@ -64,7 +72,15 @@ export async function checkMachineAvailability(): Promise<CheckResult> {
   }
 }
 
-export async function checkRobotLicense(): Promise<CheckResult> {
+export async function checkRobotLicense(hasServerless?: boolean): Promise<CheckResult> {
+  if (hasServerless) {
+    return {
+      name: "Robot License",
+      status: "pass",
+      detail: "Serverless runtime detected — Serverless robots are managed by UiPath cloud infrastructure and do not require traditional robot licenses",
+    };
+  }
+
   try {
     const robots = await orch.getRobots();
     if (robots.length === 0) {
@@ -72,27 +88,27 @@ export async function checkRobotLicense(): Promise<CheckResult> {
         name: "Robot License",
         status: "blocking",
         detail: "No robots found in the target folder",
-        remediation: "Ensure at least one Unattended robot is available in the folder. Check Orchestrator > Robots.",
+        remediation: "Ensure at least one Unattended robot is available in the folder. Check Orchestrator > Robots. Alternatively, use Serverless robots which are managed by UiPath cloud.",
       };
     }
 
     const unattended = robots.filter(
-      (r) => r.Type === "Unattended" || r.Type === "NonProduction"
+      (r) => r.Type === "Unattended" || r.Type === "NonProduction" || r.Type === "Serverless"
     );
 
     if (unattended.length === 0) {
       return {
         name: "Robot License",
         status: "warning",
-        detail: `${robots.length} robot(s) found, but none are Unattended type`,
-        remediation: "For background automation, at least one Unattended robot is recommended.",
+        detail: `${robots.length} robot(s) found, but none are Unattended or Serverless type`,
+        remediation: "For background automation, at least one Unattended or Serverless robot is recommended.",
       };
     }
 
     return {
       name: "Robot License",
       status: "pass",
-      detail: `${unattended.length} Unattended robot(s) available out of ${robots.length} total`,
+      detail: `${unattended.length} Unattended/Serverless robot(s) available out of ${robots.length} total`,
     };
   } catch (err: any) {
     return {
@@ -296,10 +312,20 @@ export async function checkAppsAvailability(): Promise<CheckResult> {
   }
 }
 
-export async function checkAll(): Promise<PrerequisiteReport> {
+export async function checkAll(hasServerless?: boolean): Promise<PrerequisiteReport> {
+  let serverless = hasServerless;
+  if (serverless === undefined) {
+    try {
+      const sessions = await orch.getSessions();
+      serverless = sessions.some((s: any) =>
+        (s.RuntimeType || "").toLowerCase() === "serverless" ||
+        (s.RobotType || "").toLowerCase() === "serverless"
+      );
+    } catch {}
+  }
   const results = await Promise.all([
-    checkMachineAvailability(),
-    checkRobotLicense(),
+    checkMachineAvailability(serverless),
+    checkRobotLicense(serverless),
     checkFolderPermissions(),
     checkPackageFeedWritable(),
     checkActionCenterLicense(),

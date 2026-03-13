@@ -19,6 +19,7 @@ import {
   makeUiPathCompliant,
   type XamlGeneratorResult,
   type XamlGap,
+  type TargetFramework,
 } from "./xaml-generator";
 import { enrichWithAI, type EnrichmentResult } from "./ai-xaml-enricher";
 import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
@@ -401,25 +402,23 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     || orchestratorArtifacts?.queues?.[0]?.name
     || "TransactionQueue";
 
-  return new Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[]; cacheHit?: boolean }>((resolve, reject) => {
-    const buffers: Buffer[] = [];
-    const passthrough = new PassThrough();
-    passthrough.on("data", (chunk: Buffer) => buffers.push(chunk));
-    passthrough.on("end", () => {
-      const buffer = Buffer.concat(buffers);
-      if (ideaId && fingerprint) {
-        evictOldestCacheEntry();
-        packageBuildCache.set(ideaId, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment });
-        console.log(`[UiPath Cache] Stored build for ${ideaId} (${buffer.length} bytes, v${version})`);
-      }
-      resolve({ buffer, gaps: allGaps, usedPackages: allUsedPkgs });
-    });
+  const buffers: Buffer[] = [];
+  const passthrough = new PassThrough();
+  passthrough.on("data", (chunk: Buffer) => buffers.push(chunk));
+
+  const streamDone = new Promise<Buffer>((resolve, reject) => {
+    passthrough.on("end", () => resolve(Buffer.concat(buffers)));
     passthrough.on("error", reject);
+  });
 
-    const archive = archiver("zip", { zlib: { level: 9 } });
-    archive.pipe(passthrough);
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.pipe(passthrough);
 
-    const libPath = "lib/net45";
+  const explicitFramework = (pkg as any).targetFramework;
+  const isServerless = explicitFramework === "Portable"
+    || !!(pkg as any).isServerless
+    || (!explicitFramework && !!(_probeCache?.serverlessDetected) && !_probeCache?.flags?.hasUnattendedSlots);
+    const libPath = isServerless ? "lib/net6.0" : "lib/net45";
     const xamlResults: XamlGeneratorResult[] = [];
 
     const contentTypesXml = `<?xml version="1.0" encoding="utf-8"?>
@@ -451,20 +450,39 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
 </coreProperties>`;
     archive.append(coreProps, { name: `package/services/metadata/core-properties/${corePropsId}.psmdcp` });
 
+    const knownVersionMap: Record<string, string> = isServerless
+      ? {
+          "UiPath.System.Activities": "[25.10.0]",
+          "UiPath.UIAutomation.Activities": "[25.10.0]",
+          "UiPath.Web.Activities": "[2.5.0]",
+          "UiPath.Excel.Activities": "[3.18.0]",
+          "UiPath.Mail.Activities": "[2.5.0]",
+          "UiPath.Database.Activities": "[2.2.0]",
+        }
+      : {
+          "UiPath.System.Activities": "[23.10.0]",
+          "UiPath.UIAutomation.Activities": "[23.10.0]",
+          "UiPath.Web.Activities": "[1.18.0]",
+          "UiPath.Excel.Activities": "[2.22.0]",
+          "UiPath.Mail.Activities": "[1.20.0]",
+          "UiPath.Database.Activities": "[1.8.0]",
+        };
     const deps: Record<string, string> = {
-      "UiPath.System.Activities": "[23.10.0]",
-      "UiPath.UIAutomation.Activities": "[23.10.0]",
-      "UiPath.Web.Activities": "[1.18.0]",
+      "UiPath.System.Activities": knownVersionMap["UiPath.System.Activities"],
+      "UiPath.UIAutomation.Activities": knownVersionMap["UiPath.UIAutomation.Activities"],
+      "UiPath.Web.Activities": knownVersionMap["UiPath.Web.Activities"],
     };
     if (pkg.dependencies) {
       for (const d of pkg.dependencies) {
-        if (!deps[d]) deps[d] = "*";
+        if (!deps[d]) deps[d] = knownVersionMap[d] || "*";
       }
     }
 
     const analysisReports: { fileName: string; report: AnalysisReport }[] = [];
+    const tf: TargetFramework = isServerless ? "Portable" : "Windows";
+    const apEnabled = !!(pkg as any).autopilotEnabled || !!(_probeCache?.flags?.autopilot);
     function compliancePass(rawXaml: string, fileName: string): string {
-      const compliant = makeUiPathCompliant(rawXaml);
+      const compliant = makeUiPathCompliant(rawXaml, tf);
       const { fixed, report } = analyzeAndFix(compliant);
       analysisReports.push({ fileName, report });
       if (report.totalAutoFixed > 0) {
@@ -490,7 +508,9 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
             decompEdges,
             wfName,
             decomp.description || "",
-            enrichment
+            enrichment,
+            tf,
+            apEnabled
           );
           xamlResults.push(result);
           archive.append(compliancePass(result.xaml, `${wfName}.xaml`), { name: `${libPath}/${wfName}.xaml` });
@@ -502,7 +522,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
 
     for (const wf of workflows) {
       const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
-      const result = generateRichXamlFromSpec(wf, sddContent || undefined);
+      const result = generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled);
       xamlResults.push(result);
       archive.append(compliancePass(result.xaml, `${wfName}.xaml`), { name: `${libPath}/${wfName}.xaml` });
       if (wfName === "Main") hasMain = true;
@@ -515,7 +535,9 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
         processEdges,
         useReFramework ? "Process" : projectName,
         pkg.description || "",
-        enrichment
+        enrichment,
+        tf,
+        apEnabled
       );
       xamlResults.push(processResult);
       const processFileName = useReFramework ? "Process" : projectName;
@@ -523,25 +545,25 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       console.log(`[UiPath] Generated process XAML from ${processNodes.length} map nodes: ${processResult.gaps.length} gaps`);
     }
 
-    const initXaml = generateInitAllSettingsXaml(orchestratorArtifacts);
+    const initXaml = generateInitAllSettingsXaml(orchestratorArtifacts, tf);
     archive.append(compliancePass(initXaml, "InitAllSettings.xaml"), { name: `${libPath}/InitAllSettings.xaml` });
 
     if (useReFramework && !hasMain) {
       console.log(`[UiPath] Generating REFramework structure (queue: ${queueName})`);
-      const mainXaml = generateReframeworkMainXaml(projectName, queueName);
+      const mainXaml = generateReframeworkMainXaml(projectName, queueName, tf);
       archive.append(compliancePass(mainXaml, "Main.xaml"), { name: `${libPath}/Main.xaml` });
       hasMain = true;
 
-      const getTransXaml = generateGetTransactionDataXaml(queueName);
+      const getTransXaml = generateGetTransactionDataXaml(queueName, tf);
       archive.append(compliancePass(getTransXaml, "GetTransactionData.xaml"), { name: `${libPath}/GetTransactionData.xaml` });
 
-      const setStatusXaml = generateSetTransactionStatusXaml();
+      const setStatusXaml = generateSetTransactionStatusXaml(tf);
       archive.append(compliancePass(setStatusXaml, "SetTransactionStatus.xaml"), { name: `${libPath}/SetTransactionStatus.xaml` });
 
-      const closeAppsXaml = generateCloseAllApplicationsXaml();
+      const closeAppsXaml = generateCloseAllApplicationsXaml(tf);
       archive.append(compliancePass(closeAppsXaml, "CloseAllApplications.xaml"), { name: `${libPath}/CloseAllApplications.xaml` });
 
-      const killXaml = generateKillAllProcessesXaml();
+      const killXaml = generateKillAllProcessesXaml(tf);
       archive.append(compliancePass(killXaml, "KillAllProcesses.xaml"), { name: `${libPath}/KillAllProcesses.xaml` });
     } else if (!hasMain) {
       let mainActivities = `
@@ -569,7 +591,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       mainActivities += `
         <ui:LogMessage Level="Info" Message="'Process completed successfully'" DisplayName="Log Completion" />`;
 
-      const closeAppsXaml = generateCloseAllApplicationsXaml();
+      const closeAppsXaml = generateCloseAllApplicationsXaml(tf);
       archive.append(compliancePass(closeAppsXaml, "CloseAllApplications.xaml"), { name: `${libPath}/CloseAllApplications.xaml` });
 
       const mainXaml = buildXaml("Main", `${projectName} - Main Workflow`, mainActivities);
@@ -580,7 +602,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     archive.append(configCsv, { name: `${libPath}/Data/Config.xlsx` });
 
     const richPackages = aggregatePackages(xamlResults);
-    const packageVersionMap: Record<string, string> = {
+    const windowsPackageVersionMap: Record<string, string> = {
       "UiPath.System.Activities": "[23.10.0]",
       "UiPath.UIAutomation.Activities": "[23.10.0]",
       "UiPath.Web.Activities": "[1.18.0]",
@@ -588,6 +610,15 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       "UiPath.Mail.Activities": "[1.20.0]",
       "UiPath.Database.Activities": "[1.8.0]",
     };
+    const crossPlatformPackageVersionMap: Record<string, string> = {
+      "UiPath.System.Activities": "[25.10.0]",
+      "UiPath.UIAutomation.Activities": "[25.10.0]",
+      "UiPath.Web.Activities": "[2.5.0]",
+      "UiPath.Excel.Activities": "[3.18.0]",
+      "UiPath.Mail.Activities": "[2.5.0]",
+      "UiPath.Database.Activities": "[2.2.0]",
+    };
+    const packageVersionMap = isServerless ? crossPlatformPackageVersionMap : windowsPackageVersionMap;
     for (const rp of richPackages) {
       if (!deps[rp]) {
         deps[rp] = packageVersionMap[rp] || "*";
@@ -595,14 +626,31 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     }
 
     if (!deps["UiPath.Excel.Activities"]) {
-      deps["UiPath.Excel.Activities"] = "[2.22.0]";
+      deps["UiPath.Excel.Activities"] = isServerless ? "[3.18.0]" : "[2.22.0]";
+    }
+
+    const allDepEntries = Object.entries(deps);
+    if (allDepEntries.length > 0) {
+      const feedResolutions = await Promise.allSettled(
+        allDepEntries.map(([pkgId, ver]) => resolvePackageVersionFromFeed(pkgId, ver))
+      );
+      for (let i = 0; i < allDepEntries.length; i++) {
+        const [pkgId, currentVer] = allDepEntries[i];
+        const result = feedResolutions[i];
+        if (result.status === "fulfilled" && result.value !== "*") {
+          if (currentVer === "*" || result.value !== currentVer) {
+            deps[pkgId] = result.value;
+          }
+        }
+      }
     }
 
     const allGaps = aggregateGaps(xamlResults);
     const allUsedPkgs = Object.keys(deps);
 
     const entryPointId = generateUuid();
-    const projectJson = {
+    const studioVer = isServerless ? "25.10.0" : "23.10.0";
+    const projectJson: Record<string, any> = {
       name: projectName,
       description: pkg.description || "",
       main: "Main.xaml",
@@ -610,7 +658,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       webServices: [],
       entitiesStores: [],
       schemaVersion: "4.0",
-      studioVersion: "23.10.0",
+      studioVersion: studioVer,
       projectVersion: version,
       runtimeOptions: {
         autoDispose: false,
@@ -630,9 +678,9 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
         libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
         processOptions: { ignoredFiles: [] },
         fileInfoCollection: [],
-        modernBehavior: false,
+        modernBehavior: isServerless,
       },
-      expressionLanguage: "VisualBasic",
+      expressionLanguage: isServerless ? "CSharp" : "VisualBasic",
       entryPoints: [
         {
           filePath: "Main.xaml",
@@ -645,6 +693,13 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       templateProjectData: {},
       publishData: {},
     };
+    if (isServerless) {
+      projectJson.targetFramework = "Portable";
+    }
+    if (apEnabled) {
+      projectJson.designOptions.autopilotEnabled = true;
+      projectJson.designOptions.selfHealingSelectors = true;
+    }
     archive.append(JSON.stringify(projectJson, null, 2), { name: `${libPath}/project.json` });
 
     const depEntries = Object.entries(deps).map(
@@ -705,12 +760,21 @@ ${depEntries}
       extractedArtifacts: orchestratorArtifacts || undefined,
       analysisReports,
       automationType: pkg._automationType || undefined,
+      targetFramework: tf,
+      autopilotEnabled: apEnabled,
     });
     archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
     console.log(`[UiPath] Generated Developer Handoff Guide: ${allGaps.length} gaps, ~${(allGaps.reduce((s: number, g: XamlGap) => s + g.estimatedMinutes, 0) / 60).toFixed(1)}h effort, REFramework=${useReFramework}`);
 
     archive.finalize();
-  });
+
+  const buffer = await streamDone;
+  if (ideaId && fingerprint) {
+    evictOldestCacheEntry();
+    packageBuildCache.set(ideaId, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment });
+    console.log(`[UiPath Cache] Stored build for ${ideaId} (${buffer.length} bytes, v${version})`);
+  }
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs };
 }
 
 async function uploadNupkgBuffer(
@@ -917,6 +981,33 @@ function folderHeaders(config: UiPathConfig, token: string): Record<string, stri
   }
   return headers;
 }
+
+async function resolvePackageVersionFromFeed(packageId: string, knownVersion: string): Promise<string> {
+  try {
+    const config = await getUiPathConfig();
+    if (!config) return knownVersion;
+    const token = await getAccessToken(config);
+    const base = orchBaseUrl(config);
+    const hdrs = folderHeaders(config, token);
+    const feedUrl = `${base}/odata/Processes/UiPath.Server.Configuration.OData.GetPackageVersions(packageId='${encodeURIComponent(packageId)}')`;
+    const res = await fetch(feedUrl, { headers: hdrs, signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      const data = await res.json();
+      const versions = data.value || [];
+      if (versions.length > 0) {
+        const latest = versions[versions.length - 1]?.Version || versions[0]?.Version;
+        if (latest) {
+          console.log(`[UiPath Feed] Resolved ${packageId} to v${latest} from tenant feed`);
+          return `[${latest}]`;
+        }
+      }
+    }
+  } catch {
+  }
+  return knownVersion;
+}
+
+export { resolvePackageVersionFromFeed };
 
 async function tryCreateRelease(
   base: string,
@@ -1835,6 +1926,7 @@ type UnifiedProbeResult = {
     storageBuckets: boolean;
     aiCenter: boolean;
     agents: boolean;
+    autopilot: boolean;
     maestro: boolean;
     integrationService: boolean;
     ixp: boolean;
@@ -1845,6 +1937,7 @@ type UnifiedProbeResult = {
     assistant: boolean;
     attendedRobots: boolean;
     studioProjects: boolean;
+    hasUnattendedSlots: boolean;
   };
   agentCapabilities?: AgentCapabilities;
   grantedScopes: string[];
@@ -1854,6 +1947,7 @@ type UnifiedProbeResult = {
   governancePolicies?: GovernancePolicy[];
   attendedRobotInfo?: AttendedRobotInfo;
   studioProjectInfo?: StudioProcessesResult;
+  serverlessDetected?: boolean;
   cachedAt: number;
   probeFailed?: boolean;
   probeError?: string;
@@ -1878,10 +1972,11 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       documentUnderstanding: false, generativeExtraction: false, communicationsMining: false,
       dataService: false, platformManagement: false,
       environments: true, triggers: true, storageBuckets: false, aiCenter: false, agents: false,
+      autopilot: false,
       maestro: false, integrationService: false, ixp: false,
       automationHub: false, automationOps: false, automationStore: false,
       apps: false, assistant: false,
-      attendedRobots: false, studioProjects: false,
+      attendedRobots: false, studioProjects: false, hasUnattendedSlots: false,
     },
     grantedScopes: [],
     licenseInfo: null,
@@ -2088,6 +2183,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     }
 
     let agentsAvailable = false;
+    let autopilotAvailable = false;
     let agentCapabilities: { autonomous: boolean; conversational: boolean; coded: boolean } = { autonomous: false, conversational: false, coded: false };
     const agentEndpoints = [
       { url: `${base}/agentstudio_/api/v1/agents?$top=1`, label: "Agent Studio" },
@@ -2101,6 +2197,10 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       const pr = agentProbeResults[i];
       if (pr.status === "fulfilled" && pr.value.ok) {
         agentsAvailable = true;
+        if (agentEndpoints[i].label === "Autopilot") {
+          autopilotAvailable = true;
+          console.log(`[UiPath Probe] Autopilot/self-healing capability detected`);
+        }
         console.log(`[UiPath Probe] Agent capability discovered via ${agentEndpoints[i].label} API`);
         try {
           const body = await pr.value.json();
@@ -2191,6 +2291,37 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     const attendedData = attendedResult.status === "fulfilled" ? attendedResult.value : null;
     const studioData = studioResult.status === "fulfilled" ? studioResult.value : null;
 
+    let serverlessDetected = false;
+    let hasUnattendedSlots = false;
+    try {
+      const sessRes = await fetch(`${orchBase}/odata/Sessions?$top=20`, { headers: hdrs });
+      if (sessRes.ok) {
+        const sessData = await sessRes.json();
+        const sessions = sessData.value || [];
+        serverlessDetected = sessions.some((s: any) =>
+          (s.RuntimeType === "Serverless" || s.RobotType === "Serverless" ||
+           (s.MachineTemplateName || "").toLowerCase().includes("serverless"))
+        );
+        hasUnattendedSlots = sessions.some((s: any) =>
+          s.RuntimeType === "Unattended" || s.RobotType === "Unattended"
+        );
+        if (serverlessDetected) {
+          console.log("[UiPath Probe] Serverless runtime detected from robot sessions");
+        }
+      }
+    } catch {
+    }
+    if (!hasUnattendedSlots) {
+      try {
+        const machRes = await fetch(`${orchBase}/odata/Machines?$top=10&$select=UnattendedSlots`, { headers: hdrs, signal: AbortSignal.timeout(5000) });
+        if (machRes.ok) {
+          const machData = await machRes.json();
+          const machines = machData.value || [];
+          hasUnattendedSlots = machines.some((m: any) => (m.UnattendedSlots || 0) > 0);
+        }
+      } catch {}
+    }
+
     const result: UnifiedProbeResult = {
       configured: true,
       flags: {
@@ -2207,6 +2338,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         storageBuckets: bucketsAvailable,
         aiCenter: aiAvailable,
         agents: agentsAvailable,
+        autopilot: autopilotAvailable,
         maestro: maestroAvailable,
         integrationService: integrationServiceAvailable,
         ixp: ixpAvailable,
@@ -2217,6 +2349,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         assistant: assistantAvailable,
         attendedRobots: attendedData?.available ?? false,
         studioProjects: studioData?.available ?? false,
+        hasUnattendedSlots,
       },
       agentCapabilities: agentsAvailable ? agentCapabilities : undefined,
       grantedScopes,
@@ -2226,6 +2359,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       governancePolicies: govData?.policies,
       attendedRobotInfo: attendedData ?? undefined,
       studioProjectInfo: studioData ?? undefined,
+      serverlessDetected,
       cachedAt: Date.now(),
     };
 

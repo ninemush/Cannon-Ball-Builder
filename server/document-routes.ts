@@ -4,8 +4,8 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { getPlatformCapabilities, buildNuGetPackage, getAICenterSkills } from "./uipath-integration";
-import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport, setAICenterSkillsContext, getReferencedMLSkillNames } from "./xaml-generator";
+import { getPlatformCapabilities, buildNuGetPackage, getAICenterSkills, resolvePackageVersionFromFeed } from "./uipath-integration";
+import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport, setAICenterSkillsContext, getReferencedMLSkillNames, TargetFramework } from "./xaml-generator";
 import { analyzeAndFix } from "./workflow-analyzer";
 import { evaluateTransition } from "./stage-transition";
 import { approveDocument } from "./document-service";
@@ -267,9 +267,9 @@ Include these sections:
 
 1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.). Explain how Action Center, Data Fabric, and Apps work together in this solution. If attended robots are available, explicitly recommend attended vs unattended execution for each component with justification.
 2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses. For each human-in-the-loop step, specify the complete form schema and SLA configuration. Reference existing deployed processes that can be reused if applicable.
-3) UiPath Activities and Packages Required — list specific UiPath packages and activities. Include Integration Service connectors if applicable. Include UiPath.Persistence.Activities for Action Center tasks and Data Fabric HTTP activities for entity operations.
+3) UiPath Activities and Packages Required — list specific UiPath packages and activities. Include Integration Service connectors if applicable. Include UiPath.Persistence.Activities for Action Center tasks and Data Fabric HTTP activities for entity operations. When targeting Serverless (Cross-Platform) robots, use Modern Design activities only: UseExcel instead of ExcelApplicationScope, UseBrowser instead of OpenBrowser, SendMail/GetMail instead of SendSmtpMailMessage/GetImapMailMessage. Do NOT use CloseApplication or KillProcess on Serverless.
 4) Integration Points and API/System Connections — all external systems, APIs, databases, and how they connect (Integration Service connectors, custom HTTP, direct DB, etc.). Include Data Fabric entity service endpoints for data persistence.
-5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling
+5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling. Include screenshot-on-error as a best practice: every TryCatch error handler should capture a screenshot before logging, especially critical for Serverless robots where no RDP is available for debugging.
 6) Security Considerations — credential management via Orchestrator assets, role-based access, data encryption, audit trail
 7) Test Strategy — unit tests, integration tests, UAT approach. Reference Test Manager if available
 7a) Governance Compliance — if governance policies are active, include a section confirming compliance with each active policy and how the solution design adheres to naming conventions, restricted activity rules, and required error handling patterns
@@ -850,7 +850,7 @@ export function registerDocumentRoutes(app: Express): void {
 {
   "queues": [{ "name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true }],
   "assets": [{ "name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default or empty", "description": "Purpose" }],
-  "machines": [{ "name": "TemplateName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose" }],
+  "machines": [{ "name": "TemplateName", "type": "Unattended|Attended|Development|Serverless", "slots": 1, "description": "Purpose" }],
   "triggers": [{ "name": "TriggerName", "type": "Queue|Time", "queueName": "if queue trigger", "cron": "if time trigger", "description": "Purpose" }],
   "storageBuckets": [{ "name": "BucketName", "description": "Purpose" }],
   "actionCenter": [{ "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }]
@@ -1135,21 +1135,27 @@ ${content}`
 
       archive.pipe(res);
 
-      const { generateInitAllSettingsXaml: genInit, aggregatePackages: aggPkgs } = require("./xaml-generator");
+      const { generateInitAllSettingsXaml: genInit, aggregatePackages: aggPkgs, makeUiPathCompliant: makeCompliant } = require("./xaml-generator");
       const allXamlResults: any[] = [];
+
+      const isServerlessDoc = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
+      const tfDoc = isServerlessDoc ? "Portable" : "Windows";
+      const apDoc = !!(pkg as any).autopilotEnabled;
 
       const workflows = pkg.workflows || [];
       for (const wf of workflows) {
-        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills);
+        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills, tfDoc, apDoc);
+        const compliantXaml = makeCompliant(result.xaml, tfDoc);
         allXamlResults.push(result);
-        archive.append(result.xaml, { name: `${wf.name || "Workflow"}.xaml` });
+        archive.append(compliantXaml, { name: `${wf.name || "Workflow"}.xaml` });
       }
 
-      const initXaml = genInit();
-      archive.append(initXaml, { name: "InitAllSettings.xaml" });
+      const initXaml = genInit(undefined, tfDoc);
+      archive.append(makeCompliant(initXaml, tfDoc), { name: "InitAllSettings.xaml" });
 
       const richPkgs = aggPkgs(allXamlResults);
-      const packageVersionMap: Record<string, string> = {
+      const isServerless = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
+      const windowsVersionMap: Record<string, string> = {
         "UiPath.System.Activities": "[23.10.0]",
         "UiPath.UIAutomation.Activities": "[23.10.0]",
         "UiPath.Web.Activities": "[1.18.0]",
@@ -1157,6 +1163,15 @@ ${content}`
         "UiPath.Mail.Activities": "[1.20.0]",
         "UiPath.Database.Activities": "[1.8.0]",
       };
+      const crossPlatformVersionMap: Record<string, string> = {
+        "UiPath.System.Activities": "[25.10.0]",
+        "UiPath.UIAutomation.Activities": "[25.10.0]",
+        "UiPath.Web.Activities": "[2.5.0]",
+        "UiPath.Excel.Activities": "[3.18.0]",
+        "UiPath.Mail.Activities": "[2.5.0]",
+        "UiPath.Database.Activities": "[2.2.0]",
+      };
+      const packageVersionMap = isServerless ? crossPlatformVersionMap : windowsVersionMap;
       const depMap: Record<string, string> = {};
       for (const d of (pkg.dependencies || [])) {
         depMap[d] = packageVersionMap[d] || "*";
@@ -1165,12 +1180,28 @@ ${content}`
         if (!depMap[rp]) depMap[rp] = packageVersionMap[rp] || "*";
       }
       if (!depMap["UiPath.Excel.Activities"]) {
-        depMap["UiPath.Excel.Activities"] = "[2.22.0]";
+        depMap["UiPath.Excel.Activities"] = isServerless ? "[3.18.0]" : "[2.22.0]";
+      }
+
+      const allDepEntries = Object.entries(depMap);
+      if (allDepEntries.length > 0) {
+        const feedResolutions = await Promise.allSettled(
+          allDepEntries.map(([pkgId, ver]) => resolvePackageVersionFromFeed(pkgId, ver))
+        );
+        for (let i = 0; i < allDepEntries.length; i++) {
+          const [pkgId, currentVer] = allDepEntries[i];
+          const result = feedResolutions[i];
+          if (result.status === "fulfilled" && result.value !== "*") {
+            if (currentVer === "*" || result.value !== currentVer) {
+              depMap[pkgId] = result.value;
+            }
+          }
+        }
       }
 
       const crypto = require("crypto");
       const entryPointId = crypto.randomUUID();
-      const projectJson = {
+      const projectJson: Record<string, any> = {
         name: pkg.projectName || idea.title.replace(/\s+/g, "_"),
         description: pkg.description || idea.description,
         main: "Main.xaml",
@@ -1198,9 +1229,9 @@ ${content}`
           libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
           processOptions: { ignoredFiles: [] },
           fileInfoCollection: [],
-          modernBehavior: false,
+          modernBehavior: isServerless,
         },
-        expressionLanguage: "VisualBasic",
+        expressionLanguage: isServerless ? "CSharp" : "VisualBasic",
         entryPoints: [
           {
             filePath: "Main.xaml",
@@ -1213,6 +1244,13 @@ ${content}`
         templateProjectData: {},
         publishData: {},
       };
+      if (isServerless) {
+        projectJson.targetFramework = "Portable";
+      }
+      if ((pkg as any).autopilotEnabled) {
+        projectJson.designOptions.autopilotEnabled = true;
+        projectJson.designOptions.selfHealingSelectors = true;
+      }
       archive.append(JSON.stringify(projectJson, null, 2), { name: "project.json" });
 
       archive.append("Name,Value,Description\nOrchestratorURL,,Orchestrator base URL\nProcessTimeout,30,Max process timeout in minutes\nMaxRetries,3,Maximum retry attempts\nApplicationName," + (pkg.projectName || "Automation") + ",Process name\nVersion,1.0.0,Package version", { name: "Data/Config.csv" });
@@ -1348,9 +1386,12 @@ ${content}`
 
       const aggGaps = aggGapsImport;
       const workflows = pkg.workflows || [];
+      const isServerlessDhg = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
+      const tfDhg = isServerlessDhg ? "Portable" : "Windows";
+      const apDhg = !!(pkg as any).autopilotEnabled;
       const allXamlResults: any[] = [];
       for (const wf of workflows) {
-        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills2);
+        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills2, tfDhg, apDhg);
         allXamlResults.push(result);
       }
 
@@ -1940,8 +1981,8 @@ ${content}`
   });
 }
 
-function generateXamlStub(workflow: any, sddContent?: string): string {
-  const result = generateRichXamlFromSpec(workflow, sddContent);
+function generateXamlStub(workflow: any, sddContent?: string, targetFramework?: TargetFramework): string {
+  const result = generateRichXamlFromSpec(workflow, sddContent, undefined, targetFramework);
   return result.xaml;
 }
 
