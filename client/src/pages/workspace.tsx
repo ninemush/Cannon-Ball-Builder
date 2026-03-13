@@ -1691,9 +1691,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             </button>
           </div>
         )}
-        <div className={`flex items-end gap-2 rounded-lg bg-card border p-2 transition-all duration-500 ${
+        <div className={`flex items-end gap-2 rounded-lg bg-card border p-2 transition-colors duration-500 ${
           !isStreaming && displayMessages.length > 0 && displayMessages[displayMessages.length - 1]?.role === "assistant" && displayMessages[displayMessages.length - 1]?.content.endsWith("?")
-            ? "border-primary/40 ring-1 ring-primary/20 animate-pulse"
+            ? "border-primary/40 ring-1 ring-primary/20"
             : "border-card-border"
         }`}>
           <input
@@ -1721,7 +1721,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={deployStep ? "Deploying... Type to queue your next message" : isGeneratingDoc ? `Generating ${generatingDocType}... Type to queue your next message` : isStreaming ? "Type to queue your next message..." : "Describe your process..."}
-            className="min-h-[36px] max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
+            className="min-h-[36px] max-h-[200px] resize-y border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
             rows={1}
             data-testid="input-chat-message"
           />
