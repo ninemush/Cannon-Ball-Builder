@@ -169,6 +169,7 @@ export function registerUiPathRoutes(app: Express): void {
       const masked = rows.map(r => ({
         ...r,
         clientSecret: r.clientSecret ? "••••••••" : "",
+        automationHubToken: r.automationHubToken ? "••••••••" : "",
       }));
       return res.json(masked);
     } catch (err: any) {
@@ -201,7 +202,7 @@ export function registerUiPathRoutes(app: Express): void {
         auth.invalidateConfig();
         clearProbeCache();
       }
-      return res.json({ ...row, clientSecret: "••••••••" });
+      return res.json({ ...row, clientSecret: "••••••••", automationHubToken: row.automationHubToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -232,7 +233,7 @@ export function registerUiPathRoutes(app: Express): void {
         auth.invalidateConfig();
         clearProbeCache();
       }
-      return res.json({ ...updated, clientSecret: "••••••••" });
+      return res.json({ ...updated, clientSecret: "••••••••", automationHubToken: updated.automationHubToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -265,7 +266,7 @@ export function registerUiPathRoutes(app: Express): void {
       auth.invalidateAllTokens();
       auth.invalidateConfig();
       clearProbeCache();
-      return res.json({ ...activated, clientSecret: "••••••••" });
+      return res.json({ ...activated, clientSecret: "••••••••", automationHubToken: activated.automationHubToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -668,6 +669,34 @@ export function registerUiPathRoutes(app: Express): void {
         summary: result.details?.deploymentSummary || "",
       } : null;
 
+      let storePublishLine = "";
+      const deploySucceeded = result.success && processResult.success && !result.details?.artifactError;
+      if (deploySucceeded) {
+        try {
+          const { publishToAutomationStore } = await import("./automation-hub");
+          sendEvent({ deployStatus: "Publishing to Automation Store..." });
+          const storeResult = await publishToAutomationStore({
+            name: packageId,
+            description: idea.description || pkg.description || "",
+            version: packageVersion,
+            packageId,
+            processName: result.details?.processName || packageId,
+            deploymentResults: deployResults,
+            ideaId,
+          });
+          if (storeResult.success) {
+            storePublishLine = `\nPublished to Automation Store (ID: ${storeResult.storeId})`;
+            sendEvent({ deployStatus: `Published to Automation Store` });
+          } else {
+            console.log(`[Automation Store] Auto-publish skipped: ${storeResult.message}`);
+          }
+        } catch (storeErr: any) {
+          console.log(`[Automation Store] Auto-publish error: ${storeErr.message}`);
+        }
+      } else {
+        console.log(`[Automation Store] Skipping auto-publish — deployment not fully successful`);
+      }
+
       const processLine = processResult.success
         ? `Process "${result.details?.processName}" created — ready to run.`
         : "";
@@ -677,8 +706,8 @@ export function registerUiPathRoutes(app: Express): void {
         : "";
 
       const chatContent = deployReportData
-        ? `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${artifactErrorLine}\n\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
-        : `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${artifactErrorLine}`;
+        ? `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${storePublishLine}${artifactErrorLine}\n\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
+        : `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${storePublishLine}${artifactErrorLine}`;
 
       if (!clientDisconnected) {
         await chatStorage.createMessage(ideaId, "assistant", chatContent);
@@ -1611,6 +1640,137 @@ export function registerUiPathRoutes(app: Express): void {
       }
 
       return res.json(results[0]);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/settings/automation-hub/status", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { getAutomationHubStatus } = await import("./automation-hub");
+      const status = await getAutomationHubStatus();
+      return res.json(status);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/settings/automation-hub/token", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { token } = req.body;
+      if (!token || !String(token).trim()) {
+        return res.status(400).json({ message: "Token is required" });
+      }
+      const { saveAutomationHubToken, getAutomationHubStatus } = await import("./automation-hub");
+      await saveAutomationHubToken(token);
+      const status = await getAutomationHubStatus();
+      return res.json({ success: true, status });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/settings/automation-hub/token", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { clearAutomationHubToken } = await import("./automation-hub");
+      await clearAutomationHubToken();
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/automation-hub/ideas", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const status = req.query.status as string | undefined;
+      const { listAutomationHubIdeas } = await import("./automation-hub");
+      const result = await listAutomationHubIdeas(limit, offset, status);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/automation-hub/ideas/:hubIdeaId", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const hubIdeaId = parseInt(req.params.hubIdeaId);
+      if (isNaN(hubIdeaId)) {
+        return res.status(400).json({ message: "Invalid Automation Hub idea ID" });
+      }
+      const { getAutomationHubIdeaDetails } = await import("./automation-hub");
+      const result = await getAutomationHubIdeaDetails(hubIdeaId);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/automation-hub/import/:hubIdeaId", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const hubIdeaId = parseInt(req.params.hubIdeaId);
+      if (isNaN(hubIdeaId)) {
+        return res.status(400).json({ message: "Invalid Automation Hub idea ID" });
+      }
+
+      const user = await storage.getUser(req.session.userId as string);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+
+      const { getAutomationHubIdeaDetails, formatHubIdeaAsContext } = await import("./automation-hub");
+      const hubResult = await getAutomationHubIdeaDetails(hubIdeaId);
+      if (!hubResult.success || !hubResult.idea) {
+        const msg = hubResult.message || "Hub idea not found";
+        const status = msg.includes("not configured") ? 400 : 502;
+        return res.status(status).json({ message: msg });
+      }
+
+      const hubIdea = hubResult.idea;
+      const idea = await storage.createIdea({
+        title: hubIdea.name,
+        description: hubIdea.description || `Imported from Automation Hub (ID: ${hubIdea.id})`,
+        owner: user.displayName,
+        ownerEmail: user.email,
+        stage: "Idea",
+        tag: hubIdea.category || null,
+      });
+
+      const contextMessage = formatHubIdeaAsContext(hubIdea);
+      await chatStorage.createMessage(
+        idea.id,
+        "user",
+        `I'm importing this automation idea from Automation Hub:\n\n${contextMessage}\n\nPlease analyze this idea and help me develop it into an automation.`
+      );
+
+      await storage.createAuditLog({
+        ideaId: idea.id,
+        userId: user.id,
+        userName: user.displayName,
+        userRole: req.session.activeRole || user.role,
+        action: "automation_hub_import",
+        details: `Imported from Automation Hub idea #${hubIdea.id}: ${hubIdea.name}`,
+      });
+
+      return res.json({
+        success: true,
+        idea,
+        hubIdea,
+        message: `Imported "${hubIdea.name}" from Automation Hub`,
+      });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

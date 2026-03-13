@@ -919,6 +919,7 @@ type UipathConnection = {
   scopes: string;
   folderId: string | null;
   folderName: string | null;
+  automationHubToken: string | null;
   isActive: boolean;
   lastTestedAt: string | null;
   createdAt: string;
@@ -1307,6 +1308,228 @@ function IntegrationServicePanel() {
               No connectors or connections discovered. Configure Integration Service in UiPath to enable pre-built enterprise system integrations.
             </p>
           )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AutomationHubPanel() {
+  const { toast } = useToast();
+  const [hubToken, setHubToken] = useState("");
+  const [showHubToken, setShowHubToken] = useState(false);
+
+  const { data: hubStatus, isLoading: hubStatusLoading } = useQuery<{
+    configured: boolean;
+    connected: boolean;
+    message: string;
+    ideaCount?: number;
+  }>({
+    queryKey: ["/api/settings/automation-hub/status"],
+  });
+
+  const saveTokenMutation = useMutation({
+    mutationFn: async (token: string) => {
+      const res = await apiRequest("POST", "/api/settings/automation-hub/token", { token });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/automation-hub/status"] });
+      setHubToken("");
+      if (data.status?.connected) {
+        toast({ title: "Automation Hub connected", description: data.status.message });
+      } else {
+        toast({ title: "Token saved", description: data.status?.message || "Token saved but connection test failed", variant: "destructive" });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to save token", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const clearTokenMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", "/api/settings/automation-hub/token");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/automation-hub/status"] });
+      toast({ title: "Automation Hub token removed" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to remove token", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const { data: hubIdeas, isLoading: hubIdeasLoading } = useQuery<{
+    success: boolean;
+    ideas?: Array<{
+      id: number;
+      name: string;
+      description: string;
+      category: string;
+      submittedBy: string;
+      status: string;
+      department: string;
+      createdDate: string;
+    }>;
+    totalCount?: number;
+    message?: string;
+  }>({
+    queryKey: ["/api/automation-hub/ideas"],
+    enabled: !!hubStatus?.connected,
+  });
+
+  return (
+    <Card className="p-4 sm:p-6 space-y-4" data-testid="card-automation-hub">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Lightbulb className="h-5 w-5 text-[#e8450a]" />
+          <h3 className="text-sm font-semibold text-foreground">Automation Hub</h3>
+        </div>
+        {hubStatusLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : hubStatus?.connected ? (
+          <Badge variant="outline" className="border-green-600 text-green-500 text-[10px]" data-testid="badge-hub-connected">
+            <CheckCircle2 className="h-3 w-3 mr-1" />
+            Connected
+          </Badge>
+        ) : hubStatus?.configured ? (
+          <Badge variant="outline" className="border-yellow-600 text-yellow-500 text-[10px]" data-testid="badge-hub-error">
+            <AlertTriangle className="h-3 w-3 mr-1" />
+            Connection Error
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-muted-foreground text-[10px]" data-testid="badge-hub-not-configured">
+            Not Configured
+          </Badge>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Connect to UiPath Automation Hub to import automation ideas and publish completed automations to the Automation Store.
+      </p>
+
+      {hubStatus?.message && !hubStatus.connected && hubStatus.configured && (
+        <div className="text-xs text-yellow-500 bg-yellow-500/10 rounded p-2" data-testid="text-hub-error">
+          {hubStatus.message}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <Label className="text-xs text-muted-foreground">Automation Hub Open API Token</Label>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Input
+              type={showHubToken ? "text" : "password"}
+              placeholder={hubStatus?.configured ? "••••••••" : "Paste your Automation Hub API token"}
+              value={hubToken}
+              onChange={(e) => setHubToken(e.target.value)}
+              className="pr-10 text-sm"
+              data-testid="input-hub-token"
+            />
+            <button
+              type="button"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setShowHubToken(!showHubToken)}
+              data-testid="button-toggle-hub-token"
+            >
+              {showHubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => saveTokenMutation.mutate(hubToken)}
+            disabled={!hubToken.trim() || saveTokenMutation.isPending}
+            data-testid="button-save-hub-token"
+          >
+            {saveTokenMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+          </Button>
+          {hubStatus?.configured && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => clearTokenMutation.mutate()}
+              disabled={clearTokenMutation.isPending}
+              data-testid="button-clear-hub-token"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          Generate an Open API token from Automation Hub &gt; Admin &gt; Open API.
+        </p>
+      </div>
+
+      {hubStatus?.connected && (
+        <div className="space-y-3 pt-2 border-t border-border">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold text-foreground">Pipeline Ideas</h4>
+            {hubStatus.ideaCount !== undefined && (
+              <span className="text-[10px] text-muted-foreground" data-testid="text-hub-idea-count">
+                {hubStatus.ideaCount} total
+              </span>
+            )}
+          </div>
+
+          {hubIdeasLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : hubIdeas?.success && hubIdeas.ideas && hubIdeas.ideas.length > 0 ? (
+            <div className="space-y-1.5 max-h-[300px] overflow-y-auto" data-testid="hub-ideas-list">
+              {hubIdeas.ideas.slice(0, 10).map((idea) => (
+                <div
+                  key={idea.id}
+                  className="flex items-center justify-between p-2 rounded border border-border hover:bg-muted/30 transition-colors"
+                  data-testid={`hub-idea-${idea.id}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{idea.name}</p>
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                      {idea.category && <span>{idea.category}</span>}
+                      {idea.department && <span>{idea.department}</span>}
+                      {idea.status && <Badge variant="outline" className="text-[9px] px-1 py-0">{idea.status}</Badge>}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-[10px] text-[#e8450a] hover:text-[#e8450a] hover:bg-[#e8450a]/10 ml-2 shrink-0 px-2"
+                    onClick={async () => {
+                      try {
+                        const res = await apiRequest("POST", `/api/automation-hub/import/${idea.id}`);
+                        const data = await res.json();
+                        if (data.success) {
+                          toast({ title: "Idea imported", description: `"${idea.name}" imported as a new project` });
+                          queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
+                        } else {
+                          toast({ title: "Import failed", description: data.message, variant: "destructive" });
+                        }
+                      } catch (err: any) {
+                        toast({ title: "Import failed", description: err.message, variant: "destructive" });
+                      }
+                    }}
+                    data-testid={`button-import-hub-idea-${idea.id}`}
+                  >
+                    <Download className="h-3 w-3 mr-1" />
+                    Import
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : hubIdeas?.success && (!hubIdeas.ideas || hubIdeas.ideas.length === 0) ? (
+            <p className="text-xs text-muted-foreground text-center py-3">
+              No ideas found in Automation Hub.
+            </p>
+          ) : hubIdeas?.message ? (
+            <p className="text-xs text-destructive text-center py-3" data-testid="text-hub-ideas-error">
+              {hubIdeas.message}
+            </p>
+          ) : null}
         </div>
       )}
     </Card>
@@ -2339,6 +2562,8 @@ function IntegrationsTab() {
 
         {config?.configured && <OrchestratorHealthPanel />}
         {config?.configured && <IntegrationServicePanel />}
+
+        {config?.configured && <AutomationHubPanel />}
 
         {step < 3 && (
           <div className="flex items-center gap-3 pt-2">

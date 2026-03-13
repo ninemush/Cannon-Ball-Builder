@@ -49,6 +49,7 @@ The application employs a modern web stack for scalability and an intuitive user
 -   **Admin & Review Panels**: Dedicated interfaces for CoE review and administrative tasks.
 -   **Role-Based Access**: Authorization enforced based on user ownership and roles for process maps and documents.
 -   **Multi-Orchestrator Connection Management**: Supports storing and managing multiple UiPath Orchestrator connection profiles.
+-   **Automation Hub & Store Integration**: Connects to UiPath Automation Hub to import automation ideas as Cannonball projects with pre-populated AI context. After successful deployment, completed automations are automatically published to the Automation Store with documentation and deployment metadata. The active connection stores an optional Open API token for Hub authentication (`automation_hub_token` column on `uipath_connections`). API client in `server/automation-hub.ts`, routes added to `server/uipath-routes.ts`, Settings UI panel in `AutomationHubPanel` component.
 -   **JSON Sanitization**: Robust parsing of AI-generated JSON with error recovery.
 -   **Shared Utilities**: Consolidated server and client utilities for common functions and shared types.
 -   **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deploy time.
