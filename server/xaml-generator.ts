@@ -2370,11 +2370,12 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     md += `- Agent config with recommended defaults (temperature, max iterations)\n`;
     md += `- Guardrail definitions from process analysis\n\n`;
 
-    md += `#### Requires Human Action\n\n`;
-    md += `- Tool authorization in Agent Builder (security review required)\n`;
-    md += `- Knowledge base document upload (actual SOPs and reference materials)\n`;
-    md += `- Production prompt tuning after testing with real data\n`;
-    md += `- Escalation rule validation with stakeholders\n\n`;
+    md += `#### Requires Human Action (Last-Mile Items)\n\n`;
+    md += `- **Context grounding data population**: Upload actual business documents (SOPs, policies, FAQs, templates) into the referenced storage bucket(s). The agent config specifies which bucket to use — populate it with real data.\n`;
+    md += `- **Prompt tuning**: The system prompt was generated from the SDD. Test with real production data and refine tone, scope, and output format to match business expectations.\n`;
+    md += `- **Tool authorization**: Each agent tool maps to a deployed Orchestrator process. Verify the agent has permission to invoke each process in Agent Builder.\n`;
+    md += `- **Escalation rule validation**: Confirm escalation conditions and Action Center catalog mappings with business stakeholders.\n`;
+    md += `- **End-to-end testing**: Run the agent with representative inputs, verify tool invocations produce correct outputs, and confirm escalation triggers work as expected.\n\n`;
   }
 
   md += `---\n\n`;

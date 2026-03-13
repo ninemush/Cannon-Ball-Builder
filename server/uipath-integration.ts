@@ -1553,6 +1553,12 @@ export type PlatformCapabilityProfile = {
   licenseInfo?: LicenseInfo | null;
 };
 
+type AgentCapabilities = {
+  autonomous: boolean;
+  conversational: boolean;
+  coded: boolean;
+};
+
 type UnifiedProbeResult = {
   configured: boolean;
   flags: {
@@ -1576,6 +1582,7 @@ type UnifiedProbeResult = {
     apps: boolean;
     assistant: boolean;
   };
+  agentCapabilities?: AgentCapabilities;
   grantedScopes: string[];
   licenseInfo: LicenseInfo | null;
   cachedAt: number;
@@ -1724,10 +1731,42 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (aiProbe && aiProbe.ok) aiAvailable = true;
 
     let agentsAvailable = false;
-    const agentProbe = await fetch(`${base}/orchestrator_/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1`, { headers: hdrs }).catch(() => null);
-    if (agentProbe && agentProbe.ok) {
-      agentsAvailable = true;
-      console.log("[UiPath Probe] Agent provisioning available (Assets API accessible for agent config)");
+    let agentCapabilities: { autonomous: boolean; conversational: boolean; coded: boolean } = { autonomous: false, conversational: false, coded: false };
+    const agentEndpoints = [
+      { url: `${base}/agentstudio_/api/v1/agents?$top=1`, label: "Agent Studio" },
+      { url: `${base}/autopilot_/api/v1/agents?$top=1`, label: "Autopilot" },
+      { url: `${orchBase}/odata/AgentDefinitions?$top=1`, label: "Orchestrator AgentDefinitions" },
+    ];
+    const agentProbeResults = await Promise.allSettled(
+      agentEndpoints.map(ep => fetch(ep.url, { headers: hdrs }))
+    );
+    for (let i = 0; i < agentProbeResults.length; i++) {
+      const pr = agentProbeResults[i];
+      if (pr.status === "fulfilled" && pr.value.ok) {
+        agentsAvailable = true;
+        console.log(`[UiPath Probe] Agent capability discovered via ${agentEndpoints[i].label} API`);
+        try {
+          const body = await pr.value.json();
+          const items = body?.value || body?.items || (Array.isArray(body) ? body : []);
+          for (const item of items) {
+            const aType = (item.agentType || item.type || "").toLowerCase();
+            if (aType.includes("autonomous")) agentCapabilities.autonomous = true;
+            else if (aType.includes("conversational") || aType.includes("chat")) agentCapabilities.conversational = true;
+            else if (aType.includes("coded")) agentCapabilities.coded = true;
+          }
+        } catch {}
+        break;
+      }
+    }
+    if (!agentsAvailable) {
+      const assetFallback = await fetch(`${orchBase}/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1`, { headers: hdrs }).catch(() => null);
+      if (assetFallback && assetFallback.ok) {
+        agentsAvailable = true;
+        console.log("[UiPath Probe] Agent provisioning available via Assets API fallback (no dedicated Agents API found)");
+      }
+    }
+    if (agentsAvailable && !agentCapabilities.autonomous && !agentCapabilities.conversational && !agentCapabilities.coded) {
+      agentCapabilities = { autonomous: true, conversational: true, coded: true };
     }
 
     let pmAvailable = false;
@@ -1801,6 +1840,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         apps: appsAvailable,
         assistant: assistantAvailable,
       },
+      agentCapabilities: agentsAvailable ? agentCapabilities : undefined,
       grantedScopes,
       licenseInfo,
       cachedAt: Date.now(),
@@ -1884,8 +1924,17 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
   if (avail.aiCenter) availNames.push("AI Center (custom ML models, model training, AI skill deployment)");
   else unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, or NLP tasks within the automation.");
 
-  if (probe.flags.agents) availNames.push("Agent Builder / Autopilot (AI agent definitions, knowledge bases, prompt templates, autonomous task execution)");
-  else unavailRecs.push("- **Agent Builder**: Agent artifact provisioning via Assets API. Agent definitions, knowledge bases, and prompt templates can be stored as Orchestrator assets for Autopilot/Agent Builder configuration.");
+  if (probe.flags.agents) {
+    const caps = probe.agentCapabilities;
+    const agentTypes: string[] = [];
+    if (caps?.autonomous) agentTypes.push("autonomous");
+    if (caps?.conversational) agentTypes.push("conversational");
+    if (caps?.coded) agentTypes.push("coded");
+    const typesStr = agentTypes.length > 0 ? ` — supported types: ${agentTypes.join(", ")}` : "";
+    availNames.push(`UiPath Agents (AI agent definitions, tool bindings to Orchestrator processes, context grounding via storage buckets, escalation to Action Center${typesStr})`);
+  } else {
+    unavailRecs.push("- **UiPath Agents**: Not available. If enabled, it would allow deploying autonomous, conversational, and coded AI agents that can invoke Orchestrator processes as tools, use storage buckets for context grounding, and escalate to Action Center for human oversight.");
+  }
 
   if (avail.maestro) availNames.push("Maestro (process orchestration, long-running workflows, human-in-the-loop coordination via PIMS)");
   else unavailRecs.push("- **Maestro**: Not available. If enabled, it would provide advanced process orchestration with human-in-the-loop coordination for complex, long-running workflows.");
@@ -2248,6 +2297,7 @@ export type ServiceAvailabilityMap = {
   environments: boolean;
   triggers: boolean;
   agents: boolean;
+  agentCapabilities?: { autonomous: boolean; conversational: boolean; coded: boolean };
   maestro: boolean;
   integrationService: boolean;
   ixp: boolean;
@@ -2271,6 +2321,7 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     environments: probe.flags.environments,
     triggers: probe.flags.triggers,
     agents: probe.flags.agents,
+    agentCapabilities: probe.agentCapabilities,
     maestro: probe.flags.maestro,
     integrationService: probe.flags.integrationService,
     ixp: probe.flags.ixp,

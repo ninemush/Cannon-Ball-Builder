@@ -267,6 +267,16 @@ Include these sections:
 6) Security Considerations — credential management via Orchestrator assets, role-based access, data encryption, audit trail
 7) Test Strategy — unit tests, integration tests, UAT approach. Reference Test Manager if available
 
+AGENT ARCHITECTURE (MANDATORY when automation type is agent or hybrid):
+If this automation uses AI agents, you MUST include a dedicated "## 8. Agent Architecture" section with:
+- **Agent Type**: autonomous (operates independently with goal-based reasoning), conversational (interactive chat-based with user), or coded (developer-written Python/JS agent logic)
+- **Agent Identity**: name, purpose, and behavioral system prompt
+- **Tool Definitions**: each tool the agent can invoke, mapped to a specific deployed Orchestrator process by name (e.g., "InvoiceExtractor" tool → calls the "Extract_Invoice_Data" process). Include input/output argument schemas.
+- **Context Grounding Strategy**: which storage buckets provide reference documents, what document sources feed the agent's knowledge, refresh cadence, and embedding model if applicable
+- **Escalation Rules**: conditions under which the agent escalates to a human, mapped to specific Action Center task catalogs by name (e.g., "confidence < 0.7" → escalate to "InvoiceReview_Catalog")
+- **Guardrails**: safety constraints, output validation rules, PII handling, and maximum iteration limits
+- **Agent Interaction Flow**: how the agent fits into the broader automation — which RPA process triggers it, what it returns, and how its output feeds downstream steps
+
 Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.`;
 }
 
@@ -315,6 +325,35 @@ Here is the EXACT format:
   ],
   "testSets": [
     { "name": "Happy Path Tests", "description": "Core scenario validation", "testCaseNames": ["TC001 - Test case name"] }
+  ],
+  "agents": [
+    {
+      "name": "AgentName",
+      "agentType": "autonomous|conversational|coded",
+      "description": "Agent purpose and scope",
+      "systemPrompt": "Full behavioral instructions for the agent",
+      "tools": [
+        { "name": "ToolName", "description": "What this tool does", "processReference": "Orchestrator_Process_Name", "inputArguments": { "argName": "argType" }, "outputArguments": ["resultField"] }
+      ],
+      "contextGrounding": {
+        "storageBucket": "BucketName_from_storageBuckets_above",
+        "documentSources": ["Source description"],
+        "refreshStrategy": "daily|weekly|on-change",
+        "embeddingModel": "model name or default"
+      },
+      "guardrails": ["Safety constraint"],
+      "escalationRules": [
+        { "condition": "When to escalate", "target": "Human role", "actionCenterCatalog": "CatalogName_from_actionCenter_above", "priority": "High" }
+      ],
+      "maxIterations": 10,
+      "temperature": 0.3
+    }
+  ],
+  "knowledgeBases": [
+    { "name": "KBName", "description": "Purpose", "documentSources": ["Source"], "refreshFrequency": "weekly" }
+  ],
+  "promptTemplates": [
+    { "name": "TemplateName", "description": "Purpose", "template": "Prompt with {{variable}}", "variables": ["variable"] }
   ]
 }
 \`\`\`
@@ -332,6 +371,12 @@ Rules:
 - Include requirements derived from PDD business rules, compliance constraints, SLAs, and acceptance criteria. Use "REQ-NNN:" prefix for traceability.
 - Include test cases covering key automation scenarios (happy path, exceptions, edge cases, regression). Use "TCNNN - " prefix.
 - Group test cases into logical test sets (e.g. "Happy Path Tests", "Exception Handling Tests", "Regression Tests"). Reference test case names exactly as defined above in the testCaseNames array.
+- AGENT ARTIFACTS (include when automation type is agent or hybrid):
+  - Each agent MUST specify agentType (autonomous, conversational, or coded).
+  - Agent tools MUST reference Orchestrator processes by exact name via processReference — these are resolved to deployed process IDs during provisioning.
+  - Agent contextGrounding.storageBucket MUST reference a storage bucket defined in the storageBuckets array above by exact name.
+  - Agent escalationRules.actionCenterCatalog MUST reference an Action Center catalog defined in the actionCenter array above by exact taskCatalog name.
+  - These cross-references are validated and wired during deployment — the agent config will contain resolved IDs for all referenced artifacts.
 - Be comprehensive — this specification drives full automated deployment.
 
 Output ONLY "## 9. Orchestrator & Platform Deployment Specification" followed by the fenced artifacts block and any brief supporting prose. Nothing else.`;

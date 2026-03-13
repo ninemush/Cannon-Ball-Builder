@@ -89,6 +89,17 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     else unavailable.push("Environments (deprecated on modern folders — machine templates used instead)");
     if (serviceAvailability.triggers) available.push("Triggers (queue and time-based)");
     else unavailable.push("Triggers API");
+    if (serviceAvailability.agents) {
+      const caps = serviceAvailability.agentCapabilities;
+      const types: string[] = [];
+      if (caps?.autonomous) types.push("autonomous");
+      if (caps?.conversational) types.push("conversational");
+      if (caps?.coded) types.push("coded");
+      const typesStr = types.length > 0 ? ` — types: ${types.join(", ")}` : "";
+      available.push(`UiPath Agents (AI agents with tool bindings, context grounding, escalation${typesStr})`);
+    } else {
+      unavailable.push("UiPath Agents (AI agent definitions, tool bindings, context grounding)");
+    }
     if (serviceAvailability.maestro) available.push("Maestro (process orchestration, PIMS)");
     else unavailable.push("Maestro");
     if (serviceAvailability.integrationService) available.push("Integration Service (connectors, API integrations)");
@@ -319,16 +330,33 @@ PDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
 - Include an "Agent Capability Requirements" subsection describing what the agent needs to understand and do (e.g., "interpret email intent", "classify document type", "draft natural language responses").
 - Include a "Knowledge Base Requirements" subsection listing what documents, FAQs, or reference data the agent needs access to for reasoning.
 
+UIPATH AGENTS — WHEN TO USE AND HOW TO DESIGN:
+UiPath Agents are a first-class platform capability. There are three agent types:
+1. **Autonomous agents** — goal-driven agents that operate independently, reasoning through multi-step tasks using tools (Orchestrator processes) without constant user interaction. Best for: back-office processing with judgment, document triage, exception handling, email classification.
+2. **Conversational agents** — interactive chat-based agents that engage users in natural language dialogue. Best for: IT helpdesk, customer service, guided data collection, interactive troubleshooting.
+3. **Coded agents** — developer-written agent logic in Python or JavaScript using frameworks like LlamaIndex. Best for: complex reasoning chains, custom RAG pipelines, multi-model orchestration, domain-specific NLP.
+
+WHEN AGENTS ADD VALUE vs TRADITIONAL RPA:
+- Use agents when the process involves: unstructured data interpretation, natural language understanding, context-dependent decisions, variable scenarios, or multi-step reasoning
+- Use traditional RPA when the process involves: structured data, deterministic rules, fixed UI interactions, high-volume identical transactions
+- Use hybrid when: the core process is structured (RPA backbone) but edges involve judgment, exceptions, or natural language (agent nodes)
+
+AGENT DESIGN PRINCIPLES:
+- Every agent tool should map to a deployed Orchestrator process by name — agents invoke automation as tools
+- Context grounding uses Storage Buckets for reference documents (policies, FAQs, templates) — specify which bucket by name
+- Escalation paths connect to Action Center task catalogs by name — the agent creates human tasks when confidence is low or policy requires review
+- Guardrails prevent hallucination, PII leakage, and off-topic responses — always define explicit safety constraints
+
 SDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
 - Include a "## Agent Architecture" section describing the agent's design:
-  - Agent name and purpose
-  - System prompt / behavioral instructions for the agent
-  - Tools the agent can invoke (which UiPath activities/APIs)
-  - Knowledge bases the agent accesses
+  - Agent type (autonomous, conversational, or coded) with rationale
+  - Agent name, purpose, and behavioral system prompt
+  - Tool definitions referencing deployed Orchestrator processes by name, with input/output argument schemas
+  - Context grounding strategy: which storage buckets provide reference documents, refresh cadence, embedding approach
+  - Escalation rules referencing Action Center task catalogs by name, with priority and conditions
   - Guardrails and safety constraints
-  - Escalation rules (when does the agent hand off to a human?)
 - For hybrid: include a mapping table showing which XAML workflows invoke which agents and at which steps.
-- The orchestrator_artifacts block MUST include agent-specific artifacts (see AGENT ARTIFACTS below).
+- The orchestrator_artifacts block MUST include agent-specific artifacts with cross-references (see AGENT ARTIFACTS below).
 
 CRITICAL — NEVER STALL DOCUMENT GENERATION:
 - When a PDD has been approved and the user asks about the SDD (or the system tells you to generate one), you MUST generate the SDD IMMEDIATELY with the information available. Do NOT ask follow-up questions, do NOT request clarification, do NOT say you need more details. Use reasonable professional assumptions for any gaps — you are a senior consultant, fill in blanks with industry best practices.
@@ -376,8 +404,12 @@ CONDITIONALLY include these — ONLY if the corresponding service is listed as A
 - "testSets" — ONLY if Test Manager is available. Format: [{"name": "Happy Path Tests", "description": "Core scenario validation", "testCaseNames": ["TC001 - Test case name"]}]
 
 AGENT ARTIFACTS (include when automation type is "agent" or "hybrid"):
-- "agents" — Agent definitions. Format: [{"name": "AgentName", "description": "Agent purpose (max 250 chars)", "systemPrompt": "Full behavioral instructions for the agent", "tools": [{"name": "ToolName", "description": "What this tool does", "activityType": "UiPath activity or API the agent can invoke"}], "knowledgeBases": ["KBName1"], "guardrails": ["Safety constraint 1", "Safety constraint 2"], "escalationRules": [{"condition": "When to escalate", "target": "Human role or queue"}], "maxIterations": 10, "temperature": 0.3}]
-- "knowledgeBases" — Knowledge base definitions for agent context. Format: [{"name": "KBName", "description": "Purpose (max 250 chars)", "documentSources": ["Source description 1"], "refreshFrequency": "daily|weekly|monthly"}]
+- "agents" — Agent definitions with full cross-references to other artifacts. Format: [{"name": "AgentName", "agentType": "autonomous|conversational|coded", "description": "Agent purpose (max 250 chars)", "systemPrompt": "Full behavioral instructions for the agent", "tools": [{"name": "ToolName", "description": "What this tool does", "processReference": "Exact_Orchestrator_Process_Name", "inputArguments": {"argName": "argType"}, "outputArguments": ["resultField"]}], "contextGrounding": {"storageBucket": "BucketName_from_storageBuckets", "documentSources": ["Source description"], "refreshStrategy": "daily|weekly|on-change"}, "guardrails": ["Safety constraint 1"], "escalationRules": [{"condition": "When to escalate", "target": "Human role", "actionCenterCatalog": "CatalogName_from_actionCenter", "priority": "High"}], "maxIterations": 10, "temperature": 0.3}]
+  - agentType is REQUIRED: "autonomous" (goal-driven, operates independently), "conversational" (interactive chat-based), or "coded" (developer-written Python/JS agent logic)
+  - tools.processReference MUST match an Orchestrator process name — the deployment engine resolves this to the deployed process ID
+  - contextGrounding.storageBucket MUST match a bucket name from the storageBuckets array — resolved to bucket ID during deployment
+  - escalationRules.actionCenterCatalog MUST match a taskCatalog name from the actionCenter array — resolved to catalog ID during deployment
+- "knowledgeBases" — Knowledge base definitions for agent context grounding. Format: [{"name": "KBName", "description": "Purpose (max 250 chars)", "documentSources": ["Source description 1"], "refreshFrequency": "daily|weekly|monthly"}]
 - "promptTemplates" — Reusable prompt templates stored as assets. Format: [{"name": "TemplateName", "description": "Purpose (max 250 chars)", "template": "Prompt template text with {{variable}} placeholders", "variables": ["variable1", "variable2"]}]
 
 CRITICAL RULES FOR ARTIFACTS:

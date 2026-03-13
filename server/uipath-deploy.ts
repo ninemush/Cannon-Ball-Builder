@@ -62,16 +62,21 @@ function generateUuid(): string {
   return uuid;
 }
 
-export type AgentToolDef = { name: string; description: string; activityType?: string };
-export type AgentEscalationRule = { condition: string; target: string };
+export type AgentToolDef = { name: string; description: string; activityType?: string; processReference?: string; inputArguments?: Record<string, string>; outputArguments?: string[] };
+export type AgentEscalationRule = { condition: string; target: string; actionCenterCatalog?: string; priority?: string };
+export type AgentContextGrounding = { storageBucket?: string; documentSources?: string[]; refreshStrategy?: string; embeddingModel?: string };
 export type AgentDef = {
   name: string;
+  agentType?: "autonomous" | "conversational" | "coded";
   description?: string;
   systemPrompt?: string;
   tools?: AgentToolDef[];
+  contextGrounding?: AgentContextGrounding;
   knowledgeBases?: string[];
   guardrails?: string[];
   escalationRules?: AgentEscalationRule[];
+  inputSchema?: Record<string, string>;
+  outputSchema?: Record<string, string>;
   maxIterations?: number;
   temperature?: number;
 };
@@ -193,6 +198,9 @@ ARTIFACT RULES:
 - testDataQueues: Include jsonSchema and concrete test data items.
 - requirements: Include type ("Functional"|"NonFunctional"|"Compliance"|"SLA"), priority, acceptanceCriteria (concrete testable criteria array).
 - testSets: Include executionMode ("Sequential"|"Parallel"), environment (target environment name), triggerType ("Manual"|"Scheduled"|"CI/CD").
+- agents: Include agentType ("autonomous"|"conversational"|"coded"), tools with processReference (exact Orchestrator process name), contextGrounding with storageBucket (exact bucket name from storageBuckets), escalationRules with actionCenterCatalog (exact catalog name from actionCenter). Cross-references are resolved to IDs during deployment.
+- knowledgeBases: Include documentSources and refreshFrequency.
+- promptTemplates: Include template text with {{variable}} placeholders and variables array.
 
 Expected JSON shape:
 {"queues":[{"name":"...","description":"...","maxRetries":3,"uniqueReference":true,"jsonSchema":"{\\"type\\":\\"object\\",\\"properties\\":{...}}","outputSchema":"..."}],"assets":[{"name":"...","type":"Text|Integer|Bool|Credential","value":"...","description":"Usage context"}],"machines":[{"name":"...","type":"Unattended|Attended|Development","slots":1,"runtimeType":"Unattended","description":"Purpose"}],"triggers":[{"name":"...","type":"Queue|Time","queueName":"...","cron":"0 0 8 ? * MON-FRI","timezone":"America/New_York","startStrategy":"Specific","maxJobsCount":1,"description":"..."}],"storageBuckets":[{"name":"...","storageProvider":"Orchestrator","description":"..."}],"environments":[{"name":"...","type":"Production|Development|Testing","description":"..."}],"robotAccounts":[{"name":"...","type":"Unattended","role":"SpecificRole","description":"..."}],"actionCenter":[{"taskCatalog":"...","assignedRole":"...","sla":"4h","escalation":"Manager","priority":"High","actions":["Approve","Reject"],"formFields":[{"name":"...","type":"String|Number|Boolean","required":true}],"description":"..."}],"documentUnderstanding":[{"name":"...","documentTypes":["Invoice"],"taxonomyFields":[{"documentType":"Invoice","fields":[{"name":"InvoiceNumber","type":"String"}]}],"classifierType":"ML","description":"..."}],"testCases":[{"name":"TC_001_TestName","testType":"Functional","priority":"Critical","description":"...","preconditions":["Precondition 1"],"postconditions":["Postcondition 1"],"testData":[{"field":"FieldName","value":"TestValue","dataType":"String"}],"automationWorkflow":"Main.xaml","expectedDuration":60,"labels":["Critical","Smoke"],"steps":[{"action":"Specific action with field names and values","expected":"Specific expected result with values"}]}],"testDataQueues":[{"name":"...","description":"...","jsonSchema":"...","items":[{"name":"Record_1","content":"..."}]}],"requirements":[{"name":"REQ-001: Name","type":"Functional","priority":"Critical","description":"...","source":"SDD Section X","acceptanceCriteria":["Criteria 1"]}],"testSets":[{"name":"Happy Path Tests","description":"...","executionMode":"Sequential","environment":"Production","triggerType":"Manual","testCaseNames":["TC_001_TestName"]}]}
@@ -3320,12 +3328,94 @@ async function provisionRobotAccounts(
   return results;
 }
 
+function resolveAgentCrossReferences(
+  agent: AgentDef,
+  priorResults: DeploymentResult[],
+): { resolvedTools: AgentToolDef[]; resolvedEscalation: AgentEscalationRule[]; resolvedContextGrounding: AgentContextGrounding | undefined; unresolvedRefs: string[] } {
+  const unresolvedRefs: string[] = [];
+
+  const processResultMap = new Map<string, { id?: number | string; status: string }>();
+  for (const r of priorResults) {
+    if (r.artifact === "Process" || r.artifact === "Release") {
+      processResultMap.set(r.name, { id: r.id, status: r.status });
+    }
+  }
+
+  const bucketResultMap = new Map<string, { id?: number | string; status: string }>();
+  for (const r of priorResults) {
+    if (r.artifact === "Storage Bucket") {
+      bucketResultMap.set(r.name, { id: r.id, status: r.status });
+    }
+  }
+
+  const acResultMap = new Map<string, { id?: number | string; status: string }>();
+  for (const r of priorResults) {
+    if (r.artifact === "Action Center" || r.artifact === "Task Catalog") {
+      acResultMap.set(r.name, { id: r.id, status: r.status });
+    }
+  }
+
+  const queueResultMap = new Map<string, { id?: number | string; status: string }>();
+  for (const r of priorResults) {
+    if (r.artifact === "Queue") {
+      queueResultMap.set(r.name, { id: r.id, status: r.status });
+    }
+  }
+
+  const resolvedTools: AgentToolDef[] = (agent.tools || []).map(tool => {
+    const resolved = { ...tool };
+    if (tool.processReference) {
+      const proc = processResultMap.get(tool.processReference);
+      if (proc?.id) {
+        resolved.processReference = `${tool.processReference} (ID: ${proc.id})`;
+      } else {
+        const queueMatch = queueResultMap.get(tool.processReference);
+        if (queueMatch?.id) {
+          resolved.processReference = `${tool.processReference} (Queue ID: ${queueMatch.id})`;
+        } else {
+          unresolvedRefs.push(`Tool "${tool.name}" references process "${tool.processReference}" — not found in deployed artifacts`);
+        }
+      }
+    }
+    return resolved;
+  });
+
+  const resolvedEscalation: AgentEscalationRule[] = (agent.escalationRules || []).map(rule => {
+    const resolved = { ...rule };
+    if (rule.actionCenterCatalog) {
+      const ac = acResultMap.get(rule.actionCenterCatalog);
+      if (ac?.id) {
+        resolved.actionCenterCatalog = `${rule.actionCenterCatalog} (ID: ${ac.id})`;
+      } else {
+        unresolvedRefs.push(`Escalation "${rule.condition}" references Action Center catalog "${rule.actionCenterCatalog}" — not found in deployed artifacts`);
+      }
+    }
+    return resolved;
+  });
+
+  let resolvedContextGrounding: AgentContextGrounding | undefined;
+  if (agent.contextGrounding) {
+    resolvedContextGrounding = { ...agent.contextGrounding };
+    if (agent.contextGrounding.storageBucket) {
+      const bucket = bucketResultMap.get(agent.contextGrounding.storageBucket);
+      if (bucket?.id) {
+        resolvedContextGrounding.storageBucket = `${agent.contextGrounding.storageBucket} (ID: ${bucket.id})`;
+      } else {
+        unresolvedRefs.push(`Context grounding references storage bucket "${agent.contextGrounding.storageBucket}" — not found in deployed artifacts`);
+      }
+    }
+  }
+
+  return { resolvedTools, resolvedEscalation, resolvedContextGrounding, unresolvedRefs };
+}
+
 async function provisionAgentArtifacts(
   base: string,
   hdrs: Record<string, string>,
   agents?: AgentDef[],
   knowledgeBases?: KnowledgeBaseDef[],
   promptTemplates?: PromptTemplateDef[],
+  priorResults?: DeploymentResult[],
 ): Promise<DeploymentResult[]> {
   const results: DeploymentResult[] = [];
   const hasAgents = (agents?.length || 0) > 0;
@@ -3460,18 +3550,33 @@ async function provisionAgentArtifacts(
 
   for (const agent of (agents || [])) {
     const assetName = `Agent_${agent.name.replace(/\s+/g, "_")}`;
+
+    const { resolvedTools, resolvedEscalation, resolvedContextGrounding, unresolvedRefs } = resolveAgentCrossReferences(agent, priorResults || []);
+    if (unresolvedRefs.length > 0) {
+      console.warn(`[UiPath Deploy] Agent "${agent.name}" has ${unresolvedRefs.length} unresolved reference(s): ${unresolvedRefs.join("; ")}`);
+    }
+
     const agentConfig = JSON.stringify({
       name: agent.name,
+      agentType: agent.agentType || "autonomous",
       description: agent.description || "",
       systemPrompt: agent.systemPrompt || "",
-      tools: agent.tools || [],
+      tools: resolvedTools,
+      contextGrounding: resolvedContextGrounding || agent.contextGrounding || undefined,
       knowledgeBases: agent.knowledgeBases || [],
       guardrails: agent.guardrails || [],
-      escalationRules: agent.escalationRules || [],
+      escalationRules: resolvedEscalation,
+      inputSchema: agent.inputSchema || undefined,
+      outputSchema: agent.outputSchema || undefined,
       maxIterations: agent.maxIterations || 10,
       temperature: agent.temperature ?? 0.3,
       provisionedBy: "CannonBall",
       provisionedAt: new Date().toISOString(),
+      crossReferences: {
+        resolved: unresolvedRefs.length === 0,
+        unresolvedCount: unresolvedRefs.length,
+        unresolvedDetails: unresolvedRefs.length > 0 ? unresolvedRefs : undefined,
+      },
     });
 
     try {
@@ -3489,7 +3594,7 @@ async function provisionAgentArtifacts(
             body: JSON.stringify({ Name: assetName, ValueType: "Text", StringValue: agentConfig, Description: truncDesc(agent.description) }),
           });
           if (putRes.status >= 200 && putRes.status < 300) {
-            results.push({ artifact: "Agent", name: agent.name, status: "updated", message: `Updated config asset "${assetName}" (ID: ${existingId})`, id: existingId });
+            results.push({ artifact: "Agent", name: agent.name, status: "updated", message: `Updated ${agent.agentType || "autonomous"} agent config asset "${assetName}" (ID: ${existingId}). Cross-refs: ${unresolvedRefs.length === 0 ? "all resolved" : `${unresolvedRefs.length} unresolved`}`, id: existingId });
           } else if (putRes.status === 404 || putRes.text.toLowerCase().includes("does not exist")) {
             console.log(`[UiPath Deploy] Agent "${agent.name}" PUT returned 404 (ID ${existingId} likely in different folder) — falling back to create in current folder`);
             shouldCreateAgent = true;
@@ -3510,17 +3615,20 @@ async function provisionAgentArtifacts(
         if (createRes.status >= 200 && createRes.status < 300) {
           const creation = isValidCreation(createRes.text);
           const manualSteps = [
-            `Configure agent in UiPath Autopilot/Agent Builder using the stored config asset "${assetName}"`,
+            `Import agent config in UiPath Agent Builder from asset "${assetName}" — type: ${agent.agentType || "autonomous"}`,
             `Review and tune the system prompt for production use`,
+            ...(agent.contextGrounding?.storageBucket ? [`Populate context grounding data in storage bucket "${agent.contextGrounding.storageBucket}"`] : []),
+            ...(agent.contextGrounding?.documentSources?.map(src => `Upload context grounding documents: ${src}`) || []),
             ...(agent.guardrails?.map(g => `Verify guardrail: ${g}`) || []),
-            ...(agent.escalationRules?.map(r => `Configure escalation: ${r.condition} → ${r.target}`) || []),
+            ...(agent.escalationRules?.map(r => `Verify escalation: ${r.condition} → ${r.target}${r.actionCenterCatalog ? ` (Action Center: ${r.actionCenterCatalog})` : ""}`) || []),
             ...(agent.knowledgeBases?.map(kb => `Connect knowledge base: ${kb}`) || []),
+            ...(unresolvedRefs.length > 0 ? [`Resolve ${unresolvedRefs.length} unresolved cross-reference(s) manually`] : []),
           ];
           results.push({
             artifact: "Agent",
             name: agent.name,
             status: "in_package",
-            message: `Config asset "${assetName}" created (ID: ${creation.data?.Id || "unknown"}). Agent configuration included in downloadable package — see Handoff Guide for Agent Builder import and setup steps.`,
+            message: `${agent.agentType || "autonomous"} agent config asset "${assetName}" created (ID: ${creation.data?.Id || "unknown"}). ${resolvedTools.length} tool(s), ${resolvedEscalation.length} escalation rule(s). Cross-refs: ${unresolvedRefs.length === 0 ? "all resolved" : `${unresolvedRefs.length} unresolved`}`,
             id: creation.data?.Id,
             manualSteps,
           });
@@ -3627,15 +3735,21 @@ export async function deployAllArtifacts(
       console.log("[UiPath Deploy] Probe says Test Manager unavailable, but attempting provisioning anyway...");
     }
 
-    const [triggerResults, actionCenterResults, duResults, testProvision, agentResults] = await Promise.all([
+    const [triggerResults, actionCenterResults, duResults, testProvision] = await Promise.all([
       triggerPromise,
       provisionActionCenter(base, hdrs, artifacts.actionCenter, config, svcAvail?.actionCenter),
       provisionDocUnderstanding(config, token, artifacts.documentUnderstanding),
       provisionTestCases(config, token, artifacts.testCases, releaseName || "Automation", artifacts.testDataQueues, config.folderId),
-      provisionAgentArtifacts(base, hdrs, artifacts.agents, artifacts.knowledgeBases, artifacts.promptTemplates),
     ]);
-    allResults.push(...triggerResults, ...actionCenterResults, ...duResults, ...testProvision.results, ...agentResults);
-    for (const r of [...triggerResults, ...actionCenterResults, ...duResults, ...testProvision.results, ...agentResults]) {
+    allResults.push(...triggerResults, ...actionCenterResults, ...duResults, ...testProvision.results);
+    for (const r of [...triggerResults, ...actionCenterResults, ...duResults, ...testProvision.results]) {
+      onProgress?.(`${r.artifact} "${r.name}" — ${r.status}`);
+    }
+
+    onProgress?.("Provisioning agent configurations...");
+    const agentResults = await provisionAgentArtifacts(base, hdrs, artifacts.agents, artifacts.knowledgeBases, artifacts.promptTemplates, allResults);
+    allResults.push(...agentResults);
+    for (const r of agentResults) {
       onProgress?.(`${r.artifact} "${r.name}" — ${r.status}`);
     }
 
