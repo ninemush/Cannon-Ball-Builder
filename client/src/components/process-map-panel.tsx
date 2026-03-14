@@ -558,14 +558,24 @@ interface ProcessMapPanelProps {
   onSwitchViewReady?: (fn: (view: ProcessView) => void) => void;
 }
 
+const NODE_HEIGHTS = {
+  start: 56,
+  end: 56,
+  decision: 100,
+  "agent-decision": 100,
+  "agent-loop": 82,
+  "agent-task": 82,
+  task: 80,
+} as const;
+
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
-  if (nodeType === "start") return { width: 72, height: 72 };
-  if (nodeType === "end") return { width: 72, height: 72 };
-  if (nodeType === "decision") return { width: 100, height: 100 };
-  if (nodeType === "agent-decision") return { width: 100, height: 120 };
-  if (nodeType === "agent-loop") return { width: 280, height: 110 };
-  if (nodeType === "agent-task") return { width: 280, height: 120 };
-  return { width: 280, height: 100 };
+  if (nodeType === "start") return { width: 56, height: NODE_HEIGHTS.start };
+  if (nodeType === "end") return { width: 56, height: NODE_HEIGHTS.end };
+  if (nodeType === "decision") return { width: 100, height: NODE_HEIGHTS.decision };
+  if (nodeType === "agent-decision") return { width: 100, height: NODE_HEIGHTS["agent-decision"] };
+  if (nodeType === "agent-loop") return { width: 280, height: NODE_HEIGHTS["agent-loop"] };
+  if (nodeType === "agent-task") return { width: 280, height: NODE_HEIGHTS["agent-task"] };
+  return { width: 280, height: NODE_HEIGHTS.task };
 }
 
 
@@ -844,7 +854,7 @@ function StartNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className={`flex items-center justify-center ${connectModeSourceId === id ? "connect-mode-source rounded-full" : ""}`}
-      style={{ width: 72, height: 72 }}
+      style={{ width: 56, height: 56 }}
       data-testid={`node-${id}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -879,7 +889,7 @@ function EndNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className={`flex items-center justify-center ${connectModeSourceId === id ? "connect-mode-source rounded-full" : ""}`}
-      style={{ width: 72, height: 72 }}
+      style={{ width: 56, height: 56 }}
       data-testid={`node-${id}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -989,6 +999,7 @@ function TaskNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
+        minHeight: NODE_HEIGHTS.task,
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1081,6 +1092,7 @@ function AgentTaskNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
+        minHeight: NODE_HEIGHTS["agent-task"],
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1214,6 +1226,7 @@ function AgentLoopNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
+        minHeight: NODE_HEIGHTS["agent-loop"],
         opacity: isGhost ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
