@@ -901,7 +901,8 @@ export function registerProcessMapRoutes(app: Express): void {
         await processMapStorage.clearAllForView(ideaId, "sdd");
         try { await documentStorage.deleteApproval(ideaId, "PDD"); } catch {}
         try { await documentStorage.deleteApproval(ideaId, "SDD"); } catch {}
-        console.log(`[ProcessMap] Cascade invalidation: As-Is v${nextVersion} invalidated To-Be, PDD, SDD for idea=${ideaId}`);
+        try { await storage.updateIdea(ideaId, { automationType: null, automationTypeRationale: null }); } catch {}
+        console.log(`[ProcessMap] Cascade invalidation: As-Is v${nextVersion} invalidated feasibility, To-Be, PDD, SDD for idea=${ideaId}`);
       }
 
     }
@@ -917,13 +918,13 @@ export function registerProcessMapRoutes(app: Express): void {
     const isReapproval = existingApproval != null;
     let nextAction: string | undefined;
     if (viewType === "as-is") {
-      nextAction = "generate-to-be";
+      nextAction = "generate-feasibility-and-to-be";
       await chatStorage.createMessage(
         ideaId,
         "assistant",
         isReapproval
-          ? `As-Is process map re-approved (v${nextVersion}). All downstream artifacts (To-Be map, PDD, SDD, UiPath package) have been invalidated. Generating the To-Be automated process map now...`
-          : "As-Is process map approved. Generating the To-Be automated process map now..."
+          ? `As-Is process map re-approved (v${nextVersion}). All downstream artifacts (To-Be map, PDD, SDD, UiPath package) have been invalidated. Running feasibility assessment and then generating the To-Be automated process map...`
+          : "As-Is process map approved. Running feasibility assessment (automation type evaluation) and then generating the To-Be automated process map..."
       );
     } else {
       nextAction = "generate-pdd";

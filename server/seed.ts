@@ -36,7 +36,7 @@ const DEMO_IDEAS = [
     description: "Streamline the employee onboarding process with automated task assignments and document collection.",
     owner: "Sam Martinez",
     ownerEmail: "sme@cannonball.demo",
-    stage: "Feasibility Assessment",
+    stage: "Design",
     tag: "HR",
   },
 ];

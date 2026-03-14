@@ -52,9 +52,8 @@ let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
 
 const STAGE_THINKING_MESSAGES: Record<string, string> = {
   "Idea": "Analyzing your process...",
-  "Feasibility Assessment": "Assessing feasibility...",
-  "Validated Backlog": "Validating requirements...",
   "Design": "Designing automation...",
+  "Feasibility Assessment": "Assessing feasibility...",
   "Build": "Building solution...",
   "Test": "Preparing tests...",
   "Governance / Security Scan": "Running compliance checks...",
@@ -188,17 +187,13 @@ const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
     action: "Describe Your Process",
     hint: "Tell the assistant about the manual process you want to automate. Include who does it, how often, and what systems are involved.",
   },
-  "Feasibility Assessment": {
-    action: "Review Feasibility",
-    hint: "Your process is being assessed for automation potential. Review the complexity score, estimated effort, and ROI projection.",
-  },
-  "Validated Backlog": {
-    action: "Prioritize & Plan",
-    hint: "This idea has been validated. It's queued for design. Review priority ranking and target timeline.",
-  },
   Design: {
-    action: "Refine the Design",
-    hint: "The As-Is process map is ready. Work with the assistant to design the To-Be automated workflow and identify exception paths.",
+    action: "Map Your Process",
+    hint: "Work with the assistant to build the As-Is process map step by step. Once complete, approve it to advance to feasibility assessment.",
+  },
+  "Feasibility Assessment": {
+    action: "Review Feasibility & To-Be",
+    hint: "The automation type is being evaluated and the To-Be automated process map is being generated. Review and approve the To-Be map to proceed to Build.",
   },
   Build: {
     action: "Build in Progress",
@@ -228,6 +223,7 @@ const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
 
 const STAGE_ARTIFACTS: Record<string, string[]> = {
   "Design": ["as-is-map"],
+  "Feasibility Assessment": ["as-is-map", "to-be-map"],
   "Build": ["as-is-map", "to-be-map", "pdd"],
   "Test": ["as-is-map", "to-be-map", "pdd", "sdd"],
   "Governance / Security Scan": ["as-is-map", "to-be-map", "pdd", "sdd"],
@@ -830,7 +826,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-approval-history"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "approval-summary"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map"] });
-                if (data.mapApproval.nextAction === "generate-to-be" && !toBeTriggeredRef.current) {
+                if ((data.mapApproval.nextAction === "generate-to-be" || data.mapApproval.nextAction === "generate-feasibility-and-to-be") && !toBeTriggeredRef.current) {
                   toBeTriggeredRef.current = true;
                   setTimeout(() => generateToBeRef.current?.(), 500);
                 }
@@ -1081,7 +1077,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const generateToBeMap = useCallback(() => {
     if (isStreaming || isGeneratingDoc) return;
     sendMessageDirect(
-      "Generate the To-Be process map based on the approved As-Is map and the available UiPath services. " +
+      "First, perform the feasibility assessment: evaluate the automation type (RPA vs Agent vs Hybrid) for this process and output the [AUTOMATION_TYPE:] tag. " +
+      "Then generate the To-Be process map based on the approved As-Is map and the available UiPath services. " +
       "Show the automated future state. Use the section header 'TO-BE Process Map' followed by [STEP:] tags."
     );
   }, [isStreaming, isGeneratingDoc, sendMessageDirect]);
