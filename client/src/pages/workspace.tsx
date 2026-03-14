@@ -341,42 +341,43 @@ function StageTracker({
               const tooltip = getStageTooltip(stage);
 
               const stageContent = (
-                <div key={stage} className="relative flex items-start group" data-testid={`stage-step-${index}`}>
-                  {index < PIPELINE_STAGES.length - 1 && (
-                    <div
-                      className={`absolute left-[11px] top-[24px] w-[2px] h-[calc(100%-8px)] ${
-                        isCompleted
-                          ? "bg-cb-teal/40"
-                          : isCurrent
-                            ? "bg-gradient-to-b from-primary/60 to-border/30"
-                            : "bg-border/30"
-                      }`}
-                    />
-                  )}
-
-                  <div className="relative z-10 flex items-center justify-center w-6 h-6 shrink-0 mt-0.5">
-                    {isCompleted && (
-                      <button
-                        onClick={() => onStageClick(stage)}
-                        className="flex items-center justify-center w-5 h-5 rounded-full bg-cb-teal/20 border border-cb-teal/30 cursor-pointer hover:bg-cb-teal/30 transition-colors"
-                        data-testid={`button-stage-${index}`}
-                      >
-                        <Check className="h-2.5 w-2.5 text-cb-teal" />
-                      </button>
-                    )}
-                    {isCurrent && (
-                      <div className="flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 border-2 border-primary">
-                        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                      </div>
-                    )}
-                    {isFuture && (
-                      <div className="flex items-center justify-center w-5 h-5 rounded-full bg-muted/30 border border-border/50">
-                        <Lock className="h-2 w-2 text-muted-foreground/40" />
-                      </div>
+                <div key={stage} className="relative flex group" data-testid={`stage-step-${index}`}>
+                  <div className="flex flex-col items-center shrink-0 w-6 z-10">
+                    <div className="flex items-center justify-center w-6 h-6 shrink-0">
+                      {isCompleted && (
+                        <button
+                          onClick={() => onStageClick(stage)}
+                          className="flex items-center justify-center w-5 h-5 rounded-full bg-cb-teal/20 border border-cb-teal/30 cursor-pointer hover:bg-cb-teal/30 transition-colors"
+                          data-testid={`button-stage-${index}`}
+                        >
+                          <Check className="h-2.5 w-2.5 text-cb-teal" />
+                        </button>
+                      )}
+                      {isCurrent && (
+                        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 border-2 border-primary">
+                          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                        </div>
+                      )}
+                      {isFuture && (
+                        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-muted/30 border border-border/50">
+                          <Lock className="h-2 w-2 text-muted-foreground/40" />
+                        </div>
+                      )}
+                    </div>
+                    {index < PIPELINE_STAGES.length - 1 && (
+                      <div
+                        className={`w-[2px] flex-1 ${
+                          isCompleted
+                            ? "bg-cb-teal/40"
+                            : isCurrent
+                              ? "bg-gradient-to-b from-primary/60 to-border/30"
+                              : "bg-border/30"
+                        }`}
+                      />
                     )}
                   </div>
 
-                  <div className="ml-2.5 pb-5 min-w-0 flex-1">
+                  <div className="ml-2.5 pb-5 min-w-0 flex-1 pt-[3px]">
                     <span
                       className={`text-xs leading-tight block ${
                         isCurrent
