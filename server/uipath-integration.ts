@@ -934,6 +934,17 @@ ${depEntries}
       }
     }
 
+    const contentHashRecord: Record<string, string> = {};
+    _appendedContentHashes.forEach((hash, path) => {
+      contentHashRecord[path] = hash;
+    });
+    for (const entry of xamlEntries) {
+      const basename = entry.name.split("/").pop() || entry.name;
+      const matchingArchivePath = _archiveManifestTracker.find(p => (p.split("/").pop() || p) === basename);
+      const key = matchingArchivePath ? `__validated__${matchingArchivePath}` : `__validated__${basename}`;
+      contentHashRecord[key] = createHash("sha256").update(entry.content).digest("hex");
+    }
+
     const qualityGateResult = runQualityGate({
       xamlEntries,
       projectJsonContent: projectJsonStr,
@@ -941,6 +952,7 @@ ${depEntries}
       orchestratorArtifacts,
       targetFramework: tf,
       archiveManifest: _archiveManifestTracker,
+      archiveContentHashes: contentHashRecord,
     });
 
     if (!qualityGateResult.passed) {

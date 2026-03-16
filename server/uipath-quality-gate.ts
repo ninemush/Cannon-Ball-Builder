@@ -37,6 +37,7 @@ export type QualityGateInput = {
   orchestratorArtifacts?: any;
   targetFramework: "Windows" | "Portable";
   archiveManifest?: string[];
+  archiveContentHashes?: Record<string, string>;
 };
 
 type ActivityPropertyInfo = {
@@ -1228,9 +1229,11 @@ function checkArchiveParity(input: QualityGateInput): QualityGateViolation[] {
   validatedBasenames.add("project.json");
 
   const archiveBasenames = new Set<string>();
+  const archivePathByBasename = new Map<string, string>();
   for (const archivePath of input.archiveManifest) {
     const basename = archivePath.split("/").pop() || archivePath;
     archiveBasenames.add(basename);
+    archivePathByBasename.set(basename, archivePath);
   }
 
   for (const entry of input.xamlEntries) {
@@ -1243,6 +1246,46 @@ function checkArchiveParity(input: QualityGateInput): QualityGateViolation[] {
         file: basename,
         detail: `Validated file "${basename}" is not present in the final archive`,
       });
+    }
+  }
+
+  if (input.archiveContentHashes && Object.keys(input.archiveContentHashes).length > 0) {
+    for (const entry of input.xamlEntries) {
+      const basename = entry.name.split("/").pop() || entry.name;
+      const archivePath = archivePathByBasename.get(basename);
+      if (!archivePath) continue;
+      const archiveHash = input.archiveContentHashes[archivePath];
+      const validatedHash = input.archiveContentHashes[`__validated__${archivePath}`]
+        || input.archiveContentHashes[`__validated__${basename}`];
+      if (!archiveHash) {
+        violations.push({
+          category: "completeness",
+          severity: "error",
+          check: "archive-content-hash-missing",
+          file: basename,
+          detail: `No content hash recorded for archive path "${archivePath}" — cannot verify byte-for-byte parity`,
+        });
+        continue;
+      }
+      if (!validatedHash) {
+        violations.push({
+          category: "completeness",
+          severity: "error",
+          check: "archive-content-hash-missing",
+          file: basename,
+          detail: `No validated content hash found for "${basename}" — cannot verify byte-for-byte parity`,
+        });
+        continue;
+      }
+      if (validatedHash !== archiveHash) {
+        violations.push({
+          category: "completeness",
+          severity: "error",
+          check: "archive-content-hash-mismatch",
+          file: basename,
+          detail: `Content hash mismatch: validated content for "${basename}" differs from archive content at "${archivePath}" — file may have been modified after validation`,
+        });
+      }
     }
   }
 
@@ -1813,6 +1856,30 @@ function collectPositiveEvidence(input: QualityGateInput): PositiveEvidence[] {
         check: "nuspec-present",
         file: nuspecPath,
         detail: `NuSpec package metadata found at "${nuspecPath}"`,
+      });
+    }
+
+    if (input.archiveContentHashes && Object.keys(input.archiveContentHashes).length > 0) {
+      let matchCount = 0;
+      let missingCount = 0;
+      const totalValidated = input.xamlEntries.length;
+      for (const entry of input.xamlEntries) {
+        const basename = entry.name.split("/").pop() || entry.name;
+        const archivePath = input.archiveManifest.find(p => (p.split("/").pop() || p) === basename);
+        if (!archivePath) { missingCount++; continue; }
+        const archiveHash = input.archiveContentHashes[archivePath];
+        const validatedHash = input.archiveContentHashes[`__validated__${archivePath}`]
+          || input.archiveContentHashes[`__validated__${basename}`];
+        if (archiveHash && validatedHash && archiveHash === validatedHash) {
+          matchCount++;
+        } else {
+          missingCount++;
+        }
+      }
+      evidence.push({
+        check: "content-hash-verified",
+        file: "package",
+        detail: `${matchCount}/${totalValidated} validated file(s) have matching archive content hashes (byte-for-byte parity${matchCount === totalValidated ? " fully confirmed" : `, ${missingCount} unverified`})`,
       });
     }
 
