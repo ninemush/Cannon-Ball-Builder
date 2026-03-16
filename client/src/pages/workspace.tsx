@@ -727,7 +727,28 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     };
   }, [savedMessages, isStreaming, isGeneratingDoc, idea.id]);
 
+  const lastUserMessageRef = useRef<string>("");
+
+  const isToBeRelatedMessage = useCallback((msg: string): boolean => {
+    const lower = msg.toLowerCase();
+    const toBeRef = /\bto[\s-]?be\b/.test(lower);
+    const modifyKeywords = /\b(simplif|modif|change|update|regenerat|redo|revise|improv|refin|reduc|optimiz|streamlin|consolidat|merg|rework|redesign|adjust|alter|rearrang)/i.test(lower);
+    if (toBeRef && modifyKeywords) return true;
+    const stageIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
+    const feasibilityIndex = PIPELINE_STAGES.indexOf("Feasibility Assessment");
+    if (stageIndex >= feasibilityIndex && modifyKeywords) {
+      const mapRef = /\b(map|process|steps?|workflow|flow)\b/.test(lower);
+      if (mapRef && !(/\bas[\s-]?is\b/.test(lower))) return true;
+    }
+    return false;
+  }, [idea.stage]);
+
   const sendMessageDirect = useCallback(async (text: string, imageData?: { base64: string; mediaType: string }) => {
+    lastUserMessageRef.current = text;
+    if (isToBeRelatedMessage(text)) {
+      toBeGeneratingRef.current = true;
+      console.log(`[ProcessMap] Detected TO-BE modification from user message, setting toBeGeneratingRef=true`);
+    }
     let docGenIdAtStart = docGenIdRef.current;
     const userMsg: ChatMsg = {
       id: `user-${Date.now()}`,
@@ -907,15 +928,19 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       }
 
       const isToBeRun = toBeGeneratingRef.current;
+      const lastMsg = lastUserMessageRef.current;
+      const isToBeFromMessage = isToBeRelatedMessage(lastMsg);
+      const isToBeContext = isToBeRun || isToBeFromMessage;
       toBeGeneratingRef.current = false;
 
       if (finalContent) {
-        const viewStepSets = parseStepsByView(finalContent);
+        const defaultView: "as-is" | "to-be" = isToBeContext ? "to-be" : "as-is";
+        const viewStepSets = parseStepsByView(finalContent, defaultView);
 
-        if (isToBeRun) {
+        if (isToBeContext) {
           for (const entry of viewStepSets) {
             if (entry.viewType === "as-is") {
-              console.log(`[ProcessMap] View pinning: forcing viewType from as-is to to-be during To-Be generation`);
+              console.log(`[ProcessMap] View pinning: forcing viewType from as-is to to-be during To-Be generation/modification`);
               entry.viewType = "to-be";
             }
           }
@@ -1076,7 +1101,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         }
       }
     }
-  }, [idea.id]);
+  }, [idea.id, isToBeRelatedMessage]);
 
   const generateDocument = useCallback((type: "PDD" | "SDD") => {
     if (isGeneratingDoc || isStreaming) return;

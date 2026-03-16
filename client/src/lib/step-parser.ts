@@ -66,7 +66,7 @@ export interface ViewSteps {
 const AS_IS_HEADER = /(?:^|\n)\s*\*{0,2}AS[-\s]IS\s+(?:Process\s*)?Map\b\*{0,2}/im;
 const TO_BE_HEADER = /(?:^|\n)\s*\*{0,2}TO[-\s]BE\s+(?:Process\s*)?Map\b\*{0,2}/im;
 
-export function parseStepsByView(text: string): ViewSteps[] {
+export function parseStepsByView(text: string, defaultViewType: "as-is" | "to-be" = "as-is"): ViewSteps[] {
   const cleaned = text.replace(/\*{1,2}/g, "");
   const asIsMatch = AS_IS_HEADER.exec(cleaned);
   const toBeMatch = TO_BE_HEADER.exec(cleaned);
@@ -74,7 +74,7 @@ export function parseStepsByView(text: string): ViewSteps[] {
   if (!asIsMatch && !toBeMatch) {
     const steps = parseStepsFromText(text);
     if (steps.length === 0) return [];
-    return [{ viewType: "as-is", steps }];
+    return [{ viewType: defaultViewType, steps }];
   }
 
   const result: ViewSteps[] = [];
@@ -108,7 +108,7 @@ export function parseStepsByView(text: string): ViewSteps[] {
 
   if (result.length === 0 && !toBeMatch) {
     const steps = parseStepsFromText(text);
-    if (steps.length > 0) return [{ viewType: "as-is", steps }];
+    if (steps.length > 0) return [{ viewType: defaultViewType, steps }];
   }
 
   return result;

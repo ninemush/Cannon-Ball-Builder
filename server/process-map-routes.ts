@@ -736,6 +736,14 @@ export function registerProcessMapRoutes(app: Express): void {
 
     const { viewType = "as-is", nodes = [], edges = [], clearExisting = false } = req.body;
 
+    if (viewType === "as-is" && toBeGenerationLocks.has(ideaId)) {
+      const existingApproval = await processMapStorage.getApproval(ideaId, "as-is");
+      if (existingApproval) {
+        console.log(`[ProcessMap] Blocked bulk write to approved as-is view during TO-BE generation for idea=${ideaId}`);
+        return res.status(409).json({ message: "Cannot overwrite approved AS-IS map while TO-BE generation is in progress" });
+      }
+    }
+
     const shouldClear = clearExisting || viewType === "sdd";
 
     const lockKey = `${ideaId}:${viewType}`;
