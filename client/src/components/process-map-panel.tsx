@@ -563,9 +563,9 @@ const NODE_HEIGHTS = {
   end: 56,
   decision: 100,
   "agent-decision": 100,
-  "agent-loop": 82,
-  "agent-task": 82,
-  task: 80,
+  "agent-loop": 100,
+  "agent-task": 100,
+  task: 96,
 } as const;
 
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
@@ -578,6 +578,24 @@ function getNodeDimensions(nodeType: string): { width: number; height: number } 
   return { width: 280, height: NODE_HEIGHTS.task };
 }
 
+function getEdgeSourceHandle(
+  isDecision: boolean,
+  label: string | null | undefined,
+  siblings: { indexOf: (e: any) => number; length: number },
+  edge: any
+): string {
+  if (!isDecision) return "bottom";
+  const lbl = (label || "").trim();
+  const isNoEdge = /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl);
+  if (isNoEdge) return "right";
+  const isYesEdge = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl);
+  if (isYesEdge) return "bottom";
+  if (siblings.length > 1) {
+    const idx = siblings.indexOf(edge);
+    return idx === 0 ? "bottom" : "right";
+  }
+  return "bottom";
+}
 
 function applyDagreLayout(
   nodes: Node[],
@@ -863,9 +881,9 @@ function StartNode({ data, id }: { data: any; id: string }) {
         nodeId={id}
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
-        targetHandles={[{ position: Position.Top }]}
+        targetHandles={[{ position: Position.Top, id: "top" }]}
         sourceHandles={[
-          { position: Position.Bottom },
+          { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
@@ -899,9 +917,9 @@ function EndNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top },
+          { position: Position.Top, id: "top" },
         ]}
-        sourceHandles={[{ position: Position.Bottom }]}
+        sourceHandles={[{ position: Position.Bottom, id: "bottom" }]}
       />
       <div
         className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-red-500/20 transition-all hover:shadow-xl hover:shadow-red-500/30"
@@ -940,10 +958,10 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top },
+          { position: Position.Top, id: "top" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom },
+          { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
@@ -999,7 +1017,7 @@ function TaskNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
-        minHeight: NODE_HEIGHTS.task,
+        height: NODE_HEIGHTS.task,
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1013,16 +1031,16 @@ function TaskNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top },
+          { position: Position.Top, id: "top" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom },
+          { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
       />
       <div
-        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        className="h-full rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
           background: bgColor,
           border: `1.5px solid ${borderColor}`,
@@ -1092,7 +1110,7 @@ function AgentTaskNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
-        minHeight: NODE_HEIGHTS["agent-task"],
+        height: NODE_HEIGHTS["agent-task"],
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1106,16 +1124,16 @@ function AgentTaskNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top },
+          { position: Position.Top, id: "top" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom },
+          { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
       />
       <div
-        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        className="h-full rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
           background: bgColor,
           border: `1.5px solid ${borderColor}`,
@@ -1176,10 +1194,10 @@ function AgentDecisionNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top },
+          { position: Position.Top, id: "top" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom },
+          { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
@@ -1226,7 +1244,7 @@ function AgentLoopNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
-        minHeight: NODE_HEIGHTS["agent-loop"],
+        height: NODE_HEIGHTS["agent-loop"],
         opacity: isGhost ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1240,16 +1258,16 @@ function AgentLoopNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top },
+          { position: Position.Top, id: "top" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom },
+          { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
       />
       <div
-        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        className="h-full rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
           background: bgColor,
           border: `2px dashed ${borderColor}`,
@@ -1830,10 +1848,14 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       const tgtS = relTgtGrp[String(e.targetNodeId)] || [e];
       const srcNodeType = nodeTypeMap[String(e.sourceNodeId)] || "task";
       const isDecision = srcNodeType === "decision" || srcNodeType === "agent-decision";
+      const sourceHandle = getEdgeSourceHandle(isDecision, e.label, srcS, e);
+
       return {
         id: String(e.id), source: String(e.sourceNodeId), target: String(e.targetNodeId),
         type: isDecision ? "smoothstep" : "custom",
         ...(isDecision && e.label ? { label: e.label } : {}),
+        sourceHandle,
+        targetHandle: "top",
         data: {
           label: e.label, dbId: e.id, viewType: activeView,
           sourceIndex: srcS.indexOf(e), sourceSiblings: srcS.length,
@@ -1909,12 +1931,15 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       const markerSize = isSimplified ? 16 : nodeCount > 25 ? 10 : 14;
       const srcType = nodeTypeMap2[String(e.sourceNodeId)] || "task";
       const isDecision = srcType === "decision" || srcType === "agent-decision";
+      const sourceHandle = getEdgeSourceHandle(isDecision, e.label, srcSiblings, e);
       return {
         id: String(e.id),
         source: String(e.sourceNodeId),
         target: String(e.targetNodeId),
         type: isDecision ? "smoothstep" : "custom",
         ...(isDecision && e.label ? { label: e.label } : {}),
+        sourceHandle,
+        targetHandle: "top",
         data: {
           label: e.label, dbId: e.id, viewType: activeView,
           sourceIndex: srcSiblings.indexOf(e), sourceSiblings: srcSiblings.length,
