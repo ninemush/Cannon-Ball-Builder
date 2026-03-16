@@ -26,6 +26,55 @@ import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./wor
 import { escapeXml } from "./lib/xml-utils";
 import { computePackageFingerprint } from "./lib/utils";
 
+export const UIPATH_PACKAGE_ALIAS_MAP: Record<string, string> = {
+  "UiPath.WebAPI.Activities": "UiPath.Web.Activities",
+  "UiPath.HTTP.Activities": "UiPath.Web.Activities",
+  "UiPath.REST.Activities": "UiPath.Web.Activities",
+  "UiPath.HttpClient.Activities": "UiPath.Web.Activities",
+  "UiPath.Orchestrator.Activities": "UiPath.System.Activities",
+  "UiPath.OrchestratorAPI.Activities": "UiPath.System.Activities",
+  "UiPath.Core.Activities": "UiPath.System.Activities",
+  "UiPath.Automation.Activities": "UiPath.System.Activities",
+  "UiPath.UI.Activities": "UiPath.UIAutomation.Activities",
+  "UiPath.UIAutomationNext.Activities": "UiPath.UIAutomation.Activities",
+  "UiPath.Browser.Activities": "UiPath.UIAutomation.Activities",
+  "UiPath.Selenium.Activities": "UiPath.UIAutomation.Activities",
+  "UiPath.Email.Activities": "UiPath.Mail.Activities",
+  "UiPath.Outlook.Activities": "UiPath.Mail.Activities",
+  "UiPath.SMTP.Activities": "UiPath.Mail.Activities",
+  "UiPath.CSV.Activities": "UiPath.Excel.Activities",
+  "UiPath.Spreadsheet.Activities": "UiPath.Excel.Activities",
+  "UiPath.DataTable.Activities": "UiPath.System.Activities",
+  "UiPath.File.Activities": "UiPath.System.Activities",
+  "UiPath.PDF.Activities": "UiPath.UIAutomation.Activities",
+  "UiPath.Cognitive.Activities": "UiPath.MLActivities",
+  "UiPath.AI.Activities": "UiPath.MLActivities",
+  "UiPath.MachineLearning.Activities": "UiPath.MLActivities",
+  "UiPath.Credentials.Activities": "UiPath.System.Activities",
+  "UiPath.Queue.Activities": "UiPath.System.Activities",
+  "UiPath.Storage.Activities": "UiPath.Persistence.Activities",
+  "UiPath.DataService.Activities": "UiPath.Persistence.Activities",
+  "UiPath.DB.Activities": "UiPath.Database.Activities",
+  "UiPath.SQL.Activities": "UiPath.Database.Activities",
+};
+
+function isValidNuGetVersion(version: string): boolean {
+  return /^\[\d+\.\d+(\.\d+){0,2}\]$/.test(version);
+}
+
+function sanitizeDeps(deps: Record<string, string>): void {
+  for (const [key, val] of Object.entries(deps)) {
+    if (val === "*" || val === "[*]" || !isValidNuGetVersion(val)) {
+      console.log(`[UiPath Sanitize] Removing invalid dependency version: ${key}=${val}`);
+      delete deps[key];
+    }
+  }
+}
+
+export function normalizePackageName(name: string): string {
+  return UIPATH_PACKAGE_ALIAS_MAP[name] || name;
+}
+
 type CachedBuild = {
   fingerprint: string;
   version: string;
@@ -354,7 +403,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
 
   let fingerprint: string | undefined;
   if (ideaId) {
-    fingerprint = computePackageFingerprint(pkg, sddContent, processNodes, processEdges, orchestratorArtifacts);
+    fingerprint = computePackageFingerprint(pkg, sddContent, processNodes, processEdges, orchestratorArtifacts, UIPATH_PACKAGE_ALIAS_MAP);
     const cached = packageBuildCache.get(ideaId);
     if (cached && cached.fingerprint === fingerprint && cached.version === version) {
       console.log(`[UiPath Cache] HIT for ${ideaId} — skipping AI enrichment and XAML generation`);
@@ -477,7 +526,8 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       "UiPath.Web.Activities": knownVersionMap["UiPath.Web.Activities"],
     };
     if (pkg.dependencies) {
-      for (const d of pkg.dependencies) {
+      for (const rawD of pkg.dependencies) {
+        const d = normalizePackageName(rawD);
         if (!deps[d] && knownVersionMap[d]) deps[d] = knownVersionMap[d];
       }
     }
@@ -627,7 +677,8 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       "UiPath.MLActivities": "[25.10.0]",
     };
     const packageVersionMap = isServerless ? crossPlatformPackageVersionMap : windowsPackageVersionMap;
-    for (const rp of richPackages) {
+    for (const rawRp of richPackages) {
+      const rp = normalizePackageName(rawRp);
       if (!deps[rp] && packageVersionMap[rp]) {
         deps[rp] = packageVersionMap[rp];
       }
@@ -654,7 +705,6 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     }
 
     const allGaps = aggregateGaps(xamlResults);
-    const allUsedPkgs = Object.keys(deps);
 
     const entryPointId = generateUuid();
     const studioVer = isServerless ? "24.10.0" : "23.10.6";
@@ -712,6 +762,8 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       projectJson.designOptions.autopilotEnabled = true;
       projectJson.designOptions.selfHealingSelectors = true;
     }
+    sanitizeDeps(deps);
+    const allUsedPkgs = Object.keys(deps);
     archive.append(JSON.stringify(projectJson, null, 2), { name: `${libPath}/project.json` });
 
     const depEntries = Object.entries(deps).map(

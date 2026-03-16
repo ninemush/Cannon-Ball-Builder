@@ -9,7 +9,8 @@ export function computePackageFingerprint(
   sddContent: string,
   processNodes: any[],
   processEdges: any[],
-  orchestratorArtifacts: any
+  orchestratorArtifacts: any,
+  aliasMap?: Record<string, string>
 ): string {
   const payload = JSON.stringify({
     p: pkg.projectName || "",
@@ -24,6 +25,7 @@ export function computePackageFingerprint(
       .map((e: any) => ({ s: e.sourceNodeId, t: e.targetNodeId, label: e.label }))
       .sort((a: any, b: any) => a.s - b.s || a.t - b.t),
     a: orchestratorArtifacts || null,
+    aliasMap: aliasMap || null,
   });
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
