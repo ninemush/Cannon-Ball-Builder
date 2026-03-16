@@ -26,8 +26,18 @@ import {
 } from "./xaml-generator";
 import { enrichWithAI, type EnrichmentResult } from "./ai-xaml-enricher";
 import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
+import { runQualityGate, formatQualityGateViolations, type QualityGateResult } from "./uipath-quality-gate";
 import { escapeXml } from "./lib/xml-utils";
 import { computePackageFingerprint } from "./lib/utils";
+
+export class QualityGateError extends Error {
+  qualityGateResult: QualityGateResult;
+  constructor(message: string, result: QualityGateResult) {
+    super(message);
+    this.name = "QualityGateError";
+    this.qualityGateResult = result;
+  }
+}
 
 export const UIPATH_PACKAGE_ALIAS_MAP: Record<string, string> = {
   "UiPath.WebAPI.Activities": "UiPath.Web.Activities",
@@ -85,6 +95,8 @@ type CachedBuild = {
   gaps: XamlGap[];
   usedPackages: string[];
   enrichment: EnrichmentResult | null;
+  qualityGatePassed: boolean;
+  qualityGateResult?: QualityGateResult;
 };
 
 const packageBuildCache = new Map<string, CachedBuild>();
@@ -400,7 +412,7 @@ function generateConfigXlsx(pkg: any, sddContent?: string, orchestratorArtifacts
   return `Settings\n${csvSettings}\n\nConstants\n${csvConstants}`;
 }
 
-export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ideaId?: string): Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[]; cacheHit?: boolean }> {
+export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ideaId?: string): Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[]; cacheHit?: boolean; qualityGateResult?: QualityGateResult }> {
   const projectName = (pkg.projectName || "Automation").replace(/\s+/g, "_");
   const sddContent = pkg._sddContent || "";
   const orchestratorArtifacts = pkg._orchestratorArtifacts || null;
@@ -412,8 +424,13 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     fingerprint = computePackageFingerprint(pkg, sddContent, processNodes, processEdges, orchestratorArtifacts, UIPATH_PACKAGE_ALIAS_MAP);
     const cached = packageBuildCache.get(ideaId);
     if (cached && cached.fingerprint === fingerprint && cached.version === version) {
-      console.log(`[UiPath Cache] HIT for ${ideaId} — skipping AI enrichment and XAML generation`);
-      return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true };
+      if (!cached.qualityGatePassed) {
+        console.log(`[UiPath Cache] HIT for ${ideaId} but quality gate was not passed — rebuilding`);
+        packageBuildCache.delete(ideaId);
+      } else {
+        console.log(`[UiPath Cache] HIT for ${ideaId} — skipping AI enrichment and XAML generation`);
+        return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true, qualityGateResult: cached.qualityGateResult };
+      }
     }
     if (cached && cached.fingerprint === fingerprint && cached.version !== version) {
       console.log(`[UiPath Cache] PARTIAL HIT for ${ideaId} — reusing enrichment, rebuilding with v${version}`);
@@ -879,23 +896,24 @@ ${depEntries}
       }
     }
 
-    const postStubViolations = validateXamlContent(xamlEntries);
-    const criticalViolations = postStubViolations.filter(v => v.check === "placeholder" || v.check === "pseudo-xaml");
-    const remainingMissingFiles = postStubViolations.filter(v => v.check === "invoked-file");
+    const qualityGateResult = runQualityGate({
+      xamlEntries,
+      projectJsonContent: projectJsonStr,
+      configData: configCsv,
+      orchestratorArtifacts,
+      targetFramework: tf,
+    });
 
-    if (criticalViolations.length > 0 || remainingMissingFiles.length > 0) {
-      const allIssues = [...criticalViolations, ...remainingMissingFiles];
-      const violationSummary: string[] = [];
-      for (const v of allIssues) {
-        const msg = `[${v.check}] ${v.file}: ${v.detail}`;
-        console.error(`[UiPath Validation FAIL] ${msg}`);
-        violationSummary.push(msg);
-      }
-      throw new Error(
-        `UiPath XAML pre-archive validation failed with ${allIssues.length} violation(s):\n${violationSummary.join("\n")}`
+    if (!qualityGateResult.passed) {
+      const formattedViolations = formatQualityGateViolations(qualityGateResult);
+      console.error(`[UiPath Quality Gate] FAILED:\n${formattedViolations}`);
+      throw new QualityGateError(
+        `UiPath pre-package quality gate failed with ${qualityGateResult.summary.totalErrors} error(s):\n${formattedViolations}`,
+        qualityGateResult
       );
     } else {
-      console.log(`[UiPath Validation] All pre-archive checks passed${stubsGenerated.length > 0 ? ` (${stubsGenerated.length} stub(s) generated)` : ""}`);
+      const warnCount = qualityGateResult.summary.totalWarnings;
+      console.log(`[UiPath Quality Gate] PASSED${warnCount > 0 ? ` with ${warnCount} warning(s)` : ""}${stubsGenerated.length > 0 ? `, ${stubsGenerated.length} stub(s) generated` : ""}`);
     }
 
     archive.finalize();
@@ -903,10 +921,10 @@ ${depEntries}
   const buffer = await streamDone;
   if (ideaId && fingerprint) {
     evictOldestCacheEntry();
-    packageBuildCache.set(ideaId, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment });
+    packageBuildCache.set(ideaId, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment, qualityGatePassed: qualityGateResult.passed, qualityGateResult });
     console.log(`[UiPath Cache] Stored build for ${ideaId} (${buffer.length} bytes, v${version})`);
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult };
 }
 
 async function uploadNupkgBuffer(
@@ -1085,6 +1103,9 @@ export async function pushToUiPath(pkg: any, ideaId?: string): Promise<{ success
       },
     };
   } catch (err: any) {
+    if (err instanceof QualityGateError) {
+      throw err;
+    }
     const msg = err.message || String(err);
     console.error(`[UiPath] Push failed for "${projectName}":`, msg);
 

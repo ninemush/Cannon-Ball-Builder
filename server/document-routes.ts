@@ -4,7 +4,7 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { getPlatformCapabilities, buildNuGetPackage, getAICenterSkills } from "./uipath-integration";
+import { getPlatformCapabilities, buildNuGetPackage, getAICenterSkills, QualityGateError } from "./uipath-integration";
 import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport, setAICenterSkillsContext, getReferencedMLSkillNames, TargetFramework } from "./xaml-generator";
 import { analyzeAndFix } from "./workflow-analyzer";
 import { evaluateTransition } from "./stage-transition";
@@ -1113,6 +1113,18 @@ ${content}`
         console.log(`[UiPath] Pre-built .nupkg for "${idea.title}" — ${buildResult.buffer.length} bytes, ${buildResult.gaps.length} gaps`);
         sendProgress(`Pre-build complete: ${packageJson.workflows.length} workflow(s) enriched`);
       } catch (prebuildErr: any) {
+        if (prebuildErr instanceof QualityGateError) {
+          console.error(`[UiPath] Quality gate failed during pre-build:`, prebuildErr.message);
+          const qgResult = prebuildErr.qualityGateResult;
+          res.write(`data: ${JSON.stringify({
+            done: true,
+            package: packageJson,
+            qualityGateWarning: true,
+            qualityGateViolations: qgResult.violations,
+            qualityGateSummary: qgResult.summary,
+          })}\n\n`);
+          return res.end();
+        }
         console.error(`[UiPath] Pre-build failed (deploy will rebuild):`, prebuildErr?.message);
         sendProgress("Pre-build skipped — deploy will build on demand");
       }
@@ -1157,7 +1169,19 @@ ${content}`
       pkg._sddContent = sddContent;
       pkg._automationType = idea.automationType || undefined;
 
-      const buildResult = await buildNuGetPackage(pkg, "1.0.0", `download-${ideaId}`);
+      let buildResult;
+      try {
+        buildResult = await buildNuGetPackage(pkg, "1.0.0", `download-${ideaId}`);
+      } catch (err: any) {
+        if (err instanceof QualityGateError) {
+          return res.status(422).json({
+            message: "Package failed quality gate validation",
+            qualityGateViolations: err.qualityGateResult.violations,
+            qualityGateSummary: err.qualityGateResult.summary,
+          });
+        }
+        throw err;
+      }
 
       const isServerless = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
       const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";

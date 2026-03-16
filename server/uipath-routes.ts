@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache, discoverIntegrationService, clearIntegrationServiceCache, discoverGovernancePolicies, discoverAttendedRobots, discoverStudioProjects } from "./uipath-integration";
+import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache, discoverIntegrationService, clearIntegrationServiceCache, discoverGovernancePolicies, discoverAttendedRobots, discoverStudioProjects, QualityGateError } from "./uipath-integration";
 import { parseArtifactsFromSDD, extractArtifactsWithLLM, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
 import { getPreviousManifest, reconcileArtifacts, saveManifest, formatReconciliationSummary } from "./artifact-reconciliation";
 import { documentStorage } from "./document-storage";
@@ -546,8 +546,27 @@ export function registerUiPathRoutes(app: Express): void {
         console.log(`[UiPath Deploy] Could not enrich package with process data: ${err.message}`);
       }
 
-      sendEvent({ deployStatus: "Uploading package to Orchestrator..." });
-      const result = await pushToUiPath(pkg, ideaId);
+      sendEvent({ deployStatus: "Running quality gate and uploading to Orchestrator..." });
+      let result;
+      try {
+        result = await pushToUiPath(pkg, ideaId);
+      } catch (pushErr: any) {
+        if (pushErr instanceof QualityGateError) {
+          sendEvent({
+            deployComplete: true,
+            success: false,
+            result: {
+              success: false,
+              message: "Package failed quality gate validation",
+              qualityGateViolations: pushErr.qualityGateResult.violations,
+              qualityGateSummary: pushErr.qualityGateResult.summary,
+            },
+          });
+          clearInterval(heartbeat);
+          return res.end();
+        }
+        throw pushErr;
+      }
 
       if (!result.success) {
         sendEvent({ deployComplete: true, success: false, result });
