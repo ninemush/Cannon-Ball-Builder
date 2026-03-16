@@ -2066,17 +2066,35 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
 
     const bucketsAvailable = bucketRes ? bucketRes.ok : false;
 
-    const [tmResult, duResult, pmResult, dfResult] = await Promise.allSettled([
+    const [tmResult, duResult, pmResult, dfResult, ixpResult, aiResult] = await Promise.allSettled([
       tryAcquireResourceToken("TM"),
       tryAcquireResourceToken("DU"),
       tryAcquireResourceToken("PM"),
       tryAcquireResourceToken("DF"),
+      tryAcquireResourceToken("IXP"),
+      tryAcquireResourceToken("AI"),
     ]);
 
     let tmAvailable = false;
     if (tmResult.status === "fulfilled" && tmResult.value.ok) {
       tmAvailable = true;
       console.log("[UiPath Probe] TM token acquired — Test Manager available");
+    }
+
+    const isServiceReachable = (res: Response | null) => {
+      if (!res) return false;
+      if (res.ok) return true;
+      if (res.status === 403 || res.status === 401) return true;
+      if (res.status >= 300 && res.status < 400) return true;
+      return false;
+    };
+
+    let aiProbeHdrs = hdrs;
+    if (aiResult.status === "fulfilled" && aiResult.value.ok) {
+      try {
+        const aiTok = await (await import("./uipath-auth")).getAiToken();
+        aiProbeHdrs = { Authorization: `Bearer ${aiTok}`, "Content-Type": "application/json" };
+      } catch { aiProbeHdrs = hdrs; }
     }
 
     let duAvailable = false;
@@ -2117,9 +2135,18 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       } catch {}
     }
 
-    const cmProbeUrl = `${base}/communicationsmining_/api/v1/datasets`;
+    const cmProbeUrl = `${base}/reinfer_/api/v1/datasets`;
+    let ixpHdrs = hdrs;
+    if (ixpResult.status === "fulfilled" && ixpResult.value.ok) {
+      try {
+        const ixpTok = await (await import("./uipath-auth")).getIxpToken();
+        ixpHdrs = { Authorization: `Bearer ${ixpTok}`, "Content-Type": "application/json" };
+      } catch {
+        ixpHdrs = hdrs;
+      }
+    }
     try {
-      const cmRes = await fetch(cmProbeUrl, { headers: hdrs });
+      const cmRes = await fetch(cmProbeUrl, { headers: ixpHdrs });
       console.log(`[UiPath Probe] Communications Mining: ${cmProbeUrl} -> ${cmRes.status}`);
       if (cmRes.ok) {
         const cmText = await cmRes.text();
@@ -2139,13 +2166,13 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     let aiAvailable = false;
     let aiCenterSkills: AICenterSkill[] = [];
     let aiCenterPackages: AICenterPackage[] = [];
-    const aiProbe = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: hdrs }).catch(() => null);
-    if (aiProbe && aiProbe.ok) {
+    const aiProbe = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: aiProbeHdrs }).catch(() => null);
+    if (aiProbe && isServiceReachable(aiProbe)) {
       aiAvailable = true;
       try {
         const [skillsRes, pkgsRes] = await Promise.all([
-          fetch(`${base}/aifabric_/ai-deployer/v1/mlskills?$top=50`, { headers: hdrs }).catch(() => null),
-          fetch(`${base}/aifabric_/ai-deployer/v1/mlpackages?$top=50`, { headers: hdrs }).catch(() => null),
+          fetch(`${base}/aifabric_/ai-deployer/v1/mlskills?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
+          fetch(`${base}/aifabric_/ai-deployer/v1/mlpackages?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
         ]);
         if (skillsRes && skillsRes.ok) {
           const skillsData = await skillsRes.json();
@@ -2242,26 +2269,34 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       }
     }
 
+    let ixpProbeHdrs = hdrs;
+    if (ixpResult.status === "fulfilled" && ixpResult.value.ok) {
+      try {
+        const ixpTok2 = await (await import("./uipath-auth")).getIxpToken();
+        ixpProbeHdrs = { Authorization: `Bearer ${ixpTok2}`, "Content-Type": "application/json" };
+      } catch { ixpProbeHdrs = hdrs; }
+    }
+
+    let pmProbeHdrs = hdrs;
+    if (pmResult.status === "fulfilled" && pmResult.value.ok) {
+      try {
+        const pmTok = await (await import("./uipath-auth")).getPmToken();
+        pmProbeHdrs = { Authorization: `Bearer ${pmTok}`, "Content-Type": "application/json" };
+      } catch { pmProbeHdrs = hdrs; }
+    }
+
     const [maestroProbe, integrationServiceProbe, ixpProbe, automationHubProbe, automationOpsProbe, automationStoreProbe, appsProbe, assistantHttpProbe] = await Promise.all([
       fetch(`${base}/maestro_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/integrationservice_/api/v1/connections?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/ixp_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/integrationservice_/api/Connections?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/reinfer_/api/v1/datasets`, { headers: ixpProbeHdrs, redirect: "manual" }).catch(() => null),
       fetch(`${base}/automationhub_/api/v1/ideas?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/automationops_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${base}/automationops_/api/v1/policies?$top=1`, { headers: pmProbeHdrs, redirect: "manual" }).catch(() => null),
       fetch(`${base}/automationstore_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
       fetch(`${base}/apps_/api/v1/apps?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
       fetch(`${base}/assistant_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
     ]);
 
     const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[] }));
-
-    const isServiceReachable = (res: Response | null) => {
-      if (!res) return false;
-      if (res.ok) return true;
-      if (res.status === 403 || res.status === 401) return true;
-      if (res.status >= 300 && res.status < 400) return true;
-      return false;
-    };
 
     const maestroAvailable = isServiceReachable(maestroProbe) || pimsResult.ok;
     const integrationServiceAvailable = isServiceReachable(integrationServiceProbe);
@@ -2807,10 +2842,12 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       tryAcquireResourceToken("PM"),
       tryAcquireResourceToken("DF"),
       tryAcquireResourceToken("PIMS"),
+      tryAcquireResourceToken("IXP"),
+      tryAcquireResourceToken("AI"),
     ]);
 
     const resources: Record<string, { ok: boolean; scopes: string[]; error?: string }> = {};
-    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF" | "PIMS"> = ["OR", "TM", "DU", "PM", "DF", "PIMS"];
+    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "AI"> = ["OR", "TM", "DU", "PM", "DF", "PIMS", "IXP", "AI"];
     for (let i = 0; i < resourceNames.length; i++) {
       const r = resourceResults[i];
       resources[resourceNames[i]] = r.status === "fulfilled" ? r.value : { ok: false, scopes: [], error: "Token request failed" };
@@ -2880,8 +2917,8 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
     }
 
     serviceChecks["IXP / Communications Mining"] = probe.flags.ixp
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible or not provisioned" };
+      ? { available: true, message: resources.IXP?.ok ? "Accessible (IXP scope granted)" : "Reachable — grant Ixp.ApiAccess scope for full access" }
+      : { available: false, message: `Not accessible — ${resources.IXP?.ok ? "provisioning issue" : "Ixp.ApiAccess scope may be needed"}` };
 
     serviceChecks["Automation Hub"] = probe.flags.automationHub
       ? { available: true, message: "Accessible" }
@@ -2897,7 +2934,7 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
 
     serviceChecks["Apps"] = probe.flags.apps
       ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible or not provisioned" };
+      : { available: false, message: "No external API access — Apps API is not publicly exposed" };
 
     serviceChecks["Assistant"] = probe.flags.assistant
       ? { available: true, message: "Accessible" }
@@ -2912,7 +2949,7 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
           : `Available (${probe.aiCenterPackages.length} packages, no skills deployed)`,
       };
     } else {
-      serviceChecks["AI Center"] = { available: false, message: "Not accessible" };
+      serviceChecks["AI Center"] = { available: false, message: `Not accessible — ${resources.AI?.ok ? "provisioning issue" : "AI Center scopes may be needed"}` };
     }
 
     serviceChecks["Attended Robots"] = probe.flags.attendedRobots

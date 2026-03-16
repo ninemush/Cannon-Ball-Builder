@@ -24,7 +24,7 @@ type CachedToken = {
   expiresAt: number;
 };
 
-export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS";
+export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "AI";
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 const TOKEN_ENDPOINT = "https://cloud.uipath.com/identity_/connect/token";
@@ -65,6 +65,12 @@ const RESOURCE_SCOPES: Record<ResourceType, string> = {
     "PIMS.Default", "PIMS.Read", "PIMS.Write",
     "PIMS.Process", "PIMS.Process.Read", "PIMS.Process.Write",
     "PIMS.Execution", "PIMS.Execution.Read",
+  ].join(" "),
+  IXP: "Ixp.ApiAccess",
+  AI: [
+    "AI.Deployer.Read", "AI.Deployer.Write",
+    "AI.Trainer.Read", "AI.Trainer.Write",
+    "AI.Helper.Read",
   ].join(" "),
 };
 
@@ -342,6 +348,22 @@ export async function getPmHeaders(extraHeaders?: Record<string, string>): Promi
 
 export async function getDfHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
   return getResourceHeaders("DF", extraHeaders);
+}
+
+export async function getIxpToken(): Promise<string> {
+  return getResourceToken("IXP");
+}
+
+export async function getIxpHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+  return getResourceHeaders("IXP", extraHeaders);
+}
+
+export async function getAiToken(): Promise<string> {
+  return getResourceToken("AI");
+}
+
+export async function getAiHeaders(extraHeaders?: Record<string, string>): Promise<Record<string, string>> {
+  return getResourceHeaders("AI", extraHeaders);
 }
 
 export async function getMaestroToken(): Promise<string> {

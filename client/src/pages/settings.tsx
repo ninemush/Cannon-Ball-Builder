@@ -558,6 +558,16 @@ const UIPATH_SCOPE_CATEGORIES = [
     { id: "OR.Webhooks.Read", description: "Read webhooks" },
     { id: "OR.Webhooks.Write", description: "Write webhooks" },
   ]},
+  { category: "IXP / Communications Mining", scopes: [
+    { id: "Ixp.ApiAccess", description: "IXP API access (Communications Mining)" },
+  ]},
+  { category: "AI Center", scopes: [
+    { id: "AI.Deployer.Read", description: "Read AI deployments and skills" },
+    { id: "AI.Deployer.Write", description: "Write AI deployments and skills" },
+    { id: "AI.Trainer.Read", description: "Read AI training pipelines" },
+    { id: "AI.Trainer.Write", description: "Write AI training pipelines" },
+    { id: "AI.Helper.Read", description: "Read AI helper data" },
+  ]},
 ];
 
 function extractOrgSlug(input: string): string {
@@ -2221,7 +2231,7 @@ function IntegrationsTab() {
                       e.preventDefault();
                       const val = (e.target as HTMLInputElement).value.trim();
                       if (val) {
-                        const parsed = val.split(/[\s,]+/).filter(s => s.startsWith("OR."));
+                        const parsed = val.split(/[\s,]+/).filter(s => s.includes("."));
                         if (parsed.length > 0) {
                           const scopeSet = new Set(parsed);
                           scopeSet.add("OR.Default");
@@ -2241,7 +2251,7 @@ function IntegrationsTab() {
                     const input = document.getElementById("paste-scopes") as HTMLInputElement;
                     const val = input?.value?.trim();
                     if (val) {
-                      const parsed = val.split(/[\s,]+/).filter(s => s.startsWith("OR."));
+                      const parsed = val.split(/[\s,]+/).filter(s => s.includes("."));
                       if (parsed.length > 0) {
                         const scopeSet = new Set(parsed);
                         scopeSet.add("OR.Default");
@@ -2608,6 +2618,8 @@ function IntegrationsTab() {
                         "PM": "Platform Management",
                         "DataFabric": "Data Service",
                         "PIMS": "Maestro",
+                        "Ixp": "IXP / Communications Mining",
+                        "AI": "AI Center",
                       };
                       for (const scope of scopeVerification.grantedScopes) {
                         const prefix = scope.startsWith("OR.") ? "OR"
@@ -2616,6 +2628,8 @@ function IntegrationsTab() {
                           : scope.startsWith("PM.") ? "PM"
                           : scope.startsWith("DataFabric.") ? "DataFabric"
                           : scope.startsWith("PIMS.") ? "PIMS"
+                          : scope.startsWith("Ixp.") ? "Ixp"
+                          : scope.startsWith("AI.") ? "AI"
                           : "Other";
                         if (!groups[prefix]) groups[prefix] = [];
                         groups[prefix].push(scope);
@@ -2627,6 +2641,8 @@ function IntegrationsTab() {
                         "PM": "bg-cyan-500/10 text-cyan-400",
                         "DataFabric": "bg-emerald-500/10 text-emerald-400",
                         "PIMS": "bg-rose-500/10 text-rose-400",
+                        "Ixp": "bg-teal-500/10 text-teal-400",
+                        "AI": "bg-indigo-500/10 text-indigo-400",
                         "Other": "bg-primary/10 text-primary",
                       };
                       return Object.entries(groups).map(([prefix, scopes]) => (
