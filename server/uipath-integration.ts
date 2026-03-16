@@ -553,14 +553,15 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
           "UiPath.MLActivities": "[25.10.0]",
         }
       : {
-          "UiPath.System.Activities": "[23.10.0]",
-          "UiPath.UIAutomation.Activities": "[23.10.0]",
+          "UiPath.System.Activities": "[26.2.1]",
+          "UiPath.UIAutomation.Activities": "[25.10.28]",
           "UiPath.Web.Activities": "[1.18.0]",
-          "UiPath.Excel.Activities": "[2.22.0]",
+          "UiPath.Excel.Activities": "[2.24.0]",
           "UiPath.Mail.Activities": "[1.20.0]",
           "UiPath.Database.Activities": "[1.8.0]",
-          "UiPath.Persistence.Activities": "[23.10.0]",
-          "UiPath.MLActivities": "[23.10.0]",
+          "UiPath.Persistence.Activities": "[25.10.0]",
+          "UiPath.MLActivities": "[25.10.0]",
+          "UiPath.IntelligentOCR.Activities": "[8.20.0]",
         };
     const deps: Record<string, string> = {
       "UiPath.System.Activities": knownVersionMap["UiPath.System.Activities"],
@@ -703,14 +704,15 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
 
     const richPackages = aggregatePackages(xamlResults);
     const windowsPackageVersionMap: Record<string, string> = {
-      "UiPath.System.Activities": "[23.10.0]",
-      "UiPath.UIAutomation.Activities": "[23.10.0]",
+      "UiPath.System.Activities": "[26.2.1]",
+      "UiPath.UIAutomation.Activities": "[25.10.28]",
       "UiPath.Web.Activities": "[1.18.0]",
-      "UiPath.Excel.Activities": "[2.22.0]",
+      "UiPath.Excel.Activities": "[2.24.0]",
       "UiPath.Mail.Activities": "[1.20.0]",
       "UiPath.Database.Activities": "[1.8.0]",
-      "UiPath.Persistence.Activities": "[23.10.0]",
-      "UiPath.MLActivities": "[23.10.0]",
+      "UiPath.Persistence.Activities": "[25.10.0]",
+      "UiPath.MLActivities": "[25.10.0]",
+      "UiPath.IntelligentOCR.Activities": "[8.20.0]",
     };
     const crossPlatformPackageVersionMap: Record<string, string> = {
       "UiPath.System.Activities": "[25.10.0]",
@@ -731,7 +733,21 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     }
 
     if (!deps["UiPath.Excel.Activities"]) {
-      deps["UiPath.Excel.Activities"] = isServerless ? "[3.18.0]" : "[2.22.0]";
+      deps["UiPath.Excel.Activities"] = isServerless ? "[3.18.0]" : "[2.24.0]";
+    }
+
+    const allXamlContent = xamlEntries.map(e => e.content).join("\n");
+    const ACTIVITY_PACKAGE_MAP: Record<string, string> = {
+      "ui:DigitizeDocument": "UiPath.IntelligentOCR.Activities",
+      "ui:ClassifyDocument": "UiPath.IntelligentOCR.Activities",
+      "ui:ExtractDocumentData": "UiPath.IntelligentOCR.Activities",
+      "ui:ValidateDocumentData": "UiPath.IntelligentOCR.Activities",
+    };
+    for (const [actTag, pkgName] of Object.entries(ACTIVITY_PACKAGE_MAP)) {
+      if (allXamlContent.includes(`<${actTag}`) && !deps[pkgName]) {
+        deps[pkgName] = packageVersionMap[pkgName] || knownVersionMap[pkgName] || "[8.20.0]";
+        console.log(`[UiPath] Auto-added dependency ${pkgName} (detected ${actTag} in XAML)`);
+      }
     }
 
     const allDepEntries = Object.entries(deps);

@@ -128,6 +128,40 @@ const UIPATH_CSHARP_SETTINGS = `
     </sco:Collection>
   </TextExpression.ReferencesForImplementation>`;
 
+function parseInvokeArgs(rawValue: string, direction: "In" | "Out" | "InOut"): string {
+  const decoded = rawValue.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  const cleaned = decoded.replace(/^\{\s*/, "").replace(/\s*\}$/, "").trim();
+  if (!cleaned) return "";
+
+  let result = "";
+  const argType = direction === "In" ? "InArgument" : direction === "Out" ? "OutArgument" : "InOutArgument";
+
+  const pairPattern = /(?:^|,)\s*"([^"]+)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}]+)/g;
+  let m;
+  while ((m = pairPattern.exec(cleaned)) !== null) {
+    const key = m[1].trim();
+    let val = m[2].trim().replace(/^["']|["']$/g, "");
+    if (!key) continue;
+    if (!val.startsWith("[")) val = `[${val}]`;
+    result += `                <${argType} x:TypeArguments="x:String" x:Key="${escapeXml(key)}">${escapeXml(val)}</${argType}>\n`;
+  }
+
+  if (!result) {
+    const simplePairs = cleaned.split(/,\s*/);
+    for (const pair of simplePairs) {
+      const colonIdx = pair.indexOf(":");
+      if (colonIdx < 0) continue;
+      const key = pair.substring(0, colonIdx).trim().replace(/^["']|["']$/g, "");
+      let val = pair.substring(colonIdx + 1).trim().replace(/^["']|["']$/g, "");
+      if (!key) continue;
+      if (!val.startsWith("[")) val = `[${val}]`;
+      result += `                <${argType} x:TypeArguments="x:String" x:Key="${escapeXml(key)}">${escapeXml(val)}</${argType}>\n`;
+    }
+  }
+
+  return result;
+}
+
 export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFramework = "Windows"): string {
   let idCounter = 0;
   const viewStateEntries: { id: string; width: number; height: number }[] = [];
@@ -186,26 +220,21 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     xml = xml.slice(0, firstTag.index) + settingsBlock + "\n  " + xml.slice(firstTag.index);
   }
 
-  let viewStateManager = `\n  <sap2010:WorkflowViewState.ViewStateManager>\n    <sap2010:ViewStateManager>`;
-  for (const entry of viewStateEntries) {
-    viewStateManager += `\n      <sap2010:ViewStateData Id="${entry.id}" sap:VirtualizedContainerService.HintSize="${entry.width},${entry.height}">
-        <sap:WorkflowViewStateService.ViewState>
-          <scg:Dictionary x:TypeArguments="x:String, x:Object">
-            <x:Boolean x:Key="IsExpanded">True</x:Boolean>
-          </scg:Dictionary>
-        </sap:WorkflowViewStateService.ViewState>
-      </sap2010:ViewStateData>`;
-  }
-  viewStateManager += `\n    </sap2010:ViewStateManager>\n  </sap2010:WorkflowViewState.ViewStateManager>`;
-
-  xml = xml.replace(/<\/Activity>\s*$/, viewStateManager + "\n</Activity>");
-
   xml = xml.replace(/scg:DataTable/g, "scg2:DataTable");
   xml = xml.replace(/scg:DataRow/g, "scg2:DataRow");
 
-  if (isCrossPlatform) {
-    xml = xml.replace(/Message="'([^']*)'"/g, 'Message="[&quot;$1&quot;]"');
+  xml = xml.replace(/Message="'([^']*)'"/g, 'Message="[&quot;$1&quot;]"');
+  xml = xml.replace(/Default="'([^']*)'"/g, 'Default="[&quot;$1&quot;]"');
 
+  let prevXml = "";
+  while (prevXml !== xml) {
+    prevXml = xml;
+    xml = xml.replace(/(Message|Default|Value)="(\[[^"]*)'([^']*)'([^"]*\])"/g, (match, attr, pre, quoted, post) => {
+      return `${attr}="${pre}&quot;${quoted}&quot;${post}"`;
+    });
+  }
+
+  if (isCrossPlatform) {
     xml = xml.replace(/Condition="\[(\w+) IsNot Nothing\]"/g, 'Condition="[$1 != null]"');
     xml = xml.replace(/Condition="\[(\w+) Is Nothing\]"/g, 'Condition="[$1 == null]"');
     xml = xml.replace(/Condition="\[Not (\w+)\]"/g, 'Condition="[!$1]"');
@@ -215,8 +244,285 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     xml = xml.replace(/\.ToString(?!\()/g, ".ToString()");
 
     xml = xml.replace(/ &amp; /g, " + ");
+  }
 
-    xml = xml.replace(/Default="'([^']*)'"/g, 'Default="[&quot;$1&quot;]"');
+  const UIPATH_ACTIVITIES_NEEDING_PREFIX = [
+    "InvokeWorkflowFile", "RetryScope", "AddQueueItem", "GetTransactionItem",
+    "SetTransactionStatus", "LogMessage", "GetCredential", "GetAsset",
+    "TakeScreenshot", "AddLogFields", "HttpClient", "DeserializeJson",
+    "SerializeJson", "Comment", "ShouldRetry", "SendSmtpMailMessage",
+    "SendOutlookMailMessage", "GetImapMailMessage", "GetOutlookMailMessages",
+    "SendMail", "GetMail", "ExcelApplicationScope", "UseExcel",
+    "ExcelReadRange", "ExcelWriteRange", "ExcelWriteCell", "ReadRange",
+    "WriteRange", "ElementExists", "Click", "TypeInto", "GetText",
+    "OpenBrowser", "NavigateTo", "AttachBrowser", "AttachWindow",
+    "UseApplicationBrowser", "UseBrowser", "UseApplication",
+    "ExecuteQuery", "ExecuteNonQuery", "ConnectToDatabase",
+    "ReadTextFile", "WriteTextFile", "PathExists",
+    "CreateFormTask", "WaitForFormTaskAndResume",
+    "MLSkill", "Predict",
+    "DigitizeDocument", "ClassifyDocument", "ExtractDocumentData", "ValidateDocumentData",
+  ];
+  for (const actName of UIPATH_ACTIVITIES_NEEDING_PREFIX) {
+    const openPattern = new RegExp(`<(?!ui:)${actName}(\\s|>|\\/)`, "g");
+    xml = xml.replace(openPattern, `<ui:${actName}$1`);
+    const closePattern = new RegExp(`<\\/(?!ui:)${actName}>`, "g");
+    xml = xml.replace(closePattern, `</ui:${actName}>`);
+  }
+
+  xml = xml.replace(/<(ui:(?:While|RetryScope))\s+([^>]*?)\/>/g, (match, tag, attrs) => {
+    if (tag === "ui:While") {
+      return `<${tag} ${attrs}>
+              <${tag}.Body>
+                <Sequence DisplayName="While Body" />
+              </${tag}.Body>
+            </${tag}>`;
+    }
+    return `<${tag} ${attrs}>
+              <${tag}.Body>
+                <Sequence DisplayName="Retry Body" />
+              </${tag}.Body>
+              <${tag}.Condition>
+                <ui:ShouldRetry />
+              </${tag}.Condition>
+            </${tag}>`;
+  });
+  xml = xml.replace(/<(While)\s+([^>]*?)\/>/g, (match, tag, attrs) => {
+    return `<${tag} ${attrs}>
+              <${tag}.Body>
+                <Sequence DisplayName="While Body" />
+              </${tag}.Body>
+            </${tag}>`;
+  });
+  xml = xml.replace(/<(RetryScope)\s+([^>]*?)\/>/g, (match, tag, attrs) => {
+    return `<ui:${tag} ${attrs}>
+              <ui:${tag}.Body>
+                <Sequence DisplayName="Retry Body" />
+              </ui:${tag}.Body>
+              <ui:${tag}.Condition>
+                <ui:ShouldRetry />
+              </ui:${tag}.Condition>
+            </ui:${tag}>`;
+  });
+
+  xml = xml.replace(/<ui:InvokeWorkflowFile\s([^>]*?)Input="([^"]*)"([^>]*?)(\/?>)/g, (match, before, inputVal, after, closing) => {
+    let argElements = parseInvokeArgs(inputVal, "In");
+    const outputMatch = (before + after).match(/Output="([^"]*)"/);
+    if (outputMatch) {
+      argElements += parseInvokeArgs(outputMatch[1], "Out");
+      before = before.replace(/\s*Output="[^"]*"/, "");
+      after = after.replace(/\s*Output="[^"]*"/, "");
+    }
+    if (argElements) {
+      const attrs = (before + after).trim();
+      return `<ui:InvokeWorkflowFile ${attrs}>\n              <ui:InvokeWorkflowFile.Arguments>\n${argElements}              </ui:InvokeWorkflowFile.Arguments>\n            </ui:InvokeWorkflowFile>`;
+    }
+    return `<ui:InvokeWorkflowFile ${(before + after).trim()}${closing}`;
+  });
+  xml = xml.replace(/<ui:InvokeWorkflowFile\s([^>]*?)Output="([^"]*)"([^>]*?)(\/?>)/g, (match, before, outputVal, after, closing) => {
+    if (match.includes("InvokeWorkflowFile.Arguments")) return match;
+    const argElements = parseInvokeArgs(outputVal, "Out");
+    if (argElements) {
+      const attrs = (before + after).trim();
+      return `<ui:InvokeWorkflowFile ${attrs}>\n              <ui:InvokeWorkflowFile.Arguments>\n${argElements}              </ui:InvokeWorkflowFile.Arguments>\n            </ui:InvokeWorkflowFile>`;
+    }
+    return `<ui:InvokeWorkflowFile ${(before + after).trim()}${closing}`;
+  });
+
+  xml = xml.replace(/<ui:TakeScreenshot\s+([^>]*?)OutputPath="([^"]*)"([^>]*?)\/>/g, (match, before, outputPathVal, after) => {
+    const attrs = (before + after).trim();
+    let resultVar = "img_Screenshot";
+    const varMatch = outputPathVal.match(/\[(\w+)\]/);
+    if (varMatch) {
+      resultVar = varMatch[1];
+    }
+    return `<ui:TakeScreenshot ${attrs}>
+                <ui:TakeScreenshot.Result>
+                  <OutArgument x:TypeArguments="ui:Image">[${resultVar}]</OutArgument>
+                </ui:TakeScreenshot.Result>
+              </ui:TakeScreenshot>`;
+  });
+
+  xml = xml.replace(/<(ui:HttpClient\s)([^>]*?)>/g, (match, prefix, attrs) => {
+    let fixed = attrs;
+    fixed = fixed.replace(/\bURL="([^"]*)"/g, (m: string, val: string) => {
+      if (val.startsWith("[")) return `Endpoint="${val}"`;
+      if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
+      return `Endpoint="[&quot;${val.replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
+    });
+    fixed = fixed.replace(/\bEndPoint="([^"]*)"/g, (m: string, val: string) => {
+      if (val.startsWith("[")) return `Endpoint="${val}"`;
+      if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
+      return `Endpoint="[&quot;${val.replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
+    });
+    fixed = fixed.replace(/\bOutput="([^"]*)"/g, (m: string, val: string) => {
+      if (val.startsWith("[")) return `ResponseContent="${val}"`;
+      if (/^[a-zA-Z_]\w*$/.test(val)) return `ResponseContent="[${val}]"`;
+      return `ResponseContent="[str_HttpResponse]"`;
+    });
+    fixed = fixed.replace(/\bResponseType="[^"]*"/g, "");
+    fixed = fixed.replace(/\bHeaders="\{([^"]*)\}"/g, (hm: string, jsonContent: string) => {
+      const decoded = jsonContent.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+      const pairs: string[] = [];
+      const pairPattern = /"([^"]+)"\s*:\s*"([^"]*)"/g;
+      let pm;
+      while ((pm = pairPattern.exec(decoded)) !== null) {
+        pairs.push(`{&quot;${pm[1]}&quot;, &quot;${pm[2]}&quot;}`);
+      }
+      if (pairs.length > 0) {
+        return `Headers="[New Dictionary(Of String, String) From {${pairs.join(", ")}}]"`;
+      }
+      return "";
+    });
+    fixed = fixed.replace(/\s{2,}/g, " ");
+    return `<${prefix}${fixed}>`;
+  });
+
+  xml = ensureVariableDeclarations(xml);
+
+  return xml;
+}
+
+const VB_RESERVED_WORDS = new Set([
+  "true", "false", "nothing", "null", "not", "and", "or", "andalso", "orelse",
+  "is", "isnot", "if", "ctype", "directcast", "gettype", "typeof", "new",
+  "throw", "string", "integer", "boolean", "double", "object", "datetime",
+  "math", "convert", "int32", "int64", "exception", "system", "console",
+  "environment", "char", "byte", "short", "long", "single", "decimal", "date",
+  "timespan", "array", "type", "enum", "dictionary", "list", "cstr", "cint",
+  "cdbl", "cbool", "cdate", "clng", "csng", "cdec", "cbyte", "cshort", "cchar",
+  "mod", "like", "xor", "me", "mybase", "addressof", "dim", "as", "of", "from",
+  "where", "select", "in", "step", "to", "byval", "byref", "optional",
+  "paramarray", "handles", "implements", "inherits", "overrides", "overloads",
+  "mustoverride", "mustinherit", "shared", "static", "const", "readonly",
+  "writeonly", "friend", "protected", "private", "public", "return", "exit",
+  "continue", "do", "loop", "until", "wend", "each", "next", "case", "end",
+  "sub", "function", "property", "event", "class", "structure", "module",
+  "interface", "namespace", "imports", "try", "catch", "finally", "using",
+  "with", "synclock", "raiseevent", "removehandler", "addhandler", "let",
+  "set", "get", "then", "else", "elseif", "for", "while", "goto", "redim",
+  "preserve", "erase", "stop", "on", "error", "resume", "option", "strict",
+  "explicit", "compare", "binary", "text", "cbyte",
+]);
+
+const DOTNET_MEMBERS = new Set([
+  "tostring", "substring", "length", "count", "rows", "message", "stacktrace",
+  "name", "reference", "min", "max", "contains", "startswith", "endswith",
+  "trim", "replace", "split", "join", "format", "parse", "tryparse", "now",
+  "today", "utcnow", "adddays", "addhours", "item", "value", "key", "hasvalue",
+  "result", "body", "subject", "content", "equals", "compareto", "indexof",
+  "lastindexof", "remove", "insert", "padleft", "padright", "tolower", "toupper",
+  "toarray", "tolist", "firstordefault", "lastordefault", "any", "all", "sum",
+  "average", "orderby", "groupby", "concat", "append", "clear", "add",
+  "addrange", "copyto", "clone", "dispose", "close", "flush", "read", "write",
+  "seek", "getbytes", "getstring", "encode", "decode", "invoke", "execute",
+  "cancel", "abort", "wait", "reset", "trygetvalue", "containskey", "keys",
+  "values", "empty", "isnullorempty", "isnullorwhitespace", "toint32",
+  "toint64", "todouble", "toboolean", "tosingle", "todecimal", "tobyte",
+  "tochar", "tostring", "gettype", "gethashcode", "referenceequals",
+  "memberwise", "finalize", "op_equality", "op_inequality",
+]);
+
+const XML_PREFIXES = new Set([
+  "x", "s", "scg", "scg2", "ui", "sap", "sap2010", "mc", "mva", "sco",
+  "sads", "sapv", "p", "local", "xmlns", "clr",
+]);
+
+function inferVariableType(varName: string): string {
+  const lower = varName.toLowerCase();
+  if (lower.startsWith("int_") || lower.startsWith("int32_")) return "x:Int32";
+  if (lower.startsWith("bool_") || lower.startsWith("is_") || lower.startsWith("has_")) return "x:Boolean";
+  if (lower.startsWith("dt_") || lower.startsWith("datatable_")) return "scg2:DataTable";
+  if (lower.startsWith("qi_")) return "ui:QueueItem";
+  if (lower.startsWith("dic_") || lower.startsWith("dict_")) return "scg:Dictionary(x:String, x:Object)";
+  if (lower.startsWith("arr_")) return "s:String[]";
+  if (lower.startsWith("img_")) return "ui:Image";
+  if (lower.startsWith("dbl_") || lower.startsWith("dec_")) return "x:Double";
+  if (lower.startsWith("obj_")) return "x:Object";
+  if (lower.startsWith("row_")) return "scg2:DataRow";
+  if (lower.startsWith("lst_")) return "scg:List(x:String)";
+  return "x:String";
+}
+
+function isExcludedToken(token: string): boolean {
+  if (token.length <= 1) return true;
+  const lower = token.toLowerCase();
+  if (VB_RESERVED_WORDS.has(lower)) return true;
+  if (DOTNET_MEMBERS.has(lower)) return true;
+  if (XML_PREFIXES.has(lower)) return true;
+  if (/^\d/.test(token)) return true;
+  if (/^[A-Z][a-z]+[A-Z]/.test(token) === false && /^[A-Z]{2,}$/.test(token)) return true;
+  return false;
+}
+
+function ensureVariableDeclarations(xml: string): string {
+  const declaredVars = new Set<string>();
+  let m;
+
+  const varDeclPattern = /<Variable\s[^>]*Name="([^"]+)"/g;
+  while ((m = varDeclPattern.exec(xml)) !== null) declaredVars.add(m[1]);
+
+  const delegatePattern = /<DelegateInArgument[^>]*Name="([^"]+)"/g;
+  while ((m = delegatePattern.exec(xml)) !== null) declaredVars.add(m[1]);
+
+  const propPattern = /<x:Property\s[^>]*Name="([^"]+)"/g;
+  while ((m = propPattern.exec(xml)) !== null) declaredVars.add(m[1]);
+
+  const referencedVars = new Set<string>();
+
+  const allBracketExprs = xml.matchAll(/\[([^\[\]]+)\]/g);
+  for (const match of allBracketExprs) {
+    const expr = match[1];
+    if (expr.startsWith("&quot;") || expr.startsWith('"')) continue;
+    if (expr.includes("xmlns") || expr.includes("clr-namespace")) continue;
+
+    const withoutStrings = expr.replace(/&quot;[^&]*&quot;/g, "").replace(/"[^"]*"/g, "");
+
+    const tokens = withoutStrings.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g);
+    if (!tokens) continue;
+
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (isExcludedToken(token)) continue;
+
+      const afterToken = withoutStrings.indexOf(token) + token.length;
+      const charAfter = withoutStrings[afterToken];
+      if (charAfter === "(") continue;
+
+      if (i > 0) {
+        const prevToken = tokens[i - 1];
+        if (prevToken === "." || withoutStrings.includes(`.${token}`)) continue;
+      }
+
+      referencedVars.add(token);
+    }
+  }
+
+  const missingVars: { name: string; type: string }[] = [];
+  for (const varName of referencedVars) {
+    if (!declaredVars.has(varName)) {
+      missingVars.push({ name: varName, type: inferVariableType(varName) });
+    }
+  }
+
+  if (missingVars.length === 0) return xml;
+
+  const varsXml = missingVars.map(v =>
+    `      <Variable x:TypeArguments="${v.type}" Name="${v.name}" />`
+  ).join("\n");
+
+  const seqVarsPattern = /(<Sequence[^>]*>)\s*(<Sequence\.Variables>)/;
+  if (seqVarsPattern.test(xml)) {
+    xml = xml.replace(seqVarsPattern, (match, seqTag, varsTag) => {
+      return `${seqTag}\n    ${varsTag}\n${varsXml}`;
+    });
+  } else {
+    const firstSeqPattern = /(<Sequence\s+DisplayName="[^"]*"[^>]*>)/;
+    if (firstSeqPattern.test(xml)) {
+      xml = xml.replace(firstSeqPattern, (match, seqTag) => {
+        return `${seqTag}\n    <Sequence.Variables>\n${varsXml}\n    </Sequence.Variables>`;
+      });
+    }
   }
 
   return xml;
@@ -1143,7 +1449,7 @@ function sanitizePropertyValue(key: string, value: any): string {
   return String(value);
 }
 
-const PSEUDO_XAML_ATTR_KEYS = new Set(["Then", "Else", "Cases", "Body", "Finally", "Try"]);
+const PSEUDO_XAML_ATTR_KEYS = new Set(["Then", "Else", "Cases", "Body", "Finally", "Try", "_convertedInputArgs", "_convertedOutputArgs"]);
 
 const CONTROL_FLOW_ACTIVITY_TYPES = new Set(["If", "Switch", "ForEach", "TryCatch"]);
 
@@ -1267,19 +1573,15 @@ function renderControlFlowActivity(
           caseBody = `\n                  <ui:LogMessage Level="Info" Message="'Case: ${escapeXml(caseKey)}'" DisplayName="Case: ${escapeXml(caseKey)}" />`;
         }
         caseElements += `
-              <Case x:TypeArguments="x:String" Value="${escapeXml(caseKey)}">
-                <Sequence DisplayName="Case: ${escapeXml(caseKey)}">${caseBody}
-                </Sequence>
-              </Case>`;
+                <Sequence x:Key="${escapeXml(caseKey)}" DisplayName="Case: ${escapeXml(caseKey)}">${caseBody}
+                </Sequence>`;
       }
     }
     if (!caseElements) {
       caseElements = `
-              <Case x:TypeArguments="x:String" Value="TODO">
-                <Sequence DisplayName="Default Case">
-                  <ui:LogMessage Level="Info" Message="'Default case: ${escapeXml(enforced)}'" DisplayName="Default Case" />
-                </Sequence>
-              </Case>`;
+                <Sequence x:Key="TODO" DisplayName="Default Case">
+                  <ui:LogMessage Level="Info" Message="[&quot;Default case: ${escapeXml(enforced)}&quot;]" DisplayName="Default Case" />
+                </Sequence>`;
     }
 
     return `
@@ -1394,8 +1696,16 @@ function renderActivity(
     propAttrs += ` TimeoutMS="${timeout}"`;
   }
 
-  const continueOnError = operationalProps?.continueOnError ?? (isNonCriticalActivity(activityType) ? true : false);
-  propAttrs += ` ContinueOnError="${continueOnError ? "True" : "False"}"`;
+  const ACTIVITIES_WITHOUT_CONTINUE_ON_ERROR = new Set([
+    "ui:LogMessage", "Assign", "ui:AddQueueItem", "ui:GetTransactionItem",
+    "ui:SetTransactionStatus", "While", "If", "Sequence", "TryCatch",
+    "Switch", "ForEach", "Rethrow", "Throw",
+  ]);
+  const baseTypeName = activityType.replace("ui:", "");
+  if (!ACTIVITIES_WITHOUT_CONTINUE_ON_ERROR.has(activityType) && !ACTIVITIES_WITHOUT_CONTINUE_ON_ERROR.has(baseTypeName)) {
+    const continueOnError = operationalProps?.continueOnError ?? (isNonCriticalActivity(activityType) ? true : false);
+    propAttrs += ` ContinueOnError="${continueOnError ? "True" : "False"}"`;
+  }
 
   if (operationalProps?.delayBefore && operationalProps.delayBefore > 0) {
     propAttrs += ` DelayBefore="${operationalProps.delayBefore}"`;
@@ -1422,7 +1732,26 @@ function renderActivity(
           </${activityType}>`;
   }
 
-  const innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+  const convertedInputArgs = properties["_convertedInputArgs"] || "";
+  const convertedOutputArgs = properties["_convertedOutputArgs"] || "";
+  const hasConvertedArgs = (activityType === "ui:InvokeWorkflowFile" || activityType === "InvokeWorkflowFile") && (convertedInputArgs || convertedOutputArgs);
+
+  let innerActivity: string;
+  if (hasConvertedArgs) {
+    let argsContent = "";
+    if (convertedInputArgs) argsContent += parseInvokeArgs(convertedInputArgs, "In");
+    if (convertedOutputArgs) argsContent += parseInvokeArgs(convertedOutputArgs, "Out");
+    if (argsContent) {
+      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs}>
+              <${activityType}.Arguments>
+${argsContent}              </${activityType}.Arguments>
+            </${activityType}>`;
+    } else {
+      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+    }
+  } else {
+    innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+  }
 
   if (isCrossPlatform && isUiActivity(activityType) && selectorHint) {
     const appSelector = selectorHint.match(/<html[^>]*\/>/)
@@ -1462,8 +1791,12 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
                         <TryCatch DisplayName="Safe Screenshot on Retry Failure">
                           <TryCatch.Try>
                             <Sequence DisplayName="Capture Screenshot">
-                              <ui:TakeScreenshot DisplayName="Screenshot on Retry Failure: ${escapedStep}" OutputPath="[str_ScreenshotPath]" />
-                              <ui:LogMessage Level="Warn" Message="[&quot;Retry exhausted for ${escapedStep}, screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Retry Screenshot" />
+                              <ui:TakeScreenshot DisplayName="Screenshot on Retry Failure: ${escapedStep}">
+                                <ui:TakeScreenshot.Result>
+                                  <OutArgument x:TypeArguments="ui:Image">[img_Screenshot]</OutArgument>
+                                </ui:TakeScreenshot.Result>
+                              </ui:TakeScreenshot>
+                              <ui:LogMessage Level="Warn" Message="[&quot;Retry exhausted for ${escapedStep}, screenshot captured&quot;]" DisplayName="Log Retry Screenshot" />
                             </Sequence>
                           </TryCatch.Try>
                           <TryCatch.Catches>
@@ -1511,8 +1844,12 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
                     <TryCatch DisplayName="Safe Screenshot Capture">
                       <TryCatch.Try>
                         <Sequence DisplayName="Capture Screenshot">
-                          <ui:TakeScreenshot DisplayName="Screenshot on Error: ${escapedStep}" OutputPath="[str_ScreenshotPath]" />
-                          <ui:LogMessage Level="Info" Message="[&quot;Screenshot saved: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Screenshot Path" />
+                          <ui:TakeScreenshot DisplayName="Screenshot on Error: ${escapedStep}">
+                            <ui:TakeScreenshot.Result>
+                              <OutArgument x:TypeArguments="ui:Image">[img_Screenshot]</OutArgument>
+                            </ui:TakeScreenshot.Result>
+                          </ui:TakeScreenshot>
+                          <ui:LogMessage Level="Info" Message="[&quot;Screenshot captured for error diagnostics&quot;]" DisplayName="Log Screenshot Captured" />
                         </Sequence>
                       </TryCatch.Try>
                       <TryCatch.Catches>
@@ -1536,20 +1873,20 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
   const addLogFields = `
                     <ui:AddLogFields DisplayName="Add Diagnostic Fields: ${escapedStep}">
                       <ui:AddLogFields.Fields>
-                        <scg:Dictionary x:TypeArguments="x:String, ui:InArgument">
-                          <InArgument x:TypeArguments="x:String" x:Key="ErrorStep">"${escapedStep}"</InArgument>
-                          <InArgument x:TypeArguments="x:String" x:Key="ErrorMessage">[exception.Message]</InArgument>
-                          <InArgument x:TypeArguments="x:String" x:Key="ErrorType">[exception.GetType().Name]</InArgument>
-                          <InArgument x:TypeArguments="x:String" x:Key="ErrorTimestamp">${timestampExpr}</InArgument>
-                          <InArgument x:TypeArguments="x:String" x:Key="StackTraceSummary">${stackTraceExpr}</InArgument>
-                          <InArgument x:TypeArguments="x:String" x:Key="ScreenshotPath">[str_ScreenshotPath]</InArgument>
+                        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                          <x:String x:Key="ErrorStep">${escapedStep}</x:String>
+                          <x:String x:Key="ErrorMessage">[exception.Message]</x:String>
+                          <x:String x:Key="ErrorType">[exception.GetType().Name]</x:String>
+                          <x:String x:Key="ErrorTimestamp">${timestampExpr}</x:String>
+                          <x:String x:Key="StackTraceSummary">${stackTraceExpr}</x:String>
+                          <x:String x:Key="ScreenshotCaptured">True</x:String>
                         </scg:Dictionary>
                       </ui:AddLogFields.Fields>
                     </ui:AddLogFields>`;
 
   const catchAction = errorHandling === "escalate"
-    ? `<ui:LogMessage Level="Error" Message="[&quot;[Escalation Required] ${escapedStep} failed — &quot;${concat}exception.Message${concat}&quot; | Screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Escalation" />`
-    : `<ui:LogMessage Level="Error" Message="[&quot;[Error] ${escapedStep} failed — &quot;${concat}exception.Message${concat}&quot; | Screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Error" />`;
+    ? `<ui:LogMessage Level="Error" Message="[&quot;[Escalation Required] ${escapedStep} failed — &quot;${concat}exception.Message]" DisplayName="Log Escalation" />`
+    : `<ui:LogMessage Level="Error" Message="[&quot;[Error] ${escapedStep} failed — &quot;${concat}exception.Message]" DisplayName="Log Error" />`;
 
   return `
           <TryCatch DisplayName="Try: ${escapedStep}"${annotAttr}>
@@ -2326,10 +2663,14 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
     </ui:UseExcel>`
     : `<ui:ExcelApplicationScope DisplayName="Read Config File" WorkbookPath="[str_ConfigPath]">
       <ui:ExcelApplicationScope.Body>
-        <Sequence DisplayName="Read Config Sheets">
-          <ui:ExcelReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
-          <ui:ExcelReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
-        </Sequence>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Handler>
+            <Sequence DisplayName="Read Config Sheets">
+              <ui:ExcelReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
+              <ui:ExcelReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
+            </Sequence>
+          </ActivityAction.Handler>
+        </ActivityAction>
       </ui:ExcelApplicationScope.Body>
     </ui:ExcelApplicationScope>`;
 
@@ -2482,7 +2823,11 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
                   </Sequence.Variables>
                   <TryCatch DisplayName="Safe Screenshot Capture">
                     <TryCatch.Try>
-                      <ui:TakeScreenshot DisplayName="Screenshot on Transaction Error" OutputPath="[str_ErrorScreenshotPath]" />
+                      <ui:TakeScreenshot DisplayName="Screenshot on Transaction Error">
+                        <ui:TakeScreenshot.Result>
+                          <OutArgument x:TypeArguments="ui:Image">[img_Screenshot]</OutArgument>
+                        </ui:TakeScreenshot.Result>
+                      </ui:TakeScreenshot>
                     </TryCatch.Try>
                     <TryCatch.Catches>
                       <Catch x:TypeArguments="s:Exception">
@@ -2497,10 +2842,10 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
                   </TryCatch>
                   <ui:AddLogFields DisplayName="Add Error Diagnostic Fields">
                     <ui:AddLogFields.Fields>
-                      <scg:Dictionary x:TypeArguments="x:String, ui:InArgument">
-                        <InArgument x:TypeArguments="x:String" x:Key="TransactionNumber">[int_TransactionNumber.ToString]</InArgument>
-                        <InArgument x:TypeArguments="x:String" x:Key="ErrorMessage">[exception.Message]</InArgument>
-                        <InArgument x:TypeArguments="x:String" x:Key="ScreenshotPath">[str_ErrorScreenshotPath]</InArgument>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:String x:Key="TransactionNumber">[int_TransactionNumber.ToString]</x:String>
+                        <x:String x:Key="ErrorMessage">[exception.Message]</x:String>
+                        <x:String x:Key="ScreenshotCaptured">True</x:String>
                       </scg:Dictionary>
                     </ui:AddLogFields.Fields>
                   </ui:AddLogFields>
@@ -2617,7 +2962,11 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
           <TryCatch DisplayName="Safe Screenshot on Transaction Failure">
             <TryCatch.Try>
               <Sequence DisplayName="Capture Screenshot">
-                <ui:TakeScreenshot DisplayName="Screenshot on Transaction Failure" OutputPath="[str_ScreenshotPath]" />
+                <ui:TakeScreenshot DisplayName="Screenshot on Transaction Failure">
+                  <ui:TakeScreenshot.Result>
+                    <OutArgument x:TypeArguments="ui:Image">[img_Screenshot]</OutArgument>
+                  </ui:TakeScreenshot.Result>
+                </ui:TakeScreenshot>
                 <ui:LogMessage Level="Info" Message="[&quot;Transaction failure screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Failure Screenshot" />
               </Sequence>
             </TryCatch.Try>

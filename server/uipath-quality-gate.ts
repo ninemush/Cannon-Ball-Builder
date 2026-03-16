@@ -333,6 +333,30 @@ const KNOWN_ACTIVITIES: Record<string, { package: string; properties: ActivityPr
       optional: ["ModelName", "Input", "Output", "ContinueOnError"],
     },
   },
+  "ui:DigitizeDocument": {
+    package: "UiPath.IntelligentOCR.Activities",
+    properties: {
+      optional: ["DocumentPath", "DocumentObjectModel", "OcrEngine", "ContinueOnError"],
+    },
+  },
+  "ui:ClassifyDocument": {
+    package: "UiPath.IntelligentOCR.Activities",
+    properties: {
+      optional: ["DocumentObjectModel", "DocumentPath", "ClassifierResult", "ContinueOnError"],
+    },
+  },
+  "ui:ExtractDocumentData": {
+    package: "UiPath.IntelligentOCR.Activities",
+    properties: {
+      optional: ["DocumentObjectModel", "DocumentPath", "ExtractorResult", "ContinueOnError"],
+    },
+  },
+  "ui:ValidateDocumentData": {
+    package: "UiPath.IntelligentOCR.Activities",
+    properties: {
+      optional: ["DocumentObjectModel", "DocumentPath", "AutoValidated", "ContinueOnError"],
+    },
+  },
 };
 
 const VALID_XMLNS_PREFIXES = new Set([

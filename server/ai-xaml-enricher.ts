@@ -231,6 +231,43 @@ Generate the enriched workflow specification. For each node, provide the specifi
           if (typeof act.continueOnError !== "boolean") act.continueOnError = undefined;
           if (typeof act.delayBefore !== "number") act.delayBefore = undefined;
           if (typeof act.delayAfter !== "number") act.delayAfter = undefined;
+
+          const uiPrefixActivities = new Set([
+            "InvokeWorkflowFile", "RetryScope", "AddQueueItem", "GetTransactionItem",
+            "SetTransactionStatus", "LogMessage", "GetCredential", "GetAsset",
+            "TakeScreenshot", "AddLogFields", "HttpClient", "DeserializeJson",
+            "SerializeJson", "Comment", "ShouldRetry",
+            "ExcelApplicationScope", "UseExcel", "ExcelReadRange", "ExcelWriteRange",
+            "SendSmtpMailMessage", "SendOutlookMailMessage", "GetImapMailMessage",
+            "ExecuteQuery", "ExecuteNonQuery", "ConnectToDatabase",
+            "ReadTextFile", "WriteTextFile", "PathExists",
+            "DigitizeDocument", "ClassifyDocument", "ExtractDocumentData", "ValidateDocumentData",
+          ]);
+          const bareType = act.activityType.replace(/^ui:/, "");
+          if (uiPrefixActivities.has(bareType) && !act.activityType.startsWith("ui:")) {
+            act.activityType = `ui:${bareType}`;
+          }
+
+          if (act.activityType === "ui:InvokeWorkflowFile") {
+            if (act.properties["Input"] && typeof act.properties["Input"] === "string") {
+              act.properties["_convertedInputArgs"] = act.properties["Input"];
+            }
+            delete act.properties["Input"];
+            if (act.properties["Output"] && typeof act.properties["Output"] === "string") {
+              act.properties["_convertedOutputArgs"] = act.properties["Output"];
+            }
+            delete act.properties["Output"];
+          }
+          if (act.activityType === "ui:TakeScreenshot") {
+            delete act.properties["OutputPath"];
+          }
+          if (act.activityType === "ui:HttpClient") {
+            delete act.properties["ResponseType"];
+            if (act.properties["URL"]) {
+              act.properties["Endpoint"] = act.properties["URL"];
+              delete act.properties["URL"];
+            }
+          }
           const pseudoKeys = ["Then", "Else", "Cases", "Body", "Finally", "Try"];
           const isControlFlow = ["If", "Switch", "ForEach", "TryCatch"].some(
             cf => act.activityType === cf || act.activityType === `System.Activities.${cf}`
