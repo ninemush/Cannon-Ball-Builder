@@ -125,6 +125,10 @@ async function ensureTable(): Promise<boolean> {
       )`
     );
     await db.execute(
+      sql`ALTER TABLE deployment_manifests
+          ADD COLUMN IF NOT EXISTS deployed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL`
+    );
+    await db.execute(
       sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_manifest_idea_type_name
           ON deployment_manifests (idea_id, artifact_type, artifact_name)`
     );
