@@ -87,6 +87,9 @@ type CachedBuild = {
 const packageBuildCache = new Map<string, CachedBuild>();
 const CACHE_MAX_ENTRIES = 20;
 
+console.log("[UiPath Cache] Clearing build cache on module load");
+packageBuildCache.clear();
+
 function evictOldestCacheEntry(): void {
   if (packageBuildCache.size >= CACHE_MAX_ENTRIES) {
     const oldest = packageBuildCache.keys().next().value;
@@ -696,10 +699,13 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       for (let i = 0; i < allDepEntries.length; i++) {
         const [pkgId, currentVer] = allDepEntries[i];
         const result = feedResolutions[i];
-        if (result.status === "fulfilled" && result.value !== "*") {
-          if (currentVer === "*" || result.value !== currentVer) {
+        if (result.status === "fulfilled" && result.value !== null && isValidNuGetVersion(result.value)) {
+          if (currentVer === "*" || currentVer === "[*]" || !isValidNuGetVersion(currentVer) || result.value !== currentVer) {
             deps[pkgId] = result.value;
           }
+        } else if (!isValidNuGetVersion(currentVer)) {
+          console.log(`[UiPath Deps] Removing dep with no valid version: ${pkgId}=${currentVer}`);
+          delete deps[pkgId];
         }
       }
     }
@@ -763,6 +769,25 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       projectJson.designOptions.selfHealingSelectors = true;
     }
     sanitizeDeps(deps);
+
+    for (const [key, val] of Object.entries(deps)) {
+      if (!isValidNuGetVersion(val)) {
+        console.log(`[UiPath Final Check] Removing invalid dependency after sanitize: ${key}=${val}`);
+        delete deps[key];
+      }
+    }
+
+    const projectJsonStr = JSON.stringify(projectJson, null, 2);
+    const parsedCheck = JSON.parse(projectJsonStr);
+    if (parsedCheck.dependencies) {
+      for (const [key, val] of Object.entries(parsedCheck.dependencies as Record<string, string>)) {
+        if (typeof val === "string" && (val.includes("*") || !isValidNuGetVersion(val))) {
+          console.error(`[UiPath JSON Check] Found invalid version in serialized project.json: ${key}=${val}, removing`);
+          delete deps[key];
+        }
+      }
+    }
+
     const allUsedPkgs = Object.keys(deps);
     archive.append(JSON.stringify(projectJson, null, 2), { name: `${libPath}/project.json` });
 
@@ -1046,10 +1071,12 @@ function folderHeaders(config: UiPathConfig, token: string): Record<string, stri
   return headers;
 }
 
-async function resolvePackageVersionFromFeed(packageId: string, knownVersion: string): Promise<string> {
+async function resolvePackageVersionFromFeed(packageId: string, knownVersion: string): Promise<string | null> {
   try {
     const config = await getUiPathConfig();
-    if (!config) return knownVersion;
+    if (!config) {
+      return isValidNuGetVersion(knownVersion) ? knownVersion : null;
+    }
     const token = await getAccessToken(config);
     const base = orchBaseUrl(config);
     const hdrs = folderHeaders(config, token);
@@ -1061,14 +1088,19 @@ async function resolvePackageVersionFromFeed(packageId: string, knownVersion: st
       if (versions.length > 0) {
         const latest = versions[versions.length - 1]?.Version || versions[0]?.Version;
         if (latest) {
-          console.log(`[UiPath Feed] Resolved ${packageId} to v${latest} from tenant feed`);
-          return `[${latest}]`;
+          const resolved = `[${latest}]`;
+          if (isValidNuGetVersion(resolved)) {
+            console.log(`[UiPath Feed] Resolved ${packageId} to v${latest} from tenant feed`);
+            return resolved;
+          } else {
+            console.log(`[UiPath Feed] Rejected invalid version for ${packageId}: ${resolved}`);
+          }
         }
       }
     }
   } catch {
   }
-  return knownVersion;
+  return isValidNuGetVersion(knownVersion) ? knownVersion : null;
 }
 
 export { resolvePackageVersionFromFeed };
