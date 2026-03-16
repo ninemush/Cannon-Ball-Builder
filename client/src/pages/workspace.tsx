@@ -930,17 +930,21 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       const isToBeRun = toBeGeneratingRef.current;
       const lastMsg = lastUserMessageRef.current;
       const isToBeFromMessage = isToBeRelatedMessage(lastMsg);
-      const isToBeContext = isToBeRun || isToBeFromMessage;
+      const stageIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
+      const designIndex = PIPELINE_STAGES.indexOf("Design");
+      const isPastDesign = stageIndex > designIndex;
+      const hasStepTags = finalContent ? /\[STEP:\s*[^|]+?\s*\|/.test(finalContent) : false;
+      const isToBeContext = isToBeRun || isToBeFromMessage || (isPastDesign && hasStepTags);
       toBeGeneratingRef.current = false;
 
       if (finalContent) {
-        const defaultView: "as-is" | "to-be" = isToBeContext ? "to-be" : "as-is";
+        const defaultView: "as-is" | "to-be" = (isToBeContext || isPastDesign) ? "to-be" : "as-is";
         const viewStepSets = parseStepsByView(finalContent, defaultView);
 
-        if (isToBeContext) {
+        if (isToBeContext || isPastDesign) {
           for (const entry of viewStepSets) {
             if (entry.viewType === "as-is") {
-              console.log(`[ProcessMap] View pinning: forcing viewType from as-is to to-be during To-Be generation/modification`);
+              console.log(`[ProcessMap] View pinning: forcing viewType from as-is to to-be (stage=${idea.stage}, isToBeContext=${isToBeContext}, isPastDesign=${isPastDesign})`);
               entry.viewType = "to-be";
             }
           }
@@ -1078,6 +1082,11 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           if (endDupTargetRemap.size > 0) {
             console.log(`[ProcessMap] Merged ${endDupTargetRemap.size} duplicate end nodes for view=${viewType}`);
           }
+          if (viewType === "as-is" && isPastDesign) {
+            console.log(`[ProcessMap] Blocked bulk write to as-is view — stage is past Design (${idea.stage}), skipping to protect approved AS-IS map`);
+            continue;
+          }
+
           console.log(`[ProcessMap] Bulk creating ${bulkNodes.length} nodes, ${remappedEdges.length} edges for view=${viewType} (clear=${clearExisting})`);
 
           const bulkRes = await fetch(`/api/ideas/${idea.id}/process-map/bulk`, {
@@ -1101,7 +1110,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         }
       }
     }
-  }, [idea.id, isToBeRelatedMessage]);
+  }, [idea.id, idea.stage, isToBeRelatedMessage]);
 
   const generateDocument = useCallback((type: "PDD" | "SDD") => {
     if (isGeneratingDoc || isStreaming) return;

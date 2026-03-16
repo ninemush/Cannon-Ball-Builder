@@ -722,6 +722,13 @@ export function registerProcessMapRoutes(app: Express): void {
     if (!ideaId) return;
     const viewType = (req.query.view as string) || "as-is";
     try {
+      if (viewType === "as-is") {
+        const existingApproval = await processMapStorage.getApproval(ideaId, "as-is");
+        if (existingApproval) {
+          console.log(`[ProcessMap] Blocked clear of approved as-is view for idea=${ideaId}`);
+          return res.status(409).json({ message: "Cannot clear approved AS-IS map" });
+        }
+      }
       const result = await processMapStorage.clearAllForView(ideaId, viewType);
       return res.json({ success: true, ...result });
     } catch (err: any) {
@@ -736,11 +743,11 @@ export function registerProcessMapRoutes(app: Express): void {
 
     const { viewType = "as-is", nodes = [], edges = [], clearExisting = false } = req.body;
 
-    if (viewType === "as-is" && toBeGenerationLocks.has(ideaId)) {
+    if (viewType === "as-is") {
       const existingApproval = await processMapStorage.getApproval(ideaId, "as-is");
       if (existingApproval) {
-        console.log(`[ProcessMap] Blocked bulk write to approved as-is view during TO-BE generation for idea=${ideaId}`);
-        return res.status(409).json({ message: "Cannot overwrite approved AS-IS map while TO-BE generation is in progress" });
+        console.log(`[ProcessMap] Blocked bulk write to approved as-is view for idea=${ideaId} (clearExisting=${clearExisting})`);
+        return res.status(409).json({ message: "Cannot overwrite approved AS-IS map" });
       }
     }
 
