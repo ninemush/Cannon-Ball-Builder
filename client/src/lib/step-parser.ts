@@ -106,7 +106,7 @@ export function parseStepsByView(text: string): ViewSteps[] {
     if (steps.length > 0) result.push({ viewType: "to-be", steps });
   }
 
-  if (result.length === 0) {
+  if (result.length === 0 && !toBeMatch) {
     const steps = parseStepsFromText(text);
     if (steps.length > 0) return [{ viewType: "as-is", steps }];
   }

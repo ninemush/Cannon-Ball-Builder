@@ -582,6 +582,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     setPendingUserMsg(null);
   }, [stopDocStreaming]);
   const toBeTriggeredRef = useRef(false);
+  const toBeGeneratingRef = useRef(false);
   const pddTriggeredRef = useRef(false);
   const sddTriggeredRef = useRef(false);
   const uipathTriggeredRef = useRef(false);
@@ -605,7 +606,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
 
   const isSystemTriggerMsg = (content: string) =>
     /^Generate the (Process Design Document|Solution Design Document).*\[DOC:(PDD|SDD):/.test(content) ||
-    /^Generate the To-Be process map based on the approved As-Is map/.test(content);
+    /^Generate the To-Be process map based on the approved As-Is map/.test(content) ||
+    /^First, perform the feasibility assessment/.test(content);
 
   const displayMessages: ChatMsg[] = (() => {
     if (savedMessages && savedMessages.length > 0) {
@@ -904,8 +906,20 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         stopDocStreaming({ force: true });
       }
 
+      const isToBeRun = toBeGeneratingRef.current;
+      toBeGeneratingRef.current = false;
+
       if (finalContent) {
         const viewStepSets = parseStepsByView(finalContent);
+
+        if (isToBeRun) {
+          for (const entry of viewStepSets) {
+            if (entry.viewType === "as-is") {
+              console.log(`[ProcessMap] View pinning: forcing viewType from as-is to to-be during To-Be generation`);
+              entry.viewType = "to-be";
+            }
+          }
+        }
 
         let firstCreatedView: string | null = null;
 
@@ -1077,6 +1091,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
 
   const generateToBeMap = useCallback(() => {
     if (isStreaming || isGeneratingDoc) return;
+    toBeGeneratingRef.current = true;
     sendMessageDirect(
       "First, perform the feasibility assessment: evaluate the automation type (RPA vs Agent vs Hybrid) for this process and output the [AUTOMATION_TYPE:] tag. " +
       "Then generate the To-Be process map based on the approved As-Is map and the available UiPath services. " +

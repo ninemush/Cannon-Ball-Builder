@@ -715,21 +715,6 @@ export function registerProcessMapRoutes(app: Express): void {
     }
 
     try {
-      if (viewType === "as-is") {
-        for (const node of nodes) {
-          if (node.nodeType === "agent-task") {
-            console.warn(`[ProcessMap] Downgrading agent-task to task in as-is bulk for idea=${ideaId}, node="${node.name}"`);
-            node.nodeType = "task";
-          } else if (node.nodeType === "agent-decision") {
-            console.warn(`[ProcessMap] Downgrading agent-decision to decision in as-is bulk for idea=${ideaId}, node="${node.name}"`);
-            node.nodeType = "decision";
-          } else if (node.nodeType === "agent-loop") {
-            console.warn(`[ProcessMap] Downgrading agent-loop to task in as-is bulk for idea=${ideaId}, node="${node.name}"`);
-            node.nodeType = "task";
-          }
-        }
-      }
-
       if (shouldClear) {
         await processMapStorage.clearAllForView(ideaId, viewType);
       }
