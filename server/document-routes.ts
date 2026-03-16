@@ -18,6 +18,8 @@ import {
   AlignmentType, ShadingType, ImageRun,
 } from "docx";
 import { renderProcessMapImage } from "./process-map-renderer";
+import AdmZip from "adm-zip";
+import archiver from "archiver";
 
 const anthropic = new Anthropic({
   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -1160,12 +1162,10 @@ ${content}`
       const isServerless = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
       const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";
 
-      const AdmZip = require("adm-zip");
       const nupkgZip = new AdmZip(buildResult.buffer);
       const nupkgEntries = nupkgZip.getEntries();
 
-      const archiverModule = require("archiver") as typeof import("archiver");
-      const archive = (archiverModule as any)("zip", { zlib: { level: 9 } });
+      const archive = archiver("zip", { zlib: { level: 9 } });
 
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename="${pkg.projectName || "UiPathPackage"}.zip"`);
