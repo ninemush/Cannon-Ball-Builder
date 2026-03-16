@@ -182,7 +182,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
 
   return (
     <div
-      className="rounded-lg border-l-4 border-l-cb-teal bg-[#2a2a2a] shadow-lg overflow-hidden"
+      className="rounded-lg border-l-4 border-l-cb-teal bg-card shadow-lg overflow-hidden"
       data-testid={`card-document-${docType.toLowerCase()}`}
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30">
@@ -315,7 +315,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         {sections.map((section, idx) => (
           <div key={idx}>
             <button
-              className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
+              className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-muted/50 transition-colors"
               onClick={() => toggleSection(idx)}
               data-testid={`button-section-toggle-${idx}`}
             >
@@ -396,7 +396,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
                 value={revisionText}
                 onChange={(e) => setRevisionText(e.target.value)}
                 placeholder={`e.g. "Update section 3 to include..." or "Add an exception for..."`}
-                className="min-h-[60px] text-xs bg-[#1a1a1a] border-border/30"
+                className="min-h-[60px] text-xs bg-muted border-border/30"
                 data-testid={`input-revision-${docType.toLowerCase()}`}
               />
               <div className="flex items-center gap-2 justify-end">
@@ -610,7 +610,7 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
 
   return (
     <div
-      className="rounded-lg border-l-4 border-l-primary bg-[#2a2a2a] shadow-lg overflow-hidden"
+      className="rounded-lg border-l-4 border-l-primary bg-card shadow-lg overflow-hidden"
       data-testid="card-uipath-package"
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30">
@@ -649,7 +649,7 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
             {expanded && (
               <div className="space-y-2 mt-1">
                 {packageData.workflows.map((wf: any, i: number) => (
-                  <div key={i} className="p-2 rounded bg-[#1a1a1a] border border-border/20">
+                  <div key={i} className="p-2 rounded bg-muted border border-border/20">
                     <p className="text-[11px] font-medium text-foreground">{wf.name}</p>
                     <p className="text-[10px] text-muted-foreground mt-0.5">{wf.description}</p>
                     {wf.steps?.length > 0 && (
@@ -710,7 +710,7 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
           <button
             onClick={() => pushMutation.mutate()}
             disabled={pushMutation.isPending}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#0067b8] hover:bg-[#005a9e] text-white text-xs font-medium transition-colors w-full justify-center disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium transition-colors w-full justify-center disabled:opacity-50"
             data-testid="button-push-uipath"
           >
             {pushMutation.isPending ? (

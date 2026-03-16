@@ -9,11 +9,26 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+function getSystemTheme(): Theme {
+  if (typeof window !== "undefined" && window.matchMedia) {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "dark";
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [hasStoredPreference] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("cannonball-theme") !== null;
+    }
+    return false;
+  });
+
   const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("cannonball-theme") as Theme;
-      return stored || "dark";
+      const stored = localStorage.getItem("cannonball-theme") as Theme | null;
+      if (stored) return stored;
+      return getSystemTheme();
     }
     return "dark";
   });
@@ -25,11 +40,26 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } else {
       root.classList.remove("dark");
     }
-    localStorage.setItem("cannonball-theme", theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (hasStoredPreference) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!localStorage.getItem("cannonball-theme")) {
+        setTheme(e.matches ? "dark" : "light");
+      }
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [hasStoredPreference]);
+
   const toggleTheme = () => {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      localStorage.setItem("cannonball-theme", next);
+      return next;
+    });
   };
 
   return (

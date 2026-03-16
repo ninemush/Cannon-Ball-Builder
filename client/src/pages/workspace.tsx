@@ -302,21 +302,21 @@ function StageTracker({
 
     return (
       <div className="space-y-1.5 text-left min-w-[180px]">
-        <div className="text-[11px] font-semibold text-zinc-200 border-b border-zinc-700 pb-1 mb-1">{stage}</div>
+        <div className="text-[11px] font-semibold text-foreground border-b border-border pb-1 mb-1">{stage}</div>
         {items.map(item => (
           <div key={item.key} className="flex items-center justify-between gap-3">
-            <span className="text-[10px] text-zinc-400">{item.label}</span>
+            <span className="text-[10px] text-muted-foreground">{item.label}</span>
             {item.status === "approved" ? (
               <div className="flex items-center gap-1">
                 <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
                   v{item.version || 1}
                 </span>
-                <span className="text-[9px] text-zinc-500">{item.userName}</span>
+                <span className="text-[9px] text-muted-foreground">{item.userName}</span>
               </div>
             ) : item.status === "invalidated" ? (
               <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400">needs redo</span>
             ) : (
-              <span className="text-[9px] text-zinc-600">pending</span>
+              <span className="text-[9px] text-muted-foreground/60">pending</span>
             )}
           </div>
         ))}
@@ -410,7 +410,7 @@ function StageTracker({
                 return (
                   <Tooltip key={stage}>
                     <TooltipTrigger asChild>{stageContent}</TooltipTrigger>
-                    <TooltipContent side="right" className="p-2.5 bg-zinc-900 border-zinc-700 max-w-[260px]">
+                    <TooltipContent side="right" className="p-2.5 bg-popover border-border max-w-[260px]">
                       {tooltip}
                     </TooltipContent>
                   </Tooltip>

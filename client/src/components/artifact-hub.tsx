@@ -141,7 +141,7 @@ function DocumentViewerModal({ open, onClose, title, ideaId, artifactType }: { o
               {sections.map((section, idx) => (
                 <div key={idx}>
                   <button
-                    className="w-full flex items-center gap-2 px-5 py-2.5 text-left hover:bg-white/5 transition-colors"
+                    className="w-full flex items-center gap-2 px-5 py-2.5 text-left hover:bg-muted/50 transition-colors"
                     onClick={() => toggleSection(idx)}
                     data-testid={`button-hub-section-toggle-${idx}`}
                   >
@@ -334,7 +334,7 @@ function UiPathViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: 
                   {expandedWf && (
                     <div className="space-y-2">
                       {packageData.workflows.map((wf, i) => (
-                        <div key={i} className="p-2.5 rounded bg-[#1a1a1a] border border-border/20">
+                        <div key={i} className="p-2.5 rounded bg-muted border border-border/20">
                           <p className="text-[11px] font-medium text-foreground">{wf.name}</p>
                           <p className="text-[10px] text-muted-foreground mt-0.5">{wf.description}</p>
                           {wf.steps && wf.steps.length > 0 && (

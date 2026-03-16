@@ -50,7 +50,7 @@ export function TopNav() {
     <>
     <NewIdeaModal open={newIdeaOpen} onOpenChange={setNewIdeaOpen} />
     <header
-      className="flex items-center justify-between gap-2 px-3 sm:px-4 h-12 sm:h-14 bg-card z-50 sticky top-0 border-b border-[#3d3d3d] dark:border-[#3d3d3d]"
+      className="flex items-center justify-between gap-2 px-3 sm:px-4 h-12 sm:h-14 bg-card z-50 sticky top-0 border-b border-border"
       data-testid="top-nav"
     >
       <div className="flex items-center gap-2 sm:gap-3">

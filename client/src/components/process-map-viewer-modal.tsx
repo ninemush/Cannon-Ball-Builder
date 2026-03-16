@@ -483,7 +483,7 @@ function ROCustomEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
             className={`px-2 py-0.5 rounded text-[9px] font-medium max-w-[140px] truncate ${
               isYes ? (isDark ? "bg-emerald-950/95 border border-emerald-500/30 text-emerald-300" : "bg-emerald-50 border border-emerald-300 text-emerald-700")
               : isNo ? (isDark ? "bg-red-950/95 border border-red-500/30 text-red-300" : "bg-red-50 border border-red-300 text-red-700")
-              : (isDark ? "bg-zinc-900/95 border border-zinc-600/30 text-zinc-400" : "bg-white border border-gray-200 text-gray-600")
+              : (isDark ? "bg-popover/95 border border-border text-muted-foreground" : "bg-popover border border-border text-muted-foreground")
             }`}
           >
             {label}

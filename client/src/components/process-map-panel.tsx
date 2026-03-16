@@ -103,11 +103,11 @@ class ReactFlowErrorBoundary extends Component<{ children: ReactNode; onRetry?: 
         );
       }
       return (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-zinc-500">
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
           <AlertCircle className="h-8 w-8 text-amber-500/60" />
-          <p className="text-xs text-zinc-400">Process map encountered an error</p>
+          <p className="text-xs text-muted-foreground">Process map encountered an error</p>
           <button
-            className="text-xs px-3 py-1.5 rounded-md bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 text-gray-700 dark:text-zinc-300 transition-colors"
+            className="text-xs px-3 py-1.5 rounded-md bg-muted hover:bg-accent text-foreground transition-colors"
             onClick={() => this.setState({ hasError: false, retryCount: 0 })}
             data-testid="button-retry-map"
           >
@@ -750,30 +750,30 @@ function NodeHoverTooltip({ data, visible }: { data: any; visible: boolean }) {
       data-testid={`tooltip-node-${data.nodeId || ""}`}
     >
       <div
-        className="rounded-lg px-3 py-2.5 text-left shadow-xl min-w-[200px] max-w-[300px] bg-white/95 dark:bg-[rgba(15,15,20,0.85)] backdrop-blur-xl border border-gray-200 dark:border-white/10"
+        className="rounded-lg px-3 py-2.5 text-left shadow-xl min-w-[200px] max-w-[300px] bg-popover/95 backdrop-blur-xl border border-border"
       >
-        <div className="text-[12px] font-semibold text-gray-900 dark:text-white/90 leading-snug break-words">
+        <div className="text-[12px] font-semibold text-foreground leading-snug break-words">
           {data.label}
         </div>
         {data.role && (
           <div className="flex items-center gap-1.5 mt-1.5">
-            <PerformerIcon className="h-3 w-3 text-gray-400 dark:text-white/40 flex-shrink-0" />
-            <span className="text-[10px] text-gray-500 dark:text-white/50">{data.role}</span>
+            <PerformerIcon className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+            <span className="text-[10px] text-muted-foreground">{data.role}</span>
           </div>
         )}
         {data.system && data.system !== "Manual" && data.system !== "manual" && (
           <div className="flex items-center gap-1.5 mt-1">
-            <Monitor className="h-3 w-3 text-gray-400 dark:text-white/40 flex-shrink-0" />
-            <span className="text-[10px] text-gray-500 dark:text-white/50">{data.system}</span>
+            <Monitor className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+            <span className="text-[10px] text-muted-foreground">{data.system}</span>
           </div>
         )}
         {cleanDescription && (
-          <div className="mt-1.5 text-[10px] text-gray-400 dark:text-white/40 leading-relaxed break-words line-clamp-3">
+          <div className="mt-1.5 text-[10px] text-muted-foreground leading-relaxed break-words line-clamp-3">
             {cleanDescription}
           </div>
         )}
-        <div className="flex items-center gap-2 mt-2 pt-1.5 border-t border-gray-200 dark:border-white/10">
-          <span className="text-[9px] text-gray-400 dark:text-white/30">{performerLabel}</span>
+        <div className="flex items-center gap-2 mt-2 pt-1.5 border-t border-border">
+          <span className="text-[9px] text-muted-foreground/70">{performerLabel}</span>
           {isAutomated && (
             <span className="flex items-center gap-1">
               <Zap className="h-2.5 w-2.5 text-green-400" />
@@ -1438,8 +1438,8 @@ function CustomEdge({
                     ? "bg-amber-950/95 border border-amber-500/30 text-amber-300 shadow-sm shadow-amber-900/30"
                     : "bg-amber-50 border border-amber-300 text-amber-700 shadow-sm")
                 : (isDark
-                    ? "bg-zinc-900/95 border border-zinc-600/30 text-zinc-400 shadow-sm shadow-zinc-900/30"
-                    : "bg-white border border-gray-200 text-gray-600 shadow-sm")
+                    ? "bg-popover/95 border border-border text-muted-foreground shadow-sm"
+                    : "bg-popover border border-border text-muted-foreground shadow-sm")
             }`}
             data-testid={`edge-label-${id}`}
           >
@@ -1503,50 +1503,50 @@ function InlineEditPanel({
   isNew?: boolean;
 }) {
   return (
-    <div className="absolute right-0 top-0 bottom-0 w-72 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-l border-gray-200 dark:border-zinc-800 z-50 flex flex-col overflow-y-auto" data-testid="panel-node-edit">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-zinc-800">
+    <div className="absolute right-0 top-0 bottom-0 w-72 bg-card/95 backdrop-blur-md border-l border-border z-50 flex flex-col overflow-y-auto" data-testid="panel-node-edit">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center">
             <Pencil className="h-3 w-3 text-primary" />
           </div>
-          <span className="text-xs font-semibold text-gray-900 dark:text-white">{isNew ? "Add Step" : "Edit Step"}</span>
+          <span className="text-xs font-semibold text-foreground">{isNew ? "Add Step" : "Edit Step"}</span>
         </div>
-        <button onClick={onCancel} className="text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors" data-testid="button-close-edit">
+        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground transition-colors" data-testid="button-close-edit">
           <X className="h-4 w-4" />
         </button>
       </div>
       <div className="flex-1 p-4 space-y-4">
         <div>
-          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Step Name</label>
+          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Step Name</label>
           <input
-            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.name}
             onChange={(e) => onChange({ ...editData, name: e.target.value })}
             data-testid="input-node-name"
           />
         </div>
         <div>
-          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Role</label>
+          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Role</label>
           <input
-            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.role}
             onChange={(e) => onChange({ ...editData, role: e.target.value })}
             data-testid="input-node-role"
           />
         </div>
         <div>
-          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">System</label>
+          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">System</label>
           <input
-            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.system}
             onChange={(e) => onChange({ ...editData, system: e.target.value })}
             data-testid="input-node-system"
           />
         </div>
         <div>
-          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Type</label>
+          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Type</label>
           <select
-            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.nodeType}
             onChange={(e) => onChange({ ...editData, nodeType: e.target.value as any })}
             data-testid="select-node-type"
@@ -1561,9 +1561,9 @@ function InlineEditPanel({
           </select>
         </div>
         <div>
-          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Description</label>
+          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Description</label>
           <textarea
-            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none resize-none transition-all"
+            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none resize-none transition-all"
             rows={3}
             value={editData.description}
             onChange={(e) => onChange({ ...editData, description: e.target.value })}
@@ -1575,13 +1575,13 @@ function InlineEditPanel({
             type="checkbox"
             checked={editData.isPainPoint}
             onChange={(e) => onChange({ ...editData, isPainPoint: e.target.checked })}
-            className="rounded border-gray-300 dark:border-zinc-600 bg-gray-50 dark:bg-zinc-900 text-red-500 focus:ring-red-500/30"
+            className="rounded border-input bg-muted text-red-500 focus:ring-red-500/30"
           />
           <Flag className="h-3 w-3 text-red-400 group-hover:text-red-300" />
-          <span className="text-xs text-zinc-400 group-hover:text-zinc-300">Pain point</span>
+          <span className="text-xs text-muted-foreground group-hover:text-foreground">Pain point</span>
         </label>
       </div>
-      <div className="p-4 border-t border-gray-200 dark:border-zinc-800 flex items-center gap-2">
+      <div className="p-4 border-t border-border flex items-center gap-2">
         <Button size="sm" className="flex-1 text-xs h-8 rounded-lg" onClick={onSave} data-testid="button-save-node">
           <Save className="h-3 w-3 mr-1.5" /> Save
         </Button>
@@ -1590,7 +1590,7 @@ function InlineEditPanel({
             <Trash2 className="h-3 w-3" />
           </Button>
         )}
-        <Button size="sm" variant="ghost" className="text-xs h-8 text-zinc-400" onClick={onCancel} data-testid="button-cancel-edit">
+        <Button size="sm" variant="ghost" className="text-xs h-8 text-muted-foreground" onClick={onCancel} data-testid="button-cancel-edit">
           Cancel
         </Button>
       </div>
@@ -1613,14 +1613,14 @@ function EdgeLabelEditPopup({
 }) {
   return (
     <div
-      className="absolute z-50 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl p-3 shadow-2xl"
+      className="absolute z-50 bg-card/95 backdrop-blur-md border border-border rounded-xl p-3 shadow-2xl"
       style={{ left: position.x, top: position.y }}
       data-testid="popup-edge-label"
     >
-      <div className="text-[10px] text-zinc-500 font-medium mb-1.5">Edge Label</div>
+      <div className="text-[10px] text-muted-foreground font-medium mb-1.5">Edge Label</div>
       <div className="flex items-center gap-2">
         <input
-          className="bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-900 dark:text-white focus:border-primary focus:outline-none w-36"
+          className="bg-muted border border-input rounded-lg px-3 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none w-36"
           placeholder="e.g. Yes / No"
           value={editData.label}
           onChange={(e) => onChange({ ...editData, label: e.target.value })}
@@ -1631,7 +1631,7 @@ function EdgeLabelEditPopup({
         <button onClick={onSave} className="text-emerald-400 hover:text-emerald-300 transition-colors" data-testid="button-save-edge-label">
           <Check className="h-4 w-4" />
         </button>
-        <button onClick={onCancel} className="text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors" data-testid="button-cancel-edge-label">
+        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground transition-colors" data-testid="button-cancel-edge-label">
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -1650,12 +1650,12 @@ function ContextMenu({
 }) {
   return (
     <div
-      className="absolute z-50 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl py-1.5 shadow-2xl min-w-[160px]"
+      className="absolute z-50 bg-card/95 backdrop-blur-md border border-border rounded-xl py-1.5 shadow-2xl min-w-[160px]"
       style={{ left: position.x, top: position.y }}
       data-testid="context-menu"
     >
       <button
-        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
+        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
         onClick={onAddStep}
         data-testid="button-add-step-context"
       >
@@ -1684,19 +1684,19 @@ function NodeContextMenu({
 }) {
   return (
     <div
-      className="absolute z-50 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl py-1.5 shadow-2xl min-w-[180px]"
+      className="absolute z-50 bg-card/95 backdrop-blur-md border border-border rounded-xl py-1.5 shadow-2xl min-w-[180px]"
       style={{ left: position.x, top: position.y }}
       data-testid="node-context-menu"
     >
       <button
-        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
+        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
         onClick={onEdit}
         data-testid="button-edit-node-context"
       >
         <Pencil className="h-3.5 w-3.5 text-primary" /> Edit Step
       </button>
       <button
-        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
+        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
         onClick={onAddChild}
         data-testid="button-add-child-context"
       >
@@ -1704,13 +1704,13 @@ function NodeContextMenu({
         {(nodeData.nodeType === "decision" || nodeData.nodeType === "agent-decision") ? "Add Branch" : "Add Child Step"}
       </button>
       <button
-        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
+        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
         onClick={onConnectTo}
         data-testid="button-connect-to-context"
       >
         <Cable className="h-3.5 w-3.5 text-emerald-400" /> Connect to...
       </button>
-      <div className="h-px bg-gray-200 dark:bg-zinc-800 my-1" />
+      <div className="h-px bg-border my-1" />
       <button
         className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 hover:text-red-300 flex items-center gap-2.5 transition-colors"
         onClick={onDelete}
@@ -2500,22 +2500,22 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="flex flex-col items-center gap-4 max-w-sm text-center">
           <div className="relative">
-            <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800">
-              <GitBranch className="h-7 w-7 text-zinc-600" />
+            <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-muted border border-border">
+              <GitBranch className="h-7 w-7 text-muted-foreground" />
             </div>
             <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center">
               <Sparkles className="h-3 w-3 text-primary" />
             </div>
           </div>
           <div className="space-y-2">
-            <h3 className="text-sm font-medium text-gray-700 dark:text-zinc-300">
+            <h3 className="text-sm font-medium text-foreground">
               {activeView === "as-is"
                 ? "Process map will appear here"
                 : activeView === "to-be"
                 ? "To-Be map will appear here"
                 : "SDD map will appear here"}
             </h3>
-            <p className="text-xs text-zinc-500 leading-relaxed">
+            <p className="text-xs text-muted-foreground leading-relaxed">
               {activeView === "as-is"
                 ? "Describe your process in the chat and the AI will build a visual flowchart with tasks, decisions, and handoffs."
                 : activeView === "to-be"
@@ -2572,10 +2572,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
         />
         <Controls
           showInteractive={false}
-          className={isDark
-            ? "!bg-zinc-900/90 !border-zinc-700 !rounded-xl !shadow-lg [&_button]:!bg-zinc-800 [&_button]:!border-zinc-700 [&_button]:!text-zinc-400 [&_button:hover]:!bg-zinc-700 [&_button:hover]:!text-white [&_button]:!rounded-lg"
-            : "!bg-white !border-gray-200 !rounded-xl !shadow-lg [&_button]:!bg-gray-50 [&_button]:!border-gray-200 [&_button]:!text-gray-600 [&_button:hover]:!bg-gray-100 [&_button:hover]:!text-gray-900 [&_button]:!rounded-lg"
-          }
+          className="!bg-card !border-border !rounded-xl !shadow-lg [&_button]:!bg-muted [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button:hover]:!text-foreground [&_button]:!rounded-lg"
         />
         <MiniMap
           nodeStrokeWidth={3}
@@ -2587,19 +2584,16 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             return "#3b82f6";
           }}
           maskColor={isDark ? "rgba(0,0,0,0.7)" : "rgba(240,240,245,0.7)"}
-          className={isDark
-            ? "!bg-zinc-900/80 !border-zinc-700 !rounded-xl"
-            : "!bg-white/90 !border-gray-200 !rounded-xl"
-          }
+          className="!bg-card/80 !border-border !rounded-xl"
           pannable
           zoomable
         />
       </ReactFlow>
 
       {selectedEdgeIds.size > 0 && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-zinc-900/95 backdrop-blur-md border border-zinc-700 rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg z-40" data-testid="edge-selection-hint">
-          <span className="text-[10px] text-zinc-400">Edge selected</span>
-          <span className="text-[10px] text-zinc-600">|</span>
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-popover/95 backdrop-blur-md border border-border rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg z-40" data-testid="edge-selection-hint">
+          <span className="text-[10px] text-muted-foreground">Edge selected</span>
+          <span className="text-[10px] text-border">|</span>
           <button
             className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1"
             onClick={() => {
@@ -2616,7 +2610,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           >
             <Trash2 className="h-3 w-3" /> Delete
           </button>
-          <span className="text-[10px] text-zinc-600">|</span>
+          <span className="text-[10px] text-border">|</span>
           <button
             className="text-[10px] text-primary hover:text-primary/80 flex items-center gap-1"
             onClick={() => {
@@ -2633,19 +2627,19 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           >
             <Pencil className="h-3 w-3" /> Label
           </button>
-          <span className="text-[10px] text-zinc-500 ml-1">(or press Delete)</span>
+          <span className="text-[10px] text-muted-foreground ml-1">(or press Delete)</span>
         </div>
       )}
 
       {connectModeSourceId && (
         <div
-          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 shadow-lg"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-card/95 backdrop-blur-md border border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 shadow-lg"
           data-testid="connect-mode-banner"
         >
           <Cable className="h-4 w-4 text-blue-400" />
-          <span className="text-xs text-gray-600 dark:text-zinc-300">Click a target node to connect, or press <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-zinc-800 rounded text-[10px] font-mono text-gray-500 dark:text-zinc-400 border border-gray-300 dark:border-zinc-700">Esc</kbd> to cancel</span>
+          <span className="text-xs text-foreground">Click a target node to connect, or press <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono text-muted-foreground border border-input">Esc</kbd> to cancel</span>
           <button
-            className="text-xs text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors ml-1"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
             onClick={() => setConnectModeSourceId(null)}
             data-testid="button-cancel-connect-mode"
           >
@@ -2698,7 +2692,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           }}
         >
           <div
-            className="pointer-events-auto absolute bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl shadow-2xl w-72"
+            className="pointer-events-auto absolute bg-card/95 backdrop-blur-md border border-border rounded-xl shadow-2xl w-72"
             style={{
               left: `50%`,
               top: `40px`,
@@ -2706,7 +2700,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             }}
             data-testid="popover-node-detail"
           >
-            <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800 flex items-center justify-between gap-2">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center"
                   style={{
@@ -2726,11 +2720,11 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
                    (detailPopover.node.nodeType === "agent-task" || detailPopover.node.nodeType === "agent-loop") ? <Brain className="h-3 w-3 text-purple-400" /> :
                    <CircleDot className="h-3 w-3 text-blue-400" />}
                 </div>
-                <span className="text-xs font-semibold text-gray-900 dark:text-white truncate">{detailPopover.node.label || "(unnamed)"}</span>
+                <span className="text-xs font-semibold text-foreground truncate">{detailPopover.node.label || "(unnamed)"}</span>
               </div>
               <button
                 onClick={() => setDetailPopover(null)}
-                className="text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors flex-shrink-0"
+                className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
                 data-testid="button-close-detail-popover"
               >
                 <X className="h-3.5 w-3.5" />
@@ -2738,7 +2732,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             </div>
             <div className="px-4 py-3 space-y-2.5">
               <div className="flex items-start gap-2">
-                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Type</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Type</span>
                 <Badge variant="outline" className="text-[10px] capitalize">
                   {detailPopover.node.nodeType === "decision" ? "Decision" :
                    detailPopover.node.nodeType === "start" ? "Start" :
@@ -2750,20 +2744,20 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
               </div>
               {detailPopover.node.role && (
                 <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Role</span>
-                  <span className="text-xs text-gray-600 dark:text-zinc-300" data-testid="text-detail-role">{detailPopover.node.role}</span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Role</span>
+                  <span className="text-xs text-foreground" data-testid="text-detail-role">{detailPopover.node.role}</span>
                 </div>
               )}
               {detailPopover.node.system && detailPopover.node.system !== "Manual" && (
                 <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">System</span>
-                  <span className="text-xs text-gray-600 dark:text-zinc-300" data-testid="text-detail-system">{detailPopover.node.system}</span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">System</span>
+                  <span className="text-xs text-foreground" data-testid="text-detail-system">{detailPopover.node.system}</span>
                 </div>
               )}
               {detailPopover.node.description && (
                 <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Desc</span>
-                  <span className="text-xs text-gray-600 dark:text-zinc-300 leading-relaxed" data-testid="text-detail-description">{detailPopover.node.description}</span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Desc</span>
+                  <span className="text-xs text-foreground leading-relaxed" data-testid="text-detail-description">{detailPopover.node.description}</span>
                 </div>
               )}
               {detailPopover.node.isPainPoint && (
@@ -2774,7 +2768,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
               )}
             </div>
             {detailLevel === "L2" && (
-              <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800">
+              <div className="px-4 py-2.5 border-t border-border">
                 <Button
                   size="sm"
                   variant="ghost"
@@ -2890,7 +2884,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center" data-testid="sdd-view-loading">
-        <div className="flex flex-col items-center gap-3 text-zinc-500">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin" />
           <span className="text-xs">Loading SDD...</span>
         </div>
@@ -2905,15 +2899,15 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
           <div className="w-12 h-12 rounded-xl bg-cb-orange/10 flex items-center justify-center mx-auto">
             <FileText className="h-6 w-6 text-cb-orange" />
           </div>
-          <h4 className="text-sm font-semibold text-gray-700 dark:text-zinc-300">No SDD Generated Yet</h4>
-          <p className="text-xs text-zinc-500 leading-relaxed">
+          <h4 className="text-sm font-semibold text-foreground">No SDD Generated Yet</h4>
+          <p className="text-xs text-muted-foreground leading-relaxed">
             The Solution Design Document will appear here once it's generated. First, complete and approve your To-Be process map, then approve the PDD. The SDD is automatically created after PDD approval.
           </p>
-          <div className="flex items-center justify-center gap-2 text-[10px] text-zinc-600">
+          <div className="flex items-center justify-center gap-2 text-[10px] text-muted-foreground">
             <span className="flex items-center gap-1"><Check className="h-3 w-3" /> Approve To-Be Map</span>
-            <span className="text-zinc-700">&rarr;</span>
+            <span className="text-muted-foreground/50">&rarr;</span>
             <span className="flex items-center gap-1"><Check className="h-3 w-3" /> Approve PDD</span>
-            <span className="text-zinc-700">&rarr;</span>
+            <span className="text-muted-foreground/50">&rarr;</span>
             <span className="flex items-center gap-1 text-cb-orange"><FileText className="h-3 w-3" /> SDD Generated</span>
           </div>
         </div>
@@ -2934,11 +2928,11 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
 
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar" data-testid="sdd-view-content">
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/60 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-cb-orange" />
-          <span className="text-xs font-semibold text-gray-700 dark:text-zinc-300">Solution Design Document</span>
-          <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">
+          <span className="text-xs font-semibold text-foreground">Solution Design Document</span>
+          <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
             v{currentSdd.version}
           </Badge>
           {currentSdd.status === "approved" && (
@@ -2949,11 +2943,11 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
           {sddVersions && sddVersions.length > 1 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="p-1 rounded hover:bg-zinc-800/50 transition-colors" data-testid="sdd-version-dropdown">
-                  <History className="h-3.5 w-3.5 text-zinc-500" />
+                <button className="p-1 rounded hover:bg-muted transition-colors" data-testid="sdd-version-dropdown">
+                  <History className="h-3.5 w-3.5 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="bg-zinc-900 border-zinc-700 min-w-[200px]">
+              <DropdownMenuContent align="start" className="min-w-[200px]">
                 {sddVersions.map((v, idx) => (
                   <DropdownMenuItem
                     key={v.id}
@@ -2961,7 +2955,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
                       setSelectedVersionIdx(idx);
                       setExpandedSections(new Set([0]));
                     }}
-                    className={`text-xs cursor-pointer ${idx === selectedVersionIdx ? "bg-zinc-800 text-zinc-200" : "text-zinc-400"}`}
+                    className={`text-xs cursor-pointer ${idx === selectedVersionIdx ? "bg-accent text-foreground" : "text-muted-foreground"}`}
                     data-testid={`sdd-version-option-${v.version}`}
                   >
                     <div className="flex items-center justify-between w-full gap-3">
@@ -2974,7 +2968,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
                           <span className="text-[9px] text-cb-orange font-medium">Latest</span>
                         )}
                       </div>
-                      <span className="text-[10px] text-zinc-600">
+                      <span className="text-[10px] text-muted-foreground">
                         {new Date(v.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
                     </div>
@@ -2984,29 +2978,29 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
             </DropdownMenu>
           )}
         </div>
-        <span className="text-[10px] text-zinc-600">
+        <span className="text-[10px] text-muted-foreground">
           {new Date(currentSdd.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
         </span>
       </div>
 
-      <div className="divide-y divide-zinc-800/40">
+      <div className="divide-y divide-border/40">
         {sections.map((section, idx) => {
           const isExpanded = expandedSections.has(idx);
           return (
             <div key={idx} data-testid={`sdd-section-${idx}`}>
               <button
                 onClick={() => toggleSection(idx)}
-                className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-zinc-800/30 transition-colors text-left"
+                className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-muted/50 transition-colors text-left"
               >
                 {isExpanded ? (
-                  <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 ) : (
-                  <ChevronRight className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 )}
-                <span className="text-xs font-medium text-gray-700 dark:text-zinc-300">{section.title}</span>
+                <span className="text-xs font-medium text-foreground">{section.title}</span>
               </button>
               {isExpanded && (
-                <div className="px-6 pb-4 text-xs text-gray-500 dark:text-zinc-400 leading-relaxed prose dark:prose-invert prose-xs max-w-none">
+                <div className="px-6 pb-4 text-xs text-muted-foreground leading-relaxed prose dark:prose-invert prose-xs max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{section.content}</ReactMarkdown>
                 </div>
               )}
@@ -3016,7 +3010,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
       </div>
 
       {showSddApproveButton && (
-        <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800/80 flex items-center justify-between bg-gray-50/80 dark:bg-zinc-950/50">
+        <div className="px-4 py-2.5 border-t border-border flex items-center justify-between bg-muted/30">
           <Button
             size="sm"
             className="text-xs rounded-lg shadow-sm bg-cb-teal shadow-cb-teal/20"
@@ -3157,17 +3151,17 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
   }, [isFullscreen]);
 
   return (
-    <div className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-50 bg-white dark:bg-zinc-950" : "h-full"}`} data-testid="panel-process-map">
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 flex items-center justify-between gap-2 bg-gray-50/80 dark:bg-zinc-950/50">
+    <div className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-50 bg-background" : "h-full"}`} data-testid="panel-process-map">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 bg-muted/30">
         <div className="flex items-center gap-2.5">
           <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${activeView === "sdd" ? "bg-cb-orange/10" : "bg-cb-teal/10"}`}>
             {activeView === "sdd" ? <FileText className="h-3.5 w-3.5 text-cb-orange" /> : <GitBranch className="h-3.5 w-3.5 text-cb-teal" />}
           </div>
-          <h3 className="text-xs font-semibold text-gray-600 dark:text-zinc-300 uppercase tracking-wider">
+          <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider">
             {activeView === "as-is" ? "As-Is Process Map" : activeView === "to-be" ? "To-Be Process Map" : "Solution Design Document"}
           </h3>
           {activeView !== "sdd" && nodeCount > 0 && (
-            <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 font-medium">
+            <Badge variant="outline" className="text-[10px] border-border text-muted-foreground font-medium">
               {nodeCount} steps
             </Badge>
           )}
@@ -3178,7 +3172,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                className="text-[10px] h-7 w-7 p-0 text-muted-foreground hover:text-foreground border border-border rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={undoRedoControls.undo}
                 disabled={!undoRedoControls.canUndo}
                 title="Undo (Ctrl+Z)"
@@ -3189,7 +3183,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                className="text-[10px] h-7 w-7 p-0 text-muted-foreground hover:text-foreground border border-border rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={undoRedoControls.redo}
                 disabled={!undoRedoControls.canRedo}
                 title="Redo (Ctrl+Shift+Z)"
@@ -3200,10 +3194,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             </>
           )}
           {activeView !== "sdd" && nodeCount > 3 && (
-            <div className="flex items-center rounded-lg bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-0.5" data-testid="level-selector">
+            <div className="flex items-center rounded-lg bg-muted border border-border p-0.5" data-testid="level-selector">
               <button
                 onClick={() => setDetailLevel("L0")}
-                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L0" ? "bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L0" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 data-testid="button-level-l0"
                 title="Overview - Phase groups only"
               >
@@ -3211,7 +3205,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               </button>
               <button
                 onClick={() => setDetailLevel("L1")}
-                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L1" ? "bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L1" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 data-testid="button-level-l1"
                 title="Key Steps - Decisions & milestones"
               >
@@ -3219,7 +3213,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               </button>
               <button
                 onClick={() => setDetailLevel("L2")}
-                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L2" ? "bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L2" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 data-testid="button-level-l2"
                 title="Full Detail - All steps"
               >
@@ -3231,7 +3225,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             <Button
               size="sm"
               variant="ghost"
-              className="text-[10px] h-7 px-2 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg"
+              className="text-[10px] h-7 px-2 text-muted-foreground hover:text-foreground border border-border rounded-lg"
               onClick={() => relayoutRef.current?.()}
               data-testid="button-relayout"
             >
@@ -3243,7 +3237,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className={`text-[10px] h-7 px-2 border border-gray-200 dark:border-zinc-800 rounded-lg ${showPerformers ? "text-purple-400 bg-purple-500/10 !border-purple-500/30" : "text-zinc-400 hover:text-gray-900 dark:hover:text-white"}`}
+                className={`text-[10px] h-7 px-2 border border-border rounded-lg ${showPerformers ? "text-purple-400 bg-purple-500/10 !border-purple-500/30" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => { setShowPerformers(!showPerformers); setShowGuidance(false); setShowPhases(false); }}
                 title="Human vs Machine breakdown"
                 data-testid="button-toggle-performers"
@@ -3253,7 +3247,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className={`text-[10px] h-7 px-2 border border-gray-200 dark:border-zinc-800 rounded-lg ${showGuidance ? "text-amber-400 bg-amber-500/10 !border-amber-500/30" : "text-zinc-400 hover:text-gray-900 dark:hover:text-white"}`}
+                className={`text-[10px] h-7 px-2 border border-border rounded-lg ${showGuidance ? "text-amber-400 bg-amber-500/10 !border-amber-500/30" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => { setShowGuidance(!showGuidance); setShowPerformers(false); setShowPhases(false); }}
                 title="Completeness guidance"
                 data-testid="button-toggle-guidance"
@@ -3267,7 +3261,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 <Button
                   size="sm"
                   variant="ghost"
-                  className={`text-[10px] h-7 px-2 border border-gray-200 dark:border-zinc-800 rounded-lg ${showPhases ? "text-blue-400 bg-blue-500/10 !border-blue-500/30" : "text-zinc-400 hover:text-gray-900 dark:hover:text-white"}`}
+                  className={`text-[10px] h-7 px-2 border border-border rounded-lg ${showPhases ? "text-blue-400 bg-blue-500/10 !border-blue-500/30" : "text-muted-foreground hover:text-foreground"}`}
                   onClick={() => { setShowPhases(!showPhases); setShowPerformers(false); setShowGuidance(false); }}
                   title="Phase groups"
                   data-testid="button-toggle-phases"
@@ -3280,7 +3274,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
           <Button
             size="sm"
             variant="ghost"
-            className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg"
+            className="text-[10px] h-7 w-7 p-0 text-muted-foreground hover:text-foreground border border-border rounded-lg"
             onClick={() => setIsFullscreen(!isFullscreen)}
             title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
             data-testid="button-fullscreen-map"
@@ -3288,26 +3282,26 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </Button>
           <div
-            className="flex items-center rounded-full bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-0.5"
+            className="flex items-center rounded-full bg-muted border border-border p-0.5"
             data-testid="button-toggle-view"
           >
             <button
               onClick={() => handleViewChange("as-is")}
-              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "as-is" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "as-is" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-muted-foreground hover:text-foreground"}`}
               data-testid="button-view-as-is"
             >
               As-Is
             </button>
             <button
               onClick={() => handleViewChange("to-be")}
-              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "to-be" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "to-be" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-muted-foreground hover:text-foreground"}`}
               data-testid="button-view-to-be"
             >
               To-Be
             </button>
             <button
               onClick={() => handleViewChange("sdd")}
-              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "sdd" ? "bg-cb-orange text-white shadow-sm shadow-cb-orange/20" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "sdd" ? "bg-cb-orange text-white shadow-sm shadow-cb-orange/20" : "text-muted-foreground hover:text-foreground"}`}
               data-testid="button-view-sdd"
             >
               SDD
@@ -3317,7 +3311,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       </div>
 
       {activeView === "to-be" && nodeCount > 0 && (
-        <div className="px-4 py-2 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/50 dark:bg-zinc-950/30" data-testid="automation-impact-bar">
+        <div className="px-4 py-2 border-b border-border bg-muted/30" data-testid="automation-impact-bar">
           {(() => {
             const nodes = mapData?.nodes || [];
             const startEndCount = nodes.filter((n) => n.nodeType === "start" || n.nodeType === "end").length;
@@ -3347,7 +3341,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                     <p className="text-xs">Percentage of steps handled by automation or system (not human)</p>
                   </TooltipContent>
                 </Tooltip>
-                <div className="flex items-center gap-2 text-[9px] text-zinc-500">
+                <div className="flex items-center gap-2 text-[9px] text-muted-foreground">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span className="flex items-center gap-0.5 cursor-default" data-testid="stat-resolved"><Zap className="h-2.5 w-2.5 text-green-400" /> {automatedCount} resolved</span>
@@ -3380,17 +3374,17 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {activeView !== "sdd" && (
-        <div className="px-4 py-2 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/50 dark:bg-zinc-950/30" data-testid="map-completeness-bar">
+        <div className="px-4 py-2 border-b border-border bg-muted/30" data-testid="map-completeness-bar">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-zinc-500 font-medium">Completeness</span>
-            <span className={`text-[10px] font-semibold ${mapCompleteness >= 85 ? "text-green-400" : mapCompleteness >= 50 ? "text-amber-400" : "text-zinc-500"}`}>
+            <span className="text-[10px] text-muted-foreground font-medium">Completeness</span>
+            <span className={`text-[10px] font-semibold ${mapCompleteness >= 85 ? "text-green-400" : mapCompleteness >= 50 ? "text-amber-400" : "text-muted-foreground"}`}>
               {mapCompleteness}%
             </span>
           </div>
-          <div className="h-1 rounded-full bg-gray-200 dark:bg-zinc-800 overflow-hidden">
+          <div className="h-1 rounded-full bg-muted overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
-                mapCompleteness >= 85 ? "bg-green-500" : mapCompleteness >= 50 ? "bg-amber-500" : "bg-zinc-600"
+                mapCompleteness >= 85 ? "bg-green-500" : mapCompleteness >= 50 ? "bg-amber-500" : "bg-muted-foreground/50"
               }`}
               style={{ width: `${mapCompleteness}%` }}
             />
@@ -3399,10 +3393,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showPerformers && performerSummary && activeView !== "sdd" && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40 space-y-3" data-testid="panel-performers">
+        <div className="px-4 py-3 border-b border-border bg-muted/30 space-y-3" data-testid="panel-performers">
           <div className="flex items-center gap-2 mb-2">
             <User className="h-3.5 w-3.5 text-purple-400" />
-            <span className="text-[11px] font-semibold text-gray-700 dark:text-zinc-300">Human vs Machine Breakdown</span>
+            <span className="text-[11px] font-semibold text-foreground">Human vs Machine Breakdown</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20" data-testid="summary-human">
@@ -3464,7 +3458,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             const sysPct = Math.round((performerSummary.system.count / total) * 100);
             const hybridPct = 100 - humanPct - sysPct;
             return (
-              <div className="h-2 rounded-full overflow-hidden flex bg-zinc-800">
+              <div className="h-2 rounded-full overflow-hidden flex bg-muted">
                 {humanPct > 0 && <div className="h-full bg-blue-500" style={{ width: `${humanPct}%` }} />}
                 {sysPct > 0 && <div className="h-full bg-purple-500" style={{ width: `${sysPct}%` }} />}
                 {hybridPct > 0 && <div className="h-full bg-amber-500" style={{ width: `${hybridPct}%` }} />}
@@ -3475,10 +3469,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showGuidance && completenessIssues.length > 0 && activeView !== "sdd" && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40 space-y-2" data-testid="panel-guidance">
+        <div className="px-4 py-3 border-b border-border bg-muted/30 space-y-2" data-testid="panel-guidance">
           <div className="flex items-center gap-2 mb-1">
             <AlertCircle className="h-3.5 w-3.5 text-amber-400" />
-            <span className="text-[11px] font-semibold text-gray-700 dark:text-zinc-300">Completeness Suggestions</span>
+            <span className="text-[11px] font-semibold text-foreground">Completeness Suggestions</span>
           </div>
           {completenessIssues.map((issue, i) => {
             const isClickable = !!issue.nodeId;
@@ -3491,14 +3485,14 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 className={`flex items-start gap-2 p-2 rounded-lg text-[10px] w-full text-left transition-colors ${
                   issue.severity === "warning"
                     ? "bg-amber-500/10 border border-amber-500/15 text-amber-400"
-                    : "bg-zinc-800/50 border border-zinc-700/30 text-zinc-400"
+                    : "bg-muted/50 border border-border text-muted-foreground"
                 } ${isClickable ? "cursor-pointer hover:bg-amber-500/20 hover:border-amber-500/30" : "cursor-default"}`}
                 data-testid={`guidance-issue-${i}`}
               >
                 {issue.severity === "warning" ? (
                   <AlertCircle className="h-3 w-3 mt-0.5 shrink-0 text-amber-500" />
                 ) : (
-                  <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-zinc-500" />
+                  <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-muted-foreground" />
                 )}
                 <span className="leading-relaxed flex-1">{issue.message}</span>
                 {isClickable && (
@@ -3511,7 +3505,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showGuidance && completenessIssues.length === 0 && activeView !== "sdd" && nodeCount > 0 && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40" data-testid="panel-guidance-complete">
+        <div className="px-4 py-3 border-b border-border bg-muted/30" data-testid="panel-guidance-complete">
           <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/15 text-emerald-400 text-[10px]">
             <Check className="h-3 w-3" />
             <span>Process map looks complete — no issues detected</span>
@@ -3520,17 +3514,17 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showPhases && phaseGroups.length > 0 && activeView !== "sdd" && (
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40 space-y-2" data-testid="panel-phases">
+        <div className="px-4 py-3 border-b border-border bg-muted/30 space-y-2" data-testid="panel-phases">
           <div className="flex items-center gap-2 mb-1">
             <CircleDot className="h-3.5 w-3.5 text-blue-400" />
-            <span className="text-[11px] font-semibold text-gray-700 dark:text-zinc-300">Phase Groups ({phaseGroups.length})</span>
+            <span className="text-[11px] font-semibold text-foreground">Phase Groups ({phaseGroups.length})</span>
           </div>
           {phaseGroups.map((group, gi) => (
             <details key={gi} className="group" data-testid={`phase-group-${gi}`}>
-              <summary className="flex items-center gap-2 p-2 rounded-lg bg-gray-100/60 dark:bg-zinc-800/40 border border-gray-200/50 dark:border-zinc-700/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-zinc-800/60 transition-colors text-[10px] text-gray-700 dark:text-zinc-300 font-medium">
-                <ChevronRight className="h-3 w-3 text-zinc-500 group-open:rotate-90 transition-transform" />
+              <summary className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 border border-border/50 cursor-pointer hover:bg-muted/60 transition-colors text-[10px] text-foreground font-medium">
+                <ChevronRight className="h-3 w-3 text-muted-foreground group-open:rotate-90 transition-transform" />
                 <span>{group.name}</span>
-                <Badge variant="outline" className="ml-auto text-[8px] border-zinc-700 text-zinc-500">{group.nodes.length} steps</Badge>
+                <Badge variant="outline" className="ml-auto text-[8px] border-border text-muted-foreground">{group.nodes.length} steps</Badge>
               </summary>
               <div className="pl-6 pt-1 space-y-0.5">
                 {group.nodes.map((node, ni) => {
@@ -3542,7 +3536,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                       key={ni}
                       type="button"
                       onClick={() => focusNodeRef.current?.(String(node.id))}
-                      className="flex items-center gap-2 text-[9px] text-zinc-400 py-0.5 w-full text-left hover:text-zinc-200 transition-colors cursor-pointer"
+                      className="flex items-center gap-2 text-[9px] text-muted-foreground py-0.5 w-full text-left hover:text-foreground transition-colors cursor-pointer"
                       data-testid={`phase-node-${node.id}`}
                     >
                       <PerfIcon className={`h-2.5 w-2.5 ${perfColor}`} />
@@ -3572,7 +3566,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showApproveButton && (
-        <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800/80 flex items-center justify-between bg-gray-50/80 dark:bg-zinc-950/50">
+        <div className="px-4 py-2.5 border-t border-border flex items-center justify-between bg-muted/30">
           {!showApprovalConfirm ? (
             <div className="flex items-center gap-2 flex-1">
               <Button
@@ -3593,7 +3587,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             </div>
           ) : (
             <div className="flex-1 space-y-2">
-              <p className="text-[11px] text-zinc-400 leading-relaxed">
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
                 {mapChanged
                   ? `Changes detected since last approval. Re-approving will create a new version and ${activeView === "as-is" ? "invalidate all downstream artifacts (To-Be, PDD, SDD, UiPath package)" : "invalidate downstream documents (PDD, SDD)"}.`
                   : `By approving, you formally sign off on this ${activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} process map. This is recorded with your name, role, and timestamp.`
@@ -3613,7 +3607,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-xs h-7 text-zinc-400"
+                  className="text-xs h-7 text-muted-foreground"
                   onClick={() => setShowApprovalConfirm(false)}
                   data-testid="button-cancel-approve"
                 >
@@ -3626,13 +3620,13 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {activeView !== "sdd" && approval && !mapChanged && (
-        <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800/80 flex items-center justify-between bg-gray-50/80 dark:bg-zinc-950/50" data-testid="approval-badge">
+        <div className="px-4 py-2.5 border-t border-border flex items-center justify-between bg-muted/30" data-testid="approval-badge">
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
               <Check className="h-3 w-3 text-emerald-500" />
               <span className="text-[11px] text-emerald-400 font-medium">{activeView === "as-is" ? "As-Is" : "To-Be"} Approved v{(approval as any).version || 1}</span>
             </div>
-            <span className="text-[10px] text-zinc-500">
+            <span className="text-[10px] text-muted-foreground">
               {new Date(approval.approvedAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
               {" by "}
               {approval.userName}
@@ -3642,7 +3636,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
           {approvalHistory && approvalHistory.length > 1 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="ghost" className="text-xs h-7 text-zinc-400 hover:text-zinc-200 gap-1" data-testid="button-version-history">
+                <Button size="sm" variant="ghost" className="text-xs h-7 text-muted-foreground hover:text-foreground gap-1" data-testid="button-version-history">
                   <History className="h-3 w-3" />
                   <span>v{(approval as any).version || 1}</span>
                   <ChevronDown className="h-2.5 w-2.5" />
@@ -3662,10 +3656,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                         {(h as any).version === (approval as any).version && " (current)"}
                       </span>
                       {(h as any).invalidated && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">superseded</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">superseded</span>
                       )}
                     </div>
-                    <span className="text-[10px] text-zinc-500">
+                    <span className="text-[10px] text-muted-foreground">
                       {new Date(h.approvedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       {" by "}{h.userName}
                     </span>

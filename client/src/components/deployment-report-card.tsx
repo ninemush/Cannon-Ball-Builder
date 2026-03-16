@@ -45,7 +45,7 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; b
   updated: { icon: RefreshCw, color: "text-cyan-400", bg: "bg-cyan-500/10", label: "Updated" },
   exists: { icon: Info, color: "text-blue-400", bg: "bg-blue-500/10", label: "Exists" },
   in_package: { icon: Package, color: "text-amber-400", bg: "bg-amber-500/10", label: "In Package" },
-  skipped: { icon: Info, color: "text-slate-400", bg: "bg-slate-500/10", label: "Not Available" },
+  skipped: { icon: Info, color: "text-muted-foreground", bg: "bg-muted/50", label: "Not Available" },
   manual: { icon: HandMetal, color: "text-amber-400", bg: "bg-amber-500/10", label: "Manual Setup" },
   failed: { icon: XCircle, color: "text-red-400", bg: "bg-red-500/10", label: "Failed" },
 };
@@ -175,7 +175,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           </span>
         )}
         {counts.skipped > 0 && (
-          <span className="flex items-center gap-1 text-xs text-slate-400" data-testid="text-deploy-skipped-count">
+          <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="text-deploy-skipped-count">
             <Info className="h-3 w-3" />
             {counts.skipped} not available
           </span>
@@ -229,7 +229,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
                         <span className="text-amber-400">{groupManual} manual</span>
                       )}
                       {groupSkipped > 0 && (
-                        <span className="text-slate-400">{groupSkipped} n/a</span>
+                        <span className="text-muted-foreground">{groupSkipped} n/a</span>
                       )}
                     </>
                   )}
