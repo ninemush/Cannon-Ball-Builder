@@ -1,0 +1,59 @@
+Package inspection complete. Three bugs to fix before Task B. Do not move on 
+until all three are resolved and a clean package is generated.
+
+BUG 1 — Hardcoded credential detector has false positives
+Main.xaml and InitAllSettings.xaml were reduced to STUB_BLOCKING_FALLBACK 
+because the quality gate flagged hardcoded-credential. No actual credentials 
+exist in these files. The likely trigger is the email address 
+"Yusuf.yasin@uipath.com" appearing in the project description or SDD content 
+being scanned.
+
+Fix: The hardcoded-credential check must only flag values that look like 
+passwords, API keys, tokens, or secrets — not email addresses. Tighten the 
+regex/pattern to exclude email addresses and plain display strings. An email 
+address in a workflow is a recipient, not a credential.
+
+Also fix: A false positive on the credential check must NOT trigger 
+STUB_BLOCKING_FALLBACK and replace the entire workflow with a stub. Credential 
+warnings should be treated as warnings (READY_WITH_WARNINGS), not blocking 
+failures that destroy the generated XAML. Only genuine blocking errors like 
+malformed XML or missing required activities should produce stubs.
+
+BUG 2 — ui:Assign and ui:DeserializeJSON stripped as unknown activities
+GetWeatherData.xaml, GetTfLStatus.xaml, and GetC2CStatus.xaml all have 
+multiple instances of:
+  <ui:Comment Text="Removed unknown activity: ui:Assign" />
+  <ui:Comment Text="Removed unknown activity: ui:DeserializeJSON" />
+
+These are core UiPath activities. ui:Assign is part of UiPath.System.Activities 
+which is already declared as a dependency in project.json. ui:DeserializeJSON 
+is part of UiPath.Web.Activities, also already declared.
+
+Fix: Add the following to the activity alias allowlist in the XAML generator 
+or compliance layer:
+  - "ui:Assign" → maps to Assign activity in UiPath.System.Activities
+  - "ui:DeserializeJSON" → maps to DeserializeJSON in UiPath.Web.Activities
+
+These must be generated as real activities with their proper attributes, not 
+stripped and replaced with comments. An Assign activity needs To and Value 
+attributes. A DeserializeJSON activity needs JsonString and TypeArgument.
+
+BUG 3 — Nested duplicate RetryScope in GetWeatherData.xaml
+GetWeatherData.xaml contains a RetryScope nested inside another RetryScope for 
+the same operation ("RetryScope for OpenWeatherMap HTTP request"). The inner 
+one uses variable references (in_MaxRetries, in_RetryDelay) while the outer 
+one has hardcoded values (NumberOfRetries="3", RetryInterval="00:00:05"). This 
+is a generation artifact — the activity was emitted twice.
+
+Fix: Each retry operation should produce exactly one RetryScope. Check the 
+XAML generation logic for the retry pattern and ensure it does not emit both 
+a wrapper and an inner copy of the same scope.
+
+After all three fixes:
+1. Regenerate the package for this same idea (WeatherAndTravelNotification)
+2. Confirm Main.xaml and InitAllSettings.xaml contain real workflow logic, 
+   not stubs
+3. Confirm ui:Assign activities appear as real XAML elements, not comments
+4. Confirm no duplicate RetryScopeswrap the same operation
+5. Confirm all 99 unit tests still pass
+6. Send the new .nupkg for inspection before we proceed to Task B
