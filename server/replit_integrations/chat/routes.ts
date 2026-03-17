@@ -1423,19 +1423,38 @@ CRITICAL RULES:
       if (mapApprovalDone || chatApprovalDone) {
         console.log(`[Chat] Skipping inline doc detection — approval confirmation response (mapApproval=${mapApprovalDone}, chatApproval=${chatApprovalDone})`);
       } else if (docTagMatch) {
-        detectedDocType = docTagMatch[1] as "PDD" | "SDD";
-        docContent = cleanedResponse.slice(docTagMatch[0].length).trim();
+        const tagDocType = docTagMatch[1] as "PDD" | "SDD";
+        const existingApproval = await documentStorage.getApproval(ideaId, tagDocType);
+        const hasExplicitRegenRequest = /\b(regenerat|redo|rewrite|generate|create|draft|produce|build)\b/i.test(content) &&
+          new RegExp(`\\b${tagDocType}\\b`, "i").test(content);
+        if (existingApproval && !hasExplicitRegenRequest) {
+          console.log(`[Chat] Skipping inline doc creation — ${tagDocType} already approved (approval id ${existingApproval.id}), no explicit regen request`);
+          cleanedResponse = cleanedResponse.slice(docTagMatch[0].length).trim();
+        } else {
+          detectedDocType = tagDocType;
+          docContent = cleanedResponse.slice(docTagMatch[0].length).trim();
+        }
       } else if (cleanedResponse.length > 2000) {
         const hasSddSections = /## \d+\.\s/.test(cleanedResponse) && 
           (/orchestrator_artifacts/.test(cleanedResponse) || /Orchestrator Deployment/.test(cleanedResponse));
         const hasPddSections = /## \d+\.\s/.test(cleanedResponse) && 
           /Executive Summary/.test(cleanedResponse) && /Automation Opportunity/.test(cleanedResponse);
+        let patternDocType: "PDD" | "SDD" | null = null;
         if (hasSddSections) {
-          detectedDocType = "SDD";
-          docContent = cleanedResponse;
+          patternDocType = "SDD";
         } else if (hasPddSections) {
-          detectedDocType = "PDD";
-          docContent = cleanedResponse;
+          patternDocType = "PDD";
+        }
+        if (patternDocType) {
+          const patternApproval = await documentStorage.getApproval(ideaId, patternDocType);
+          const hasExplicitRegenRequest = /\b(regenerat|redo|rewrite|generate|create|draft|produce|build)\b/i.test(content) &&
+            new RegExp(`\\b${patternDocType}\\b`, "i").test(content);
+          if (patternApproval && !hasExplicitRegenRequest) {
+            console.log(`[Chat] Skipping inline doc creation — ${patternDocType} already approved (approval id ${patternApproval.id}), no explicit regen request`);
+          } else {
+            detectedDocType = patternDocType;
+            docContent = cleanedResponse;
+          }
         }
       }
 

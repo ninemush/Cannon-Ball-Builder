@@ -957,9 +957,13 @@ ${content}`
     if (!ideaId) return;
 
     try {
-      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-      if (!sdd || sdd.status !== "approved") {
+      const sddApproval = await documentStorage.getApproval(ideaId, "SDD");
+      if (!sddApproval) {
         return res.status(400).json({ message: "SDD must be approved first" });
+      }
+      const sdd = await documentStorage.getDocument(sddApproval.documentId);
+      if (!sdd) {
+        return res.status(400).json({ message: "Approved SDD document not found" });
       }
 
       const existingMessages = await chatStorage.getMessagesByIdeaId(ideaId);
@@ -1111,6 +1115,11 @@ ${content}`
     if (!ideaId) return;
 
     try {
+      const sddApprovalCheck = await documentStorage.getApproval(ideaId, "SDD");
+      if (!sddApprovalCheck) {
+        return res.status(400).json({ message: "SDD must be approved first" });
+      }
+
       const idea = await storage.getIdea(ideaId);
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 
@@ -1147,8 +1156,8 @@ ${content}`
         }
       }
 
-      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-      const sddContent = sdd?.content || "";
+      const approvedSdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
+      const sddContent = approvedSdd?.content || "";
 
       const isServerless = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
       const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";

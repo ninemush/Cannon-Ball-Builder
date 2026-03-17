@@ -484,6 +484,11 @@ export function registerUiPathRoutes(app: Express): void {
       return res.status(403).json({ message: "Access denied" });
     }
 
+    const sddApprovalCheck = await documentStorage.getApproval(ideaId, "SDD");
+    if (!sddApprovalCheck) {
+      return res.status(400).json({ message: "SDD must be approved first" });
+    }
+
     const messages = await chatStorage.getMessagesByIdeaId(ideaId);
     const uipathMsg = findUiPathMessage(messages);
     if (!uipathMsg) {
@@ -621,7 +626,7 @@ export function registerUiPathRoutes(app: Express): void {
 
       sendEvent({ deployStatus: processResult.success ? `Process "${result.details?.processName}" created` : "Process creation skipped" });
 
-      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+      const sdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
       try {
         if (sdd?.content) {
           let artifacts = parseArtifactsFromSDD(sdd.content);
