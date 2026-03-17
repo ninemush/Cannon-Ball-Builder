@@ -4,9 +4,8 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { getPlatformCapabilities, buildNuGetPackage, getAICenterSkills, QualityGateError } from "./uipath-integration";
-import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport, setAICenterSkillsContext, getReferencedMLSkillNames, TargetFramework } from "./xaml-generator";
-import { analyzeAndFix } from "./workflow-analyzer";
+import { getPlatformCapabilities, QualityGateError } from "./uipath-integration";
+import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPackage, computeVersion, getCachedPipelineResult } from "./uipath-pipeline";
 import { evaluateTransition } from "./stage-transition";
 import { approveDocument } from "./document-service";
 import { escapeXml } from "./lib/xml-utils";
@@ -1074,28 +1073,9 @@ ${content}`
       sendProgress("Package spec stored. Pre-building .nupkg with AI enrichment...");
 
       try {
-        const enrichPkg = { ...packageJson } as any;
-        if (sdd?.content) enrichPkg._sddContent = sdd.content;
-        if (idea.automationType) enrichPkg._automationType = idea.automationType;
-        if (mapNodes.length > 0) {
-          enrichPkg._processNodes = mapNodes;
-          const allEdges = await processMapStorage.getEdgesByIdeaId(ideaId, toBeNodes.length > 0 ? "to-be" : "as-is");
-          enrichPkg._processEdges = allEdges;
-        }
-        if (sdd?.content) {
-          const { parseArtifactsFromSDD, extractArtifactsWithLLM } = await import("./uipath-deploy");
-          let artifacts = parseArtifactsFromSDD(sdd.content);
-          if (!artifacts) artifacts = await extractArtifactsWithLLM(sdd.content);
-          if (artifacts) enrichPkg._orchestratorArtifacts = artifacts;
-        }
-
-        const now = new Date();
-        const patch = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
-        const version = `1.0.${patch}`;
-
-        sendProgress("AI-enriching XAML workflows...");
-        const buildResult = await buildNuGetPackage(enrichPkg, version, ideaId);
-        console.log(`[UiPath] Pre-built .nupkg for "${idea.title}" — ${buildResult.buffer.length} bytes, ${buildResult.gaps.length} gaps`);
+        const requestedMode = (req.body.generationMode === "baseline_openable") ? "baseline_openable" as const : undefined;
+        const pipelineResult = await generateUiPathPackage(ideaId, packageJson, { onProgress: sendProgress, generationMode: requestedMode });
+        console.log(`[UiPath] Pre-built .nupkg for "${idea.title}" — ${pipelineResult.packageBuffer.length} bytes, ${pipelineResult.gaps.length} gaps`);
         sendProgress(`Pre-build complete: ${packageJson.workflows.length} workflow(s) enriched`);
       } catch (prebuildErr: any) {
         if (prebuildErr instanceof QualityGateError) {
@@ -1135,43 +1115,45 @@ ${content}`
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 
       const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+      const uipathMsg = findUiPathMessage(messages);
       if (!uipathMsg) {
         return res.status(404).json({ message: "No UiPath package found" });
       }
 
-      const jsonStr = uipathMsg.content.slice(8, -1);
       let pkg;
       try {
-        pkg = JSON.parse(jsonStr);
+        pkg = parseUiPathPackage(uipathMsg);
       } catch {
         return res.status(500).json({ message: "Invalid package data" });
+      }
+
+      let pipelineResult;
+      const cached = getCachedPipelineResult(ideaId);
+      if (cached) {
+        console.log(`[Download] Serving cached pipeline result for ${ideaId}`);
+        pipelineResult = cached;
+      } else {
+        try {
+          pipelineResult = await generateUiPathPackage(ideaId, pkg, { version: computeVersion() });
+        } catch (err: any) {
+          if (err instanceof QualityGateError) {
+            return res.status(422).json({
+              message: "Package failed quality gate validation",
+              qualityGateViolations: err.qualityGateResult.violations,
+              qualityGateSummary: err.qualityGateResult.summary,
+            });
+          }
+          throw err;
+        }
       }
 
       const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
       const sddContent = sdd?.content || "";
 
-      pkg._sddContent = sddContent;
-      pkg._automationType = idea.automationType || undefined;
-
-      let buildResult;
-      try {
-        buildResult = await buildNuGetPackage(pkg, "1.0.0", `download-${ideaId}`);
-      } catch (err: any) {
-        if (err instanceof QualityGateError) {
-          return res.status(422).json({
-            message: "Package failed quality gate validation",
-            qualityGateViolations: err.qualityGateResult.violations,
-            qualityGateSummary: err.qualityGateResult.summary,
-          });
-        }
-        throw err;
-      }
-
       const isServerless = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
       const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";
 
-      const nupkgZip = new AdmZip(buildResult.buffer);
+      const nupkgZip = new AdmZip(pipelineResult.packageBuffer);
       const nupkgEntries = nupkgZip.getEntries();
 
       const archive = archiver("zip", { zlib: { level: 9 } });
@@ -1224,94 +1206,21 @@ ${content}`
     if (!ideaId) return;
 
     try {
-      const idea = await storage.getIdea(ideaId);
-      if (!idea) return res.status(404).json({ message: "Idea not found" });
-
       const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+      const uipathMsg = findUiPathMessage(messages);
       if (!uipathMsg) {
         return res.status(404).json({ message: "No UiPath package found. Generate the package first." });
       }
 
-      const jsonStr = uipathMsg.content.slice(8, -1);
       let pkg;
       try {
-        pkg = JSON.parse(jsonStr);
+        pkg = parseUiPathPackage(uipathMsg);
       } catch {
         return res.status(500).json({ message: "Invalid package data" });
       }
 
-      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-      const sddContent = sdd?.content || "";
-
-      let aiSkills2: any[] = [];
-      try {
-        const aiResult2 = await getAICenterSkills();
-        if (aiResult2.available) aiSkills2 = aiResult2.skills;
-      } catch { }
-      setAICenterSkillsContext(aiSkills2);
-
-      const aggGaps = aggGapsImport;
-      const workflows = pkg.workflows || [];
-      const isServerlessDhg = (pkg as any).targetFramework === "Portable" || (pkg as any).isServerless;
-      const tfDhg = isServerlessDhg ? "Portable" : "Windows";
-      const apDhg = !!(pkg as any).autopilotEnabled;
-      const allXamlResults: any[] = [];
-      for (const wf of workflows) {
-        const result = generateRichXamlFromSpec(wf, sddContent || undefined, aiSkills2, tfDhg, apDhg);
-        allXamlResults.push(result);
-      }
-
-      const analysisReports: Array<{ fileName: string; report: any }> = [];
-      for (let i = 0; i < allXamlResults.length; i++) {
-        const wfName = (workflows[i]?.name || "Workflow").replace(/\s+/g, "_");
-        const { report } = analyzeAndFix(allXamlResults[i].xaml);
-        analysisReports.push({ fileName: `${wfName}.xaml`, report });
-      }
-
-      const allGapsForDhg = aggGaps(allXamlResults);
-      const depMap: Record<string, string> = {};
-      for (const d of (pkg.dependencies || [])) depMap[d] = "*";
-      const wfNamesForDhg = workflows.map((wf: any) => (wf.name || "Workflow").replace(/\s+/g, "_"));
-
-      const enrichment = pkg._enrichment || pkg.enrichment || null;
-      const useReFramework = enrichment?.useReFramework ?? pkg._useReFramework ?? pkg.useReFramework ?? false;
-      const painPoints = (pkg._painPoints || pkg.painPoints || []).map((p: any) => ({
-        name: p.name || "",
-        description: p.description || "",
-      }));
-
-      const deployReportMsg = [...messages].reverse().find((m) => m.content.includes("[DEPLOY_REPORT:"));
-      let deploymentResults: any[] | undefined;
-      if (deployReportMsg) {
-        const drMatch = deployReportMsg.content.match(/\[DEPLOY_REPORT:([\s\S]*?)\]$/);
-        if (drMatch) {
-          try {
-            const drData = JSON.parse(drMatch[1]);
-            deploymentResults = drData.results || [];
-          } catch {}
-        }
-      }
-
-      const extractedArtifacts = pkg._extractedArtifacts || pkg.extractedArtifacts || undefined;
-
-      const dhgContent = generateDeveloperHandoffGuide({
-        projectName: pkg.projectName || idea.title.replace(/\s+/g, "_"),
-        description: pkg.description || idea.description,
-        gaps: allGapsForDhg,
-        usedPackages: Object.keys(depMap),
-        workflowNames: wfNamesForDhg,
-        sddContent: sddContent || undefined,
-        enrichment,
-        useReFramework,
-        painPoints,
-        deploymentResults,
-        extractedArtifacts,
-        automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
-        analysisReports,
-      });
-
-      res.json({ content: dhgContent, projectName: pkg.projectName || idea.title });
+      const dhgResult = await generateDhg(ideaId, pkg);
+      res.json({ content: dhgResult.dhgContent, projectName: dhgResult.projectName });
     } catch (error) {
       console.error("Error generating DHG:", error);
       if (!res.headersSent) {
@@ -1848,10 +1757,6 @@ ${content}`
   });
 }
 
-function generateXamlStub(workflow: any, sddContent?: string, targetFramework?: TargetFramework): string {
-  const result = generateRichXamlFromSpec(workflow, sddContent, undefined, targetFramework);
-  return result.xaml;
-}
 
 function extractSddSection(sddContent: string, heading: string): string {
   const lines = sddContent.split("\n");

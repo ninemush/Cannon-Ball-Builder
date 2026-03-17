@@ -32,6 +32,7 @@ import { runQualityGate, formatQualityGateViolations, type QualityGateResult } f
 import { escapeXml } from "./lib/xml-utils";
 import { computePackageFingerprint } from "./lib/utils";
 import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern } from "./uipath-activity-registry";
+import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
 
 export class QualityGateError extends Error {
   qualityGateResult: QualityGateResult;
@@ -105,6 +106,9 @@ type CachedBuild = {
   enrichment: EnrichmentResult | null;
   qualityGatePassed: boolean;
   qualityGateResult?: QualityGateResult;
+  xamlEntries: { name: string; content: string }[];
+  dependencyMap: Record<string, string>;
+  archiveManifest: string[];
 };
 
 const packageBuildCache = new Map<string, CachedBuild>();
@@ -124,7 +128,14 @@ function evictOldestCacheEntry(): void {
 }
 
 export function clearPackageCache(ideaId: string): void {
-  if (packageBuildCache.delete(ideaId)) {
+  let cleared = false;
+  for (const key of Array.from(packageBuildCache.keys())) {
+    if (key === ideaId || key.startsWith(`${ideaId}:`)) {
+      packageBuildCache.delete(key);
+      cleared = true;
+    }
+  }
+  if (cleared) {
     console.log(`[UiPath Cache] Cleared cache for ${ideaId}`);
   }
 }
@@ -420,7 +431,22 @@ function generateConfigXlsx(pkg: any, sddContent?: string, orchestratorArtifacts
   return `Settings\n${csvSettings}\n\nConstants\n${csvConstants}`;
 }
 
-export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ideaId?: string): Promise<{ buffer: Buffer; gaps: XamlGap[]; usedPackages: string[]; cacheHit?: boolean; qualityGateResult?: QualityGateResult }> {
+export type BuildResult = {
+  buffer: Buffer;
+  gaps: XamlGap[];
+  usedPackages: string[];
+  cacheHit?: boolean;
+  qualityGateResult?: QualityGateResult;
+  xamlEntries: { name: string; content: string }[];
+  dependencyMap: Record<string, string>;
+  archiveManifest: string[];
+  usedFallbackStubs: boolean;
+  generationMode: GenerationMode;
+};
+
+export type GenerationMode = "baseline_openable" | "full_implementation";
+
+export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation"): Promise<BuildResult> {
   const projectName = (pkg.projectName || "Automation").replace(/\s+/g, "_");
   const sddContent = pkg._sddContent || "";
   const orchestratorArtifacts = pkg._orchestratorArtifacts || null;
@@ -428,64 +454,77 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
   const processEdges = pkg._processEdges || [];
 
   let fingerprint: string | undefined;
-  if (ideaId) {
+  const buildCacheKey = ideaId ? `${ideaId}:${generationMode}` : undefined;
+  if (ideaId && buildCacheKey) {
     fingerprint = computePackageFingerprint(pkg, sddContent, processNodes, processEdges, orchestratorArtifacts, UIPATH_PACKAGE_ALIAS_MAP);
-    const cached = packageBuildCache.get(ideaId);
+    const cached = packageBuildCache.get(buildCacheKey);
     if (cached && cached.fingerprint === fingerprint && cached.version === version) {
       if (!cached.qualityGatePassed) {
-        console.log(`[UiPath Cache] HIT for ${ideaId} but quality gate was not passed — rebuilding`);
-        packageBuildCache.delete(ideaId);
+        console.log(`[UiPath Cache] HIT for ${buildCacheKey} but quality gate was not passed — rebuilding`);
+        packageBuildCache.delete(buildCacheKey);
       } else {
-        console.log(`[UiPath Cache] HIT for ${ideaId} — skipping AI enrichment and XAML generation`);
-        return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true, qualityGateResult: cached.qualityGateResult };
+        console.log(`[UiPath Cache] HIT for ${buildCacheKey} — skipping AI enrichment and XAML generation`);
+        return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true, qualityGateResult: cached.qualityGateResult, xamlEntries: cached.xamlEntries, dependencyMap: cached.dependencyMap, archiveManifest: cached.archiveManifest, usedFallbackStubs: false, generationMode };
       }
     }
     if (cached && cached.fingerprint === fingerprint && cached.version !== version) {
-      console.log(`[UiPath Cache] PARTIAL HIT for ${ideaId} — reusing enrichment, rebuilding with v${version}`);
+      console.log(`[UiPath Cache] PARTIAL HIT for ${buildCacheKey} — reusing enrichment, rebuilding with v${version}`);
     } else {
-      console.log(`[UiPath Cache] MISS for ${ideaId}${cached ? " (fingerprint changed)" : " (no cache)"}`);
-    }
-  }
-
-  let enrichment: EnrichmentResult | null = null;
-  const cachedEntry = ideaId ? packageBuildCache.get(ideaId) : undefined;
-  const canReuseEnrichment = cachedEntry && fingerprint && cachedEntry.fingerprint === fingerprint;
-  if (canReuseEnrichment) {
-    enrichment = cachedEntry.enrichment;
-    if (enrichment) {
-      console.log(`[UiPath] Reusing cached AI enrichment for ${ideaId} (${enrichment.nodes.length} nodes)`);
-    } else {
-      console.log(`[UiPath] Skipping AI enrichment for ${ideaId} (previously attempted, cached as null)`);
-    }
-  } else if (processNodes.length > 0 && sddContent) {
-    try {
-      console.log(`[UiPath] Requesting AI enrichment for ${processNodes.length} process nodes...`);
-      enrichment = await enrichWithAI(
-        processNodes,
-        processEdges,
-        sddContent,
-        orchestratorArtifacts,
-        projectName,
-        45000
-      );
-      if (enrichment) {
-        console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
-      }
-    } catch (err: any) {
-      console.log(`[UiPath] AI enrichment failed (falling back to keyword classification): ${err.message}`);
+      console.log(`[UiPath Cache] MISS for ${buildCacheKey}${cached ? " (fingerprint changed)" : " (no cache)"}`);
     }
   }
 
   const hasQueues = orchestratorArtifacts?.queues?.length > 0;
-  const automationPattern = classifyAutomationPattern(
+  let automationPattern = classifyAutomationPattern(
+    processNodes,
+    sddContent,
+    hasQueues,
+    undefined,
+  );
+
+  let enrichment: EnrichmentResult | null = null;
+  if (generationMode === "baseline_openable") {
+    console.log(`[UiPath] baseline_openable mode — skipping AI enrichment, using flat scaffold`);
+  } else {
+    const cachedEntry = buildCacheKey ? packageBuildCache.get(buildCacheKey) : undefined;
+    const canReuseEnrichment = cachedEntry && fingerprint && cachedEntry.fingerprint === fingerprint;
+    if (canReuseEnrichment) {
+      enrichment = cachedEntry.enrichment;
+      if (enrichment) {
+        console.log(`[UiPath] Reusing cached AI enrichment for ${ideaId} (${enrichment.nodes.length} nodes)`);
+      } else {
+        console.log(`[UiPath] Skipping AI enrichment for ${ideaId} (previously attempted, cached as null)`);
+      }
+    } else if (processNodes.length > 0 && sddContent) {
+      try {
+        console.log(`[UiPath] Requesting AI enrichment for ${processNodes.length} process nodes...`);
+        enrichment = await enrichWithAI(
+          processNodes,
+          processEdges,
+          sddContent,
+          orchestratorArtifacts,
+          projectName,
+          45000,
+          automationPattern
+        );
+        if (enrichment) {
+          console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
+        }
+      } catch (err: any) {
+        console.log(`[UiPath] AI enrichment failed (falling back to keyword classification): ${err.message}`);
+      }
+    }
+  }
+
+  automationPattern = classifyAutomationPattern(
     processNodes,
     sddContent,
     hasQueues,
     enrichment?.useReFramework,
   );
-  const useReFramework = shouldUseReFramework(automationPattern);
+  const useReFramework = generationMode === "baseline_openable" ? false : shouldUseReFramework(automationPattern);
   setAutomationPattern(automationPattern);
-  console.log(`[UiPath] Automation pattern: ${automationPattern}, useReFramework: ${useReFramework}`);
+  console.log(`[UiPath] Automation pattern: ${automationPattern}, useReFramework: ${useReFramework}, generationMode: ${generationMode}`);
   const queueName = enrichment?.reframeworkConfig?.queueName
     || orchestratorArtifacts?.queues?.[0]?.name
     || "TransactionQueue";
@@ -594,7 +633,11 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     const apEnabled = !!(pkg as any).autopilotEnabled || !!(_probeCache?.flags?.autopilot);
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
       const compliant = makeUiPathCompliant(rawXaml, tf);
-      const { fixed, report } = analyzeAndFix(compliant);
+      const { filtered, removed } = filterBlockedActivitiesFromXaml(compliant, automationPattern);
+      if (removed.length > 0) {
+        console.log(`[UiPath Policy] ${fileName}: removed ${removed.length} blocked activit(ies) for pattern "${automationPattern}": ${removed.join(", ")}`);
+      }
+      const { fixed, report } = analyzeAndFix(filtered);
       analysisReports.push({ fileName, report });
       if (!skipTracking) {
         xamlEntries.push({ name: fileName, content: fixed });
@@ -950,6 +993,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       targetFramework: tf,
       archiveManifest: allArchivePaths,
       archiveContentHashes: buildContentHashRecord(),
+      automationPattern,
     });
 
     const autoFixSummary: string[] = [];
@@ -1044,6 +1088,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
         targetFramework: tf,
         archiveManifest: allArchivePaths,
         archiveContentHashes: buildContentHashRecord(),
+        automationPattern,
       });
 
       if (!qualityGateResult.passed) {
@@ -1087,6 +1132,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
           targetFramework: tf,
           archiveManifest: allArchivePaths,
           archiveContentHashes: buildContentHashRecord(),
+          automationPattern,
         });
       }
 
@@ -1096,12 +1142,17 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     }
 
     if (!qualityGateResult.passed && !usedFallback) {
-      const formattedViolations = formatQualityGateViolations(qualityGateResult);
-      console.error(`[UiPath Quality Gate] FAILED after remediation:\n${formattedViolations}`);
-      throw new QualityGateError(
-        `UiPath pre-package quality gate failed with ${qualityGateResult.summary.totalErrors} error(s) after auto-remediation:\n${formattedViolations}`,
-        qualityGateResult
-      );
+      if (generationMode === "baseline_openable") {
+        const formattedViolations = formatQualityGateViolations(qualityGateResult);
+        console.warn(`[UiPath Quality Gate] baseline_openable mode — demoting ${qualityGateResult.summary.totalErrors} error(s) to warnings (non-blocking):\n${formattedViolations}`);
+      } else {
+        const formattedViolations = formatQualityGateViolations(qualityGateResult);
+        console.error(`[UiPath Quality Gate] FAILED after remediation:\n${formattedViolations}`);
+        throw new QualityGateError(
+          `UiPath pre-package quality gate failed with ${qualityGateResult.summary.totalErrors} error(s) after auto-remediation:\n${formattedViolations}`,
+          qualityGateResult
+        );
+      }
     }
 
     if (!qualityGateResult.passed && usedFallback) {
@@ -1112,7 +1163,7 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     {
       const warnCount = qualityGateResult.summary.totalWarnings;
       const evidenceCount = qualityGateResult.positiveEvidence?.length || 0;
-      const status = usedFallback ? "PASSED_WITH_FALLBACK" : "PASSED";
+      const status = usedFallback ? "PASSED_WITH_FALLBACK" : (generationMode === "baseline_openable" && !qualityGateResult.passed ? "BASELINE_OPENABLE" : "PASSED");
       console.log(`[UiPath Quality Gate] ${status}${warnCount > 0 ? ` with ${warnCount} warning(s)` : ""}${stubsGenerated.length > 0 ? `, ${stubsGenerated.length} stub(s) generated` : ""}${usedFallback ? ", FALLBACK stubs used" : ""}, ${evidenceCount} positive evidence item(s)`);
       if (autoFixSummary.length > 0) {
         console.log(`[UiPath Auto-Remediation Summary] ${autoFixSummary.length} fix(es) applied:\n${autoFixSummary.map(s => `  - ${s}`).join("\n")}`);
@@ -1241,12 +1292,16 @@ ${depEntries}
     console.log(`[UiPath Post-Archive Parity] PASSED — all ${_archiveManifestTracker.length} appended files verified, ${zipPathSet.size} ZIP entries checked bidirectionally`);
   }
 
-  if (ideaId && fingerprint) {
+  const finalXamlEntries = xamlEntries.map(e => ({ name: e.name, content: e.content }));
+  const finalDependencyMap = { ...deps };
+  const finalArchiveManifest = allArchivePaths;
+
+  if (buildCacheKey && fingerprint) {
     evictOldestCacheEntry();
-    packageBuildCache.set(ideaId, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment, qualityGatePassed: qualityGateResult.passed, qualityGateResult });
-    console.log(`[UiPath Cache] Stored build for ${ideaId} (${buffer.length} bytes, v${version})`);
+    packageBuildCache.set(buildCacheKey, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment, qualityGatePassed: qualityGateResult.passed, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest });
+    console.log(`[UiPath Cache] Stored build for ${buildCacheKey} (${buffer.length} bytes, v${version})`);
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode };
 }
 
 async function uploadNupkgBuffer(
@@ -1306,7 +1361,7 @@ async function uploadNupkgBuffer(
   }
 }
 
-export async function pushToUiPath(pkg: any, ideaId?: string): Promise<{ success: boolean; message: string; details?: any }> {
+export async function pushToUiPath(pkg: any, ideaId?: string, prebuiltResult?: BuildResult): Promise<{ success: boolean; message: string; details?: any }> {
   const config = await getUiPathConfig();
   if (!config) {
     return { success: false, message: "UiPath Orchestrator is not configured. Go to Admin > Integrations to set it up." };
@@ -1321,8 +1376,12 @@ export async function pushToUiPath(pkg: any, ideaId?: string): Promise<{ success
     const patch = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
     let version = `1.0.${patch}`;
 
-    const buildResult = await buildNuGetPackage(pkg, version, ideaId);
-    console.log(`[UiPath] Built .nupkg for "${projectName}" v${version} — ${buildResult.buffer.length} bytes (${buildResult.gaps.length} gaps, ${buildResult.usedPackages.length} packages)`);
+    const buildResult = prebuiltResult || await buildNuGetPackage(pkg, version, ideaId);
+    if (prebuiltResult) {
+      console.log(`[UiPath] Using pre-built .nupkg for "${projectName}" — ${buildResult.buffer.length} bytes`);
+    } else {
+      console.log(`[UiPath] Built .nupkg for "${projectName}" v${version} — ${buildResult.buffer.length} bytes (${buildResult.gaps.length} gaps, ${buildResult.usedPackages.length} packages)`);
+    }
 
     let result = { ...(await uploadNupkgBuffer(config, token, buildResult.buffer, projectName, version)), gaps: buildResult.gaps };
 

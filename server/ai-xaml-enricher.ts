@@ -1,6 +1,8 @@
 import { getLLM } from "./lib/llm";
 import type { ProcessNode, ProcessEdge } from "@shared/schema";
 import { sanitizeJsonString, stripCodeFences } from "./lib/json-utils";
+import { isActivityAllowed } from "./uipath-activity-policy";
+import type { AutomationPattern } from "./uipath-activity-registry";
 
 export interface EnrichedActivity {
   activityType: string;
@@ -145,7 +147,8 @@ export async function enrichWithAI(
   sddContent: string,
   orchestratorArtifacts: any,
   projectName: string,
-  timeoutMs: number = 45000
+  timeoutMs: number = 45000,
+  automationPattern?: AutomationPattern
 ): Promise<EnrichmentResult | null> {
   try {
     const nodeDescriptions = nodes
@@ -222,6 +225,16 @@ Generate the enriched workflow specification. For each node, provide the specifi
         node.activities = node.activities.filter((a: any) =>
           a && typeof a.activityType === "string" && a.activityType.length > 0
         );
+        if (automationPattern) {
+          const beforeCount = node.activities.length;
+          node.activities = node.activities.filter((a: any) =>
+            isActivityAllowed(a.activityType, automationPattern)
+          );
+          const removedCount = beforeCount - node.activities.length;
+          if (removedCount > 0) {
+            console.log(`[AI XAML Enricher] Filtered ${removedCount} policy-blocked activit(ies) from node "${node.nodeName}" for pattern "${automationPattern}"`);
+          }
+        }
         for (const act of node.activities) {
           if (!act.properties) act.properties = {};
           if (!act.variables) act.variables = [];

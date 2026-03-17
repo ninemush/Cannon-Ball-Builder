@@ -10,6 +10,8 @@ import {
 import { escapeXml } from "./lib/xml-utils";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { AICenterSkill } from "./uipath-integration";
+import { isActivityAllowed } from "./uipath-activity-policy";
+import type { AutomationPattern } from "./uipath-activity-registry";
 
 let _aiCenterSkillsCtx: AICenterSkill[] = [];
 let _currentAutomationPattern: string = "";
@@ -20,6 +22,11 @@ export function setAICenterSkillsContext(skills: AICenterSkill[]): void {
 
 export function setAutomationPattern(pattern: string): void {
   _currentAutomationPattern = pattern;
+}
+
+export function isCurrentPatternActivityAllowed(activity: string): boolean {
+  if (!_currentAutomationPattern) return true;
+  return isActivityAllowed(activity, _currentAutomationPattern as AutomationPattern);
 }
 
 export function getReferencedMLSkillNames(): string[] {
@@ -638,7 +645,11 @@ function classifyActivity(ctx: ActivityContext): {
     return classifyExcel(ctx, combined);
   }
   if (system.includes("email") || system.includes("outlook") || system.includes("smtp") || combined.includes("email") || combined.includes("mail")) {
-    return classifyEmail(ctx, combined);
+    const emailResult = classifyEmail(ctx, combined);
+    if (!isCurrentPatternActivityAllowed(emailResult.activityType)) {
+      return classifyGeneral(ctx, combined);
+    }
+    return emailResult;
   }
   if (system.includes("api") || system.includes("http") || system.includes("rest") || system.includes("web service") || combined.includes("api") || combined.includes("http request")) {
     return classifyApi(ctx, combined);
@@ -663,7 +674,11 @@ function classifyActivity(ctx: ActivityContext): {
   }
 
   if (combined.includes("browser") || combined.includes("web") || combined.includes("click") || combined.includes("type") || combined.includes("navigate") || combined.includes("login") || combined.includes("portal") || combined.includes("screen") || combined.includes("ui ") || combined.includes("application")) {
-    return classifyUI(ctx, combined);
+    const uiResult = classifyUI(ctx, combined);
+    if (!isCurrentPatternActivityAllowed(uiResult.activityType)) {
+      return classifyGeneral(ctx, combined);
+    }
+    return uiResult;
   }
 
   if (ctx.nodeType === "agent-task" || ctx.nodeType === "agent-loop") {

@@ -5,7 +5,9 @@ import {
   scanXamlForRequiredPackages,
   type ActivityPropertyInfo,
   type VersionedProperty,
+  type AutomationPattern,
 } from "./uipath-activity-registry";
+import { getBlockedActivities } from "./uipath-activity-policy";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
@@ -49,6 +51,7 @@ export type QualityGateInput = {
   targetFramework: "Windows" | "Portable";
   archiveManifest?: string[];
   archiveContentHashes?: Record<string, string>;
+  automationPattern?: AutomationPattern;
 };
 
 const VALID_XMLNS_PREFIXES = new Set([
@@ -111,6 +114,24 @@ const PLACEHOLDER_PATTERNS = [
 
 function scanBlockedPatterns(input: QualityGateInput): QualityGateViolation[] {
   const violations: QualityGateViolation[] = [];
+
+  if (input.automationPattern) {
+    const blockedSet = getBlockedActivities(input.automationPattern);
+    for (const entry of input.xamlEntries) {
+      const shortName = entry.name.split("/").pop() || entry.name;
+      for (const activity of blockedSet) {
+        if (entry.content.includes(`<${activity}`) || entry.content.includes(`<${activity} `)) {
+          violations.push({
+            category: "blocked-pattern",
+            severity: "warning",
+            check: "policy-blocked-activity",
+            file: shortName,
+            detail: `Activity "${activity}" is blocked by policy for pattern "${input.automationPattern}"`,
+          });
+        }
+      }
+    }
+  }
 
   for (const entry of input.xamlEntries) {
     const shortName = entry.name.split("/").pop() || entry.name;

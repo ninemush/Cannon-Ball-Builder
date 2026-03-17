@@ -440,6 +440,8 @@ export function isKnownActivity(activityName: string): boolean {
   return activityName in ACTIVITY_REGISTRY;
 }
 
+export { getBlockedActivities, isActivityAllowed } from "./uipath-activity-policy";
+
 export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
   const packages = new Set<string>();
   packages.add("UiPath.System.Activities");

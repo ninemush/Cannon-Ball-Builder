@@ -7,8 +7,7 @@ import { evaluateTransition } from "../../stage-transition";
 import { approveDocument } from "../../document-service";
 import { PIPELINE_STAGES, type PipelineStage, type AutomationType } from "@shared/schema";
 import { probeServiceAvailability, type ServiceAvailabilityMap } from "../../uipath-integration";
-import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps } from "../../xaml-generator";
-import { analyzeAndFix } from "../../workflow-analyzer";
+import { generateDhg, findUiPathMessage, parseUiPathPackage } from "../../uipath-pipeline";
 import { getLLM, type LLMMessage, type LLMContentBlock } from "../../lib/llm";
 
 function hasMapApprovalIntent(userMessage: string): boolean {
@@ -1151,7 +1150,7 @@ CRITICAL RULES:
       } else if (classifiedIntent === "DHG") {
         try {
           const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-          const uipathMsg = [...messages].reverse().find((m) => (m.role === "assistant" || m.role === "system") && m.content.startsWith("[UIPATH:"));
+          const uipathMsg = findUiPathMessage(messages);
           if (!uipathMsg) {
             const noPackageMsg = "The Developer Handoff Guide (DHG) can only be generated after the UiPath automation package has been built. Please complete the automation pipeline first — design the process, approve the PDD and SDD, and generate the automation package. Once the package is ready, you can request the DHG.";
             await chatStorage.createMessage(ideaId, "assistant", noPackageMsg);
@@ -1164,9 +1163,8 @@ CRITICAL RULES:
             return;
           }
 
-          const jsonStr = uipathMsg.content.slice(8, -1);
           let pkg: any;
-          try { pkg = JSON.parse(jsonStr); } catch {
+          try { pkg = parseUiPathPackage(uipathMsg); } catch {
             const errMsg = "Unable to read the automation package data. Please try regenerating the package first.";
             await chatStorage.createMessage(ideaId, "assistant", errMsg);
             try {
@@ -1180,59 +1178,8 @@ CRITICAL RULES:
 
           try { res.write(`data: ${JSON.stringify({ dhgProgress: { started: true } })}\n\n`); } catch {}
 
-          const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-          const sddContent = sdd?.content || "";
-          const workflows = pkg.workflows || [];
-          const allXamlResults: any[] = [];
-          for (const wf of workflows) {
-            allXamlResults.push(generateRichXamlFromSpec(wf, sddContent || undefined));
-          }
-
-          const analysisReports: Array<{ fileName: string; report: any }> = [];
-          for (let i = 0; i < allXamlResults.length; i++) {
-            const wfName = (workflows[i]?.name || "Workflow").replace(/\s+/g, "_");
-            const { report } = analyzeAndFix(allXamlResults[i].xaml);
-            analysisReports.push({ fileName: `${wfName}.xaml`, report });
-          }
-
-          const allGapsForDhg = aggregateGaps(allXamlResults);
-          const depMap: Record<string, string> = {};
-          for (const d of (pkg.dependencies || [])) depMap[d] = "*";
-          const wfNamesForDhg = workflows.map((wf: any) => (wf.name || "Workflow").replace(/\s+/g, "_"));
-
-          const enrichment = pkg._enrichment || pkg.enrichment || null;
-          const useReFramework = enrichment?.useReFramework ?? pkg._useReFramework ?? pkg.useReFramework ?? false;
-          const painPoints = (pkg._painPoints || pkg.painPoints || []).map((p: any) => ({
-            name: p.name || "",
-            description: p.description || "",
-          }));
-
-          const deployReportMsg = [...messages].reverse().find((m) => (m.role === "assistant" || m.role === "system") && m.content.includes("[DEPLOY_REPORT:"));
-          let deploymentResults: any[] | undefined;
-          if (deployReportMsg) {
-            const drMatch = deployReportMsg.content.match(/\[DEPLOY_REPORT:([\s\S]*?)\]$/);
-            if (drMatch) {
-              try { deploymentResults = JSON.parse(drMatch[1]).results || []; } catch {}
-            }
-          }
-
-          const extractedArtifacts = pkg._extractedArtifacts || pkg.extractedArtifacts || undefined;
-
-          const dhgContent = generateDeveloperHandoffGuide({
-            projectName: pkg.projectName || idea.title.replace(/\s+/g, "_"),
-            description: pkg.description || idea.description,
-            gaps: allGapsForDhg,
-            usedPackages: Object.keys(depMap),
-            workflowNames: wfNamesForDhg,
-            sddContent: sddContent || undefined,
-            enrichment,
-            useReFramework,
-            painPoints,
-            deploymentResults,
-            extractedArtifacts,
-            automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
-            analysisReports,
-          });
+          const dhgResult = await generateDhg(ideaId, pkg);
+          const dhgContent = dhgResult.dhgContent;
 
           const dhgResponse = `Here is the **Developer Handoff Guide (DHG)** for this automation:\n\n${dhgContent}`;
           await chatStorage.createMessage(ideaId, "assistant", dhgResponse);

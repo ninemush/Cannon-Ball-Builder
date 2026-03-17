@@ -5,7 +5,7 @@ import { getPreviousManifest, reconcileArtifacts, saveManifest, formatReconcilia
 import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { processMapStorage } from "./process-map-storage";
+import { findUiPathMessage, parseUiPathPackage, generateUiPathPackage, computeVersion, getCachedPipelineResult } from "./uipath-pipeline";
 import * as auth from "./uipath-auth";
 import * as orch from "./orchestrator-client";
 import * as prereqs from "./prerequisite-checker";
@@ -485,18 +485,14 @@ export function registerUiPathRoutes(app: Express): void {
     }
 
     const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-    const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+    const uipathMsg = findUiPathMessage(messages);
     if (!uipathMsg) {
       return res.status(404).json({ message: "No UiPath package found. Generate it first." });
     }
 
     let pkg;
     try {
-      let jsonStr = uipathMsg.content.slice(8);
-      if (jsonStr.endsWith("]")) jsonStr = jsonStr.slice(0, -1);
-      const braceEnd = jsonStr.lastIndexOf("}");
-      if (braceEnd !== -1) jsonStr = jsonStr.slice(0, braceEnd + 1);
-      pkg = JSON.parse(jsonStr);
+      pkg = parseUiPathPackage(uipathMsg);
     } catch {
       return res.status(500).json({ message: "Invalid package data" });
     }
@@ -523,33 +519,61 @@ export function registerUiPathRoutes(app: Express): void {
     try {
       sendEvent({ deployStatus: "Preparing package for deployment..." });
 
-      let sdd: any = null;
-      try {
-        sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-        if (sdd?.content) pkg._sddContent = sdd.content;
-        if (idea.automationType) pkg._automationType = idea.automationType;
-        const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-        const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-        const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
-        if (mapNodes.length > 0) {
-          pkg._processNodes = mapNodes;
-          const edges = await processMapStorage.getEdgesByIdeaId(ideaId, toBeNodes.length > 0 ? "to-be" : "as-is");
-          pkg._processEdges = edges;
+      let prebuiltResult;
+      const cachedPipeline = getCachedPipelineResult(ideaId);
+      if (cachedPipeline) {
+        console.log(`[UiPath Deploy] Using cached pipeline result for ${ideaId}`);
+        prebuiltResult = {
+          buffer: cachedPipeline.packageBuffer,
+          gaps: cachedPipeline.gaps,
+          usedPackages: cachedPipeline.usedPackages,
+          qualityGateResult: cachedPipeline.qualityGateResult,
+          xamlEntries: cachedPipeline.xamlEntries,
+          dependencyMap: cachedPipeline.dependencyMap,
+          archiveManifest: cachedPipeline.archiveManifest,
+          usedFallbackStubs: cachedPipeline.usedFallbackStubs,
+          generationMode: cachedPipeline.generationMode,
+        };
+      } else {
+        try {
+          const pipelineResult = await generateUiPathPackage(ideaId, pkg, {
+            version: computeVersion(),
+            onProgress: (msg) => sendEvent({ deployStatus: msg }),
+          });
+          prebuiltResult = {
+            buffer: pipelineResult.packageBuffer,
+            gaps: pipelineResult.gaps,
+            usedPackages: pipelineResult.usedPackages,
+            qualityGateResult: pipelineResult.qualityGateResult,
+            xamlEntries: pipelineResult.xamlEntries,
+            dependencyMap: pipelineResult.dependencyMap,
+            archiveManifest: pipelineResult.archiveManifest,
+            usedFallbackStubs: pipelineResult.usedFallbackStubs,
+            generationMode: pipelineResult.generationMode,
+          };
+        } catch (err: any) {
+          if (err instanceof QualityGateError) {
+            sendEvent({
+              deployComplete: true,
+              success: false,
+              result: {
+                success: false,
+                message: "Package failed quality gate validation",
+                qualityGateViolations: err.qualityGateResult.violations,
+                qualityGateSummary: err.qualityGateResult.summary,
+              },
+            });
+            clearInterval(heartbeat);
+            return res.end();
+          }
+          throw err;
         }
-        if (sdd?.content) {
-          const { parseArtifactsFromSDD: parseSdd, extractArtifactsWithLLM: extractLlm } = await import("./uipath-deploy");
-          let artifacts = parseSdd(sdd.content);
-          if (!artifacts) artifacts = await extractLlm(sdd.content);
-          if (artifacts) pkg._orchestratorArtifacts = artifacts;
-        }
-      } catch (err: any) {
-        console.log(`[UiPath Deploy] Could not enrich package with process data: ${err.message}`);
       }
 
-      sendEvent({ deployStatus: "Running quality gate and uploading to Orchestrator..." });
+      sendEvent({ deployStatus: "Uploading to Orchestrator..." });
       let result;
       try {
-        result = await pushToUiPath(pkg, ideaId);
+        result = await pushToUiPath(pkg, ideaId, prebuiltResult);
       } catch (pushErr: any) {
         if (pushErr instanceof QualityGateError) {
           sendEvent({
@@ -597,6 +621,7 @@ export function registerUiPathRoutes(app: Express): void {
 
       sendEvent({ deployStatus: processResult.success ? `Process "${result.details?.processName}" created` : "Process creation skipped" });
 
+      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
       try {
         if (sdd?.content) {
           let artifacts = parseArtifactsFromSDD(sdd.content);
