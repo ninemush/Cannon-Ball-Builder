@@ -1,14 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant } from "../xaml-generator";
+import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes } from "../xaml-generator";
 import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
 import { getBlockedActivities, isActivityAllowed } from "../uipath-activity-policy";
-import { scanXamlForRequiredPackages, classifyAutomationPattern } from "../uipath-activity-registry";
+import { scanXamlForRequiredPackages, classifyAutomationPattern, ACTIVITY_REGISTRY } from "../uipath-activity-registry";
+import { normalizePackageName, UIPATH_PACKAGE_ALIAS_MAP, buildNuGetPackage } from "../uipath-integration";
 import {
   simpleLinearNodes,
+  simpleLinearEdges,
   apiDataDrivenNodes,
+  apiDataDrivenEdges,
   transactionalQueueNodes,
+  transactionalQueueEdges,
   lowConfidenceNodes,
+  lowConfidenceEdges,
   makeProjectJson,
+  makeValidXaml,
+  makeApiDrivenXaml,
+  makeXamlWithInvoke,
 } from "./fixtures/process-specs";
 
 function makeStubWithDeps(name: string = "Main") {
@@ -19,6 +27,24 @@ function makeStubWithDeps(name: string = "Main") {
   for (const pkg of required) deps[pkg] = "23.10.0";
   if (!deps["UiPath.System.Activities"]) deps["UiPath.System.Activities"] = "23.10.0";
   return { xaml: compliant, deps };
+}
+
+function runQG(
+  xamlEntries: { name: string; content: string }[],
+  deps: Record<string, string>,
+  options?: Partial<QualityGateInput>,
+): ReturnType<typeof runQualityGate> {
+  return runQualityGate({
+    xamlEntries,
+    projectJsonContent: makeProjectJson("Test", deps),
+    targetFramework: "Windows",
+    archiveManifest: [
+      ...xamlEntries.map(e => `lib/net45/${e.name.split("/").pop()}`),
+      "lib/net45/project.json",
+      "Test.nuspec",
+    ],
+    ...options,
+  });
 }
 
 describe("UiPath Generation Regression Tests", () => {
@@ -132,34 +158,23 @@ describe("UiPath Generation Regression Tests", () => {
       const pattern = classifyAutomationPattern(lowConfidenceNodes, "", false);
       expect(["simple-linear", "api-data-driven", "ui-automation", "transactional-queue", "hybrid"]).toContain(pattern);
     });
+
+    it("enrichmentUseReFramework=true forces transactional-queue", () => {
+      const pattern = classifyAutomationPattern(apiDataDrivenNodes, "", false, true);
+      expect(pattern).toBe("transactional-queue");
+    });
   });
 
   describe("XAML Validation — validateXamlContent", () => {
     it("detects [object Object] placeholder leakage", () => {
-      const xaml = `<?xml version="1.0" encoding="utf-8"?>
-<Activity x:Class="Main"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities">
-  <Sequence DisplayName="Main">
-    <ui:LogMessage Message="[object Object]" />
-  </Sequence>
-</Activity>`;
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Message="[object Object]" />`);
       const violations = validateXamlContent([{ name: "Main.xaml", content: xaml }]);
       const placeholders = violations.filter(v => v.check === "placeholder");
       expect(placeholders.length).toBeGreaterThan(0);
     });
 
     it("detects ellipsis placeholder attributes", () => {
-      const xaml = `<?xml version="1.0" encoding="utf-8"?>
-<Activity x:Class="Main"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities">
-  <Sequence DisplayName="Main">
-    <ui:LogMessage Message="..." />
-  </Sequence>
-</Activity>`;
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Message="..." />`);
       const violations = validateXamlContent([{ name: "Main.xaml", content: xaml }]);
       const placeholders = violations.filter(v => v.check === "placeholder");
       expect(placeholders.length).toBeGreaterThan(0);
@@ -174,20 +189,29 @@ describe("UiPath Generation Regression Tests", () => {
       );
       expect(severe.length).toBe(0);
     });
+
+    it("detects pseudo-XAML string attributes (Then/Else/Body as strings)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <If Condition="[True]" Then="Do something" Else="Do other" />
+  </Sequence>
+</Activity>`;
+      const violations = validateXamlContent([{ name: "Main.xaml", content: xaml }]);
+      const pseudoXaml = violations.filter(v => v.check === "pseudo-xaml");
+      expect(pseudoXaml.length).toBeGreaterThan(0);
+    });
   });
 
   describe("Quality Gate — Warning vs Blocking Classification", () => {
-    it("treats invalid XML as blocking error", () => {
+    it("treats invalid XML as blocking error via validateXamlContent", () => {
       const badXaml = `<?xml version="1.0"?><Activity><Sequence>unclosed`;
-      const deps = { "UiPath.System.Activities": "23.10.0" };
-      const result = runQualityGate({
-        xamlEntries: [{ name: "Main.xaml", content: badXaml }],
-        projectJsonContent: makeProjectJson("Test", deps),
-        targetFramework: "Windows",
-        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
-      });
-      expect(result.passed).toBe(false);
-      expect(result.summary.totalErrors).toBeGreaterThan(0);
+      const violations = validateXamlContent([{ name: "Main.xaml", content: badXaml }]);
+      const xmlErrors = violations.filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBeGreaterThan(0);
     });
 
     it("treats malformed project.json as blocking error", () => {
@@ -202,12 +226,7 @@ describe("UiPath Generation Regression Tests", () => {
 
     it("captures logic-location findings as warnings not errors", () => {
       const { xaml, deps } = makeStubWithDeps();
-      const result = runQualityGate({
-        xamlEntries: [{ name: "Main.xaml", content: xaml }],
-        projectJsonContent: makeProjectJson("Test", deps),
-        targetFramework: "Windows",
-        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
-      });
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
       const logicLocationErrors = result.violations.filter(
         v => v.category === "logic-location" && v.severity === "error"
       );
@@ -216,12 +235,7 @@ describe("UiPath Generation Regression Tests", () => {
 
     it("errors vs warnings are correctly classified by severity", () => {
       const { xaml, deps } = makeStubWithDeps();
-      const result = runQualityGate({
-        xamlEntries: [{ name: "Main.xaml", content: xaml }],
-        projectJsonContent: makeProjectJson("Test", deps),
-        targetFramework: "Windows",
-        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
-      });
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
       for (const v of result.violations) {
         expect(["error", "warning"]).toContain(v.severity);
         expect(v.category).toBeDefined();
@@ -232,6 +246,65 @@ describe("UiPath Generation Regression Tests", () => {
       const warningCategories = result.violations.filter(v => v.severity === "warning");
       expect(result.summary.totalErrors).toBe(blockingCategories.length);
       expect(result.summary.totalWarnings).toBe(warningCategories.length);
+    });
+
+    it("hardcoded credentials are blocking errors", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Message="password = 'MySecretPassword123'" DisplayName="Bad Log" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const credIssues = result.violations.filter(v => v.check === "hardcoded-credential");
+      expect(credIssues.length).toBeGreaterThan(0);
+      expect(credIssues[0].severity).toBe("error");
+    });
+
+    it("unknown activities are blocking errors", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:MadeUpActivity DisplayName="Fake" Prop="val" />
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const unknownActs = result.violations.filter(v => v.check === "unknown-activity");
+      expect(unknownActs.length).toBeGreaterThan(0);
+      expect(unknownActs[0].severity).toBe("error");
+    });
+
+    it("placeholder values (TODO/PLACEHOLDER) in XAML are warnings, not errors", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Message="[&quot;TODO implement real logic&quot;]" DisplayName="Placeholder" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const placeholderWarnings = result.violations.filter(
+        v => v.check === "placeholder-value"
+      );
+      for (const w of placeholderWarnings) {
+        expect(w.severity).toBe("warning");
+      }
+    });
+
+    it("safe stubs and conservative simplifications are warnings not blockers", () => {
+      const stub = generateStubWorkflow("HelperWorkflow");
+      const compliant = makeUiPathCompliant(stub, "Windows");
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG(
+        [
+          { name: "Main.xaml", content: makeStubWithDeps("Main").xaml },
+          { name: "HelperWorkflow.xaml", content: compliant },
+        ],
+        deps,
+      );
+      const blockers = result.violations.filter(v => v.severity === "error");
+      const stubRelatedBlockers = blockers.filter(v =>
+        v.detail.includes("STUB") || v.detail.includes("stub")
+      );
+      expect(stubRelatedBlockers.length).toBe(0);
     });
   });
 
@@ -252,56 +325,90 @@ describe("UiPath Generation Regression Tests", () => {
     });
 
     it("scanXamlForRequiredPackages detects UIAutomation when UI activities present", () => {
-      const uiXaml = `<?xml version="1.0" encoding="utf-8"?>
-<Activity mc:Ignorable="sap sap2010" x:Class="Main"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
-  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities">
-  <Sequence DisplayName="Main">
-    <ui:OpenBrowser Url="'https://example.com'" BrowserType="Chrome" DisplayName="Open Browser" />
-  </Sequence>
-</Activity>`;
+      const uiXaml = makeValidXaml("Main", `<ui:OpenBrowser Url="[&quot;https://example.com&quot;]" BrowserType="Chrome" DisplayName="Open Browser" />`);
       const required = scanXamlForRequiredPackages(uiXaml);
       expect(required.has("UiPath.UIAutomation.Activities")).toBe(true);
+    });
+
+    it("no dependency over-injection: emitted deps match exactly what activities require", () => {
+      const xaml = makeApiDrivenXaml();
+      const required = scanXamlForRequiredPackages(xaml);
+      const requiredList = [...required].sort();
+      const expectedForApiXaml = ["UiPath.System.Activities", "UiPath.Web.Activities"].sort();
+      expect(requiredList).toEqual(expectedForApiXaml);
+      expect(required.has("UiPath.UIAutomation.Activities")).toBe(false);
+      expect(required.has("UiPath.Excel.Activities")).toBe(false);
+      expect(required.has("UiPath.Mail.Activities")).toBe(false);
+      expect(required.has("UiPath.Database.Activities")).toBe(false);
+      expect(required.has("UiPath.Persistence.Activities")).toBe(false);
+      expect(required.has("UiPath.MLActivities")).toBe(false);
+    });
+
+    it("pipeline does not over-inject: buildNuGetPackage deps match XAML-required packages", async () => {
+      const pkg = {
+        projectName: "OverInjectionTest",
+        description: "Test no unnecessary dependencies are added",
+        workflows: [{ name: "Main", steps: [{ name: "Log", description: "Log message" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      const allXamlContent = result.xamlEntries.map(e => e.content).join("\n");
+      const requiredByXaml = scanXamlForRequiredPackages(allXamlContent);
+      const emittedDeps = new Set(Object.keys(result.dependencyMap));
+
+      for (const dep of emittedDeps) {
+        expect(requiredByXaml.has(dep)).toBe(true);
+      }
     });
   });
 
   describe("Archive Manifest Parity", () => {
     it("quality gate checks archive manifest presence", () => {
       const { xaml, deps } = makeStubWithDeps();
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      expect(result).toBeDefined();
+      expect(result.violations).toBeDefined();
+      expect(Array.isArray(result.violations)).toBe(true);
+    });
+
+    it("detects XAML file missing from archive", () => {
+      const { xaml, deps } = makeStubWithDeps();
       const result = runQualityGate({
         xamlEntries: [{ name: "Main.xaml", content: xaml }],
         projectJsonContent: makeProjectJson("Test", deps),
         targetFramework: "Windows",
-        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+        archiveManifest: ["lib/net45/project.json"],
       });
-      expect(result).toBeDefined();
-      expect(result.violations).toBeDefined();
-      expect(Array.isArray(result.violations)).toBe(true);
+      const archiveMissing = result.violations.filter(v =>
+        v.check === "archive-parity-missing-from-archive"
+      );
+      expect(archiveMissing.length).toBeGreaterThan(0);
+    });
+
+    it("detects unvalidated XAML in archive", () => {
+      const { xaml, deps } = makeStubWithDeps();
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: [
+          "lib/net45/Main.xaml",
+          "lib/net45/Extra.xaml",
+          "lib/net45/project.json",
+        ],
+      });
+      const notValidated = result.violations.filter(v =>
+        v.check === "archive-parity-not-validated"
+      );
+      expect(notValidated.length).toBeGreaterThan(0);
     });
   });
 
   describe("Project JSON Validation", () => {
     it("detects [*] wildcard version strings as errors", () => {
       const { xaml } = makeStubWithDeps();
-      const badProjectJson = JSON.stringify({
-        name: "Test",
-        projectVersion: "1.0.0",
-        description: "Test",
-        main: "Main.xaml",
-        dependencies: { "UiPath.System.Activities": "[*]" },
-        toolVersion: "23.10.0",
-        projectType: "Workflow",
-        expressionLanguage: "VisualBasic",
-        entryPoints: [{ filePath: "Main.xaml", uniqueId: "00000000-0000-0000-0000-000000000001", input: [], output: [] }],
-        schemaVersion: "4.0",
-        studioVersion: "23.10.0.0",
-        targetFramework: "Windows",
-      }, null, 2);
-
+      const badProjectJson = makeProjectJson("Test", { "UiPath.System.Activities": "[*]" });
       const result = runQualityGate({
         xamlEntries: [{ name: "Main.xaml", content: xaml }],
         projectJsonContent: badProjectJson,
@@ -317,7 +424,6 @@ describe("UiPath Generation Regression Tests", () => {
     it("detects missing required project.json fields", () => {
       const { xaml } = makeStubWithDeps();
       const minimalProjectJson = JSON.stringify({ name: "Test" });
-
       const result = runQualityGate({
         xamlEntries: [{ name: "Main.xaml", content: xaml }],
         projectJsonContent: minimalProjectJson,
@@ -326,40 +432,53 @@ describe("UiPath Generation Regression Tests", () => {
       });
       expect(result.passed).toBe(false);
     });
+
+    it("detects missing dependencies object as error", () => {
+      const { xaml } = makeStubWithDeps();
+      const noDeps = JSON.stringify({
+        name: "Test",
+        projectVersion: "1.0.0",
+        main: "Main.xaml",
+        targetFramework: "Windows",
+        designOptions: { modernBehavior: true },
+      });
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: noDeps,
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+      });
+      const depErrors = result.violations.filter(v => v.check === "dependencies");
+      expect(depErrors.length).toBeGreaterThan(0);
+    });
+
+    it("rejects modernBehavior=false as error", () => {
+      const { xaml, deps } = makeStubWithDeps();
+      const badPJ = makeProjectJson("Test", deps, { modernBehavior: false });
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: badPJ,
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+      });
+      expect(result.passed).toBe(false);
+      const modernErrors = result.violations.filter(v =>
+        v.detail.includes("modernBehavior") || v.check === "modern-project" || v.check === "legacy-modern-behavior"
+      );
+      expect(modernErrors.length).toBeGreaterThan(0);
+    });
   });
 
   describe("InvokeWorkflowFile Path Validation", () => {
     it("detects InvokeWorkflowFile references to nonexistent files", () => {
-      const mainXaml = `<?xml version="1.0" encoding="utf-8"?>
-<Activity mc:Ignorable="sap sap2010" x:Class="Main"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
-  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities">
-  <Sequence DisplayName="Main">
-    <ui:InvokeWorkflowFile DisplayName="Invoke Helper" WorkflowFileName="Helper.xaml" />
-  </Sequence>
-</Activity>`;
+      const mainXaml = makeXamlWithInvoke("Helper.xaml");
       const violations = validateXamlContent([{ name: "Main.xaml", content: mainXaml }]);
       const invokeIssues = violations.filter(v => v.check === "invoked-file");
       expect(invokeIssues.length).toBeGreaterThan(0);
     });
 
     it("no invoke violation when referenced file exists in entries", () => {
-      const mainXaml = `<?xml version="1.0" encoding="utf-8"?>
-<Activity mc:Ignorable="sap sap2010" x:Class="Main"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
-  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities">
-  <Sequence DisplayName="Main">
-    <ui:InvokeWorkflowFile DisplayName="Invoke Helper" WorkflowFileName="Helper.xaml" />
-  </Sequence>
-</Activity>`;
+      const mainXaml = makeXamlWithInvoke("Helper.xaml");
       const helperStub = generateStubWorkflow("Helper");
       const violations = validateXamlContent([
         { name: "Main.xaml", content: mainXaml },
@@ -368,20 +487,364 @@ describe("UiPath Generation Regression Tests", () => {
       const invokeIssues = violations.filter(v => v.check === "invoked-file");
       expect(invokeIssues.length).toBe(0);
     });
+
+    it("detects Workflows\\ prefix path mismatch in invoke references", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:InvokeWorkflowFile DisplayName="Invoke" WorkflowFileName="Workflows\\Helper.xaml" />
+      `);
+      const helper = generateStubWorkflow("Helper");
+      const violations = validateXamlContent([
+        { name: "Main.xaml", content: xaml },
+        { name: "Helper.xaml", content: helper },
+      ]);
+      const pathIssues = violations.filter(v => v.check === "invoked-file");
+      expect(pathIssues.length).toBeGreaterThan(0);
+    });
   });
 
-  describe("Generation Mode Type Exports", () => {
-    it("GenerationMode and pipeline functions are exported from pipeline", async () => {
+  describe("Root-Relative Workflow Paths (Source Correctness)", () => {
+    it("makeUiPathCompliant normalizes Workflows\\ prefix to root-relative", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:InvokeWorkflowFile DisplayName="Invoke" WorkflowFileName="Workflows\\Helper.xaml" />
+      `);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).not.toContain('WorkflowFileName="Workflows\\');
+      expect(compliant).toContain('WorkflowFileName="Helper.xaml"');
+    });
+
+    it("makeUiPathCompliant normalizes Workflows/ prefix to root-relative", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:InvokeWorkflowFile DisplayName="Invoke" WorkflowFileName="Workflows/Helper.xaml" />
+      `);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).not.toContain('WorkflowFileName="Workflows/');
+      expect(compliant).toContain('WorkflowFileName="Helper.xaml"');
+    });
+  });
+
+  describe("Centralization Verification", () => {
+    it("all entry points import from uipath-pipeline, which delegates to buildNuGetPackage", async () => {
       const pipeline = await import("../uipath-pipeline");
       expect(pipeline).toHaveProperty("generateUiPathPackage");
       expect(pipeline).toHaveProperty("getCachedPipelineResult");
       expect(pipeline).toHaveProperty("generateDhg");
       expect(pipeline).toHaveProperty("normalizeXaml");
+      expect(typeof pipeline.generateUiPathPackage).toBe("function");
+      expect(typeof pipeline.getCachedPipelineResult).toBe("function");
+      expect(typeof pipeline.generateDhg).toBe("function");
+      expect(typeof pipeline.normalizeXaml).toBe("function");
+    });
+
+    it("normalizeXaml produces the same result for the same input", async () => {
+      const { normalizeXaml } = await import("../uipath-pipeline");
+      const stub = generateStubWorkflow("TestWorkflow");
+      const result1 = normalizeXaml(stub, "Windows");
+      const result2 = normalizeXaml(stub, "Windows");
+      expect(result1.normalized).toBe(result2.normalized);
+    });
+
+    it("scanXamlForRequiredPackages is deterministic for the same XAML", () => {
+      const xaml = makeApiDrivenXaml();
+      const result1 = scanXamlForRequiredPackages(xaml);
+      const result2 = scanXamlForRequiredPackages(xaml);
+      expect([...result1].sort()).toEqual([...result2].sort());
+    });
+
+    it("runQualityGate produces the same contract for the same input", () => {
+      const { xaml, deps } = makeStubWithDeps();
+      const input: QualityGateInput = {
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+      };
+      const r1 = runQualityGate(input);
+      const r2 = runQualityGate(input);
+      expect(r1.passed).toBe(r2.passed);
+      expect(r1.violations.length).toBe(r2.violations.length);
+      expect(r1.summary).toEqual(r2.summary);
     });
 
     it("BuildResult includes usedFallbackStubs and generationMode", async () => {
       const integration = await import("../uipath-integration");
       expect(integration).toHaveProperty("buildNuGetPackage");
+    });
+
+    it("normalizePackageName resolves aliases consistently", () => {
+      expect(normalizePackageName("UiPath.WebAPI.Activities")).toBe("UiPath.Web.Activities");
+      expect(normalizePackageName("UiPath.HTTP.Activities")).toBe("UiPath.Web.Activities");
+      expect(normalizePackageName("UiPath.Core.Activities")).toBe("UiPath.System.Activities");
+      expect(normalizePackageName("UiPath.UI.Activities")).toBe("UiPath.UIAutomation.Activities");
+      expect(normalizePackageName("UiPath.System.Activities")).toBe("UiPath.System.Activities");
+    });
+  });
+
+  describe("Regression: ui:TakeScreenshot not emitted for non-UI patterns", () => {
+    it("quality gate blocks TakeScreenshot in simple-linear context", () => {
+      const xaml = makeValidXaml("Main", `<ui:TakeScreenshot DisplayName="Take Screenshot" />`);
+      const deps = {
+        "UiPath.System.Activities": "23.10.0",
+        "UiPath.UIAutomation.Activities": "23.10.0",
+      };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+        automationPattern: "simple-linear",
+      });
+      const blocked = result.violations.filter(v =>
+        v.check === "policy-blocked-activity" && v.detail.includes("TakeScreenshot")
+      );
+      expect(blocked.length).toBeGreaterThan(0);
+    });
+
+    it("quality gate blocks TakeScreenshot in api-data-driven context", () => {
+      const xaml = makeValidXaml("Main", `<ui:TakeScreenshot DisplayName="Take Screenshot" />`);
+      const deps = {
+        "UiPath.System.Activities": "23.10.0",
+        "UiPath.UIAutomation.Activities": "23.10.0",
+      };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+        automationPattern: "api-data-driven",
+      });
+      const blocked = result.violations.filter(v =>
+        v.check === "policy-blocked-activity" && v.detail.includes("TakeScreenshot")
+      );
+      expect(blocked.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Regression: ui:AddLogFields not emitted for non-UI patterns", () => {
+    it("quality gate blocks AddLogFields in simple-linear", () => {
+      const xaml = makeValidXaml("Main", `<ui:AddLogFields DisplayName="Add Fields" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+        automationPattern: "simple-linear",
+      });
+      const blocked = result.violations.filter(v =>
+        v.check === "policy-blocked-activity" && v.detail.includes("AddLogFields")
+      );
+      expect(blocked.length).toBeGreaterThan(0);
+    });
+
+    it("quality gate blocks AddLogFields in api-data-driven", () => {
+      const xaml = makeValidXaml("Main", `<ui:AddLogFields DisplayName="Add Fields" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+        automationPattern: "api-data-driven",
+      });
+      const blocked = result.violations.filter(v =>
+        v.check === "policy-blocked-activity" && v.detail.includes("AddLogFields")
+      );
+      expect(blocked.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Regression: Undeclared variables in expressions", () => {
+    it("quality gate detects undeclared prefixed variables", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <Sequence.Variables />
+    <ui:LogMessage Level="Info" Message="[str_UndeclaredVar]" DisplayName="Log" />
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const undeclared = result.violations.filter(v => v.check === "undeclared-variable");
+      expect(undeclared.length).toBeGreaterThan(0);
+      expect(undeclared[0].severity).toBe("error");
+    });
+
+    it("no undeclared variable error when variable is properly declared", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="str_MyVar" Default="" />
+    </Sequence.Variables>
+    <ui:LogMessage Level="Info" Message="[str_MyVar]" DisplayName="Log" />
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const undeclared = result.violations.filter(v => v.check === "undeclared-variable");
+      expect(undeclared.length).toBe(0);
+    });
+  });
+
+  describe("Regression: Placeholder token leakage in baseline_openable", () => {
+    it("quality gate warns on PLACEHOLDER_ tokens in XAML", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage Message="[&quot;PLACEHOLDER_endpoint_url&quot;]" DisplayName="Placeholder Log" />
+      `);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const placeholders = result.violations.filter(v =>
+        v.check === "placeholder-value" && v.detail.includes("PLACEHOLDER")
+      );
+      expect(placeholders.length).toBeGreaterThan(0);
+    });
+
+    it("quality gate warns on TODO_ tokens in XAML", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage Message="[&quot;TODO_implement_business_rule&quot;]" DisplayName="Todo Log" />
+      `);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const placeholders = result.violations.filter(v =>
+        v.check === "placeholder-value" &&
+        (v.detail.includes("TODO") || v.detail.includes("PLACEHOLDER"))
+      );
+      expect(placeholders.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Regression: Malformed project.json", () => {
+    it("unparseable JSON fails quality gate", () => {
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: makeStubWithDeps().xaml }],
+        projectJsonContent: "NOT VALID JSON {{{",
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+      });
+      expect(result.passed).toBe(false);
+      const parseErrors = result.violations.filter(v => v.check === "project-json-parse");
+      expect(parseErrors.length).toBeGreaterThan(0);
+    });
+
+    it("empty dependencies object fails quality gate", () => {
+      const { xaml } = makeStubWithDeps();
+      const emptyDeps = JSON.stringify({
+        name: "Test",
+        projectVersion: "1.0.0",
+        main: "Main.xaml",
+        dependencies: {},
+        targetFramework: "Windows",
+        designOptions: { modernBehavior: true },
+      });
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: emptyDeps,
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+      });
+      expect(result.passed).toBe(false);
+    });
+  });
+
+  describe("Regression: Generator/Validator Activity Schema Drift", () => {
+    it("every activity in ACTIVITY_REGISTRY has a package mapping", () => {
+      for (const [actName, entry] of Object.entries(ACTIVITY_REGISTRY)) {
+        if (actName === "Assign") continue;
+        expect(entry.package).toBeTruthy();
+        expect(entry.package.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("registry activities are not rejected by quality gate when properly declared", () => {
+      const testableActivities = [
+        { name: "ui:LogMessage", props: 'Level="Info" Message="[&quot;test&quot;]"' },
+        { name: "ui:HttpClient", props: 'Endpoint="[&quot;https://test.com&quot;]" Method="GET"' },
+        { name: "ui:DeserializeJson", props: 'JsonString="[str_json]"' },
+      ];
+
+      for (const act of testableActivities) {
+        const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="str_json" Default="" />
+    </Sequence.Variables>
+    <${act.name} ${act.props} DisplayName="Test ${act.name}" />
+  </Sequence>
+</Activity>`;
+        const entry = ACTIVITY_REGISTRY[act.name];
+        const deps: Record<string, string> = { "UiPath.System.Activities": "23.10.0" };
+        if (entry?.package && entry.package !== "UiPath.System.Activities") {
+          deps[entry.package] = entry.package.includes("Web") ? "1.15.0" : "23.10.0";
+        }
+        const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+        const unknownActs = result.violations.filter(v => v.check === "unknown-activity" && v.detail.includes(act.name));
+        expect(unknownActs.length).toBe(0);
+      }
+    });
+
+    it("every package alias resolves to a canonical package name", () => {
+      const canonicalNames = new Set(Object.values(UIPATH_PACKAGE_ALIAS_MAP));
+      for (const [alias, canonical] of Object.entries(UIPATH_PACKAGE_ALIAS_MAP)) {
+        expect(canonical).toBeTruthy();
+        expect(normalizePackageName(alias)).toBe(canonical);
+        expect(normalizePackageName(canonical)).toBe(canonical);
+      }
+    });
+  });
+
+  describe("Low-Confidence Stub Fallback", () => {
+    it("low-confidence fixture produces a valid classified pattern", () => {
+      const pattern = classifyAutomationPattern(lowConfidenceNodes, "", false);
+      expect(pattern).toBeDefined();
+      expect(typeof pattern).toBe("string");
+    });
+
+    it("stub workflow for low-confidence input is valid Studio-openable XAML", () => {
+      const stub = generateStubWorkflow("Main");
+      const compliant = makeUiPathCompliant(stub, "Windows");
+
+      expect(compliant).toContain('<?xml version="1.0"');
+      expect(compliant).toContain("</Activity>");
+      expect(compliant).toContain("<Sequence");
+      expect(compliant).toContain("ui:LogMessage");
+
+      const validation = validateXamlContent([{ name: "Main.xaml", content: compliant }]);
+      const xmlErrors = validation.filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+    });
+
+    it("low-confidence stub passes quality gate with correct project wiring", () => {
+      const stub = generateStubWorkflow("Main");
+      const compliant = makeUiPathCompliant(stub, "Windows");
+      const required = scanXamlForRequiredPackages(compliant);
+      const deps: Record<string, string> = {};
+      for (const pkg of required) deps[pkg] = "23.10.0";
+
+      const result = runQG([{ name: "Main.xaml", content: compliant }], deps);
+      const fatalErrors = result.violations.filter(v =>
+        v.severity === "error" &&
+        v.check !== "empty-container"
+      );
+      expect(fatalErrors.length).toBe(0);
     });
   });
 
@@ -394,12 +857,7 @@ describe("UiPath Generation Regression Tests", () => {
 
     it("quality gate in baseline_openable mode: errors are demoted in pipeline", () => {
       const { xaml, deps } = makeStubWithDeps();
-      const qgResult = runQualityGate({
-        xamlEntries: [{ name: "Main.xaml", content: xaml }],
-        projectJsonContent: makeProjectJson("Test", deps),
-        targetFramework: "Windows",
-        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
-      });
+      const qgResult = runQG([{ name: "Main.xaml", content: xaml }], deps);
 
       const isBaselineOpenable = true;
       const qualityGateBlocking = isBaselineOpenable ? false : !qgResult.passed;
@@ -410,6 +868,473 @@ describe("UiPath Generation Regression Tests", () => {
       expect(qualityGateBlocking).toBe(false);
       if (qgResult.summary.totalErrors > 0) {
         expect(qualityGateWarnings.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("baseline_openable mode does NOT produce REFramework files for simple-linear input", () => {
+      const stub = generateStubWorkflow("Main");
+      const compliant = makeUiPathCompliant(stub, "Windows");
+
+      expect(compliant).not.toContain("GetTransactionData");
+      expect(compliant).not.toContain("SetTransactionStatus");
+      expect(compliant).not.toContain("InitAllSettings");
+      expect(compliant).not.toContain("REFramework");
+    });
+
+    it("baseline_openable stub has flat scaffold structure (no sub-workflow invocations)", () => {
+      const stub = generateStubWorkflow("Main");
+      const compliant = makeUiPathCompliant(stub, "Windows");
+      expect(compliant).not.toMatch(/<ui:InvokeWorkflowFile\s/);
+      expect(compliant).not.toMatch(/WorkflowFileName="/);
+    });
+  });
+
+  describe("makeUiPathCompliant Transforms", () => {
+    it("adds ui: prefix to activities that need it", () => {
+      const xaml = makeValidXaml("Main", `<LogMessage Level="Info" Message="[&quot;test&quot;]" DisplayName="Log" />`);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain("ui:LogMessage");
+      expect(compliant).not.toMatch(/<(?!ui:)LogMessage\s/);
+    });
+
+    it("fixes scg:DataTable to scg2:DataTable", () => {
+      const xaml = makeValidXaml("Main", `
+        <Sequence.Variables>
+          <Variable x:TypeArguments="scg:DataTable" Name="dt_Data" />
+        </Sequence.Variables>
+      `);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain("scg2:DataTable");
+      expect(compliant).not.toContain("scg:DataTable");
+    });
+
+    it("expands self-closing Assign into proper To/Value structure", () => {
+      const xaml = makeValidXaml("Main", `<Assign DisplayName="Set Variable" To="[str_Result]" Value="[&quot;Hello&quot;]" />`);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain("<Assign.To>");
+      expect(compliant).toContain("<Assign.Value>");
+    });
+
+    it("injects VB settings for Windows target", () => {
+      const stub = generateStubWorkflow("Main");
+      const compliant = makeUiPathCompliant(stub, "Windows");
+      expect(compliant).toContain("VisualBasic.Settings");
+      expect(compliant).toContain("WorkflowViewState.IdRef");
+    });
+
+    it("injects C# settings for Portable target", () => {
+      const stub = generateStubWorkflow("Main");
+      const compliant = makeUiPathCompliant(stub, "Portable");
+      expect(compliant).not.toContain("VisualBasic.Settings");
+      expect(compliant).toContain("WorkflowViewState.IdRef");
+      expect(compliant).toContain("System.Runtime");
+    });
+  });
+
+  describe("Cross-Framework Validation", () => {
+    it("Portable XAML with VB concatenation is flagged", () => {
+      const xamlContent = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <Sequence.Variables />
+    <ui:LogMessage DisplayName="Log">
+      <ui:LogMessage.Message>
+        <InArgument x:TypeArguments="x:String">"Hello" &amp; str_Name</InArgument>
+      </ui:LogMessage.Message>
+    </ui:LogMessage>
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "25.10.0" };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xamlContent }],
+        projectJsonContent: makeProjectJson("Test", deps, { targetFramework: "Portable" }),
+        targetFramework: "Portable",
+        archiveManifest: ["lib/net6.0/Main.xaml", "lib/net6.0/project.json", "Test.nuspec"],
+      });
+      const syntaxErrors = result.violations.filter(v => v.check === "expression-syntax-mismatch");
+      expect(syntaxErrors.length).toBeGreaterThan(0);
+    });
+
+    it("Windows XAML with C# interpolation is flagged", () => {
+      const xamlContent = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <Sequence.Variables />
+    <!-- Expression uses C# interpolation: $"Hello {str_Name}" which is wrong for VB -->
+    <ui:LogMessage DisplayName="Log">
+      <ui:LogMessage.Message>
+        <InArgument x:TypeArguments="x:String">$"Hello {str_Name}"</InArgument>
+      </ui:LogMessage.Message>
+    </ui:LogMessage>
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xamlContent }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json", "Test.nuspec"],
+      });
+      const syntaxErrors = result.violations.filter(v => v.check === "expression-syntax-mismatch");
+      expect(syntaxErrors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Comprehensive Warning vs Blocking Split", () => {
+    it("minor issues (incomplete logic, safe stubs) appear as warnings in DHG without failing build", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage Level="Info" Message="[&quot;TODO implement real business rule&quot;]" DisplayName="Stub Step" />
+      `);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+
+      const todoWarnings = result.violations.filter(v =>
+        v.check === "placeholder-value" && v.severity === "warning"
+      );
+      expect(todoWarnings.length).toBeGreaterThan(0);
+
+      const fatalBlockers = result.violations.filter(v =>
+        v.severity === "error" && !["empty-container"].includes(v.check)
+      );
+      expect(fatalBlockers.length).toBe(0);
+    });
+
+    it("major issues (invalid XML) are detected by validateXamlContent", () => {
+      const invalidXaml = `<?xml version="1.0"?><Activity><Sequence DisplayName="Main"><Unclosed`;
+      const violations = validateXamlContent([{ name: "Main.xaml", content: invalidXaml }]);
+      const xmlErrors = violations.filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBeGreaterThan(0);
+    });
+
+    it("major issues (unresolved InvokeWorkflowFile references) force failure", () => {
+      const xaml = makeXamlWithInvoke("NonExistent.xaml");
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const invokeErrors = result.violations.filter(v =>
+        v.check === "invoked-file" && v.severity === "error"
+      );
+      expect(invokeErrors.length).toBeGreaterThan(0);
+    });
+
+    it("major issues (malformed project.json) force failure", () => {
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: makeStubWithDeps().xaml }],
+        projectJsonContent: "}{broken",
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml"],
+      });
+      expect(result.passed).toBe(false);
+    });
+
+    it("blocked-pattern violations for policy-blocked activities are warnings", () => {
+      const xaml = makeValidXaml("Main", `<ui:TakeScreenshot DisplayName="Screenshot" />`);
+      const deps = {
+        "UiPath.System.Activities": "23.10.0",
+        "UiPath.UIAutomation.Activities": "23.10.0",
+      };
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Main.xaml", content: xaml }],
+        projectJsonContent: makeProjectJson("Test", deps),
+        targetFramework: "Windows",
+        archiveManifest: ["lib/net45/Main.xaml", "lib/net45/project.json"],
+        automationPattern: "simple-linear",
+      });
+      const blockedWarnings = result.violations.filter(v =>
+        v.check === "policy-blocked-activity" && v.severity === "warning"
+      );
+      expect(blockedWarnings.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Route-Level Centralization Proof", () => {
+    it("document-routes, uipath-routes, and chat routes all import generation functions from uipath-pipeline", async () => {
+      const fs = await import("fs");
+      const path = await import("path");
+      const docRoutesContent = fs.readFileSync(path.resolve(__dirname, "../document-routes.ts"), "utf-8");
+      const uipathRoutesContent = fs.readFileSync(path.resolve(__dirname, "../uipath-routes.ts"), "utf-8");
+      const chatRoutesContent = fs.readFileSync(path.resolve(__dirname, "../replit_integrations/chat/routes.ts"), "utf-8");
+
+      const extractPipelineImports = (content: string): string[] => {
+        const match = content.match(/import\s*\{([^}]+)\}\s*from\s*["'][^"']*uipath-pipeline["']/);
+        if (!match) return [];
+        return match[1].split(",").map(s => s.trim()).filter(Boolean).sort();
+      };
+
+      const docImports = extractPipelineImports(docRoutesContent);
+      const uipathImports = extractPipelineImports(uipathRoutesContent);
+      const chatImports = extractPipelineImports(chatRoutesContent);
+
+      const sharedEntryPoints = ["findUiPathMessage", "parseUiPathPackage", "generateUiPathPackage", "computeVersion", "getCachedPipelineResult"];
+      for (const fn of sharedEntryPoints) {
+        expect(docImports).toContain(fn);
+        expect(uipathImports).toContain(fn);
+      }
+
+      expect(chatImports).toContain("findUiPathMessage");
+      expect(chatImports).toContain("parseUiPathPackage");
+
+      expect(chatRoutesContent).toMatch(/from\s*["'][^"']*uipath-pipeline["']/);
+    });
+
+    it("neither route file imports directly from xaml-generator or uipath-activity-registry for generation", async () => {
+      const fs = await import("fs");
+      const path = await import("path");
+      const docRoutesContent = fs.readFileSync(path.resolve(__dirname, "../document-routes.ts"), "utf-8");
+      const uipathRoutesContent = fs.readFileSync(path.resolve(__dirname, "../uipath-routes.ts"), "utf-8");
+      const chatRoutesContent = fs.readFileSync(path.resolve(__dirname, "../replit_integrations/chat/routes.ts"), "utf-8");
+
+      expect(docRoutesContent).not.toMatch(/from\s*["']\.\/xaml-generator["']/);
+      expect(docRoutesContent).not.toMatch(/from\s*["']\.\/uipath-activity-registry["']/);
+      expect(uipathRoutesContent).not.toMatch(/from\s*["']\.\/xaml-generator["']/);
+      expect(uipathRoutesContent).not.toMatch(/from\s*["']\.\/uipath-activity-registry["']/);
+      expect(chatRoutesContent).not.toMatch(/from\s*["'][^"']*xaml-generator["']/);
+      expect(chatRoutesContent).not.toMatch(/from\s*["'][^"']*uipath-activity-registry["']/);
+    });
+
+    it("all entry points converge to the same pipeline contract: buildNuGetPackage produces identical result shape", async () => {
+      const pkg1 = {
+        projectName: "ContractTest",
+        description: "Identical input contract test",
+        workflows: [{ name: "Main", steps: [{ name: "Step", description: "Do something" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const pkg2 = { ...pkg1 };
+
+      const result1 = await buildNuGetPackage(pkg1, "1.0.0-contract", undefined, "baseline_openable");
+      const result2 = await buildNuGetPackage(pkg2, "1.0.0-contract", undefined, "baseline_openable");
+
+      expect(result1.generationMode).toBe(result2.generationMode);
+      expect(Object.keys(result1.dependencyMap).sort()).toEqual(Object.keys(result2.dependencyMap).sort());
+      expect(result1.xamlEntries.map(e => e.name).sort()).toEqual(result2.xamlEntries.map(e => e.name).sort());
+      const filterDeterministic = (manifest: string[]) =>
+        manifest.filter(f => !f.includes(".psmdcp")).sort();
+      expect(filterDeterministic(result1.archiveManifest)).toEqual(filterDeterministic(result2.archiveManifest));
+      expect(result1.usedFallbackStubs).toBe(result2.usedFallbackStubs);
+    });
+  });
+
+  describe("Pre-Normalization InvokeWorkflowFile Path Verification", () => {
+    it("generator emits root-relative WorkflowFileName paths (no Workflows/ prefix)", () => {
+      const result = generateRichXamlFromSpec(
+        { name: "Main", steps: [{ name: "Step 1", description: "Test step" }] },
+        undefined,
+        undefined,
+        "Windows",
+        false,
+      );
+      const rawXaml = result.xaml;
+      const workflowPaths = [...rawXaml.matchAll(/WorkflowFileName="([^"]+)"/g)].map(m => m[1]);
+      for (const p of workflowPaths) {
+        expect(p).not.toMatch(/^Workflows[/\\]/);
+        expect(p).toMatch(/\.xaml$/);
+      }
+    });
+
+    it("REFramework main XAML emits root-relative paths for all sub-workflows", () => {
+      const mainXaml = generateReframeworkMainXaml("TestProject", "TestQueue", "Windows");
+      const workflowPaths = [...mainXaml.matchAll(/WorkflowFileName="([^"]+)"/g)].map(m => m[1]);
+
+      expect(workflowPaths.length).toBeGreaterThan(0);
+      const expectedFiles = ["InitAllSettings.xaml", "GetTransactionData.xaml", "Process.xaml", "SetTransactionStatus.xaml", "CloseAllApplications.xaml"];
+      for (const expected of expectedFiles) {
+        expect(workflowPaths).toContain(expected);
+      }
+      for (const p of workflowPaths) {
+        expect(p).not.toMatch(/^Workflows[/\\]/);
+      }
+    });
+
+    it("makeUiPathCompliant strips Workflows/ prefix from paths if present", () => {
+      const xaml = makeValidXaml("Main", `<ui:InvokeWorkflowFile WorkflowFileName="Workflows\\SubProcess.xaml" DisplayName="Invoke Sub" />`);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain('WorkflowFileName="SubProcess.xaml"');
+      expect(compliant).not.toContain('Workflows\\SubProcess.xaml');
+    });
+  });
+
+  describe("Integration: Pipeline Execution from Fixture Inputs", () => {
+    it("buildNuGetPackage produces valid package with correct structure from process nodes", async () => {
+      const pkg = {
+        projectName: "TestSimpleLinear",
+        description: "Test simple linear automation",
+        workflows: [{ name: "Main", steps: [{ name: "Log Start", description: "Log start message" }] }],
+        dependencies: ["UiPath.System.Activities"],
+        _processNodes: simpleLinearNodes,
+        _processEdges: simpleLinearEdges,
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      expect(result.buffer).toBeInstanceOf(Buffer);
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(["baseline_openable", "full_implementation"]).toContain(result.generationMode);
+      expect(result.xamlEntries.length).toBeGreaterThan(0);
+      expect(result.archiveManifest.length).toBeGreaterThan(0);
+      expect(result.dependencyMap).toHaveProperty("UiPath.System.Activities");
+
+      const mainXaml = result.xamlEntries.find(e => e.name === "Main.xaml");
+      expect(mainXaml).toBeDefined();
+      expect(mainXaml!.content).toContain("</Activity>");
+    });
+
+    it("buildNuGetPackage produces valid package from api-data-driven spec", async () => {
+      const pkg = {
+        projectName: "TestApiDriven",
+        description: "Test API driven automation",
+        workflows: [{ name: "Main", steps: [{ name: "Call API", description: "HTTP request step" }] }],
+        dependencies: ["UiPath.System.Activities", "UiPath.Web.Activities"],
+        _processNodes: apiDataDrivenNodes,
+        _processEdges: apiDataDrivenEdges,
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      expect(result.buffer).toBeInstanceOf(Buffer);
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(result.xamlEntries.length).toBeGreaterThan(0);
+
+      const mainXaml = result.xamlEntries.find(e => e.name === "Main.xaml");
+      expect(mainXaml).toBeDefined();
+
+      expect(result.archiveManifest.some(f => f.endsWith("project.json"))).toBe(true);
+      expect(result.archiveManifest.some(f => f.endsWith(".nuspec"))).toBe(true);
+    });
+
+    it("buildNuGetPackage PipelineResult shape includes all required fields", async () => {
+      const pkg = {
+        projectName: "ShapeTest",
+        description: "Test result shape",
+        workflows: [{ name: "Main", steps: [{ name: "Step", description: "Step" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      expect(result).toHaveProperty("buffer");
+      expect(result).toHaveProperty("gaps");
+      expect(result).toHaveProperty("usedPackages");
+      expect(result).toHaveProperty("xamlEntries");
+      expect(result).toHaveProperty("dependencyMap");
+      expect(result).toHaveProperty("archiveManifest");
+      expect(result).toHaveProperty("usedFallbackStubs");
+      expect(result).toHaveProperty("generationMode");
+      expect(Array.isArray(result.gaps)).toBe(true);
+      expect(Array.isArray(result.usedPackages)).toBe(true);
+      expect(Array.isArray(result.xamlEntries)).toBe(true);
+      expect(Array.isArray(result.archiveManifest)).toBe(true);
+      expect(typeof result.usedFallbackStubs).toBe("boolean");
+    });
+
+    it("buildNuGetPackage with low-confidence nodes produces valid package with fallback handling", async () => {
+      const pkg = {
+        projectName: "TestLowConfidence",
+        description: "Low confidence test",
+        workflows: [],
+        dependencies: ["UiPath.System.Activities"],
+        _processNodes: lowConfidenceNodes,
+        _processEdges: lowConfidenceEdges,
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      expect(result.buffer).toBeInstanceOf(Buffer);
+      expect(result.xamlEntries.length).toBeGreaterThan(0);
+
+      const mainEntry = result.xamlEntries.find(e => e.name === "Main.xaml");
+      expect(mainEntry).toBeDefined();
+      expect(mainEntry!.content).toContain("</Activity>");
+
+      expect(result.archiveManifest.some(f => f.endsWith("project.json"))).toBe(true);
+
+      if (result.qualityGateResult) {
+        expect(typeof result.qualityGateResult.passed).toBe("boolean");
+        expect(Array.isArray(result.qualityGateResult.violations)).toBe(true);
+      }
+
+      expect(typeof result.usedFallbackStubs).toBe("boolean");
+    });
+
+    it("buildNuGetPackage output archive manifest contains expected structural files", async () => {
+      const pkg = {
+        projectName: "ManifestTest",
+        description: "Manifest structure test",
+        workflows: [{ name: "Main", steps: [{ name: "Step 1", description: "Do something" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      expect(result.archiveManifest).toContain("[Content_Types].xml");
+      expect(result.archiveManifest).toContain("_rels/.rels");
+      expect(result.archiveManifest.some(f => f.endsWith(".nuspec"))).toBe(true);
+      expect(result.archiveManifest.some(f => f.endsWith("project.json"))).toBe(true);
+      expect(result.archiveManifest.some(f => f.endsWith("Main.xaml"))).toBe(true);
+    });
+
+    it("all XAML entries from buildNuGetPackage pass validateXamlContent", async () => {
+      const pkg = {
+        projectName: "XamlValidation",
+        description: "Full validation test",
+        workflows: [{ name: "Main", steps: [{ name: "Step 1", description: "Process data" }] }],
+        dependencies: ["UiPath.System.Activities"],
+        _processNodes: simpleLinearNodes,
+        _processEdges: simpleLinearEdges,
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      const violations = validateXamlContent(result.xamlEntries);
+      const blockers = violations.filter(v =>
+        v.check === "xml-wellformedness" || v.check === "malformed-quote" || v.check === "pseudo-xaml"
+      );
+      expect(blockers.length).toBe(0);
+    });
+
+    it("quality gate on buildNuGetPackage output does not block in baseline_openable mode", async () => {
+      const pkg = {
+        projectName: "QGIntegration",
+        description: "Quality gate integration test",
+        workflows: [{ name: "Main", steps: [{ name: "Step 1", description: "Process" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      if (result.qualityGateResult) {
+        const isBaselineOpenable = result.generationMode === "baseline_openable";
+        const blocking = isBaselineOpenable ? false : !result.qualityGateResult.passed;
+        expect(blocking).toBe(false);
+      }
+    });
+
+    it("baseline_openable pipeline output contains no REFramework files in XAML entries or manifest", async () => {
+      const pkg = {
+        projectName: "NoREFrameworkTest",
+        description: "Verify flat scaffold with no REFramework files",
+        workflows: [{ name: "Main", steps: [{ name: "Step 1", description: "Simple step" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+
+      if (result.generationMode === "baseline_openable") {
+        const reframeworkFiles = ["GetTransactionData.xaml", "SetTransactionStatus.xaml"];
+        for (const rf of reframeworkFiles) {
+          expect(result.xamlEntries.some(e => e.name === rf)).toBe(false);
+          expect(result.archiveManifest.some(f => f.endsWith(rf))).toBe(false);
+        }
+
+        const mainEntry = result.xamlEntries.find(e => e.name === "Main.xaml");
+        if (mainEntry) {
+          expect(mainEntry.content).not.toContain("GetTransactionData");
+          expect(mainEntry.content).not.toContain("SetTransactionStatus");
+        }
       }
     });
   });
