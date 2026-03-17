@@ -393,6 +393,30 @@ export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = {
       optional: ["To", "Value"],
     },
   },
+  "ui:Assign": {
+    package: "",
+    properties: {
+      optional: ["To", "Value"],
+    },
+  },
+  "Throw": {
+    package: "",
+    properties: {
+      optional: ["Exception"],
+    },
+  },
+  "ui:Throw": {
+    package: "",
+    properties: {
+      optional: ["Exception"],
+    },
+  },
+  "ui:DeserializeJSON": {
+    package: "UiPath.Web.Activities",
+    properties: {
+      optional: ["JsonString", "JsonObject"],
+    },
+  },
 };
 
 export type AutomationPattern = "simple-linear" | "api-data-driven" | "ui-automation" | "transactional-queue" | "hybrid";

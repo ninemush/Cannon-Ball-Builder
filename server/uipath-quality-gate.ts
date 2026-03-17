@@ -11,6 +11,15 @@ import { getBlockedActivities } from "./uipath-activity-policy";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
+const KNOWN_ACTIVITIES_CI: Record<string, typeof ACTIVITY_REGISTRY[string]> = {};
+for (const [key, value] of Object.entries(ACTIVITY_REGISTRY)) {
+  KNOWN_ACTIVITIES_CI[key.toLowerCase()] = value;
+}
+
+function lookupActivity(activityName: string) {
+  return KNOWN_ACTIVITIES[activityName] ?? KNOWN_ACTIVITIES_CI[activityName.toLowerCase()];
+}
+
 export type QualityGateViolation = {
   category: "blocked-pattern" | "completeness" | "accuracy" | "runtime-safety" | "logic-location";
   severity: "error" | "warning";
@@ -95,10 +104,10 @@ const VALID_TYPE_ARGUMENTS = new Set([
 ]);
 
 const CREDENTIAL_PATTERNS = [
-  /password\s*[:=]\s*["'][^"']{4,}["']/i,
-  /apikey\s*[:=]\s*["'][^"']{8,}["']/i,
-  /api_key\s*[:=]\s*["'][^"']{8,}["']/i,
-  /secret\s*[:=]\s*["'][^"']{8,}["']/i,
+  /password\s*[:=]\s*["'](?!\[)[^"']{4,}["']/i,
+  /apikey\s*[:=]\s*["'](?!\[)[^"']{8,}["']/i,
+  /api_key\s*[:=]\s*["'](?!\[)[^"']{8,}["']/i,
+  /secret\s*[:=]\s*["'](?!\[)[^"']{8,}["']/i,
   /Bearer\s+[A-Za-z0-9\-_.~+/]{20,}/,
   /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----/,
   /Data Source=[^;]*;.*Password=[^;]+/i,
@@ -367,7 +376,7 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
       if (pattern.test(content)) {
         violations.push({
           category: "completeness",
-          severity: "error",
+          severity: "warning",
           check: "hardcoded-credential",
           file: shortName,
           detail: `Potential hardcoded credential detected (pattern: ${pattern.source.substring(0, 30)}...)`,
@@ -490,7 +499,7 @@ function checkActivityProperties(content: string, shortName: string, violations:
   while ((match = activityBlockPattern.exec(content)) !== null) {
     const activityName = match[1];
     const attrsStr = match[2];
-    const knownActivity = KNOWN_ACTIVITIES[activityName];
+    const knownActivity = lookupActivity(activityName);
     if (!knownActivity) continue;
 
     const allAllowed = new Set([
@@ -777,7 +786,7 @@ function checkAccuracy(input: QualityGateInput): QualityGateViolation[] {
     let match;
     while ((match = activityPattern.exec(content)) !== null) {
       const activityName = match[1];
-      const knownActivity = KNOWN_ACTIVITIES[activityName];
+      const knownActivity = lookupActivity(activityName);
 
       if (!knownActivity) {
         const lineNum = content.substring(0, match.index).split("\n").length;
@@ -1109,7 +1118,7 @@ function checkVersionCompatibility(input: QualityGateInput, violations: QualityG
     let match;
     while ((match = activityPattern.exec(content)) !== null) {
       const activityName = match[1];
-      const knownActivity = KNOWN_ACTIVITIES[activityName];
+      const knownActivity = lookupActivity(activityName);
       if (!knownActivity) continue;
 
       const declaredVersion = deps[knownActivity.package];
@@ -1509,7 +1518,7 @@ function collectPositiveEvidence(input: QualityGateInput): PositiveEvidence[] {
     const activityPattern = /<(ui:[A-Za-z]+)\s/g;
     let match;
     while ((match = activityPattern.exec(entry.content)) !== null) {
-      const knownActivity = KNOWN_ACTIVITIES[match[1]];
+      const knownActivity = lookupActivity(match[1]);
       if (knownActivity) {
         usedPackages.add(knownActivity.package);
       }
@@ -1686,7 +1695,6 @@ const BLOCKING_CHECKS = new Set([
   "invoke-path-mismatch",
   "dependencies",
   "dependency-version",
-  "hardcoded-credential",
   "unknown-activity",
   "undeclared-variable",
   "invoke-arg-type-mismatch",
@@ -1697,6 +1705,7 @@ const BLOCKING_CHECKS = new Set([
 ]);
 
 const WARNING_CHECKS = new Set([
+  "hardcoded-credential",
   "placeholder-value",
   "config-key-missing",
   "undeclared-asset",

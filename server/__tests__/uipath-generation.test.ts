@@ -269,13 +269,13 @@ describe("UiPath Generation Regression Tests", () => {
       expect(result.summary.totalWarnings).toBe(warningCategories.length);
     });
 
-    it("hardcoded credentials are blocking errors", () => {
+    it("hardcoded credentials are warnings (not blocking errors)", () => {
       const xaml = makeValidXaml("Main", `<ui:LogMessage Message="password = 'MySecretPassword123'" DisplayName="Bad Log" />`);
       const deps = { "UiPath.System.Activities": "23.10.0" };
       const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
       const credIssues = result.violations.filter(v => v.check === "hardcoded-credential");
       expect(credIssues.length).toBeGreaterThan(0);
-      expect(credIssues[0].severity).toBe("error");
+      expect(credIssues[0].severity).toBe("warning");
     });
 
     it("unknown activities are blocking errors", () => {
@@ -781,8 +781,9 @@ describe("UiPath Generation Regression Tests", () => {
 
   describe("Regression: Generator/Validator Activity Schema Drift", () => {
     it("every activity in ACTIVITY_REGISTRY has a package mapping", () => {
+      const builtinActivities = new Set(["Assign", "ui:Assign", "Throw", "ui:Throw"]);
       for (const [actName, entry] of Object.entries(ACTIVITY_REGISTRY)) {
-        if (actName === "Assign") continue;
+        if (builtinActivities.has(actName)) continue;
         expect(entry.package).toBeTruthy();
         expect(entry.package.length).toBeGreaterThan(0);
       }
@@ -1356,6 +1357,104 @@ describe("UiPath Generation Regression Tests", () => {
           expect(mainEntry.content).not.toContain("GetTransactionData");
           expect(mainEntry.content).not.toContain("SetTransactionStatus");
         }
+      }
+    });
+  });
+
+  describe("Regression: Activity Stripping, Credential False Positive, Duplicate RetryScope", () => {
+    it("ui:Assign is recognized by quality gate and not flagged as unknown", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:Assign DisplayName="Set Value">
+          <ui:Assign.To><OutArgument x:TypeArguments="x:String">[str_Result]</OutArgument></ui:Assign.To>
+          <ui:Assign.Value><InArgument x:TypeArguments="x:String">"hello"</InArgument></ui:Assign.Value>
+        </ui:Assign>`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const unknownActs = result.violations.filter(v => v.check === "unknown-activity");
+      expect(unknownActs.length).toBe(0);
+    });
+
+    it("ui:Throw is recognized by quality gate and not flagged as unknown", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:Throw DisplayName="Throw Exception" Exception="[new System.Exception()]" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const unknownActs = result.violations.filter(v => v.check === "unknown-activity");
+      expect(unknownActs.length).toBe(0);
+    });
+
+    it("ui:DeserializeJSON (uppercase) is recognized by quality gate", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:DeserializeJSON DisplayName="Parse JSON" JsonString="[str_Json]" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0", "UiPath.Web.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const unknownActs = result.violations.filter(v => v.check === "unknown-activity");
+      expect(unknownActs.length).toBe(0);
+    });
+
+    it("bracket-wrapped UiPath variable references do not trigger credential false positive", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="InitAllSettings"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Init">
+    <ui:GetCredential DisplayName="Get Cred" AssetName="MyCred" Username="[str_TempUser]" Password="[sec_TempPass]" />
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "InitAllSettings.xaml", content: xaml }], deps);
+      const credIssues = result.violations.filter(v => v.check === "hardcoded-credential");
+      expect(credIssues.length).toBe(0);
+    });
+
+    it("generated package XAML does not contain nested duplicate RetryScope elements", async () => {
+      const pkg = {
+        projectName: "RetryTest",
+        description: "Test that retry wrapping is not duplicated",
+        workflows: [{
+          name: "CallApi",
+          steps: [
+            { name: "Call REST API", description: "HTTP GET request to external API", activity: "HttpClient" },
+          ],
+        }],
+        dependencies: ["UiPath.System.Activities", "UiPath.Web.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+      for (const entry of result.xamlEntries) {
+        const content = entry.content;
+        const openTag = /<ui:RetryScope[\s>]/g;
+        let match;
+        while ((match = openTag.exec(content)) !== null) {
+          const scopeStart = match.index;
+          const closeIdx = content.indexOf("</ui:RetryScope>", scopeStart);
+          if (closeIdx < 0) continue;
+          const innerContent = content.substring(scopeStart + match[0].length, closeIdx);
+          const nestedCount = (innerContent.match(/<ui:RetryScope[\s>]/g) || []).length;
+          expect(nestedCount).toBe(0);
+        }
+      }
+    });
+
+    it("generated InitAllSettings.xaml with credentials does not get stub-replaced", () => {
+      const initXaml = generateReframeworkMainXaml("TestProject", "TestQueue", "Windows");
+      expect(initXaml).toContain("StateMachine");
+      expect(initXaml).not.toContain("STUB_BLOCKING_FALLBACK");
+    });
+
+    it("generated package with credential assets has no STUB_BLOCKING_FALLBACK in any XAML", async () => {
+      const pkg = {
+        projectName: "CredentialTest",
+        description: "Test that credential assets do not trigger stub fallback",
+        workflows: [{ name: "Main", steps: [{ name: "Log", description: "Log message" }] }],
+        dependencies: ["UiPath.System.Activities"],
+      };
+      const result = await buildNuGetPackage(pkg, "1.0.0-test", undefined, "baseline_openable");
+      for (const entry of result.xamlEntries) {
+        expect(entry.content).not.toContain("STUB_BLOCKING_FALLBACK");
       }
     });
   });

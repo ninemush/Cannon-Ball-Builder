@@ -1970,6 +1970,7 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
 
   if (errorHandling === "retry") {
     const escapedStep = escapeXml(stepName);
+    const alreadyHasRetryScope = /<ui:RetryScope[\s>]/.test(innerXml);
     const retryScreenshot = suppressDiagnostics ? "" : `
                         <TryCatch DisplayName="Safe Screenshot on Retry Failure">
                           <TryCatch.Try>
@@ -1993,9 +1994,7 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
                             </Catch>
                           </TryCatch.Catches>
                         </TryCatch>`;
-    return `
-          <TryCatch DisplayName="Try Retry: ${escapedStep}"${annotAttr}>
-            <TryCatch.Try>
+    const retryBody = alreadyHasRetryScope ? innerXml : `
               <ui:RetryScope DisplayName="Retry: ${escapedStep}" NumberOfRetries="3" RetryInterval="00:00:05">
                 <ui:RetryScope.Body>
                   <Sequence DisplayName="Retry Body: ${escapedStep}">${innerXml}
@@ -2004,7 +2003,10 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
                 <ui:RetryScope.Condition>
                   <ui:ShouldRetry />
                 </ui:RetryScope.Condition>
-              </ui:RetryScope>
+              </ui:RetryScope>`;
+    return `
+          <TryCatch DisplayName="Try Retry: ${escapedStep}"${annotAttr}>
+            <TryCatch.Try>${retryBody}
             </TryCatch.Try>
             <TryCatch.Catches>
               <Catch x:TypeArguments="s:Exception">
