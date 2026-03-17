@@ -1,0 +1,46 @@
+Surface the quality gate results as a human-readable Studio compatibility summary in the Developer Handoff Guide, and ensure the frontend package status accurately reflects the actual artifact state.
+
+PART A — STUDIO COMPATIBILITY SUMMARY IN THE DHG
+
+BACKGROUND
+The quality gate already validates: XML well-formedness, unknown activities, hardcoded credentials, placeholder leakage, dependency parity, and archive manifest consistency. This information is currently used only internally. Developers receiving the handoff package have no pre-flight summary before they open Studio — they discover issues only after the package fails to load or throws errors.
+
+SOLUTION
+1. In quality-gate.ts (or wherever the gate results are structured), ensure the result object contains a typed list of check results:
+   type QualityCheckResult = {
+     checkName: string;
+     status: 'pass' | 'warn' | 'fail';
+     message: string;
+     remediation?: string;   // one-line fix instruction, populated for warn and fail
+   }
+
+2. In dhg-generator.ts, add a "Studio Compatibility" section to the generated DHG. Place it near the top — before deployment steps. Format it as a table with columns: Check | Result | Notes.
+
+   Populate it from the QualityCheckResult list. Use plain language for check names:
+   - 'xml_wellformed' → 'XAML structure'
+   - 'unknown_activities' → 'Activity references'
+   - 'hardcoded_credentials' → 'Credential safety'
+   - 'placeholder_leakage' → 'Placeholder cleanup'
+   - 'dependency_parity' → 'Package dependencies'
+   - 'archive_manifest' → 'Package manifest'
+
+   For any warn or fail result, include the remediation note in the Notes column.
+
+3. Add a one-line overall verdict above the table:
+   - All checks passed → "This package is ready to open in UiPath Studio 2025."
+   - Warnings present → "This package will open in Studio. Review the items below before running."
+   - Failures present → "This package has issues that must be resolved before it will open correctly in Studio."
+
+PART B — PACKAGE READINESS INDICATOR IN THE FRONTEND
+
+4. Use the four-state enum from Task 2 (BUILDING, READY, READY_WITH_WARNINGS, FAILED) to drive the package card UI in the frontend.
+
+5. The package card should show:
+   - BUILDING: animated progress, streaming log panel (from Task 7), no download/deploy buttons
+   - READY: green "Ready" badge, download button enabled, deploy button enabled, Studio compatibility summary accessible via "View details"
+   - READY_WITH_WARNINGS: amber "Review before opening" badge, download and deploy buttons enabled, warning count shown inline (e.g. "2 warnings"), expandable panel showing the specific warnings with remediation notes
+   - FAILED: red "Build failed" badge, retry button, error message, no download/deploy buttons
+
+6. The "View details" panel for READY and READY_WITH_WARNINGS should show the same Studio compatibility check table that appears in the DHG — so the user can review it in the UI without downloading the document first.
+
+7. All existing tests must still pass.
