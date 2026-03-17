@@ -362,7 +362,7 @@ function SystemTab() {
           ) : (
             <div className="space-y-2">
               <p className="text-sm font-semibold" data-testid="text-current-model">
-                {llmData?.provider === "anthropic" ? "Claude" : llmData?.provider} {llmData?.model}
+                {llmData?.provider === "anthropic" ? "Anthropic" : llmData?.provider === "openai" ? "OpenAI" : llmData?.provider === "google" ? "Google" : llmData?.provider} {llmData?.model}
               </p>
               <Select
                 value={selectedModel || llmData?.model || ""}

@@ -21,7 +21,7 @@ The application employs a modern web stack for scalability and an intuitive user
 -   PostgreSQL integrated with Drizzle ORM.
 
 **AI Integration**:
--   LLM provider abstraction layer (`server/lib/llm.ts`) supporting provider-agnostic AI calls. Currently configured for Anthropic Claude via Replit AI Integrations. Provider and model are configurable via `LLM_PROVIDER` and `LLM_MODEL` environment variables (defaults: `anthropic` / `claude-sonnet-4-6`). New providers can be added by implementing the `LLMProvider` interface and registering in the provider registry.
+-   LLM provider abstraction layer (`server/lib/llm.ts`) supporting provider-agnostic AI calls. Supports three providers: Anthropic Claude (via Replit AI Integrations), OpenAI (ChatGPT 5.0, ChatGPT 5.3 Codex), and Google (Gemini 2.5 Pro). Provider is auto-resolved from the selected model ID. Model is configurable via admin Settings UI or `LLM_MODEL` env var (default: `claude-sonnet-4-6`). API keys: `AI_INTEGRATIONS_ANTHROPIC_API_KEY` for Anthropic (via Replit integration), `OPENAI_API_KEY` for OpenAI, `GOOGLE_AI_API_KEY` for Gemini. New providers can be added by implementing the `LLMProvider` interface and registering in the provider registry.
 
 **Authentication**:
 -   Session-based authentication supports demo users and role-switching.
@@ -59,7 +59,7 @@ The application employs a modern web stack for scalability and an intuitive user
 -   **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deploy time.
 
 ## External Dependencies
--   **AI Service**: Anthropic Claude (via Replit AI Integrations)
+-   **AI Service**: Anthropic Claude (via Replit AI Integrations), OpenAI (via `openai` npm package), Google Gemini (via `@google/generative-ai` npm package)
 -   **Database**: PostgreSQL
 -   **ORM**: Drizzle ORM
 -   **Frontend Libraries**: React Flow, @dagrejs/dagre, shadcn/ui, wouter
