@@ -15,6 +15,122 @@ import type { AutomationPattern } from "./uipath-activity-registry";
 
 let _aiCenterSkillsCtx: AICenterSkill[] = [];
 let _currentAutomationPattern: string = "";
+let _currentGenerationMode: GenerationMode = "baseline_openable";
+
+export type GenerationMode = "baseline_openable" | "full_implementation";
+
+export interface GenerationModeConfig {
+  mode: GenerationMode;
+  reason: string;
+  flatScaffold: boolean;
+  blockReFramework: boolean;
+  blockForbiddenActivities: boolean;
+}
+
+const BASELINE_FORBIDDEN_ACTIVITIES = new Set([
+  "ui:TakeScreenshot",
+  "ui:AddLogFields",
+]);
+
+const REFRAMEWORK_FILES = new Set([
+  "GetTransactionData.xaml",
+  "SetTransactionStatus.xaml",
+  "CloseAllApplications.xaml",
+  "KillAllProcesses.xaml",
+]);
+
+export function selectGenerationMode(
+  automationPattern: string,
+  confidence?: number,
+): GenerationModeConfig {
+  const isSimpleOrApi = automationPattern === "simple-linear" || automationPattern === "api-data-driven";
+  const isLowConfidence = confidence !== undefined && confidence < 0.6;
+  const isTransactional = automationPattern === "transactional-queue";
+
+  if (isTransactional && !isLowConfidence) {
+    return {
+      mode: "full_implementation",
+      reason: `Pattern "${automationPattern}" supports full implementation with REFramework`,
+      flatScaffold: false,
+      blockReFramework: false,
+      blockForbiddenActivities: false,
+    };
+  }
+
+  if (isSimpleOrApi || isLowConfidence) {
+    return {
+      mode: "baseline_openable",
+      reason: isLowConfidence
+        ? `Low confidence (${(confidence! * 100).toFixed(0)}%) — defaulting to baseline_openable for safety`
+        : `Pattern "${automationPattern}" defaults to baseline_openable for reliable Studio-openable output`,
+      flatScaffold: true,
+      blockReFramework: true,
+      blockForbiddenActivities: true,
+    };
+  }
+
+  if (automationPattern === "ui-automation" || automationPattern === "hybrid") {
+    return {
+      mode: "full_implementation",
+      reason: `Pattern "${automationPattern}" supports full implementation`,
+      flatScaffold: false,
+      blockReFramework: false,
+      blockForbiddenActivities: false,
+    };
+  }
+
+  return {
+    mode: "baseline_openable",
+    reason: `Unknown pattern "${automationPattern}" — defaulting to baseline_openable`,
+    flatScaffold: true,
+    blockReFramework: true,
+    blockForbiddenActivities: true,
+  };
+}
+
+export function setGenerationMode(mode: GenerationMode): void {
+  _currentGenerationMode = mode;
+}
+
+export function getGenerationMode(): GenerationMode {
+  return _currentGenerationMode;
+}
+
+export function applyActivityPolicy(
+  xamlContent: string,
+  modeConfig: GenerationModeConfig,
+  fileName: string,
+): { content: string; blocked: string[] } {
+  if (!modeConfig.blockForbiddenActivities) {
+    return { content: xamlContent, blocked: [] };
+  }
+  const blocked: string[] = [];
+  let content = xamlContent;
+
+  for (const forbidden of Array.from(BASELINE_FORBIDDEN_ACTIVITIES)) {
+    const escaped = forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const selfClosingRe = new RegExp(`<${escaped}[^>]*\\/>`, "g");
+    const openCloseRe = new RegExp(`<${escaped}[^>]*>[\\s\\S]*?<\\/${escaped}>`, "g");
+    const replacement = `<ui:Comment Text="[baseline_openable] Removed forbidden activity: ${forbidden}" DisplayName="Policy: ${forbidden} blocked" />`;
+    if (content.includes(forbidden.replace("ui:", "<ui:"))) {
+      blocked.push(forbidden);
+      content = content.replace(selfClosingRe, replacement);
+      content = content.replace(openCloseRe, replacement);
+    }
+  }
+
+  if (modeConfig.blockReFramework) {
+    content = content.replace(/WorkflowFileName="Workflows\\([^"]+)"/g, 'WorkflowFileName="$1"');
+    content = content.replace(/WorkflowFileName="Workflows\/([^"]+)"/g, 'WorkflowFileName="$1"');
+  }
+
+  return { content, blocked };
+}
+
+export function isReFrameworkFile(fileName: string): boolean {
+  const basename = fileName.split("/").pop() || fileName;
+  return REFRAMEWORK_FILES.has(basename);
+}
 
 export function setAICenterSkillsContext(skills: AICenterSkill[]): void {
   _aiCenterSkillsCtx = skills || [];
@@ -3183,6 +3299,14 @@ export type DhgExtractedArtifacts = {
   requirements?: Array<{ name: string; type?: string; priority?: string; acceptanceCriteria?: string[]; source?: string; description?: string }>;
 };
 
+export type DhgQualityIssue = {
+  severity: "blocking" | "warning";
+  file: string;
+  check: string;
+  detail: string;
+  stubbedWorkflow?: string;
+};
+
 export type DhgOptions = {
   projectName: string;
   description?: string;
@@ -3199,6 +3323,10 @@ export type DhgOptions = {
   automationType?: "rpa" | "agent" | "hybrid";
   targetFramework?: TargetFramework;
   autopilotEnabled?: boolean;
+  generationMode?: GenerationMode;
+  generationModeReason?: string;
+  qualityIssues?: DhgQualityIssue[];
+  stubbedWorkflows?: string[];
 };
 
 export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
@@ -3246,6 +3374,14 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   }
   if (autopilotEnabled) md += `**Autopilot:** Enabled — self-healing selectors and AI-assisted recovery active\n`;
   if (enrichment) md += `**AI Enrichment:** Applied — activities use system-specific selectors and real property values\n`;
+  if (opts.generationMode) {
+    const modeLabel = opts.generationMode === "baseline_openable" ? "Baseline Openable (minimal, deterministic)" : "Full Implementation";
+    md += `**Generation Mode:** ${modeLabel}\n`;
+    if (opts.generationModeReason) md += `**Mode Reason:** ${opts.generationModeReason}\n`;
+  }
+  if (opts.stubbedWorkflows?.length) {
+    md += `**Stubbed Workflows:** ${opts.stubbedWorkflows.length} workflow(s) replaced with Studio-openable stubs due to blocking issues\n`;
+  }
 
   const tier2Items = [...endpointGaps, ...configGaps];
   const totalAutoFixed = analysisReports?.reduce((s, r) => s + r.report.totalAutoFixed, 0) ?? 0;
@@ -3286,6 +3422,42 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
 
   md += `\n**Readiness Score: ${readinessScore}%** | Estimated developer effort: **~${(estTotalMinutes / 60).toFixed(1)} hours** (${totalSelectorCount} selectors, ${totalCredentialCount} credentials, ${mandatoryBaseMinutes} min mandatory validation)\n`;
   md += `\n---\n\n`;
+
+  const blockingIssues = (opts.qualityIssues || []).filter(i => i.severity === "blocking");
+  const warningIssues = (opts.qualityIssues || []).filter(i => i.severity === "warning");
+  if (blockingIssues.length > 0 || warningIssues.length > 0) {
+    sectionNum++;
+    md += `## ${sectionNum}. Quality Gate Results\n\n`;
+
+    if (blockingIssues.length > 0) {
+      md += `### Blocking Issues (${blockingIssues.length})\n\n`;
+      md += `These issues caused specific workflows to fall back to Studio-openable stubs. The stubs are valid XAML and can be opened in Studio, but require manual implementation.\n\n`;
+      md += `| # | File | Check | Detail |\n`;
+      md += `|---|------|-------|---------|\n`;
+      blockingIssues.forEach((issue, i) => {
+        const detail = issue.detail.length > 120 ? issue.detail.slice(0, 117) + "..." : issue.detail;
+        md += `| ${i + 1} | \`${issue.file}\` | ${issue.check} | ${detail.replace(/\|/g, "\\|")} |\n`;
+      });
+      md += `\n`;
+      if (opts.stubbedWorkflows?.length) {
+        md += `**Stubbed Workflows:** ${opts.stubbedWorkflows.map(s => `\`${s}\``).join(", ")}\n\n`;
+        md += `> These stubs contain a LogMessage indicating manual implementation is needed. They are correctly wired into the project with valid InvokeWorkflowFile references.\n\n`;
+      }
+    }
+
+    if (warningIssues.length > 0) {
+      md += `### Warnings (${warningIssues.length})\n\n`;
+      md += `These are minor issues that do not prevent the package from being opened or used. They represent areas where a developer can improve the generated output.\n\n`;
+      md += `| # | File | Check | Detail |\n`;
+      md += `|---|------|-------|---------|\n`;
+      warningIssues.forEach((issue, i) => {
+        const detail = issue.detail.length > 120 ? issue.detail.slice(0, 117) + "..." : issue.detail;
+        md += `| ${i + 1} | \`${issue.file}\` | ${issue.check} | ${detail.replace(/\|/g, "\\|")} |\n`;
+      });
+      md += `\n`;
+    }
+    md += `---\n\n`;
+  }
 
   const allSelectorHints: Array<{ activity: string; hint: string; nodeName: string }> = [];
   if (enrichment?.nodes) {
@@ -4423,8 +4595,40 @@ export function validateXamlContent(xamlEntries: { name: string; content: string
   return violations;
 }
 
-export function generateStubWorkflow(fileName: string): string {
+export interface StubWorkflowOptions {
+  arguments?: Array<{ name: string; direction: string; type: string }>;
+  variables?: Array<{ name: string; type: string; defaultValue?: string }>;
+  reason?: string;
+  isBlockingFallback?: boolean;
+}
+
+export function generateStubWorkflow(fileName: string, options?: StubWorkflowOptions): string {
   const className = fileName.replace(/\.xaml$/i, "").replace(/[^A-Za-z0-9_]/g, "_");
+  const reason = options?.reason || "this workflow was auto-generated as a placeholder because it is referenced by InvokeWorkflowFile but was not part of the original process map";
+  const stubLabel = options?.isBlockingFallback ? "STUB_BLOCKING_FALLBACK" : "STUB";
+
+  let argumentProps = "";
+  if (options?.arguments?.length) {
+    argumentProps = "\n  <x:Members>\n";
+    for (const arg of options.arguments) {
+      const dir = arg.direction === "OutArgument" ? "OutArgument" : arg.direction === "InOutArgument" ? "InOutArgument" : "InArgument";
+      argumentProps += `    <x:Property Name="${escapeXml(arg.name)}" Type="${dir}(${escapeXml(arg.type)})" />\n`;
+    }
+    argumentProps += "  </x:Members>";
+  }
+
+  let variableDecls = "";
+  if (options?.variables?.length) {
+    variableDecls = "\n    <Sequence.Variables>\n";
+    for (const v of options.variables) {
+      const defVal = v.defaultValue ? ` Default="${escapeXml(v.defaultValue)}"` : "";
+      variableDecls += `      <Variable x:TypeArguments="${escapeXml(v.type)}" Name="${escapeXml(v.name)}"${defVal} />\n`;
+    }
+    variableDecls += "    </Sequence.Variables>";
+  } else {
+    variableDecls = "\n    <Sequence.Variables />";
+  }
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${className}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
@@ -4434,10 +4638,9 @@ export function generateStubWorkflow(fileName: string): string {
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Data;assembly=System.Data"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <Sequence DisplayName="${escapeXml(className)}">
-    <Sequence.Variables />
-    <ui:LogMessage Level="Warn" Message="'STUB: ${escapeXml(className)} — this workflow was auto-generated as a placeholder because it is referenced by InvokeWorkflowFile but was not part of the original process map. Implement the actual logic here.'" DisplayName="Stub Warning: ${escapeXml(className)}" />
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${argumentProps}
+  <Sequence DisplayName="${escapeXml(className)}">${variableDecls}
+    <ui:LogMessage Level="Warn" Message="[&quot;${stubLabel}: ${escapeXml(className)} — ${escapeXml(reason)}. Implement the actual logic here.&quot;]" DisplayName="Stub Warning: ${escapeXml(className)}" />
   </Sequence>
 </Activity>`;
 }

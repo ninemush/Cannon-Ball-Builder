@@ -21,14 +21,21 @@ import {
   validateXamlContent,
   generateStubWorkflow,
   setAutomationPattern,
+  selectGenerationMode,
+  setGenerationMode,
+  applyActivityPolicy,
+  isReFrameworkFile,
+  type GenerationMode,
+  type GenerationModeConfig,
   type XamlGeneratorResult,
   type XamlGap,
   type TargetFramework,
   type XamlValidationViolation,
+  type DhgQualityIssue,
 } from "./xaml-generator";
 import { enrichWithAI, type EnrichmentResult } from "./ai-xaml-enricher";
 import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
-import { runQualityGate, formatQualityGateViolations, type QualityGateResult } from "./uipath-quality-gate";
+import { runQualityGate, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue } from "./uipath-quality-gate";
 import { escapeXml } from "./lib/xml-utils";
 import { computePackageFingerprint } from "./lib/utils";
 import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern } from "./uipath-activity-registry";
@@ -522,9 +529,12 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     hasQueues,
     enrichment?.useReFramework,
   );
-  const useReFramework = generationMode === "baseline_openable" ? false : shouldUseReFramework(automationPattern);
+  const modeConfig = selectGenerationMode(automationPattern);
+  generationMode = modeConfig.mode;
+  setGenerationMode(generationMode);
+  const useReFramework = modeConfig.blockReFramework ? false : shouldUseReFramework(automationPattern);
   setAutomationPattern(automationPattern);
-  console.log(`[UiPath] Automation pattern: ${automationPattern}, useReFramework: ${useReFramework}, generationMode: ${generationMode}`);
+  console.log(`[UiPath] Automation pattern: ${automationPattern}, generationMode: ${generationMode}, useReFramework: ${useReFramework}, reason: ${modeConfig.reason}`);
   const queueName = enrichment?.reframeworkConfig?.queueName
     || orchestratorArtifacts?.queues?.[0]?.name
     || "TransactionQueue";
@@ -631,13 +641,23 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     const deferredWrites = new Map<string, string>();
     const tf: TargetFramework = isServerless ? "Portable" : "Windows";
     const apEnabled = !!(pkg as any).autopilotEnabled || !!(_probeCache?.flags?.autopilot);
+    const earlyStubFallbacks: string[] = [];
+    const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
+    const collectedQualityIssues: DhgQualityIssue[] = [];
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
-      const compliant = makeUiPathCompliant(rawXaml, tf);
+      let compliant = makeUiPathCompliant(rawXaml, tf);
       const { filtered, removed } = filterBlockedActivitiesFromXaml(compliant, automationPattern);
+      compliant = filtered;
       if (removed.length > 0) {
         console.log(`[UiPath Policy] ${fileName}: removed ${removed.length} blocked activit(ies) for pattern "${automationPattern}": ${removed.join(", ")}`);
       }
-      const { fixed, report } = analyzeAndFix(filtered);
+      const policyResult = applyActivityPolicy(compliant, modeConfig, fileName);
+      compliant = policyResult.content;
+      if (policyResult.blocked.length > 0) {
+        allPolicyBlocked.push({ file: fileName, activities: policyResult.blocked });
+        console.log(`[UiPath Policy] ${fileName}: blocked ${policyResult.blocked.join(", ")} (${generationMode} mode)`);
+      }
+      const { fixed, report } = analyzeAndFix(compliant);
       analysisReports.push({ fileName, report });
       if (!skipTracking) {
         xamlEntries.push({ name: fileName, content: fixed });
@@ -646,6 +666,38 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
         console.log(`[UiPath Analyzer] ${fileName}: ${report.totalAutoFixed} auto-fixed, ${report.totalRemaining} remaining`);
       }
       return fixed;
+    }
+
+    function tryGenerateOrStub(
+      generateFn: () => XamlGeneratorResult,
+      wfName: string,
+      description: string,
+    ): XamlGeneratorResult | null {
+      try {
+        const result = generateFn();
+        if (modeConfig.blockReFramework && isReFrameworkFile(`${wfName}.xaml`)) {
+          console.log(`[UiPath Early Stub] Skipping REFramework file ${wfName}.xaml in ${generationMode} mode`);
+          return null;
+        }
+        return result;
+      } catch (err: any) {
+        console.log(`[UiPath Early Stub] Generator failed for ${wfName}: ${err.message} — emitting stub`);
+        const stubXaml = generateStubWorkflow(wfName, {
+          reason: `Generator could not safely produce this workflow: ${err.message}`,
+          isBlockingFallback: true,
+        });
+        const stubCompliant = compliancePass(stubXaml, `${wfName}.xaml`);
+        deferredWrites.set(`${libPath}/${wfName}.xaml`, stubCompliant);
+        earlyStubFallbacks.push(`${wfName}.xaml`);
+        collectedQualityIssues.push({
+          severity: "blocking",
+          file: `${wfName}.xaml`,
+          check: "generator-failure",
+          detail: `Generator failed: ${err.message} — replaced with Studio-openable stub`,
+          stubbedWorkflow: `${wfName}.xaml`,
+        });
+        return null;
+      }
     }
 
     const workflows = pkg.workflows || [];
@@ -660,46 +712,52 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
           decomp.nodeIds.includes(e.sourceNodeId) || decomp.nodeIds.includes(e.targetNodeId)
         );
         if (decompNodes.length > 0) {
-          const result = generateRichXamlFromNodes(
-            decompNodes,
-            decompEdges,
+          const result = tryGenerateOrStub(
+            () => generateRichXamlFromNodes(decompNodes, decompEdges, wfName, decomp.description || "", enrichment, tf, apEnabled),
             wfName,
             decomp.description || "",
-            enrichment,
-            tf,
-            apEnabled
           );
-          xamlResults.push(result);
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
-          if (wfName === "Main") hasMain = true;
-          console.log(`[UiPath] Generated decomposed workflow "${wfName}": ${decompNodes.length} nodes, ${result.gaps.length} gaps`);
+          if (result) {
+            xamlResults.push(result);
+            deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
+            if (wfName === "Main") hasMain = true;
+            console.log(`[UiPath] Generated decomposed workflow "${wfName}": ${decompNodes.length} nodes, ${result.gaps.length} gaps`);
+          } else if (wfName === "Main") {
+            hasMain = true;
+          }
         }
       }
     }
 
     for (const wf of workflows) {
       const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
-      const result = generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled);
-      xamlResults.push(result);
-      deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
-      if (wfName === "Main") hasMain = true;
-      console.log(`[UiPath] Generated rich XAML for "${wfName}": ${result.gaps.length} gaps, ${result.usedPackages.length} packages`);
+      const result = tryGenerateOrStub(
+        () => generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled),
+        wfName,
+        wf.name || "Workflow",
+      );
+      if (result) {
+        xamlResults.push(result);
+        deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
+        if (wfName === "Main") hasMain = true;
+        console.log(`[UiPath] Generated rich XAML for "${wfName}": ${result.gaps.length} gaps, ${result.usedPackages.length} packages`);
+      } else if (wfName === "Main") {
+        hasMain = true;
+      }
     }
 
     if (!hasMain && processNodes.length > 0 && !enrichment?.decomposition?.length) {
-      const processResult = generateRichXamlFromNodes(
-        processNodes,
-        processEdges,
-        useReFramework ? "Process" : projectName,
-        pkg.description || "",
-        enrichment,
-        tf,
-        apEnabled
-      );
-      xamlResults.push(processResult);
       const processFileName = useReFramework ? "Process" : projectName;
-      deferredWrites.set(`${libPath}/${processFileName}.xaml`, compliancePass(processResult.xaml, `${processFileName}.xaml`));
-      console.log(`[UiPath] Generated process XAML from ${processNodes.length} map nodes: ${processResult.gaps.length} gaps`);
+      const processResult = tryGenerateOrStub(
+        () => generateRichXamlFromNodes(processNodes, processEdges, processFileName, pkg.description || "", enrichment, tf, apEnabled),
+        processFileName,
+        pkg.description || "",
+      );
+      if (processResult) {
+        xamlResults.push(processResult);
+        deferredWrites.set(`${libPath}/${processFileName}.xaml`, compliancePass(processResult.xaml, `${processFileName}.xaml`));
+        console.log(`[UiPath] Generated process XAML from ${processNodes.length} map nodes: ${processResult.gaps.length} gaps`);
+      }
     }
 
     const initXaml = generateInitAllSettingsXaml(orchestratorArtifacts, tf);
@@ -889,25 +947,18 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       .filter((n: any) => n.isPainPoint)
       .map((n: any) => ({ name: n.name, description: n.description || "" }));
 
-    const dhg = generateDeveloperHandoffGuide({
-      projectName,
-      description: pkg.description || "",
-      gaps: allGaps,
-      usedPackages: allUsedPkgs,
-      workflowNames,
-      sddContent: sddContent || undefined,
-      enrichment,
-      useReFramework,
-      painPoints,
-      deploymentResults: pkg._deploymentResults || undefined,
-      extractedArtifacts: orchestratorArtifacts || undefined,
-      analysisReports,
-      automationType: pkg._automationType || undefined,
-      targetFramework: tf,
-      autopilotEnabled: apEnabled,
-    });
-    archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
-    console.log(`[UiPath] Generated Developer Handoff Guide: ${allGaps.length} gaps, ~${(allGaps.reduce((s: number, g: XamlGap) => s + g.estimatedMinutes, 0) / 60).toFixed(1)}h effort, REFramework=${useReFramework}`);
+    for (const pb of allPolicyBlocked) {
+      for (const act of pb.activities) {
+        collectedQualityIssues.push({
+          severity: "warning",
+          file: pb.file,
+          check: "activity-policy-blocked",
+          detail: `Activity ${act} was blocked by ${generationMode} mode activity policy`,
+        });
+      }
+    }
+
+    console.log(`[UiPath] DHG generation deferred until after quality gate processing`);
 
     const preArchiveViolations = validateXamlContent(xamlEntries);
 
@@ -1002,6 +1053,16 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
     if (!qualityGateResult.passed) {
       console.log(`[UiPath Quality Gate] Initial check failed with ${qualityGateResult.summary.totalErrors} error(s). Attempting auto-remediation...`);
 
+      const classifiedIssues = classifyQualityIssues(qualityGateResult);
+      for (const ci of classifiedIssues) {
+        collectedQualityIssues.push({
+          severity: ci.severity,
+          file: ci.file,
+          check: ci.check,
+          detail: ci.detail,
+        });
+      }
+
       for (let i = 0; i < xamlEntries.length; i++) {
         let content = xamlEntries[i].content;
         let wasFixed = false;
@@ -1092,48 +1153,166 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
       });
 
       if (!qualityGateResult.passed) {
-        console.log(`[UiPath Quality Gate] Still failing after remediation (${qualityGateResult.summary.totalErrors} errors). Falling back to clean baseline stubs.`);
-        usedFallback = true;
+        const reClassified = classifyQualityIssues(qualityGateResult);
+        const blockingFiles = getBlockingFiles(reClassified);
+        const onlyWarnings = hasOnlyWarnings(reClassified);
 
-        for (let i = 0; i < xamlEntries.length; i++) {
-          const entryName = xamlEntries[i].name;
-          const className = (entryName.split("/").pop() || entryName).replace(".xaml", "");
-          const stubXaml = generateStubWorkflow(className);
-          const stubCompliant = makeUiPathCompliant(stubXaml, tf);
-          xamlEntries[i] = { name: entryName, content: stubCompliant };
+        if (onlyWarnings) {
+          console.log(`[UiPath Quality Gate] Only warning-level issues remain (${qualityGateResult.summary.totalWarnings}) — shipping package with warnings documented in DHG`);
+          qualityGateResult = { ...qualityGateResult, passed: true };
+        } else if (blockingFiles.size > 0) {
+          console.log(`[UiPath Quality Gate] Per-workflow stub fallback for ${blockingFiles.size} file(s): ${Array.from(blockingFiles).join(", ")}`);
+          usedFallback = true;
 
-          const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === (entryName.split("/").pop() || entryName));
-          if (archivePath) {
-            deferredWrites.set(archivePath, stubCompliant);
+          for (let i = 0; i < xamlEntries.length; i++) {
+            const entryName = xamlEntries[i].name;
+            const shortName = entryName.split("/").pop() || entryName;
+            if (!blockingFiles.has(shortName)) continue;
+
+            const className = shortName.replace(".xaml", "");
+            const blockingDetails = reClassified.filter(ci => ci.file === shortName && ci.severity === "blocking");
+            const stubXaml = generateStubWorkflow(className, {
+              reason: `Blocking quality gate issues: ${blockingDetails.map(d => d.check).join(", ")}`,
+              isBlockingFallback: true,
+            });
+            const stubCompliant = makeUiPathCompliant(stubXaml, tf);
+            xamlEntries[i] = { name: entryName, content: stubCompliant };
+
+            const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === shortName);
+            if (archivePath) {
+              deferredWrites.set(archivePath, stubCompliant);
+            }
+            earlyStubFallbacks.push(shortName);
+            autoFixSummary.push(`Replaced ${entryName} with per-workflow Studio-openable stub (blocking issues: ${blockingDetails.map(d => d.check).join(", ")})`);
           }
-          autoFixSummary.push(`Replaced ${entryName} with clean Studio-openable stub`);
-        }
 
-        const stubPackages = new Set<string>();
-        for (const stubEntry of xamlEntries) {
-          const scanned = scanXamlForRequiredPackages(stubEntry.content);
-          for (const pkg of scanned) stubPackages.add(pkg);
-        }
-        for (const key of Object.keys(deps)) delete deps[key];
-        for (const pkg of stubPackages) {
-          deps[pkg] = knownVersionMap[pkg] || (tf === "Windows" ? "23.10.0" : "25.10.0");
-        }
-        if (!deps["UiPath.System.Activities"]) {
-          deps["UiPath.System.Activities"] = knownVersionMap["UiPath.System.Activities"];
-        }
-        projectJson.dependencies = { ...deps };
-        const stubProjectJsonStr = JSON.stringify(projectJson, null, 2);
+          const stubPackages = new Set<string>();
+          for (const stubEntry of xamlEntries) {
+            const scanned = scanXamlForRequiredPackages(stubEntry.content);
+            for (const pkg of scanned) stubPackages.add(pkg);
+          }
+          for (const key of Object.keys(deps)) {
+            if (!stubPackages.has(key)) {
+              delete deps[key];
+            }
+          }
+          for (const pkg of stubPackages) {
+            if (!deps[pkg]) {
+              deps[pkg] = knownVersionMap[pkg] || (tf === "Windows" ? "23.10.0" : "25.10.0");
+            }
+          }
+          if (!deps["UiPath.System.Activities"]) {
+            deps["UiPath.System.Activities"] = knownVersionMap["UiPath.System.Activities"];
+          }
+          projectJson.dependencies = { ...deps };
+          const stubProjectJsonStr = JSON.stringify(projectJson, null, 2);
 
-        qualityGateResult = runQualityGate({
-          xamlEntries,
-          projectJsonContent: stubProjectJsonStr,
-          configData: configCsv,
-          orchestratorArtifacts,
-          targetFramework: tf,
-          archiveManifest: allArchivePaths,
-          archiveContentHashes: buildContentHashRecord(),
-          automationPattern,
-        });
+          qualityGateResult = runQualityGate({
+            xamlEntries,
+            projectJsonContent: stubProjectJsonStr,
+            configData: configCsv,
+            orchestratorArtifacts,
+            targetFramework: tf,
+            archiveManifest: allArchivePaths,
+            archiveContentHashes: buildContentHashRecord(),
+            automationPattern,
+          });
+
+          if (!qualityGateResult.passed) {
+            const finalClassified = classifyQualityIssues(qualityGateResult);
+            if (hasOnlyWarnings(finalClassified)) {
+              console.log(`[UiPath Quality Gate] After per-workflow stub fallback, only warnings remain — passing`);
+              qualityGateResult = { ...qualityGateResult, passed: true };
+            } else {
+              console.log(`[UiPath Quality Gate] Per-workflow stub fallback insufficient — escalating to full package stub fallback`);
+              for (let j = 0; j < xamlEntries.length; j++) {
+                const entryName = xamlEntries[j].name;
+                const className = (entryName.split("/").pop() || entryName).replace(".xaml", "");
+                const stubXaml = generateStubWorkflow(className, {
+                  reason: "Escalated from per-workflow to full package stub fallback",
+                  isBlockingFallback: true,
+                });
+                const stubCompliant = makeUiPathCompliant(stubXaml, tf);
+                xamlEntries[j] = { name: entryName, content: stubCompliant };
+                const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === (entryName.split("/").pop() || entryName));
+                if (archivePath) deferredWrites.set(archivePath, stubCompliant);
+                const sn = entryName.split("/").pop() || entryName;
+                if (!earlyStubFallbacks.includes(sn)) earlyStubFallbacks.push(sn);
+                autoFixSummary.push(`Escalated ${entryName} to full package stub fallback`);
+              }
+              const escStubPackages = new Set<string>();
+              for (const stubEntry of xamlEntries) {
+                const scanned = scanXamlForRequiredPackages(stubEntry.content);
+                for (const pkg of scanned) escStubPackages.add(pkg);
+              }
+              for (const key of Object.keys(deps)) delete deps[key];
+              for (const pkg of escStubPackages) {
+                deps[pkg] = knownVersionMap[pkg] || (tf === "Windows" ? "23.10.0" : "25.10.0");
+              }
+              if (!deps["UiPath.System.Activities"]) {
+                deps["UiPath.System.Activities"] = knownVersionMap["UiPath.System.Activities"];
+              }
+              projectJson.dependencies = { ...deps };
+              qualityGateResult = runQualityGate({
+                xamlEntries,
+                projectJsonContent: JSON.stringify(projectJson, null, 2),
+                configData: configCsv,
+                orchestratorArtifacts,
+                targetFramework: tf,
+                archiveManifest: allArchivePaths,
+                archiveContentHashes: buildContentHashRecord(),
+                automationPattern,
+              });
+            }
+          }
+        } else {
+          console.log(`[UiPath Quality Gate] Still failing after remediation (${qualityGateResult.summary.totalErrors} errors) with package-level blocking issues. Falling back to clean baseline stubs.`);
+          usedFallback = true;
+
+          for (let i = 0; i < xamlEntries.length; i++) {
+            const entryName = xamlEntries[i].name;
+            const className = (entryName.split("/").pop() || entryName).replace(".xaml", "");
+            const stubXaml = generateStubWorkflow(className, {
+              reason: "Package-level quality gate failure forced complete stub fallback",
+              isBlockingFallback: true,
+            });
+            const stubCompliant = makeUiPathCompliant(stubXaml, tf);
+            xamlEntries[i] = { name: entryName, content: stubCompliant };
+
+            const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === (entryName.split("/").pop() || entryName));
+            if (archivePath) {
+              deferredWrites.set(archivePath, stubCompliant);
+            }
+            earlyStubFallbacks.push(entryName.split("/").pop() || entryName);
+            autoFixSummary.push(`Replaced ${entryName} with clean Studio-openable stub`);
+          }
+
+          const stubPackages = new Set<string>();
+          for (const stubEntry of xamlEntries) {
+            const scanned = scanXamlForRequiredPackages(stubEntry.content);
+            for (const pkg of scanned) stubPackages.add(pkg);
+          }
+          for (const key of Object.keys(deps)) delete deps[key];
+          for (const pkg of stubPackages) {
+            deps[pkg] = knownVersionMap[pkg] || (tf === "Windows" ? "23.10.0" : "25.10.0");
+          }
+          if (!deps["UiPath.System.Activities"]) {
+            deps["UiPath.System.Activities"] = knownVersionMap["UiPath.System.Activities"];
+          }
+          projectJson.dependencies = { ...deps };
+          const stubProjectJsonStr2 = JSON.stringify(projectJson, null, 2);
+
+          qualityGateResult = runQualityGate({
+            xamlEntries,
+            projectJsonContent: stubProjectJsonStr2,
+            configData: configCsv,
+            orchestratorArtifacts,
+            targetFramework: tf,
+            archiveManifest: allArchivePaths,
+            archiveContentHashes: buildContentHashRecord(),
+            automationPattern,
+          });
+        }
       }
 
       if (autoFixSummary.length > 0) {
@@ -1169,6 +1348,30 @@ export async function buildNuGetPackage(pkg: any, version: string = "1.0.0", ide
         console.log(`[UiPath Auto-Remediation Summary] ${autoFixSummary.length} fix(es) applied:\n${autoFixSummary.map(s => `  - ${s}`).join("\n")}`);
       }
     }
+
+    const dhg = generateDeveloperHandoffGuide({
+      projectName,
+      description: pkg.description || "",
+      gaps: allGaps,
+      usedPackages: allUsedPkgs,
+      workflowNames,
+      sddContent: sddContent || undefined,
+      enrichment,
+      useReFramework,
+      painPoints,
+      deploymentResults: pkg._deploymentResults || undefined,
+      extractedArtifacts: orchestratorArtifacts || undefined,
+      analysisReports,
+      automationType: pkg._automationType || undefined,
+      targetFramework: tf,
+      autopilotEnabled: apEnabled,
+      generationMode,
+      generationModeReason: modeConfig.reason,
+      qualityIssues: collectedQualityIssues,
+      stubbedWorkflows: earlyStubFallbacks.length > 0 ? earlyStubFallbacks : undefined,
+    });
+    archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
+    console.log(`[UiPath] Generated Developer Handoff Guide: ${allGaps.length} gaps, ~${(allGaps.reduce((s: number, g: XamlGap) => s + g.estimatedMinutes, 0) / 60).toFixed(1)}h effort, REFramework=${useReFramework}`);
 
     for (const [path, content] of deferredWrites.entries()) {
       archive.append(content, { name: path });

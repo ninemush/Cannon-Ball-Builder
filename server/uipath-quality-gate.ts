@@ -1662,6 +1662,89 @@ function buildSummary(violations: QualityGateViolation[]): QualityGateResult["su
   };
 }
 
+export type QualityIssueSeverity = "blocking" | "warning";
+
+export interface ClassifiedIssue {
+  severity: QualityIssueSeverity;
+  file: string;
+  check: string;
+  detail: string;
+  originalViolation: QualityGateViolation;
+}
+
+const BLOCKING_CHECKS = new Set([
+  "object-object",
+  "pseudo-xaml",
+  "fake-trycatch",
+  "net45-in-portable",
+  "legacy-modern-behavior",
+  "project-json-parse",
+  "modern-project",
+  "target-framework",
+  "main-xaml",
+  "invoked-file",
+  "invoke-path-mismatch",
+  "dependencies",
+  "dependency-version",
+  "hardcoded-credential",
+  "unknown-activity",
+  "undeclared-variable",
+  "invoke-arg-type-mismatch",
+  "xml-wellformedness",
+  "duplicate-file",
+  "archive-manifest-parity",
+  "archive-content-parity",
+]);
+
+const WARNING_CHECKS = new Set([
+  "placeholder-value",
+  "config-key-missing",
+  "undeclared-asset",
+  "invalid-activity-property",
+  "invalid-continue-on-error",
+  "invalid-trycatch-structure",
+  "empty-catches",
+  "invalid-catch-type",
+  "invalid-default-value",
+  "missing-required-property",
+  "legacy-selector-format",
+  "missing-retry-scope",
+  "logic-location",
+]);
+
+export function classifyQualityIssues(result: QualityGateResult): ClassifiedIssue[] {
+  const issues: ClassifiedIssue[] = [];
+  for (const v of result.violations) {
+    const isBlocking = v.severity === "error" && (BLOCKING_CHECKS.has(v.check) || !WARNING_CHECKS.has(v.check));
+    issues.push({
+      severity: isBlocking ? "blocking" : "warning",
+      file: v.file,
+      check: v.check,
+      detail: v.detail,
+      originalViolation: v,
+    });
+  }
+  return issues;
+}
+
+export function getBlockingFiles(issues: ClassifiedIssue[]): Set<string> {
+  const files = new Set<string>();
+  for (const issue of issues) {
+    if (issue.severity === "blocking" && issue.file !== "project.json" && issue.file !== "package" && issue.file !== "orchestrator") {
+      files.add(issue.file);
+    }
+  }
+  return files;
+}
+
+export function hasOnlyWarnings(issues: ClassifiedIssue[]): boolean {
+  return issues.every(i => i.severity === "warning");
+}
+
+export function hasBlockingIssues(issues: ClassifiedIssue[]): boolean {
+  return issues.some(i => i.severity === "blocking");
+}
+
 export function formatQualityGateViolations(result: QualityGateResult): string {
   const lines: string[] = [];
 
