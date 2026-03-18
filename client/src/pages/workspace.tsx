@@ -62,6 +62,14 @@ const STAGE_THINKING_MESSAGES: Record<string, string> = {
   "Maintenance": "Checking status...",
 };
 
+const INTENT_THINKING_MESSAGES: Record<string, string> = {
+  "DEPLOY": "Generating UiPath package...",
+  "PDD": "Generating Process Design Document...",
+  "SDD": "Generating Solution Design Document...",
+  "PDD_SDD": "Generating documents...",
+  "DHG": "Generating Developer Handoff Guide...",
+};
+
 interface StreamingProgressProps {
   mode: "thinking" | "doc" | "deploy";
   docType?: string;
@@ -69,9 +77,10 @@ interface StreamingProgressProps {
   deployStep?: string;
   onCancel?: () => void;
   stage?: string;
+  classifiedIntent?: string;
 }
 
-function StreamingProgressIndicator({ mode, docType, currentSection, deployStep, onCancel, stage }: StreamingProgressProps) {
+function StreamingProgressIndicator({ mode, docType, currentSection, deployStep, onCancel, stage, classifiedIntent }: StreamingProgressProps) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -84,6 +93,11 @@ function StreamingProgressIndicator({ mode, docType, currentSection, deployStep,
   const fallbackStep = steps[Math.min(Math.floor(elapsed / stepDuration), steps.length - 1)];
 
   const getThinkingMessage = () => {
+    if (classifiedIntent && INTENT_THINKING_MESSAGES[classifiedIntent]) {
+      if (elapsed >= 60) return "This is taking longer than usual, hang tight...";
+      if (elapsed >= 45) return "Still working on this...";
+      return INTENT_THINKING_MESSAGES[classifiedIntent];
+    }
     if (elapsed >= 45) return "This is taking longer than usual, hang tight...";
     if (elapsed >= 35) return "Still working on this...";
     return stage ? (STAGE_THINKING_MESSAGES[stage] || "Thinking...") : "Thinking...";
@@ -498,6 +512,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
   const [docProgressSection, setDocProgressSection] = useState<string>("");
   const [deployStep, setDeployStep] = useState<string>("");
+  const [classifiedIntent, setClassifiedIntent] = useState<string>("");
   const [uipathBuildStatus, setUipathBuildStatus] = useState<string | undefined>();
   const [uipathBuildWarnings, setUipathBuildWarnings] = useState<Array<{ code: string; message: string; stage: string; recoverable: boolean }> | undefined>();
   const [streamingDocContent, setStreamingDocContent] = useState<string>("");
@@ -747,6 +762,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
 
   const sendMessageDirect = useCallback(async (text: string, imageData?: { base64: string; mediaType: string }) => {
     lastUserMessageRef.current = text;
+    setClassifiedIntent("");
+    setDeployStep("");
     if (isToBeRelatedMessage(text)) {
       toBeGeneratingRef.current = true;
       console.log(`[ProcessMap] Detected TO-BE modification from user message, setting toBeGeneratingRef=true`);
@@ -822,12 +839,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                   prev ? { ...prev, content: prev.content + data.token } : prev
                 );
               }
+              if (data.intentClassified) {
+                setClassifiedIntent(data.intentClassified);
+              }
               if (data.done) {
                 setStreamingMsg((prev) =>
                   prev ? { ...prev, isStreaming: false } : prev
                 );
                 setDocProgressSection("");
-                setDeployStep("");
+                setClassifiedIntent("");
               }
               if (data.docProgress) {
                 if (data.docProgress.started && !isGeneratingDocRef.current) {
@@ -841,6 +861,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               if (data.deployStatus) {
                 if (data.deployComplete) {
                   setDeployStep("");
+                  setClassifiedIntent("");
                   setStreamingMsg(null);
                   queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
                 } else {
@@ -1616,7 +1637,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="doc" docType={docType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />;
             }
             if (!msg.content) {
-              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" stage={idea.stage} />;
+              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" stage={idea.stage} classifiedIntent={classifiedIntent} />;
             }
           }
 

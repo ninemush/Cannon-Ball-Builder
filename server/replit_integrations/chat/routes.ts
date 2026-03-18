@@ -629,6 +629,7 @@ export function registerChatRoutes(app: Express): void {
     }
 
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let deployKeepAliveOuter: ReturnType<typeof setInterval> | null = null;
     try {
       const idea = await storage.getIdea(ideaId);
       if (!idea) {
@@ -936,10 +937,14 @@ export function registerChatRoutes(app: Express): void {
       const hasGenVerb = /\b(generate|write|create|regenerate|redo|produce|build|draft)\b/.test(lowerContent);
       const hasShowVerb = /\b(show|view|open|display|get|see|give)\b/.test(lowerContent);
       const hasDeployVerb = /\b(deploy|push)\b/.test(lowerContent) && /\b(uipath|orchestrator)\b/.test(lowerContent);
+      const hasUiPathGenVerb = /\b(generate|regenerate|rebuild|build|create|redo)\b/.test(lowerContent) && /\b(uipath|package|nupkg|automation\s+package)\b/.test(lowerContent) && !hasPddKeyword && !hasSddKeyword;
 
       if (hasDeployVerb) {
         classifiedIntent = "DEPLOY";
         console.log(`[Chat] Keyword intent classification: DEPLOY`);
+      } else if (hasUiPathGenVerb) {
+        classifiedIntent = "DEPLOY";
+        console.log(`[Chat] Keyword intent classification: DEPLOY (uipath package generation)`);
       } else if (hasDhgKeyword) {
         classifiedIntent = "DHG";
         console.log(`[Chat] Keyword intent classification: DHG`);
@@ -992,6 +997,8 @@ CRITICAL RULES:
         classifiedIntent = "CHAT";
       }
 
+      try { res.write(`data: ${JSON.stringify({ intentClassified: classifiedIntent })}\n\n`); } catch {}
+
       let earlyDocType: "PDD" | "SDD" | null = null;
       if (chatApprovalDone) {
         console.log(`[Chat] ${approvalIntent} approved via chat — skipping inline doc generation (client auto-chain will handle next step)`);
@@ -1002,7 +1009,7 @@ CRITICAL RULES:
         earlyDocType = "SDD";
         try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
       } else if (classifiedIntent === "DEPLOY") {
-        try { res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`); } catch {}
+        try { res.write(`data: ${JSON.stringify({ deployStatus: "Analyzing your request..." })}\n\n`); } catch {}
       }
 
       let docContext = "";
@@ -1147,6 +1154,7 @@ CRITICAL RULES:
         intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting both PDD and SDD. Per the pipeline sequence, the PDD must be generated and approved first. Generate the PDD NOW using [DOC:PDD:0]. The SDD will be generated separately after PDD approval. Start your response with [DOC:PDD:0] followed by the full PDD content. Do NOT generate an SDD in this response.";
       } else if (classifiedIntent === "DEPLOY") {
         intentOverride = "\n\nDEPLOYMENT DIRECTIVE: The user is requesting deployment to UiPath Orchestrator. Proceed with the deployment flow.";
+        try { res.write(`data: ${JSON.stringify({ deployStatus: "Planning deployment..." })}\n\n`); } catch {}
       } else if (classifiedIntent === "DHG") {
         try {
           const messages = await chatStorage.getMessagesByIdeaId(ideaId);
@@ -1221,6 +1229,14 @@ CRITICAL RULES:
         messages: finalMessages,
       });
 
+      let deployKeepAlive: ReturnType<typeof setInterval> | null = null;
+      if (classifiedIntent === "DEPLOY") {
+        deployKeepAlive = setInterval(() => {
+          try { res.write(`data: ${JSON.stringify({ deployStatus: "Processing deployment request..." })}\n\n`); } catch {}
+        }, 10000);
+        deployKeepAliveOuter = deployKeepAlive;
+      }
+
       let fullResponse = "";
       let stopReason = "";
       let docProgressDocType: "PDD" | "SDD" | null = earlyDocType;
@@ -1289,6 +1305,7 @@ CRITICAL RULES:
       }
 
       clearInterval(heartbeat);
+      if (deployKeepAlive) clearInterval(deployKeepAlive);
 
       if (clientDisconnected) {
         if (fullResponse.length > 0) {
@@ -1622,7 +1639,7 @@ CRITICAL RULES:
 
       if (fullResponse.includes("[DEPLOY_UIPATH]")) {
         try {
-          res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`);
+          res.write(`data: ${JSON.stringify({ deployStatus: "Initiating deployment pipeline..." })}\n\n`);
 
           const existingMsgs = await chatStorage.getMessagesByIdeaId(ideaId);
           const hasPackage = existingMsgs.some(m => m.content.startsWith("[UIPATH:"));
@@ -1797,6 +1814,7 @@ CRITICAL RULES:
       res.end();
     } catch (error: any) {
       if (heartbeat) clearInterval(heartbeat);
+      if (deployKeepAliveOuter) clearInterval(deployKeepAliveOuter);
       console.error("Error in chat:", error?.message || error);
       if (res.headersSent) {
         res.write(`data: ${JSON.stringify({ error: "Stream interrupted" })}\n\n`);
