@@ -426,6 +426,13 @@ export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = {
       optional: ["JsonString", "JsonObject"],
     },
   },
+  "ui:Delay": {
+    package: "UiPath.System.Activities",
+    properties: {
+      required: ["Duration"],
+      optional: ["DisplayName"],
+    },
+  },
 };
 
 export type AutomationPattern = "simple-linear" | "api-data-driven" | "ui-automation" | "transactional-queue" | "hybrid";

@@ -592,6 +592,8 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `<${propTag}><InArgument${attrs}>${wrappedExpr}</InArgument></${propTag}>`;
   });
 
+  xml = ensureVariableDeclarations(xml);
+
   return xml;
 }
 
@@ -653,6 +655,8 @@ function inferVariableType(varName: string): string {
   if (lower.startsWith("obj_")) return "x:Object";
   if (lower.startsWith("row_")) return "scg2:DataRow";
   if (lower.startsWith("lst_")) return "scg:List(x:String)";
+  if (lower.startsWith("out_")) return "x:String";
+  if (lower.startsWith("in_")) return "x:String";
   return "x:String";
 }
 
@@ -718,6 +722,12 @@ function ensureVariableDeclarations(xml: string): string {
   }
 
   if (missingVars.length === 0) return xml;
+
+  const classMatch = xml.match(/x:Class="([^"]+)"/);
+  const workflowName = classMatch ? classMatch[1] : "unknown";
+  for (const v of missingVars) {
+    console.log(`Auto-declared variable ${v.name} as ${v.type} in ${workflowName}`);
+  }
 
   const varsXml = missingVars.map(v =>
     `      <Variable x:TypeArguments="${v.type}" Name="${v.name}" />`

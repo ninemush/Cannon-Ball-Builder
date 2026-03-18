@@ -1717,24 +1717,12 @@ export interface ClassifiedIssue {
 }
 
 const BLOCKING_CHECKS = new Set([
+  "xml-wellformedness",
   "object-object",
   "pseudo-xaml",
   "fake-trycatch",
-  "net45-in-portable",
-  "legacy-modern-behavior",
   "project-json-parse",
-  "modern-project",
-  "target-framework",
   "main-xaml",
-  "invoked-file",
-  "invoke-path-mismatch",
-  "dependencies",
-  "dependency-version",
-  "unknown-activity",
-  "undeclared-variable",
-  "invoke-arg-type-mismatch",
-  "xml-wellformedness",
-  "duplicate-file",
   "archive-manifest-parity",
   "archive-content-parity",
 ]);
@@ -1756,12 +1744,24 @@ const WARNING_CHECKS = new Set([
   "logic-location",
   "CATALOG_VIOLATION",
   "missing-package-dep",
+  "unknown-activity",
+  "undeclared-variable",
+  "net45-in-portable",
+  "legacy-modern-behavior",
+  "modern-project",
+  "target-framework",
+  "invoked-file",
+  "invoke-path-mismatch",
+  "dependencies",
+  "dependency-version",
+  "invoke-arg-type-mismatch",
+  "duplicate-file",
 ]);
 
 export function classifyQualityIssues(result: QualityGateResult): ClassifiedIssue[] {
   const issues: ClassifiedIssue[] = [];
   for (const v of result.violations) {
-    const isBlocking = v.severity === "error" && (BLOCKING_CHECKS.has(v.check) || !WARNING_CHECKS.has(v.check));
+    const isBlocking = v.severity === "error" && BLOCKING_CHECKS.has(v.check);
     issues.push({
       severity: isBlocking ? "blocking" : "warning",
       file: v.file,

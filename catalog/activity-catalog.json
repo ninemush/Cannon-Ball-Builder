@@ -2322,6 +2322,37 @@
               "typeArguments": null
             }
           ]
+        },
+        {
+          "className": "Delay",
+          "displayName": "Delay",
+          "browsable": true,
+          "processTypes": [
+            "general",
+            "attended-ui",
+            "unattended-ui",
+            "orchestration"
+          ],
+          "properties": [
+            {
+              "name": "Duration",
+              "direction": "In",
+              "clrType": "System.TimeSpan",
+              "xamlSyntax": "attribute",
+              "argumentWrapper": null,
+              "required": true,
+              "typeArguments": null
+            },
+            {
+              "name": "DisplayName",
+              "direction": "In",
+              "clrType": "System.String",
+              "xamlSyntax": "attribute",
+              "argumentWrapper": null,
+              "required": false,
+              "typeArguments": null
+            }
+          ]
         }
       ]
     },

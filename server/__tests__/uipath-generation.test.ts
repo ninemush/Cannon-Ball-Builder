@@ -278,7 +278,7 @@ describe("UiPath Generation Regression Tests", () => {
       expect(credIssues[0].severity).toBe("warning");
     });
 
-    it("unknown activities are blocking errors", () => {
+    it("unknown activities are warnings (not blocking errors)", () => {
       const xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="Main"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
@@ -296,6 +296,10 @@ describe("UiPath Generation Regression Tests", () => {
       const unknownActs = result.violations.filter(v => v.check === "unknown-activity");
       expect(unknownActs.length).toBeGreaterThan(0);
       expect(unknownActs[0].severity).toBe("error");
+      const classified = classifyQualityIssues(result);
+      const unknownClassified = classified.filter(c => c.check === "unknown-activity");
+      expect(unknownClassified.length).toBeGreaterThan(0);
+      expect(unknownClassified[0].severity).toBe("warning");
     });
 
     it("placeholder values (TODO/PLACEHOLDER) in XAML are warnings, not errors", () => {
