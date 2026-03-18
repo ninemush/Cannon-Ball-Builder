@@ -1018,6 +1018,20 @@ CRITICAL RULES:
 
       try { res.write(`data: ${JSON.stringify({ liveStatus: "Probing UiPath services..." })}\n\n`); } catch {}
 
+      const probeMessages = [
+        "Checking UiPath service availability...",
+        "Connecting to Orchestrator...",
+        "Verifying AI Center status...",
+        "Almost ready to start generation...",
+      ];
+      let probeMessageIdx = 0;
+      const probeKeepAlive = setInterval(() => {
+        try {
+          res.write(`data: ${JSON.stringify({ liveStatus: probeMessages[probeMessageIdx % probeMessages.length] })}\n\n`);
+          probeMessageIdx++;
+        } catch {}
+      }, 8000);
+
       let serviceAvailability: ServiceAvailabilityMap | null = null;
       try {
         console.log(`[Chat] Running service probe for stage: ${idea.stage}`);
@@ -1028,6 +1042,7 @@ CRITICAL RULES:
       } catch (e) {
         console.warn("[Chat] Service probe failed:", (e as any)?.message);
       }
+      clearInterval(probeKeepAlive);
 
       const isToBeGeneration = content.toLowerCase().includes("generate the to-be process map");
       const isToBeModification = (() => {

@@ -410,7 +410,9 @@ export async function generateUiPathPackage(
     tracker.heartbeat("xaml_assembly", () => {
       return `Building workflow ${currentWorkflowIdx + 1} of ${workflowCount || "?"}`;
     });
-    const buildResult = await buildNuGetPackage(enriched, ver, ideaId, mode);
+    const buildResult = await buildNuGetPackage(enriched, ver, ideaId, mode, options?.onPipelineProgress ? (event) => {
+      options.onPipelineProgress!(event);
+    } : undefined);
     currentWorkflowIdx = workflowCount > 0 ? workflowCount - 1 : 0;
     tracker.complete("xaml_assembly", `${buildResult.xamlEntries.length} XAML file(s) assembled`, {
       xamlCount: buildResult.xamlEntries.length,

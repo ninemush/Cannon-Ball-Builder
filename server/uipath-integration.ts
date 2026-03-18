@@ -475,7 +475,7 @@ export type BuildResult = {
   dependencyWarnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
 };
 
-export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation"): Promise<BuildResult> {
+export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void): Promise<BuildResult> {
   const projectName = (pkg.projectName || "Automation").replace(/\s+/g, "_");
   const sddContent = pkg.internal?.sddContent || "";
   const orchestratorArtifacts = pkg.internal?.orchestratorArtifacts || null;
@@ -528,22 +528,29 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     } else if (processNodes.length > 0 && sddContent) {
       try {
         console.log(`[UiPath] Requesting tree-based AI enrichment for ${processNodes.length} process nodes...`);
-        const treeResult = await enrichWithAITree(
-          processNodes,
-          processEdges,
-          sddContent,
-          orchestratorArtifacts,
-          projectName,
-          45000,
-          automationPattern
-        );
-        if (treeResult && treeResult.status === "success") {
-          treeEnrichment = treeResult;
-          console.log(`[UiPath] Tree enrichment successful: "${treeResult.workflowSpec.name}", ${treeResult.workflowSpec.variables.length} variables`);
-        } else if (treeResult && treeResult.status === "validation_failed") {
-          const errorSummary = treeResult.validationErrors.join("; ");
-          console.log(`[UiPath] Tree enrichment validation failed after retry: ${errorSummary}`);
-          throw new Error(`WorkflowSpec validation failed after retry: ${errorSummary}`);
+        const treeHeartbeat = onProgress ? setInterval(() => {
+          onProgress({ type: "heartbeat", stage: "ai_enrichment", message: "AI is building the workflow tree structure — this may take a minute for complex processes..." });
+        }, 10000) : null;
+        try {
+          const treeResult = await enrichWithAITree(
+            processNodes,
+            processEdges,
+            sddContent,
+            orchestratorArtifacts,
+            projectName,
+            45000,
+            automationPattern
+          );
+          if (treeResult && treeResult.status === "success") {
+            treeEnrichment = treeResult;
+            console.log(`[UiPath] Tree enrichment successful: "${treeResult.workflowSpec.name}", ${treeResult.workflowSpec.variables.length} variables`);
+          } else if (treeResult && treeResult.status === "validation_failed") {
+            const errorSummary = treeResult.validationErrors.join("; ");
+            console.log(`[UiPath] Tree enrichment validation failed after retry: ${errorSummary}`);
+            throw new Error(`WorkflowSpec validation failed after retry: ${errorSummary}`);
+          }
+        } finally {
+          if (treeHeartbeat) clearInterval(treeHeartbeat);
         }
       } catch (err: any) {
         if (err.message?.startsWith("WorkflowSpec validation failed")) {
@@ -555,17 +562,24 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (!treeEnrichment) {
         try {
           console.log(`[UiPath] Falling back to legacy AI enrichment for ${processNodes.length} process nodes...`);
-          enrichment = await enrichWithAI(
-            processNodes,
-            processEdges,
-            sddContent,
-            orchestratorArtifacts,
-            projectName,
-            45000,
-            automationPattern
-          );
-          if (enrichment) {
-            console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
+          const legacyHeartbeat = onProgress ? setInterval(() => {
+            onProgress({ type: "heartbeat", stage: "ai_enrichment", message: "AI is enriching workflow activities — this may take a minute for complex processes..." });
+          }, 10000) : null;
+          try {
+            enrichment = await enrichWithAI(
+              processNodes,
+              processEdges,
+              sddContent,
+              orchestratorArtifacts,
+              projectName,
+              45000,
+              automationPattern
+            );
+            if (enrichment) {
+              console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
+            }
+          } finally {
+            if (legacyHeartbeat) clearInterval(legacyHeartbeat);
           }
         } catch (err: any) {
           console.log(`[UiPath] AI enrichment failed (falling back to keyword classification): ${err.message}`);
