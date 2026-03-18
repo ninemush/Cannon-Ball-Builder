@@ -302,16 +302,25 @@ interface LlmCodeModelResponse {
   supportedModels: { id: string; label: string }[];
 }
 
+interface LlmMetaValidationModelResponse {
+  model: string;
+  provider: string;
+  supportedModels: { id: string; label: string }[];
+}
+
 function SystemTab() {
   const { toast } = useToast();
   const { data: users } = useQuery<User[]>({ queryKey: ["/api/users"] });
   const { data: ideas } = useQuery<Idea[]>({ queryKey: ["/api/ideas"] });
   const { data: llmData, isLoading: llmLoading } = useQuery<LlmModelResponse>({ queryKey: ["/api/settings/llm-model"] });
   const { data: codeModelData, isLoading: codeModelLoading } = useQuery<LlmCodeModelResponse>({ queryKey: ["/api/settings/llm-code-model"] });
+  const { data: metaValidationModelData, isLoading: metaValidationModelLoading } = useQuery<LlmMetaValidationModelResponse>({ queryKey: ["/api/settings/llm-meta-validation-model"] });
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [confirmModelOpen, setConfirmModelOpen] = useState(false);
   const [selectedCodeModel, setSelectedCodeModel] = useState<string | null>(null);
   const [confirmCodeModelOpen, setConfirmCodeModelOpen] = useState(false);
+  const [selectedMetaValidationModel, setSelectedMetaValidationModel] = useState<string | null>(null);
+  const [confirmMetaValidationModelOpen, setConfirmMetaValidationModelOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -348,6 +357,24 @@ function SystemTab() {
       toast({ title: "Failed to update code model", description: err.message, variant: "destructive" });
       setSelectedCodeModel(null);
       setConfirmCodeModelOpen(false);
+    },
+  });
+
+  const updateMetaValidationModelMutation = useMutation({
+    mutationFn: async (model: string) => {
+      const res = await apiRequest("PUT", "/api/settings/llm-meta-validation-model", { model });
+      return res.json();
+    },
+    onSuccess: (data: LlmMetaValidationModelResponse) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/llm-meta-validation-model"] });
+      toast({ title: "Meta-validation model updated", description: `Meta-validation model changed to ${data.model}` });
+      setSelectedMetaValidationModel(null);
+      setConfirmMetaValidationModelOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update meta-validation model", description: err.message, variant: "destructive" });
+      setSelectedMetaValidationModel(null);
+      setConfirmMetaValidationModelOpen(false);
     },
   });
 
@@ -507,6 +534,68 @@ function SystemTab() {
                   data-testid="button-confirm-code-model-change"
                 >
                   {updateCodeModelMutation.isPending ? "Saving..." : "Confirm"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </Card>
+        <Card className="p-4 space-y-2" data-testid="card-meta-validation-model">
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Stethoscope className="h-4 w-4" />
+            Meta-Validation Model
+          </div>
+          {metaValidationModelLoading ? (
+            <Skeleton className="h-5 w-32" />
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm font-semibold" data-testid="text-current-meta-validation-model">
+                {metaValidationModelData?.provider === "anthropic" ? "Anthropic" : metaValidationModelData?.provider === "openai" ? "OpenAI" : metaValidationModelData?.provider === "google" ? "Google" : metaValidationModelData?.provider} {metaValidationModelData?.model}
+              </p>
+              <Select
+                value={selectedMetaValidationModel || metaValidationModelData?.model || ""}
+                onValueChange={(val) => {
+                  if (val !== metaValidationModelData?.model) {
+                    setSelectedMetaValidationModel(val);
+                    setConfirmMetaValidationModelOpen(true);
+                  }
+                }}
+              >
+                <SelectTrigger className="h-8 text-xs" data-testid="select-meta-validation-model-trigger">
+                  <SelectValue placeholder="Change model..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {metaValidationModelData?.supportedModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id} data-testid={`select-meta-validation-model-option-${m.id}`}>
+                      {m.label}{m.id === "claude-haiku-4-5" ? " (Recommended)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="text-xs text-muted-foreground space-y-1">
+                <p>Controls which AI model reviews generated XAML for errors.</p>
+                <p>Fast and cheap (recommended for most processes): Haiku 4.5, Gemini 2.5 Flash, GPT-4o</p>
+                <p>More thorough (catches subtler issues, higher cost): Sonnet 4, GPT-5, GPT-5.2, Gemini 2.5 Pro, Opus 4, GPT-5.3 Codex (optimised for code analysis — may catch structural XAML issues other models miss)</p>
+              </div>
+            </div>
+          )}
+          <AlertDialog open={confirmMetaValidationModelOpen} onOpenChange={(open) => { setConfirmMetaValidationModelOpen(open); if (!open) setSelectedMetaValidationModel(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Change Meta-Validation Model?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will change the meta-validation model from <strong>{metaValidationModelData?.model}</strong> to <strong>{selectedMetaValidationModel}</strong>. More capable models (Sonnet, GPT-5) catch subtler issues but cost more and take longer. Faster models (Haiku, Flash) work well for pattern-matching checks and are more cost-effective.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel data-testid="button-cancel-meta-validation-model-change">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => selectedMetaValidationModel && updateMetaValidationModelMutation.mutate(selectedMetaValidationModel)}
+                  disabled={updateMetaValidationModelMutation.isPending}
+                  data-testid="button-confirm-meta-validation-model-change"
+                >
+                  {updateMetaValidationModelMutation.isPending ? "Saving..." : "Confirm"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

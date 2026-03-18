@@ -11,7 +11,7 @@ import { registerDocumentRoutes } from "./document-routes";
 import { registerUiPathRoutes } from "./uipath-routes";
 import { registerFileUploadRoutes } from "./file-upload";
 import { evaluateTransition } from "./stage-transition";
-import { SUPPORTED_MODELS, CHAT_SUPPORTED_MODELS, setDbModel, getActiveModel, getProviderName, setDbCodeModel, getActiveCodeModel, getCodeProviderName } from "./lib/llm";
+import { SUPPORTED_MODELS, CHAT_SUPPORTED_MODELS, setDbModel, getActiveModel, getProviderName, setDbCodeModel, getActiveCodeModel, getCodeProviderName, setDbMetaValidationModel, getActiveMetaValidationModel, getMetaValidationProviderName } from "./lib/llm";
 import { getMetricsSummary, getAllMetrics, type MetaValidationMode } from "./meta-validation";
 
 declare module "express-session" {
@@ -71,6 +71,11 @@ export async function registerRoutes(
   const dbCodeModelValue = await storage.getAppSetting("llm_code_model");
   if (dbCodeModelValue) {
     setDbCodeModel(dbCodeModelValue);
+  }
+
+  const dbMetaValidationModelValue = await storage.getAppSetting("llm_meta_validation_model");
+  if (dbMetaValidationModelValue) {
+    setDbMetaValidationModel(dbMetaValidationModelValue);
   }
 
   registerChatRoutes(app);
@@ -500,6 +505,52 @@ export async function registerRoutes(
     }
     await storage.setAppSetting(`meta_validation_mode_${req.session.userId}`, mode);
     return res.json({ mode });
+  });
+
+  app.get("/api/settings/llm-meta-validation-model", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    return res.json({
+      model: getActiveMetaValidationModel(),
+      provider: getMetaValidationProviderName(),
+      supportedModels: SUPPORTED_MODELS,
+    });
+  });
+
+  app.put("/api/settings/llm-meta-validation-model", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const dbUser = await storage.getUser(req.session.userId);
+    const effectiveRole = req.session.activeRole || dbUser?.role;
+    if (!dbUser || effectiveRole !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const { model } = req.body;
+    if (!model || !SUPPORTED_MODELS.some((m) => m.id === model)) {
+      return res.status(400).json({
+        message: `Invalid model. Supported: ${SUPPORTED_MODELS.map((m) => m.id).join(", ")}`,
+      });
+    }
+    const previousModel = getActiveMetaValidationModel();
+    await storage.setAppSetting("llm_meta_validation_model", model);
+    setDbMetaValidationModel(model);
+    await storage.createAuditLog({
+      ideaId: null,
+      userId: req.session.userId,
+      userName: dbUser.displayName || "Unknown",
+      userRole: effectiveRole,
+      action: "llm_meta_validation_model_changed",
+      fromStage: null,
+      toStage: null,
+      details: `Changed meta-validation model from "${previousModel}" to "${model}"`,
+    });
+    return res.json({
+      model: getActiveMetaValidationModel(),
+      provider: getMetaValidationProviderName(),
+      supportedModels: SUPPORTED_MODELS,
+    });
   });
 
   app.get("/api/admin/meta-validation/metrics", async (req: Request, res: Response) => {

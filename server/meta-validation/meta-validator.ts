@@ -1,5 +1,5 @@
 import type { ErrorCategory } from "./confidence-scorer";
-import { getLLM, getLLMForModel, type LLMProvider } from "../lib/llm";
+import { getLLM, getLLMForModel, getActiveMetaValidationModel, type LLMProvider } from "../lib/llm";
 
 export type CorrectionConfidence = "high" | "medium" | "low";
 
@@ -133,14 +133,14 @@ export async function runMetaValidation(
   const INPUT_TOKEN_CAP = 6000;
   const OUTPUT_TOKEN_CAP = 2000;
 
-  const HAIKU_MODEL_ID = "claude-haiku-4-5";
+  const configuredModel = getActiveMetaValidationModel();
   let llm: LLMProvider;
-  let usedModel = HAIKU_MODEL_ID;
+  let usedModel = configuredModel;
   try {
-    llm = getLLMForModel(HAIKU_MODEL_ID);
-    console.log(`[Meta-Validator] Using Haiku model (${HAIKU_MODEL_ID}) for review`);
+    llm = getLLMForModel(configuredModel);
+    console.log(`[Meta-Validator] Using configured model (${configuredModel}) for review`);
   } catch {
-    console.warn(`[Meta-Validator] Haiku model unavailable, falling back to active generation model`);
+    console.warn(`[Meta-Validator] Configured model "${configuredModel}" unavailable, falling back to active generation model`);
     try {
       llm = getLLM();
       usedModel = "default";

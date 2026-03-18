@@ -818,3 +818,23 @@ export function getCodeProviderName(): string {
   if (!codeModel) return getProviderName();
   return getProviderForModel(codeModel);
 }
+
+let dbMetaValidationModel: string | null = null;
+
+export function setDbMetaValidationModel(model: string | null): void {
+  if (model && !SUPPORTED_MODELS.some((m) => m.id === model)) {
+    console.warn(`[LLM] Stored meta-validation model "${model}" is not recognized. Ignoring.`);
+    dbMetaValidationModel = null;
+  } else {
+    dbMetaValidationModel = model;
+  }
+}
+
+export function getActiveMetaValidationModel(): string {
+  return dbMetaValidationModel || "claude-haiku-4-5";
+}
+
+export function getMetaValidationProviderName(): string {
+  const model = getActiveMetaValidationModel();
+  return getProviderForModel(model);
+}
