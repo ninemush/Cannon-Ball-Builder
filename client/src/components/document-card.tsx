@@ -462,9 +462,10 @@ interface UiPathPackageCardProps {
   status?: "BUILDING" | "READY" | "READY_WITH_WARNINGS" | "FAILED";
   warnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
   onRetry?: () => void;
+  templateComplianceScore?: number;
 }
 
-export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry }: UiPathPackageCardProps) {
+export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry, templateComplianceScore }: UiPathPackageCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [pushResult, setPushResult] = useState<{ success: boolean; details?: any } | null>(null);
   const [jobState, setJobState] = useState<{ id?: number; state?: string; polling?: boolean } | null>(null);
@@ -635,6 +636,20 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
         {hasWarnings && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-medium" data-testid="badge-status-warnings">
             <AlertTriangle className="h-3 w-3" /> {warnings.length} warning{warnings.length !== 1 ? "s" : ""}
+          </span>
+        )}
+        {templateComplianceScore !== undefined && !isNaN(templateComplianceScore) && (
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+              templateComplianceScore >= 0.9
+                ? "bg-emerald-500/15 text-emerald-500"
+                : templateComplianceScore >= 0.7
+                  ? "bg-amber-500/15 text-amber-500"
+                  : "bg-red-500/15 text-red-500"
+            }`}
+            data-testid="badge-template-compliance"
+          >
+            {Math.round(templateComplianceScore * 100)}% compliant
           </span>
         )}
       </div>

@@ -4,6 +4,7 @@ import { sanitizeJsonString, stripCodeFences } from "./lib/json-utils";
 import { isActivityAllowed } from "./uipath-activity-policy";
 import type { AutomationPattern } from "./uipath-activity-registry";
 import { catalogService, type ProcessType, type PaletteEntry } from "./catalog/catalog-service";
+import { buildTemplateBlock, formatTemplateBlockForPrompt } from "./catalog/xaml-template-builder";
 
 export interface EnrichedActivity {
   activityType: string;
@@ -53,58 +54,61 @@ export interface EnrichmentResult {
   arguments?: Array<{ name: string; direction: string; type: string; required?: boolean }>;
 }
 
-const ENRICHMENT_PROMPT = `You are a senior UiPath RPA architect. Given a process map and SDD content, produce a detailed technical specification for generating UiPath XAML workflows.
+const SECTION_1_ROLE = `=== SECTION 1: ROLE ===
+You are a senior UiPath RPA architect. Your job is to ASSEMBLE workflows by filling in VALUES within pre-defined XAML templates. You do NOT invent XAML syntax.
 
 You are generating PRODUCTION-READY artifacts. Every value must be as close to executable as possible. Use real values from the SDD — queue names, asset names, API endpoints, system URLs, file paths, email addresses, credential asset names, cron schedules, field names, data types. Only use placeholders when the information is genuinely not available in the SDD (e.g. actual passwords, environment-specific hostnames). For any placeholder, prefix with PLACEHOLDER_ so the Developer Handoff Guide can identify them.
 
-RULES:
-1. Each process node should map to ONE OR MORE UiPath activities (multi-activity sequences for complex steps)
-2. Use REAL UiPath activity types from standard packages:
-   - UiPath.UIAutomation.Activities: OpenBrowser, NavigateTo, TypeInto, Click, GetText, ElementExists, AttachBrowser, AttachWindow, UseApplicationBrowser
-   - UiPath.Excel.Activities: ExcelApplicationScope, ExcelReadRange, ExcelWriteRange, ExcelWriteCell
-   - UiPath.Mail.Activities: SendSmtpMailMessage, GetImapMailMessage, GetOutlookMailMessages, SendOutlookMailMessage
-   - UiPath.Web.Activities: HttpClient, DeserializeJson, SerializeJson
-   - UiPath.Database.Activities: ExecuteQuery, ExecuteNonQuery, ConnectToDatabase
-   - UiPath.System.Activities: AddQueueItem, GetTransactionItem, SetTransactionStatus, GetCredential, GetAsset, ReadTextFile, WriteTextFile, PathExists, LogMessage, InvokeWorkflowFile
-   - System.Activities: Assign, If, ForEach, Switch, Delay, Sequence, TryCatch, Rethrow
-3. Generate SYSTEM-SPECIFIC selector patterns:
-   - SAP GUI: <wnd app='saplogon.exe' /><ctrl role='editable text' automationid='usr/txtRSYST-BNAME' />
-   - SAP Fiori: <webctrl css-selector='.sapMInputBaseInner' parentcss-selector='.sapMInput' />
-   - Salesforce: <webctrl tag='INPUT' css-selector='input[data-interactive-lib-uid]' parentcss-selector='.slds-form-element' />
-   - ServiceNow: <webctrl tag='INPUT' id='sys_display.incident.caller_id' />
-   - Workday: <webctrl tag='INPUT' data-automation-id='textInputBox' />
-   - Oracle: <webctrl tag='INPUT' id='pt1:r1:0:inputText1::content' />
-   - Generic web: <webctrl tag='INPUT|SELECT|BUTTON' name='field_name_from_context' />
-   - Desktop: <wnd cls='WindowClass' title='Window Title' /><ctrl name='ControlName' role='role' />
-   For selectors, generate the most specific selector possible — include application names, window titles, control IDs, CSS selectors. For web apps, use realistic CSS selectors based on the system (Salesforce uses data-interactive-lib-uid, ServiceNow uses sys_display prefixes, SAP Fiori uses sapM prefixes).
-4. Replace ALL TODO placeholders with real values from the SDD — actual queue names, asset names, API endpoints, file paths, email addresses, system URLs, credential asset names. Only use PLACEHOLDER_ prefix when the SDD genuinely doesn't contain the value.
-5. Variable names should be CONTEXT-SPECIFIC (dt_InvoiceData not dt_ExcelData, str_CustomerEmail not str_EmailTo)
-6. For login flows, generate FULL multi-step sequences: navigate → type username → type password → click login → verify success
-7. For data processing, use ForEachRow with proper column references
-8. Determine if REFramework should be used (when queues are involved for transaction processing)
-9. Suggest workflow decomposition: group related steps into sub-workflows by system or function
-10. Define workflow arguments: For each sub-workflow (not Main), specify InArgument/OutArgument/InOutArgument entries with direction-prefixed names (in_, out_, io_), .NET types, and whether required. Include in_TransactionItem for performer workflows, io_Config for all workflows.
-11. Include these operational properties for each activity:
-    - Timeout: default 30000ms for UI activities, higher for long-running operations
-    - ContinueOnError: "True" for non-critical activities (logging, notifications), "False" for critical activities (data processing, login, validation)
-    - DelayBefore/DelayAfter: specify when system-specific timing needs exist (e.g. SAP page loads need 1000-2000ms delay, web transitions need 500ms)
-12. DOMAIN-SPECIFIC BUSINESS LOGIC FIDELITY:
-    - Carefully read the SDD for any priority ordering, fallback sequences, or routing rules (e.g., "try System A first, then fall back to System B", "route high-priority items via Channel X before Channel Y")
-    - Reflect that exact ordering in the generated activity sequence and decision conditions — do NOT reorder steps arbitrarily
-    - When the SDD specifies a priority or fallback chain, implement it as nested If/Switch conditions preserving the documented order
-    - Add a dhgNotes entry when domain-specific ordering is applied, e.g. "Applied SDD priority ordering: System A → System B → Manual fallback"
-13. STRUCTURAL RULES FOR CONTROL FLOW:
-    - NEVER return Then, Else, Cases, Body, or Finally as string property values — these are always nested child elements in UiPath XAML
-    - If/Switch activities must use structured decomposition: If.Then with Sequence child, If.Else with Sequence child, Switch.Cases with Case children
-    - Properties must ONLY contain simple string/number/boolean values or VB.NET/C# expressions — never nested activity XML as a string value
-    - For Headers properties, return a proper Dictionary initializer string, not a JSON object
+ABSOLUTE RULES:
+1. Each process node should map to ONE OR MORE UiPath activities — reference template names from Section 2 for each activity.
+2. Use ONLY activity types present in the Activity Templates (Section 2). Do NOT invent activity names or properties not in the templates.
+3. For LogMessage, the Level property MUST be one of: Info, Warn, Error, Fatal, Trace. NEVER use "Information", "Warning", "Debug", or "Critical" — these are INVALID enum values and constitute a generation failure.
+4. For Assign, ALWAYS use child-element syntax with Assign.To (OutArgument) and Assign.Value (InArgument). NEVER use To= or Value= as XML attributes.
+5. For properties marked as child-element in templates, ALWAYS emit them as nested child XML elements with the correct argument wrapper. NEVER place them as XML attributes.
+6. NEVER double-wrap arguments — do NOT nest InArgument inside InArgument or OutArgument inside OutArgument.
+7. NEVER return Then, Else, Cases, Body, or Finally as string property values — these are always nested child elements in UiPath XAML.
+8. Properties must ONLY contain simple string/number/boolean values or VB.NET/C# expressions — never nested activity XML as a string value.
+9. ALL variables must be declared in the Sequence.Variables block BEFORE their first use. Use the Variable Declaration template from Section 3.
+10. Variable names must be CONTEXT-SPECIFIC with type prefixes (str_, int_, bool_, dt_, dbl_, dec_, obj_, ts_, drow_, qi_).
+11. For Headers properties, return a proper VB.NET Dictionary initializer string, not a JSON object.
+12. DOMAIN-SPECIFIC BUSINESS LOGIC FIDELITY: Reflect exact priority ordering, fallback sequences, and routing rules from the SDD. Do NOT reorder steps arbitrarily.`;
 
+const SECTION_3_VARIABLES = `=== SECTION 3: VARIABLE DECLARATION RULES ===
+Every variable MUST be declared before first use using this template:
+  <Variable x:TypeArguments="{{type}}" Name="{{name}}" Default="{{defaultValue}}" />
+
+Type mapping:
+  String → x:String       Int32 → x:Int32        Int64 → x:Int64
+  Boolean → x:Boolean     Double → x:Double      Decimal → x:Decimal
+  Object → x:Object       DateTime → s:DateTime  TimeSpan → s:TimeSpan
+  DataTable → scg2:DataTable    DataRow → scg2:DataRow
+
+Naming conventions (MANDATORY):
+  str_VariableName   int_VariableName   bool_VariableName
+  dt_VariableName    dbl_VariableName   dec_VariableName
+  obj_VariableName   ts_VariableName    drow_VariableName
+  qi_VariableName    qid_VariableName
+
+Variables must be declared inside the nearest enclosing Sequence.Variables block.
+Variable names must be context-specific (str_CustomerEmail not str_Email, dt_InvoiceData not dt_Data).`;
+
+const SECTION_4_OUTPUT = `=== SECTION 4: WORKFLOW SPECIFICATION ===
 OUTPUT FORMAT — respond with ONLY valid JSON matching this schema:
 {
   "nodes": [
     {
       "nodeId": <number>,
       "nodeName": "<string>",
+      "steps": [
+        {
+          "template": "<template name from Section 2>",
+          "displayName": "<descriptive name>",
+          "errorHandling": "retry|catch|escalate|none",
+          "properties": { "<PropertyName>": "<real_value_from_SDD_or_PLACEHOLDER_description>" },
+          "outputVar": "<variable name if activity produces output, or null>",
+          "outputType": "<.NET type for output variable, or null>"
+        }
+      ],
       "activities": [
         {
           "activityType": "<full UiPath activity type e.g. ui:TypeInto>",
@@ -140,7 +144,9 @@ OUTPUT FORMAT — respond with ONLY valid JSON matching this schema:
   "arguments": [
     { "name": "in_TransactionItem", "direction": "InArgument", "type": "x:String", "required": true }
   ]
-}`;
+}
+
+IMPORTANT: Each "steps" entry references a template name from Section 2. The "activities" array provides the full activity specification for backward compatibility. Both should be consistent.`;
 
 export async function enrichWithAI(
   nodes: ProcessNode[],
@@ -190,27 +196,33 @@ ${artifactsJson}
 SDD CONTENT (excerpts):
 ${sddSummary}
 
-Generate the enriched workflow specification. For each node, provide the specific UiPath activities with system-aware properties and selectors. Determine if REFramework is appropriate and suggest workflow decomposition.`;
+Generate the enriched workflow specification. For each node, provide the specific UiPath activities with system-aware properties and selectors. Determine if REFramework is appropriate and suggest workflow decomposition. Reference template names from Section 2 in each step's "template" field.`;
 
-    let systemPrompt = ENRICHMENT_PROMPT;
+    let section2Block = "";
+    const processType = classifyProcessType(sddSummary, nodeDescriptions);
 
     if (catalogService.isLoaded()) {
       try {
-        const processType = classifyProcessType(sddSummary, nodeDescriptions);
-        const palette = catalogService.buildActivityPalette(processType);
-        if (palette.length > 0) {
-          const paletteBlock = formatActivityConstraints(palette, processType);
-          systemPrompt = systemPrompt + "\n\n" + paletteBlock;
-          console.log(`[AI XAML Enricher] Injected ACTIVITY CONSTRAINTS block for processType="${processType}" (${palette.length} activities)`);
-        } else {
-          console.warn(`[AI XAML Enricher] Catalog loaded but palette empty for processType="${processType}" — no activity constraints available`);
-        }
+        const templateBlock = buildTemplateBlock(processType);
+        section2Block = "\n\n" + formatTemplateBlockForPrompt(templateBlock);
+        console.log(`[AI XAML Enricher] Injected ACTIVITY TEMPLATES block for processType="${processType}" (${templateBlock.activityTemplates.length} activity templates, ${templateBlock.templateNames.length} total templates)`);
       } catch (err: any) {
-        console.warn(`[AI XAML Enricher] Failed to inject catalog constraints: ${err.message}`);
+        console.warn(`[AI XAML Enricher] Failed to build template block: ${err.message}`);
+        try {
+          const palette = catalogService.buildActivityPalette(processType);
+          if (palette.length > 0) {
+            section2Block = "\n\n" + formatActivityConstraints(palette, processType);
+            console.log(`[AI XAML Enricher] Fell back to ACTIVITY CONSTRAINTS block for processType="${processType}" (${palette.length} activities)`);
+          }
+        } catch (err2: any) {
+          console.warn(`[AI XAML Enricher] Fallback also failed: ${err2.message}`);
+        }
       }
     } else {
-      console.warn(`[AI XAML Enricher] Activity catalog not loaded — skipping ACTIVITY CONSTRAINTS injection; LLM output may use incorrect XAML syntax`);
+      console.warn(`[AI XAML Enricher] Activity catalog not loaded — skipping template injection; LLM output may use incorrect XAML syntax`);
     }
+
+    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);

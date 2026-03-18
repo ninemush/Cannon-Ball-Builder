@@ -1269,27 +1269,38 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (catalogViolations.length > 0) {
         const existingKeys = new Set(
           result.violations
-            .filter(v => v.check === "CATALOG_VIOLATION")
+            .filter(v => v.check === "CATALOG_VIOLATION" || v.check === "ENUM_VIOLATION")
             .map(v => `${v.file}::${v.detail}`)
         );
-        let added = 0;
+        let addedWarnings = 0;
+        let addedErrors = 0;
         for (const cv of catalogViolations) {
           const key = `${cv.file}::${cv.detail}`;
           if (!existingKeys.has(key)) {
+            const isEnumViolation = cv.detail.includes("ENUM_VIOLATION");
             result.violations.push({
               category: "accuracy",
-              severity: "warning",
-              check: "CATALOG_VIOLATION",
+              severity: isEnumViolation ? "error" : "warning",
+              check: isEnumViolation ? "ENUM_VIOLATION" : "CATALOG_VIOLATION",
               file: cv.file,
               detail: cv.detail,
             });
             existingKeys.add(key);
-            added++;
+            if (isEnumViolation) {
+              addedErrors++;
+            } else {
+              addedWarnings++;
+            }
           }
         }
-        if (added > 0) {
-          result.summary.accuracyWarnings = (result.summary.accuracyWarnings || 0) + added;
-          result.summary.totalWarnings += added;
+        if (addedWarnings > 0) {
+          result.summary.accuracyWarnings = (result.summary.accuracyWarnings || 0) + addedWarnings;
+          result.summary.totalWarnings += addedWarnings;
+        }
+        if (addedErrors > 0) {
+          result.summary.accuracyErrors = (result.summary.accuracyErrors || 0) + addedErrors;
+          result.summary.totalErrors = (result.summary.totalErrors || 0) + addedErrors;
+          result.passed = false;
         }
       }
     };

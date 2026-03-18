@@ -1054,10 +1054,12 @@ ${content}`
       }
       const preloadedContext: IdeaContext = { idea, sdd: sddDoc, pdd: pddDoc, mapNodes: mNodes, processEdges: pEdges };
 
+      let completedTemplateComplianceScore: number | undefined;
       try {
         const requestedMode = (req.body.generationMode === "baseline_openable") ? "baseline_openable" as const : undefined;
         const pipelineResult = await generateUiPathPackage(ideaId, packageJson, { onProgress: sendProgress, generationMode: requestedMode, preloadedContext });
         console.log(`[UiPath] Pre-built .nupkg for "${idea.title}" — ${pipelineResult.packageBuffer.length} bytes, ${pipelineResult.gaps.length} gaps`);
+        completedTemplateComplianceScore = pipelineResult.templateComplianceScore;
 
         if (pipelineResult.status === "FAILED") {
           sendProgress("Package build failed");
@@ -1078,6 +1080,7 @@ ${content}`
             package: packageJson,
             status: pipelineResult.status,
             warnings: pipelineResult.warnings,
+            templateComplianceScore: pipelineResult.templateComplianceScore,
           })}\n\n`);
           return res.end();
         }
@@ -1108,7 +1111,7 @@ ${content}`
         return res.end();
       }
 
-      res.write(`data: ${JSON.stringify({ done: true, package: packageJson, status: "READY" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: true, package: packageJson, status: "READY", templateComplianceScore: completedTemplateComplianceScore })}\n\n`);
       return res.end();
     } catch (error) {
       console.error("Error generating UiPath package:", error);

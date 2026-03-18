@@ -18,6 +18,7 @@ import {
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import type { QualityGateResult } from "./uipath-quality-gate";
+import { calculateTemplateCompliance } from "./catalog/xaml-template-builder";
 
 export type { GenerationMode };
 
@@ -48,6 +49,7 @@ export interface PipelineResult {
   referencedMLSkillNames: string[];
   warnings: PipelineWarning[];
   status: PackageStatus;
+  templateComplianceScore?: number;
 }
 
 export interface DhgResult {
@@ -283,6 +285,26 @@ export async function generateUiPathPackage(
       ? "READY_WITH_WARNINGS"
       : "READY";
 
+  let templateComplianceScore: number | undefined;
+  try {
+    if (buildResult.xamlEntries.length > 0) {
+      let totalScore = 0;
+      let count = 0;
+      for (const entry of buildResult.xamlEntries) {
+        const compliance = calculateTemplateCompliance(entry.content);
+        totalScore += compliance.score;
+        count++;
+        if (compliance.violations.length > 0) {
+          console.log(`[Pipeline] Template compliance for ${entry.name}: ${compliance.score} (${compliance.compliantActivities}/${compliance.totalActivities} compliant, ${compliance.violations.length} violations)`);
+        }
+      }
+      templateComplianceScore = count > 0 ? Math.round((totalScore / count) * 100) / 100 : 1.0;
+      console.log(`[Pipeline] Overall templateComplianceScore: ${templateComplianceScore}`);
+    }
+  } catch (err: any) {
+    console.warn(`[Pipeline] Template compliance calculation failed: ${err.message}`);
+  }
+
   const result: PipelineResult = {
     packageBuffer: buildResult.buffer,
     gaps: buildResult.gaps,
@@ -301,11 +323,12 @@ export async function generateUiPathPackage(
     referencedMLSkillNames: buildResult.referencedMLSkillNames || [],
     warnings: pipelineWarnings,
     status,
+    templateComplianceScore,
   };
 
   evictOldestPipelineCacheEntry();
   pipelineCache.set(cacheKey, { ...result, fingerprint: fp });
-  console.log(`[Pipeline] Cached result for ${ideaId} (mode=${mode}, fingerprint ${fp}, ${buildResult.buffer.length} bytes, status=${status}, warnings=${pipelineWarnings.length})`);
+  console.log(`[Pipeline] Cached result for ${ideaId} (mode=${mode}, fingerprint ${fp}, ${buildResult.buffer.length} bytes, status=${status}, warnings=${pipelineWarnings.length}, templateCompliance=${templateComplianceScore ?? "N/A"})`);
 
   return result;
 }

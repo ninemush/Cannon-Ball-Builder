@@ -3,6 +3,7 @@ import { validateCatalog } from "../catalog/catalog-validator";
 import { catalogService, type ProcessType } from "../catalog/catalog-service";
 import { classifyProcessType } from "../ai-xaml-enricher";
 import { classifyQualityIssues, getBlockingFiles } from "../uipath-quality-gate";
+import { buildTemplateBlock, calculateTemplateCompliance, formatTemplateBlockForPrompt } from "../catalog/xaml-template-builder";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -591,6 +592,239 @@ describe("Activity Catalog", () => {
       expect(dt!.required).toBe(true);
       expect(dt!.xamlSyntax).toBe("child-element");
       expect(dt!.argumentWrapper).toBe("OutArgument");
+    });
+  });
+
+  describe("Template Builder - buildTemplateBlock", () => {
+    it("returns templates for api-integration processType", () => {
+      const block = buildTemplateBlock("api-integration");
+      expect(block.processType).toBe("api-integration");
+      expect(block.activityTemplates.length).toBeGreaterThan(0);
+      expect(block.structuralTemplates.length).toBeGreaterThan(0);
+      expect(block.variableTemplate).toBeDefined();
+      expect(block.workflowHeaderTemplate).toBeDefined();
+      const names = block.activityTemplates.map(t => t.name);
+      expect(names).toContain("Assign");
+      expect(names).toContain("LogMessage");
+      expect(names).toContain("InvokeWorkflowFile");
+      expect(names).toContain("RetryScope");
+      expect(names).toContain("Rethrow");
+      expect(names).toContain("Delay");
+      expect(names).toContain("HttpClient");
+    });
+
+    it("returns templates for attended-ui processType with UI activities", () => {
+      const block = buildTemplateBlock("attended-ui");
+      const names = block.activityTemplates.map(t => t.name);
+      expect(names).toContain("Click");
+      expect(names).toContain("TypeInto");
+      expect(names).toContain("Assign");
+      expect(names).toContain("LogMessage");
+    });
+
+    it("returns templates for general processType", () => {
+      const block = buildTemplateBlock("general");
+      expect(block.activityTemplates.length).toBeGreaterThan(5);
+      expect(block.templateNames.length).toBeGreaterThan(0);
+    });
+
+    it("LogMessage template has valid enum values for Level", () => {
+      const block = buildTemplateBlock("general");
+      const logMsg = block.activityTemplates.find(t => t.name === "LogMessage");
+      expect(logMsg).toBeDefined();
+      const levelPh = logMsg!.placeholders.find(p => p.key === "level");
+      expect(levelPh).toBeDefined();
+      expect(levelPh!.validValues).toContain("Info");
+      expect(levelPh!.validValues).toContain("Warn");
+      expect(levelPh!.validValues).toContain("Error");
+      expect(levelPh!.validValues).toContain("Fatal");
+      expect(levelPh!.validValues).toContain("Trace");
+      expect(levelPh!.validValues).not.toContain("Information");
+      expect(levelPh!.validValues).not.toContain("Warning");
+      expect(levelPh!.validValues).not.toContain("Debug");
+      expect(levelPh!.validValues).not.toContain("Critical");
+    });
+
+    it("templateNames includes all template names", () => {
+      const block = buildTemplateBlock("general");
+      expect(block.templateNames).toContain("Assign");
+      expect(block.templateNames).toContain("LogMessage");
+      expect(block.templateNames).toContain("TryCatch");
+      expect(block.templateNames).toContain("IfThenElse");
+      expect(block.templateNames).toContain("VariableDeclaration");
+      expect(block.templateNames).toContain("WorkflowHeader");
+    });
+
+    it("formatTemplateBlockForPrompt produces valid prompt text", () => {
+      const block = buildTemplateBlock("api-integration");
+      const promptText = formatTemplateBlockForPrompt(block);
+      expect(promptText).toContain("ACTIVITY TEMPLATES");
+      expect(promptText).toContain("Activity Templates");
+      expect(promptText).toContain("Structural Templates");
+      expect(promptText).toContain("Variable Declaration Template");
+      expect(promptText).toContain("Workflow Header Template");
+      expect(promptText).toContain("Available template names:");
+      expect(promptText).toContain("Info | Warn | Error | Fatal | Trace");
+    });
+  });
+
+  describe("Template Compliance Scoring", () => {
+    it("calculates perfect score for compliant XAML", () => {
+      const goodXaml = `
+        <Activity x:Class="TestWorkflow" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          <Sequence DisplayName="Main">
+            <ui:LogMessage Level="Info" Message="[&quot;Starting&quot;]" DisplayName="Log Start" />
+            <Assign DisplayName="Set Value">
+              <Assign.To><OutArgument x:TypeArguments="x:String">[str_Result]</OutArgument></Assign.To>
+              <Assign.Value><InArgument x:TypeArguments="x:String">[str_Input]</InArgument></Assign.Value>
+            </Assign>
+            <ui:LogMessage Level="Error" Message="[&quot;Done&quot;]" DisplayName="Log End" />
+          </Sequence>
+        </Activity>
+      `;
+      const result = calculateTemplateCompliance(goodXaml);
+      expect(result.score).toBeGreaterThanOrEqual(0.9);
+      expect(result.totalActivities).toBeGreaterThan(0);
+      expect(result.violations.filter(v => v.severity === "error")).toHaveLength(0);
+    });
+
+    it("detects invalid enum value for LogMessage Level", () => {
+      const badXaml = `
+        <Activity x:Class="TestWorkflow" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          <Sequence DisplayName="Main">
+            <ui:LogMessage Level="Information" Message="[&quot;Bad level&quot;]" DisplayName="Log Bad" />
+          </Sequence>
+        </Activity>
+      `;
+      const result = calculateTemplateCompliance(badXaml);
+      expect(result.score).toBeLessThan(1.0);
+      expect(result.violations.length).toBeGreaterThan(0);
+      expect(result.violations.some(v => v.issue.includes("Information") && v.severity === "error")).toBe(true);
+    });
+
+    it("calculates low score for XAML with multiple violations", () => {
+      const badXaml = `
+        <Activity x:Class="TestWorkflow" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          <Sequence DisplayName="Main">
+            <ui:LogMessage Level="Information" Message="[&quot;Bad level 1&quot;]" DisplayName="Log 1" />
+            <ui:LogMessage Level="Warning" Message="[&quot;Bad level 2&quot;]" DisplayName="Log 2" />
+            <ui:LogMessage Level="Debug" Message="[&quot;Bad level 3&quot;]" DisplayName="Log 3" />
+          </Sequence>
+        </Activity>
+      `;
+      const result = calculateTemplateCompliance(badXaml);
+      expect(result.score).toBe(0);
+      expect(result.compliantActivities).toBe(0);
+      expect(result.totalActivities).toBe(3);
+    });
+
+    it("returns score of 1.0 for empty XAML", () => {
+      const result = calculateTemplateCompliance("<Activity></Activity>");
+      expect(result.score).toBe(1.0);
+      expect(result.totalActivities).toBe(0);
+    });
+
+    it("detects double-wrapped arguments", () => {
+      const badXaml = `
+        <Activity x:Class="TestWorkflow" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          <Sequence DisplayName="Main">
+            <Assign DisplayName="Bad Assign">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">
+                  <OutArgument x:TypeArguments="x:String">[str_Val]</OutArgument>
+                </OutArgument>
+              </Assign.To>
+            </Assign>
+          </Sequence>
+        </Activity>
+      `;
+      const result = calculateTemplateCompliance(badXaml);
+      expect(result.violations.some(v => v.issue.includes("Double-wrapped"))).toBe(true);
+    });
+  });
+
+  describe("Enum Violation Handling", () => {
+    it("flags enum violations as generation failures without auto-correcting", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:LogMessage",
+        { Level: "Information", Message: "test" },
+        []
+      );
+      expect(result.valid).toBe(false);
+      expect(result.violations.some(v => v.includes("ENUM_VIOLATION"))).toBe(true);
+      expect(result.corrections.some(c => c.detail.includes("GENERATION_FAILURE"))).toBe(true);
+      const correction = result.corrections.find(c => c.property === "Level");
+      expect(correction).toBeDefined();
+      expect(correction!.correctedValue).toBeUndefined();
+    });
+
+    it("does not flag valid enum values", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:LogMessage",
+        { Level: "Info", Message: "test" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
+  });
+
+  describe("ENUM_VIOLATION is a blocking quality gate error", () => {
+    it("ENUM_VIOLATION is in BLOCKING_CHECKS and classifies as blocking", () => {
+      const mockResult = {
+        passed: false,
+        violations: [{
+          category: "accuracy" as const,
+          severity: "error" as const,
+          check: "ENUM_VIOLATION",
+          file: "Main.xaml",
+          detail: 'ENUM_VIOLATION: Invalid value "Information" for "Level" on ui:LogMessage',
+        }],
+        positiveEvidence: [],
+        summary: {
+          blockedPatterns: 0,
+          completenessErrors: 0,
+          completenessWarnings: 0,
+          accuracyErrors: 1,
+          accuracyWarnings: 0,
+          runtimeSafetyErrors: 0,
+          runtimeSafetyWarnings: 0,
+          logicLocationWarnings: 0,
+          totalErrors: 1,
+          totalWarnings: 0,
+        },
+      };
+      const issues = classifyQualityIssues(mockResult);
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe("blocking");
+    });
+
+    it("ENUM_VIOLATION produces blocking files", () => {
+      const mockResult = {
+        passed: false,
+        violations: [{
+          category: "accuracy" as const,
+          severity: "error" as const,
+          check: "ENUM_VIOLATION",
+          file: "Main.xaml",
+          detail: 'ENUM_VIOLATION: Invalid value "Information" for "Level"',
+        }],
+        positiveEvidence: [],
+        summary: {
+          blockedPatterns: 0,
+          completenessErrors: 0,
+          completenessWarnings: 0,
+          accuracyErrors: 1,
+          accuracyWarnings: 0,
+          runtimeSafetyErrors: 0,
+          runtimeSafetyWarnings: 0,
+          logicLocationWarnings: 0,
+          totalErrors: 1,
+          totalWarnings: 0,
+        },
+      };
+      const issues = classifyQualityIssues(mockResult);
+      const blockingFiles = getBlockingFiles(issues);
+      expect(blockingFiles).toContain("Main.xaml");
     });
   });
 });

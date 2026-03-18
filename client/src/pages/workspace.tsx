@@ -517,6 +517,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [liveStatus, setLiveStatus] = useState<string>("");
   const [uipathBuildStatus, setUipathBuildStatus] = useState<string | undefined>();
   const [uipathBuildWarnings, setUipathBuildWarnings] = useState<Array<{ code: string; message: string; stage: string; recoverable: boolean }> | undefined>();
+  const [uipathTemplateComplianceScore, setUipathTemplateComplianceScore] = useState<number | undefined>();
   const [streamingDocContent, setStreamingDocContent] = useState<string>("");
   const [streamingDocElapsed, setStreamingDocElapsed] = useState(0);
   const streamingDocElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1364,6 +1365,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     if (data.warnings) {
                       setUipathBuildWarnings(data.warnings);
                     }
+                    if (data.templateComplianceScore !== undefined) {
+                      setUipathTemplateComplianceScore(data.templateComplianceScore);
+                    }
                     if (data.status === "FAILED") {
                       toast({
                         title: "Package build failed",
@@ -1713,6 +1717,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     onRetry={() => generateUiPath(true)}
                     status={uipathBuildStatus as any}
                     warnings={uipathBuildWarnings}
+                    templateComplianceScore={uipathTemplateComplianceScore}
                   />
                 </div>
               </div>

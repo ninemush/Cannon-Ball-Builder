@@ -562,16 +562,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `<${prefix}${fixed}>`;
   });
 
-  const LOG_LEVEL_MAP: Record<string, string> = {
-    "Information": "Info",
-    "Warning": "Warn",
-    "Debug": "Trace",
-    "Critical": "Fatal",
-  };
-  xml = xml.replace(/(<ui:LogMessage\s[^>]*?)Level="([^"]*)"([^>]*?>)/g, (_m, before, level, after) => {
-    const corrected = LOG_LEVEL_MAP[level] || level;
-    return `${before}Level="${corrected}"${after}`;
-  });
 
   xml = xml.replace(/<(InArgument|OutArgument)([^>]*)><\1([^>]*)>([^<]*)<\/\1><\/\1>/g, (_m, tag, outerAttrs, innerAttrs, content) => {
     const attrs = (innerAttrs || outerAttrs).trim();

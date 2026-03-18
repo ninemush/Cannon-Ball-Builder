@@ -1744,30 +1744,26 @@ describe("UiPath Generation Regression Tests", () => {
     });
   });
 
-  describe("Regression: LogMessage Level normalization", () => {
-    it("normalizes Information to Info", () => {
+  describe("Regression: LogMessage Level enum values are not auto-corrected", () => {
+    it("preserves invalid Level values for downstream ENUM_VIOLATION detection", () => {
       const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Information" Message="[&quot;test&quot;]" DisplayName="Test Log" />`);
       const result = makeUiPathCompliant(xaml, "Windows");
-      expect(result).not.toContain('Level="Information"');
-      expect(result).toContain('Level="Info"');
+      expect(result).toContain('Level="Information"');
     });
 
-    it("normalizes Warning to Warn", () => {
+    it("preserves Warning value for downstream ENUM_VIOLATION detection", () => {
       const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Warning" Message="[&quot;test&quot;]" DisplayName="Test Log" />`);
       const result = makeUiPathCompliant(xaml, "Windows");
-      expect(result).not.toContain('Level="Warning"');
-      expect(result).toContain('Level="Warn"');
+      expect(result).toContain('Level="Warning"');
     });
 
-    it("normalizes Debug to Trace and Critical to Fatal", () => {
+    it("preserves Debug and Critical values for downstream ENUM_VIOLATION detection", () => {
       const xaml = makeValidXaml("Main", `
         <ui:LogMessage Level="Debug" Message="[&quot;debug msg&quot;]" DisplayName="Debug Log" />
         <ui:LogMessage Level="Critical" Message="[&quot;critical msg&quot;]" DisplayName="Critical Log" />`);
       const result = makeUiPathCompliant(xaml, "Windows");
-      expect(result).not.toContain('Level="Debug"');
-      expect(result).not.toContain('Level="Critical"');
-      expect(result).toContain('Level="Trace"');
-      expect(result).toContain('Level="Fatal"');
+      expect(result).toContain('Level="Debug"');
+      expect(result).toContain('Level="Critical"');
     });
 
     it("preserves valid Level values unchanged", () => {

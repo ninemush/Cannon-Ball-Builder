@@ -301,23 +301,14 @@ class CatalogService {
       if (hasAttribute && prop.validValues && prop.validValues.length > 0) {
         const currentVal = attributes[prop.name];
         if (currentVal && !prop.validValues.includes(currentVal)) {
-          const LEVEL_CORRECTION_MAP: Record<string, string> = {
-            "Information": "Info",
-            "Warning": "Warn",
-            "Debug": "Trace",
-            "Critical": "Fatal",
-          };
-          const corrected = LEVEL_CORRECTION_MAP[currentVal] || prop.default || prop.validValues[0];
-          if (corrected && prop.validValues.includes(corrected)) {
-            result.valid = false;
-            result.violations.push(`Invalid value "${currentVal}" for "${prop.name}" on ${tag} — valid values: ${prop.validValues.join(", ")}`);
-            result.corrections.push({
-              type: "fix-invalid-value",
-              property: prop.name,
-              detail: `Correct "${prop.name}" value from "${currentVal}" to "${corrected}" on ${tag}`,
-              correctedValue: corrected,
-            });
-          }
+          result.valid = false;
+          result.violations.push(`ENUM_VIOLATION: Invalid value "${currentVal}" for "${prop.name}" on ${tag} — valid values: ${prop.validValues.join(", ")}. This is a generation failure — enum violations must not be auto-corrected.`);
+          result.corrections.push({
+            type: "fix-invalid-value",
+            property: prop.name,
+            detail: `GENERATION_FAILURE: "${prop.name}" value "${currentVal}" is not a valid enum value on ${tag}. Valid values: ${prop.validValues.join(", ")}`,
+            correctedValue: undefined,
+          });
         }
       }
     }

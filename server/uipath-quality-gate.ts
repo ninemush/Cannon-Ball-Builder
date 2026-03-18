@@ -1725,6 +1725,7 @@ const BLOCKING_CHECKS = new Set([
   "main-xaml",
   "archive-manifest-parity",
   "archive-content-parity",
+  "ENUM_VIOLATION",
 ]);
 
 const WARNING_CHECKS = new Set([
