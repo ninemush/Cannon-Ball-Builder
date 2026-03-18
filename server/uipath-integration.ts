@@ -18,6 +18,7 @@ import {
   generateDeveloperHandoffGuide,
   generateDhgSummary,
   makeUiPathCompliant,
+  ensureBracketWrapped,
   validateXamlContent,
   generateStubWorkflow,
   selectGenerationMode,
@@ -38,7 +39,7 @@ import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./wor
 import { runQualityGate, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue } from "./uipath-quality-gate";
 import { escapeXml } from "./lib/xml-utils";
 import { computePackageFingerprint } from "./lib/utils";
-import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern } from "./uipath-activity-registry";
+import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName } from "./uipath-activity-registry";
 import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
 import { catalogService } from "./catalog/catalog-service";
 
@@ -718,6 +719,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
     const workflows = pkg.workflows || [];
     let hasMain = false;
+    const generatedWorkflowNames = new Set<string>();
 
     if (enrichment?.decomposition?.length) {
       console.log(`[UiPath] Using AI decomposition: ${enrichment.decomposition.length} sub-workflows`);
@@ -736,8 +738,25 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           if (result) {
             xamlResults.push(result);
             deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
+            generatedWorkflowNames.add(wfName);
             if (wfName === "Main") hasMain = true;
             console.log(`[UiPath] Generated decomposed workflow "${wfName}": ${decompNodes.length} nodes, ${result.gaps.length} gaps`);
+          } else if (wfName === "Main") {
+            hasMain = true;
+          }
+        } else {
+          const specFallback = { name: decomp.name, description: decomp.description || "", steps: [] as Array<{ name: string; description: string }> };
+          const result = tryGenerateOrStub(
+            () => generateRichXamlFromSpec(specFallback, sddContent || undefined, undefined, tf, apEnabled, genCtx),
+            wfName,
+            decomp.description || "",
+          );
+          if (result) {
+            xamlResults.push(result);
+            deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
+            generatedWorkflowNames.add(wfName);
+            if (wfName === "Main") hasMain = true;
+            console.log(`[UiPath] Generated decomposed workflow "${wfName}" from spec (no matching nodes): ${result.gaps.length} gaps`);
           } else if (wfName === "Main") {
             hasMain = true;
           }
@@ -747,6 +766,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
     for (const wf of workflows) {
       const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
+      if (generatedWorkflowNames.has(wfName)) continue;
       const result = tryGenerateOrStub(
         () => generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled, genCtx),
         wfName,
@@ -755,6 +775,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (result) {
         xamlResults.push(result);
         deferredWrites.set(`${libPath}/${wfName}.xaml`, compliancePass(result.xaml, `${wfName}.xaml`));
+        generatedWorkflowNames.add(wfName);
         if (wfName === "Main") hasMain = true;
         console.log(`[UiPath] Generated rich XAML for "${wfName}": ${result.gaps.length} gaps, ${result.usedPackages.length} packages`);
       } else if (wfName === "Main") {
@@ -800,22 +821,28 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       let mainActivities = `
         <ui:InvokeWorkflowFile DisplayName="Initialize Settings" WorkflowFileName="InitAllSettings.xaml" />`;
 
+      const invokedNames = new Set<string>();
       if (enrichment?.decomposition?.length) {
         for (const decomp of enrichment.decomposition) {
           const wfName = decomp.name.replace(/\s+/g, "_");
+          invokedNames.add(wfName);
           mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(decomp.name)}" WorkflowFileName="${wfName}.xaml" />`;
         }
-      } else if (workflows.length > 0) {
+      }
+      if (workflows.length > 0) {
         for (const wf of workflows) {
           const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
+          if (invokedNames.has(wfName)) continue;
+          invokedNames.add(wfName);
           mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(wf.name || wfName)}" WorkflowFileName="${wfName}.xaml" />`;
         }
-      } else if (processNodes.length > 0) {
+      }
+      if (invokedNames.size === 0 && processNodes.length > 0) {
         mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(projectName)}" WorkflowFileName="${projectName}.xaml" />`;
-      } else {
+      } else if (invokedNames.size === 0) {
         mainActivities += `
         <ui:Comment DisplayName="Auto-generated by CannonBall" Text="This automation package was generated from the CannonBall pipeline. Open this project in UiPath Studio to build out the workflow logic." />`;
       }
@@ -1145,7 +1172,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
                     const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const childElement = `<${className}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${propVal}</${wrapper}>\n          </${className}.${propName}>`;
+                    const wrappedVal = ensureBracketWrapped(propVal);
+                    const childElement = `<${className}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${className}.${propName}>`;
 
                     const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
                     const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?>)`);
@@ -1272,6 +1300,18 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         let content = xamlEntries[i].content;
         let wasFixed = false;
 
+        for (const [aliasName, canonicalName] of Object.entries(ACTIVITY_NAME_ALIAS_MAP)) {
+          const escapedAlias = aliasName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const aliasRegex = new RegExp(`<${escapedAlias}(\\s|>|\\/)`, "g");
+          const closingRegex = new RegExp(`</${escapedAlias}>`, "g");
+          if (aliasRegex.test(content)) {
+            content = content.replace(new RegExp(`<${escapedAlias}(\\s|>|\\/)`, "g"), `<${canonicalName}$1`);
+            content = content.replace(closingRegex, `</${canonicalName}>`);
+            autoFixSummary.push(`Normalised activity alias ${aliasName} → ${canonicalName} in ${xamlEntries[i].name}`);
+            wasFixed = true;
+          }
+        }
+
         const unknownActivityViolations = qualityGateResult.violations.filter(
           v => v.check === "unknown-activity" && v.file === (xamlEntries[i].name.split("/").pop() || xamlEntries[i].name)
         );
@@ -1279,6 +1319,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           const actMatch = v.detail.match(/unknown activity "([^"]+)"/);
           if (actMatch) {
             const badTag = actMatch[1];
+            if (ACTIVITY_NAME_ALIAS_MAP[badTag]) continue;
             content = content.replace(new RegExp(`<${badTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^>]*\\/?>`, "g"), `<ui:Comment Text="Removed unknown activity: ${badTag}" />`);
             content = content.replace(new RegExp(`</${badTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`, "g"), "");
             autoFixSummary.push(`Removed unknown activity ${badTag} from ${xamlEntries[i].name}`);

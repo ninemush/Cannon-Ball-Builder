@@ -37,6 +37,14 @@ export const ACTIVITIES_SUPPORTING_CONTINUE_ON_ERROR = new Set([
   "ui:UseApplicationBrowser",
 ]);
 
+export const ACTIVITY_NAME_ALIAS_MAP: Record<string, string> = {
+  "ui:GetCredentials": "ui:GetCredential",
+};
+
+export function normalizeActivityName(name: string): string {
+  return ACTIVITY_NAME_ALIAS_MAP[name] || name;
+}
+
 export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = {
   "ui:Click": {
     package: "UiPath.UIAutomation.Activities",
@@ -263,7 +271,8 @@ export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = {
   "ui:GetCredential": {
     package: "UiPath.System.Activities",
     properties: {
-      optional: ["AssetName", "Username", "Password"],
+      required: ["AssetName"],
+      optional: ["Username", "Password"],
     },
   },
   "ui:GetAsset": {

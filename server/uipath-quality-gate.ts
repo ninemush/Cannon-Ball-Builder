@@ -3,6 +3,7 @@ import {
   DESIGNER_PROPERTIES,
   ACTIVITIES_SUPPORTING_CONTINUE_ON_ERROR,
   scanXamlForRequiredPackages,
+  normalizeActivityName,
   type ActivityPropertyInfo,
   type VersionedProperty,
   type AutomationPattern,
@@ -17,7 +18,8 @@ for (const [key, value] of Object.entries(ACTIVITY_REGISTRY)) {
 }
 
 function lookupActivity(activityName: string) {
-  return KNOWN_ACTIVITIES[activityName] ?? KNOWN_ACTIVITIES_CI[activityName.toLowerCase()];
+  const normalized = normalizeActivityName(activityName);
+  return KNOWN_ACTIVITIES[normalized] ?? KNOWN_ACTIVITIES_CI[normalized.toLowerCase()];
 }
 
 export type QualityGateViolation = {
@@ -836,7 +838,7 @@ function checkAccuracy(input: QualityGateInput): QualityGateViolation[] {
       if (knownActivity.package && !declaredDeps.has(knownActivity.package)) {
         violations.push({
           category: "accuracy",
-          severity: "error",
+          severity: "warning",
           check: "missing-package-dep",
           file: shortName,
           detail: `Activity "${activityName}" requires package "${knownActivity.package}" which is not in project.json dependencies`,
@@ -1753,6 +1755,7 @@ const WARNING_CHECKS = new Set([
   "missing-retry-scope",
   "logic-location",
   "CATALOG_VIOLATION",
+  "missing-package-dep",
 ]);
 
 export function classifyQualityIssues(result: QualityGateResult): ClassifiedIssue[] {

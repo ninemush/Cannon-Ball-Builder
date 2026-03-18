@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes } from "../xaml-generator";
-import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
-import { getBlockedActivities, isActivityAllowed } from "../uipath-activity-policy";
-import { scanXamlForRequiredPackages, classifyAutomationPattern, ACTIVITY_REGISTRY } from "../uipath-activity-registry";
+import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes, applyActivityPolicy } from "../xaml-generator";
+import { runQualityGate, classifyQualityIssues, getBlockingFiles, type QualityGateInput } from "../uipath-quality-gate";
+import { getBlockedActivities, isActivityAllowed, filterBlockedActivitiesFromXaml } from "../uipath-activity-policy";
+import { scanXamlForRequiredPackages, classifyAutomationPattern, ACTIVITY_REGISTRY, normalizeActivityName, ACTIVITY_NAME_ALIAS_MAP } from "../uipath-activity-registry";
 import { normalizePackageName, UIPATH_PACKAGE_ALIAS_MAP, buildNuGetPackage } from "../uipath-integration";
 import {
   simpleLinearNodes,
@@ -1567,6 +1567,176 @@ describe("UiPath Generation Regression Tests", () => {
       expect(result.packageBuffer).toBeDefined();
       expect(result.status).toBeDefined();
       expect(["READY", "READY_WITH_WARNINGS"]).toContain(result.status);
+    });
+  });
+
+  describe("Issue Fixes", () => {
+    it("missing-package-dep produces warning not error (Issue 2)", () => {
+      const xaml = makeValidXaml();
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG(
+        [{ name: "Main.xaml", content: xaml }],
+        deps,
+      );
+      const missingPkgViolations = result.violations.filter(v => v.check === "missing-package-dep");
+      for (const v of missingPkgViolations) {
+        expect(v.severity).toBe("warning");
+      }
+      if (missingPkgViolations.length > 0) {
+        const classified = classifyQualityIssues(result);
+        const blockingMissing = classified.filter(c => c.check === "missing-package-dep" && c.severity === "blocking");
+        expect(blockingMissing).toHaveLength(0);
+      }
+    });
+
+    it("missing-package-dep does not trigger STUB_BLOCKING_FALLBACK (Issue 2)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main Sequence">
+    <ui:LogMessage DisplayName="Log" Level="Info" Message="[&quot;Test&quot;]" />
+    <ui:GetCredential DisplayName="Get Cred" AssetName="MyCred" />
+  </Sequence>
+</Activity>`;
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const classified = classifyQualityIssues(result);
+      const blockingFiles = getBlockingFiles(classified);
+      expect(blockingFiles.size).toBe(0);
+    });
+
+    it("ui:GetCredentials normalised to ui:GetCredential (Issue 3)", () => {
+      expect(normalizeActivityName("ui:GetCredentials")).toBe("ui:GetCredential");
+      expect(ACTIVITY_NAME_ALIAS_MAP["ui:GetCredentials"]).toBe("ui:GetCredential");
+    });
+
+    it("ui:GetCredentials in XAML is normalised via alias replacement (Issue 3)", () => {
+      const xaml = `<ui:GetCredentials DisplayName="Get Cred" AssetName="MyCred" />`;
+      let content = xaml;
+      for (const [aliasName, canonicalName] of Object.entries(ACTIVITY_NAME_ALIAS_MAP)) {
+        content = content.replace(new RegExp(`<${aliasName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|>|\\/)`, "g"), `<${canonicalName}$1`);
+        content = content.replace(new RegExp(`</${aliasName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`, "g"), `</${canonicalName}>`);
+      }
+      expect(content).toContain("ui:GetCredential");
+      expect(content).not.toContain("ui:GetCredentials");
+    });
+
+    it("AddLogFields silently removed without comments (Issue 4)", () => {
+      const xaml = `<Sequence>
+  <ui:AddLogFields DisplayName="Log Fields" />
+  <ui:LogMessage DisplayName="Log" Level="Info" Message="test" />
+</Sequence>`;
+      const { filtered, removed } = filterBlockedActivitiesFromXaml(xaml, "simple-linear");
+      expect(removed).toContain("ui:AddLogFields");
+      expect(filtered).not.toContain("AddLogFields");
+      expect(filtered).not.toContain("Removed blocked activity");
+      expect(filtered).toContain("ui:LogMessage");
+    });
+
+    it("AddLogFields silently removed in applyActivityPolicy (Issue 4)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:AddLogFields DisplayName="Add Fields" />
+    <ui:LogMessage DisplayName="Log" Level="Info" Message="[&quot;test&quot;]" />
+  </Sequence>
+</Activity>`;
+      const { content, blocked } = applyActivityPolicy(xaml, {
+        useStubs: false,
+        flatScaffold: false,
+        blockReFramework: false,
+        blockForbiddenActivities: true,
+      }, "Test.xaml");
+      expect(blocked).toContain("ui:AddLogFields");
+      expect(content).not.toContain("AddLogFields");
+      expect(content).not.toContain("Removed forbidden activity");
+    });
+
+    it("OutArgument child elements have bracket-wrapped expressions (Issue 5)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:GetAsset DisplayName="Get Asset">
+      <GetAsset.Value>
+        <OutArgument x:TypeArguments="x:String">assetValue</OutArgument>
+      </GetAsset.Value>
+    </ui:GetAsset>
+    <ui:HttpClient DisplayName="Call API">
+      <HttpClient.ResponseContent>
+        <OutArgument x:TypeArguments="x:String">responseBody</OutArgument>
+      </HttpClient.ResponseContent>
+    </ui:HttpClient>
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain("[assetValue]");
+      expect(result).toContain("[responseBody]");
+      expect(result).not.toMatch(/>assetValue</);
+      expect(result).not.toMatch(/>responseBody</);
+    });
+
+    it("InArgument child elements with variable refs have bracket-wrapped expressions (Issue 5)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:HttpClient DisplayName="Call API">
+      <HttpClient.Body>
+        <InArgument x:TypeArguments="x:String">requestPayload</InArgument>
+      </HttpClient.Body>
+    </ui:HttpClient>
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain("[requestPayload]");
+      expect(result).not.toMatch(/>requestPayload</);
+    });
+
+    it("already bracket-wrapped expressions remain unchanged (Issue 5)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:GetAsset DisplayName="Get Asset">
+      <GetAsset.Value>
+        <OutArgument x:TypeArguments="x:String">[existingVar]</OutArgument>
+      </GetAsset.Value>
+    </ui:GetAsset>
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain("[existingVar]");
+      expect(result).not.toContain("[[existingVar]]");
+    });
+
+    it("makeUiPathCompliant normalises ui:GetCredentials to ui:GetCredential (Issue 3 integration)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:GetCredentials DisplayName="Get Cred" AssetName="MyCred" />
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).not.toContain("<ui:GetCredentials");
+      expect(result).toContain("<ui:GetCredential ");
+    });
+
+    it("makeUiPathCompliant brackets all InArgument child elements (Issue 5 integration)", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:HttpClient DisplayName="Call API">
+      <HttpClient.EndpointUrl>
+        <InArgument x:TypeArguments="x:String">apiUrl</InArgument>
+      </HttpClient.EndpointUrl>
+      <HttpClient.ResponseContent>
+        <OutArgument x:TypeArguments="x:String">responseBody</OutArgument>
+      </HttpClient.ResponseContent>
+    </ui:HttpClient>
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain("[apiUrl]");
+      expect(result).toContain("[responseBody]");
+      expect(result).not.toMatch(/>apiUrl</);
+      expect(result).not.toMatch(/>responseBody</);
     });
   });
 });

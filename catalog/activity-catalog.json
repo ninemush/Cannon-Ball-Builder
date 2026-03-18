@@ -1979,15 +1979,15 @@
               "clrType": "System.String",
               "xamlSyntax": "attribute",
               "argumentWrapper": null,
-              "required": false,
+              "required": true,
               "typeArguments": "x:String"
             },
             {
               "name": "Username",
               "direction": "Out",
               "clrType": "System.String",
-              "xamlSyntax": "attribute",
-              "argumentWrapper": null,
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "OutArgument",
               "required": false,
               "typeArguments": "x:String"
             },
@@ -1995,8 +1995,8 @@
               "name": "Password",
               "direction": "Out",
               "clrType": "System.Security.SecureString",
-              "xamlSyntax": "attribute",
-              "argumentWrapper": null,
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "OutArgument",
               "required": false,
               "typeArguments": "s:SecureString"
             }

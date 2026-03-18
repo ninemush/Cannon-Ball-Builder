@@ -12,16 +12,17 @@ import type { DeploymentResult } from "@shared/models/deployment";
 import type { AICenterSkill } from "./uipath-integration";
 import { isActivityAllowed } from "./uipath-activity-policy";
 import type { AutomationPattern } from "./uipath-activity-registry";
+import { ACTIVITY_NAME_ALIAS_MAP } from "./uipath-activity-registry";
 import type { XamlGenerationContext } from "./types/uipath-package";
 import { XMLValidator } from "fast-xml-parser";
 
-function ensureBracketWrapped(val: string): string {
+export function ensureBracketWrapped(val: string): string {
   const trimmed = val.trim();
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   return `[${trimmed}]`;
 }
 
-function looksLikeVariableRef(val: string): boolean {
+export function looksLikeVariableRef(val: string): boolean {
   const trimmed = val.trim();
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return false;
   if (/^[0-9]/.test(trimmed)) return false;
@@ -44,6 +45,10 @@ export interface GenerationModeConfig {
 
 const BASELINE_FORBIDDEN_ACTIVITIES = new Set([
   "ui:TakeScreenshot",
+  "ui:AddLogFields",
+]);
+
+const SILENTLY_FORBIDDEN_ACTIVITIES = new Set([
   "ui:AddLogFields",
 ]);
 
@@ -119,7 +124,8 @@ export function applyActivityPolicy(
     const escaped = forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const selfClosingRe = new RegExp(`<${escaped}[^>]*\\/>`, "g");
     const openCloseRe = new RegExp(`<${escaped}[^>]*>[\\s\\S]*?<\\/${escaped}>`, "g");
-    const replacement = `<ui:Comment Text="[baseline_openable] Removed forbidden activity: ${forbidden}" DisplayName="Policy: ${forbidden} blocked" />`;
+    const silent = SILENTLY_FORBIDDEN_ACTIVITIES.has(forbidden);
+    const replacement = silent ? "" : `<ui:Comment Text="[baseline_openable] Removed forbidden activity: ${forbidden}" DisplayName="Policy: ${forbidden} blocked" />`;
     if (content.includes(forbidden.replace("ui:", "<ui:"))) {
       blocked.push(forbidden);
       content = content.replace(selfClosingRe, replacement);
@@ -294,6 +300,12 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   let idCounter = 0;
   const viewStateEntries: { id: string; width: number; height: number }[] = [];
   const isCrossPlatform = targetFramework === "Portable";
+
+  for (const [aliasName, canonicalName] of Object.entries(ACTIVITY_NAME_ALIAS_MAP)) {
+    const escapedAlias = aliasName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    rawXaml = rawXaml.replace(new RegExp(`<${escapedAlias}(\\s|>|\\/)`, "g"), `<${canonicalName}$1`);
+    rawXaml = rawXaml.replace(new RegExp(`</${escapedAlias}>`, "g"), `</${canonicalName}>`);
+  }
 
   function nextId(prefix: string): string {
     idCounter++;
@@ -565,6 +577,19 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   xml = xml.replace(/<Assign\.Value>\s*<InArgument([^>]*)>([^<]*)<\/InArgument>\s*<\/Assign\.Value>/g, (_match, attrs, expr) => {
     const wrappedExpr = looksLikeVariableRef(expr) ? ensureBracketWrapped(expr) : expr;
     return `<Assign.Value><InArgument${attrs}>${wrappedExpr}</InArgument></Assign.Value>`;
+  });
+
+  xml = xml.replace(/<(\w+(?::\w+)?\.[\w.]+)>\s*<OutArgument([^>]*)>([^<]*)<\/OutArgument>\s*<\/\1>/g, (_match, propTag, attrs, expr) => {
+    if (propTag.startsWith("Assign.")) return _match;
+    const wrappedExpr = ensureBracketWrapped(expr);
+    return `<${propTag}><OutArgument${attrs}>${wrappedExpr}</OutArgument></${propTag}>`;
+  });
+
+  xml = xml.replace(/<(\w+(?::\w+)?\.[\w.]+)>\s*<InArgument([^>]*)>([^<]*)<\/InArgument>\s*<\/\1>/g, (_match, propTag, attrs, expr) => {
+    if (propTag.startsWith("Assign.")) return _match;
+    const trimmedExpr = expr.trim();
+    const wrappedExpr = (trimmedExpr && !trimmedExpr.startsWith("[")) ? ensureBracketWrapped(trimmedExpr) : trimmedExpr;
+    return `<${propTag}><InArgument${attrs}>${wrappedExpr}</InArgument></${propTag}>`;
   });
 
   return xml;

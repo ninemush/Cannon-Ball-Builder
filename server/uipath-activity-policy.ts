@@ -39,6 +39,10 @@ const ALWAYS_BLOCKED = [
   "ui:AddLogFields",
 ];
 
+const SILENTLY_BLOCKED = new Set([
+  "ui:AddLogFields",
+]);
+
 const PATTERN_BLOCKED: Record<AutomationPattern, Set<string>> = {
   "simple-linear": new Set([
     ...UI_ACTIVITIES,
@@ -75,15 +79,17 @@ export function filterBlockedActivitiesFromXaml(xaml: string, pattern: Automatio
     const escapedActivity = activity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const selfClosingRe = new RegExp(`<${escapedActivity}\\s[^>]*?\\/>`, "g");
     const openCloseRe = new RegExp(`<${escapedActivity}[^>]*>[\\s\\S]*?<\\/${escapedActivity}>`, "g");
+    const silent = SILENTLY_BLOCKED.has(activity);
+    const replacement = silent ? "" : `<ui:Comment Text="Removed blocked activity: ${tag}" />`;
 
     if (selfClosingRe.test(result)) {
       removed.push(activity);
-      result = result.replace(new RegExp(`<${escapedActivity}\\s[^>]*?\\/>`, "g"), `<ui:Comment Text="Removed blocked activity: ${tag}" />`);
+      result = result.replace(new RegExp(`<${escapedActivity}\\s[^>]*?\\/>`, "g"), replacement);
     }
 
     if (openCloseRe.test(result)) {
       if (!removed.includes(activity)) removed.push(activity);
-      result = result.replace(new RegExp(`<${escapedActivity}[^>]*>[\\s\\S]*?<\\/${escapedActivity}>`, "g"), `<ui:Comment Text="Removed blocked activity: ${tag}" />`);
+      result = result.replace(new RegExp(`<${escapedActivity}[^>]*>[\\s\\S]*?<\\/${escapedActivity}>`, "g"), replacement);
     }
   });
 
