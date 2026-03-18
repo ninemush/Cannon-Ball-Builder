@@ -538,7 +538,7 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
 
       try {
         const response = await getCodeLLM().create({
-          maxTokens: 8192,
+          maxTokens: 16384,
           system: systemPrompt,
           messages,
         });
