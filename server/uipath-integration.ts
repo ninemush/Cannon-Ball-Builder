@@ -1190,6 +1190,20 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                       autoFixSummary.push(`Catalog: Moved ${fullTag}.${propName} from attribute to child-element in ${fileName}`);
                     }
                   }
+                } else if (correction.type === "fix-invalid-value" && correction.correctedValue) {
+                  const propName = correction.property;
+                  const oldVal = attrs[propName];
+                  if (oldVal !== undefined) {
+                    const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const escapedOldVal = oldVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const attrRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedOldVal}"`, "g");
+                    if (attrRegex.test(content)) {
+                      content = content.replace(attrRegex, `$1${propName}="${correction.correctedValue}"`);
+                      correctedProperties.add(propName);
+                      modified = true;
+                      autoFixSummary.push(`Catalog: Corrected ${fullTag}.${propName} value from "${oldVal}" to "${correction.correctedValue}" in ${fileName}`);
+                    }
+                  }
                 } else if (correction.type === "wrap-in-argument" && correction.argumentWrapper) {
                   const propName = correction.property;
                   const className = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
@@ -1198,7 +1212,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                   const xType = correction.typeArguments || clrToXamlType("System.String");
 
                   const childTagRegex = new RegExp(
-                    `(<${escapedClassName}\\.${propName}>)\\s*(?!<${wrapper}[\\s>])([\\s\\S]*?)\\s*(<\\/${escapedClassName}\\.${propName}>)`,
+                    `(<${escapedClassName}\\.${propName}>)\\s*(?!<(?:InArgument|OutArgument|InOutArgument)[\\s>])([\\s\\S]*?)\\s*(<\\/${escapedClassName}\\.${propName}>)`,
                   );
                   if (childTagRegex.test(content)) {
                     content = content.replace(childTagRegex,

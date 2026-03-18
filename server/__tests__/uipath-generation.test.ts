@@ -785,7 +785,7 @@ describe("UiPath Generation Regression Tests", () => {
 
   describe("Regression: Generator/Validator Activity Schema Drift", () => {
     it("every activity in ACTIVITY_REGISTRY has a package mapping", () => {
-      const builtinActivities = new Set(["Assign", "ui:Assign", "Throw", "ui:Throw"]);
+      const builtinActivities = new Set(["Assign", "ui:Assign", "Throw", "ui:Throw", "Rethrow"]);
       for (const [actName, entry] of Object.entries(ACTIVITY_REGISTRY)) {
         if (builtinActivities.has(actName)) continue;
         expect(entry.package).toBeTruthy();
@@ -1741,6 +1741,118 @@ describe("UiPath Generation Regression Tests", () => {
       expect(result).toContain("[responseBody]");
       expect(result).not.toMatch(/>apiUrl</);
       expect(result).not.toMatch(/>responseBody</);
+    });
+  });
+
+  describe("Regression: LogMessage Level normalization", () => {
+    it("normalizes Information to Info", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Information" Message="[&quot;test&quot;]" DisplayName="Test Log" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).not.toContain('Level="Information"');
+      expect(result).toContain('Level="Info"');
+    });
+
+    it("normalizes Warning to Warn", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Warning" Message="[&quot;test&quot;]" DisplayName="Test Log" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).not.toContain('Level="Warning"');
+      expect(result).toContain('Level="Warn"');
+    });
+
+    it("normalizes Debug to Trace and Critical to Fatal", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage Level="Debug" Message="[&quot;debug msg&quot;]" DisplayName="Debug Log" />
+        <ui:LogMessage Level="Critical" Message="[&quot;critical msg&quot;]" DisplayName="Critical Log" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).not.toContain('Level="Debug"');
+      expect(result).not.toContain('Level="Critical"');
+      expect(result).toContain('Level="Trace"');
+      expect(result).toContain('Level="Fatal"');
+    });
+
+    it("preserves valid Level values unchanged", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage Level="Info" Message="[&quot;info&quot;]" DisplayName="Info" />
+        <ui:LogMessage Level="Error" Message="[&quot;err&quot;]" DisplayName="Err" />
+        <ui:LogMessage Level="Warn" Message="[&quot;warn&quot;]" DisplayName="Warn" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain('Level="Info"');
+      expect(result).toContain('Level="Error"');
+      expect(result).toContain('Level="Warn"');
+    });
+  });
+
+  describe("Regression: No double-wrapped InArgument/OutArgument", () => {
+    it("flattens nested OutArgument wrappers", () => {
+      const xaml = makeValidXaml("Main", `
+        <Assign DisplayName="Test Assign">
+          <Assign.To><OutArgument x:TypeArguments="x:String"><OutArgument x:TypeArguments="x:String">[myVar]</OutArgument></OutArgument></Assign.To>
+          <Assign.Value><InArgument x:TypeArguments="x:String">[someVal]</InArgument></Assign.Value>
+        </Assign>`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).not.toMatch(/<OutArgument[^>]*><OutArgument/);
+      expect(result).toContain("[myVar]");
+    });
+
+    it("flattens nested InArgument wrappers", () => {
+      const xaml = makeValidXaml("Main", `
+        <Assign DisplayName="Test Assign">
+          <Assign.To><OutArgument x:TypeArguments="x:String">[myVar]</OutArgument></Assign.To>
+          <Assign.Value><InArgument x:TypeArguments="x:String"><InArgument x:TypeArguments="x:String">[someVal]</InArgument></InArgument></Assign.Value>
+        </Assign>`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).not.toMatch(/<InArgument[^>]*><InArgument/);
+      expect(result).toContain("[someVal]");
+    });
+
+    it("does not double-wrap already wrapped content", () => {
+      const xaml = makeValidXaml("Main", `
+        <Assign DisplayName="Test">
+          <Assign.To><OutArgument x:TypeArguments="x:String">[str_Result]</OutArgument></Assign.To>
+          <Assign.Value><InArgument x:TypeArguments="x:String">[str_Input]</InArgument></Assign.Value>
+        </Assign>`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      const outArgCount = (result.match(/<OutArgument/g) || []).length;
+      const closeOutArgCount = (result.match(/<\/OutArgument>/g) || []).length;
+      expect(outArgCount).toBe(closeOutArgCount);
+      expect(outArgCount).toBe(1);
+    });
+  });
+
+  describe("Regression: ui:Rethrow is a valid activity", () => {
+    it("Rethrow is prefixed to ui:Rethrow by makeUiPathCompliant", () => {
+      const xaml = makeValidXaml("Main", `<Rethrow DisplayName="Rethrow" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain("<ui:Rethrow");
+      expect(result).not.toMatch(/<Rethrow\s/);
+    });
+
+    it("ui:Rethrow is not flagged as unknown activity in quality gate", () => {
+      const xaml = makeValidXaml("Main", `<ui:Rethrow DisplayName="Rethrow" />`);
+      const deps = { "UiPath.System.Activities": "23.10.0" };
+      const result = runQG([{ name: "Main.xaml", content: xaml }], deps);
+      const unknownActs = result.violations.filter(v => v.check === "unknown-activity" && v.detail.includes("Rethrow"));
+      expect(unknownActs.length).toBe(0);
+    });
+  });
+
+  describe("Regression: Auto-declare undeclared variables", () => {
+    it("auto-declares str_ prefixed variables as x:String", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="[str_TestVar]" DisplayName="Test" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain('Name="str_TestVar"');
+      expect(result).toContain('x:TypeArguments="x:String"');
+    });
+
+    it("auto-declares multiple variable types correctly", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage Level="Info" Message="[str_Name]" DisplayName="Log Name" />
+        <ui:LogMessage Level="Info" Message="[int_Count]" DisplayName="Log Count" />
+        <ui:LogMessage Level="Info" Message="[bool_Flag]" DisplayName="Log Flag" />`);
+      const result = makeUiPathCompliant(xaml, "Windows");
+      expect(result).toContain('Name="str_Name"');
+      expect(result).toContain('Name="int_Count"');
+      expect(result).toContain('Name="bool_Flag"');
     });
   });
 });

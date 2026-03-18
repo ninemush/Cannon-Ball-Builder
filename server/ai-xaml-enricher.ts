@@ -276,6 +276,7 @@ Generate the enriched workflow specification. For each node, provide the specifi
             "ExecuteQuery", "ExecuteNonQuery", "ConnectToDatabase",
             "ReadTextFile", "WriteTextFile", "PathExists",
             "DigitizeDocument", "ClassifyDocument", "ExtractDocumentData", "ValidateDocumentData",
+            "Rethrow",
           ]);
           const bareType = act.activityType.replace(/^ui:/, "");
           if (uiPrefixActivities.has(bareType) && !act.activityType.startsWith("ui:")) {

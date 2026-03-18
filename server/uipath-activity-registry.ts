@@ -433,6 +433,18 @@ export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = {
       optional: ["DisplayName"],
     },
   },
+  "Rethrow": {
+    package: "",
+    properties: {
+      optional: [],
+    },
+  },
+  "ui:Rethrow": {
+    package: "UiPath.System.Activities",
+    properties: {
+      optional: [],
+    },
+  },
 };
 
 export type AutomationPattern = "simple-linear" | "api-data-driven" | "ui-automation" | "transactional-queue" | "hybrid";

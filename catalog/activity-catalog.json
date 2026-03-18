@@ -2167,7 +2167,9 @@
               "xamlSyntax": "attribute",
               "argumentWrapper": null,
               "required": false,
-              "typeArguments": null
+              "typeArguments": null,
+              "validValues": ["Trace", "Info", "Warn", "Error", "Fatal"],
+              "default": "Info"
             },
             {
               "name": "Message",
@@ -2259,6 +2261,15 @@
         {
           "className": "ShouldRetry",
           "displayName": "Should Retry",
+          "browsable": true,
+          "processTypes": [
+            "general"
+          ],
+          "properties": []
+        },
+        {
+          "className": "Rethrow",
+          "displayName": "Rethrow",
           "browsable": true,
           "processTypes": [
             "general"

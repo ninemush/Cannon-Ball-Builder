@@ -12,6 +12,8 @@ export interface CatalogProperty {
   argumentWrapper: string | null;
   typeArguments: string | null;
   required: boolean;
+  validValues?: string[];
+  default?: string;
 }
 
 export interface CatalogActivity {
@@ -42,11 +44,12 @@ export interface ActivitySchema {
 }
 
 export interface ValidationCorrection {
-  type: "wrap-in-argument" | "move-to-attribute" | "move-to-child-element" | "add-missing-required";
+  type: "wrap-in-argument" | "move-to-attribute" | "move-to-child-element" | "add-missing-required" | "fix-invalid-value";
   property: string;
   detail: string;
   argumentWrapper?: string;
   typeArguments?: string | null;
+  correctedValue?: string;
 }
 
 export interface ActivityValidationResult {
@@ -293,6 +296,29 @@ class CatalogService {
           property: prop.name,
           detail: `Move "${prop.name}" from child element to attribute on ${tag}`,
         });
+      }
+
+      if (hasAttribute && prop.validValues && prop.validValues.length > 0) {
+        const currentVal = attributes[prop.name];
+        if (currentVal && !prop.validValues.includes(currentVal)) {
+          const LEVEL_CORRECTION_MAP: Record<string, string> = {
+            "Information": "Info",
+            "Warning": "Warn",
+            "Debug": "Trace",
+            "Critical": "Fatal",
+          };
+          const corrected = LEVEL_CORRECTION_MAP[currentVal] || prop.default || prop.validValues[0];
+          if (corrected && prop.validValues.includes(corrected)) {
+            result.valid = false;
+            result.violations.push(`Invalid value "${currentVal}" for "${prop.name}" on ${tag} — valid values: ${prop.validValues.join(", ")}`);
+            result.corrections.push({
+              type: "fix-invalid-value",
+              property: prop.name,
+              detail: `Correct "${prop.name}" value from "${currentVal}" to "${corrected}" on ${tag}`,
+              correctedValue: corrected,
+            });
+          }
+        }
       }
     }
 

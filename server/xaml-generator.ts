@@ -19,6 +19,7 @@ import { XMLValidator } from "fast-xml-parser";
 export function ensureBracketWrapped(val: string): string {
   const trimmed = val.trim();
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+  if (trimmed.startsWith("<InArgument") || trimmed.startsWith("<OutArgument")) return trimmed;
   return `[${trimmed}]`;
 }
 
@@ -430,6 +431,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     "CreateFormTask", "WaitForFormTaskAndResume",
     "MLSkill", "Predict",
     "DigitizeDocument", "ClassifyDocument", "ExtractDocumentData", "ValidateDocumentData",
+    "Rethrow",
   ];
   for (const actName of UIPATH_ACTIVITIES_NEEDING_PREFIX) {
     const openPattern = new RegExp(`<(?!ui:)${actName}(\\s|>|\\/)`, "g");
@@ -560,6 +562,22 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `<${prefix}${fixed}>`;
   });
 
+  const LOG_LEVEL_MAP: Record<string, string> = {
+    "Information": "Info",
+    "Warning": "Warn",
+    "Debug": "Trace",
+    "Critical": "Fatal",
+  };
+  xml = xml.replace(/(<ui:LogMessage\s[^>]*?)Level="([^"]*)"([^>]*?>)/g, (_m, before, level, after) => {
+    const corrected = LOG_LEVEL_MAP[level] || level;
+    return `${before}Level="${corrected}"${after}`;
+  });
+
+  xml = xml.replace(/<(InArgument|OutArgument)([^>]*)><\1([^>]*)>([^<]*)<\/\1><\/\1>/g, (_m, tag, outerAttrs, innerAttrs, content) => {
+    const attrs = (innerAttrs || outerAttrs).trim();
+    return `<${tag}${attrs ? " " + attrs : ""}>${content}</${tag}>`;
+  });
+
   xml = ensureVariableDeclarations(xml);
 
   xml = xml.replace(/WorkflowFileName="Workflows\\([^"]+)"/g, 'WorkflowFileName="$1"');
@@ -642,11 +660,22 @@ const XML_PREFIXES = new Set([
   "sads", "sapv", "p", "local", "xmlns", "clr",
 ]);
 
+const SPECIFIC_VARIABLE_TYPES: Record<string, string> = {
+  "gmailAppPassword": "s:SecureString",
+  "primaryRouteDisrupted": "x:Boolean",
+  "c2cAvailable": "x:Boolean",
+  "smtpSendAttempt": "x:Int32",
+  "severityCode": "x:Int32",
+};
+
 function inferVariableType(varName: string): string {
+  if (SPECIFIC_VARIABLE_TYPES[varName]) return SPECIFIC_VARIABLE_TYPES[varName];
+
   const lower = varName.toLowerCase();
-  if (lower.startsWith("int_") || lower.startsWith("int32_")) return "x:Int32";
-  if (lower.startsWith("bool_") || lower.startsWith("is_") || lower.startsWith("has_")) return "x:Boolean";
-  if (lower.startsWith("dt_") || lower.startsWith("datatable_")) return "scg2:DataTable";
+  if (lower.startsWith("str_")) return "x:String";
+  if (lower.startsWith("int_") || lower.startsWith("i_") || lower.startsWith("int32_")) return "x:Int32";
+  if (lower.startsWith("bool_") || lower.startsWith("b_") || lower.startsWith("is_") || lower.startsWith("has_")) return "x:Boolean";
+  if (lower.startsWith("dt_") || lower.startsWith("datatable_")) return "s:DataTable";
   if (lower.startsWith("qi_")) return "ui:QueueItem";
   if (lower.startsWith("dic_") || lower.startsWith("dict_")) return "scg:Dictionary(x:String, x:Object)";
   if (lower.startsWith("arr_")) return "s:String[]";
@@ -657,7 +686,7 @@ function inferVariableType(varName: string): string {
   if (lower.startsWith("lst_")) return "scg:List(x:String)";
   if (lower.startsWith("out_")) return "x:String";
   if (lower.startsWith("in_")) return "x:String";
-  return "x:String";
+  return "x:Object";
 }
 
 function isExcludedToken(token: string): boolean {
@@ -669,6 +698,22 @@ function isExcludedToken(token: string): boolean {
   if (/^\d/.test(token)) return true;
   if (/^[A-Z][a-z]+[A-Z]/.test(token) === false && /^[A-Z]{2,}$/.test(token)) return true;
   return false;
+}
+
+function findNearestEnclosingSequenceIndex(xml: string, refIndex: number): number {
+  let bestIdx = -1;
+  const seqPattern = /<Sequence\s[^>]*>/g;
+  let sm;
+  while ((sm = seqPattern.exec(xml)) !== null) {
+    if (sm.index < refIndex) {
+      const closeTag = "</Sequence>";
+      const closeIdx = xml.indexOf(closeTag, sm.index);
+      if (closeIdx === -1 || closeIdx > refIndex) {
+        bestIdx = sm.index;
+      }
+    }
+  }
+  return bestIdx;
 }
 
 function ensureVariableDeclarations(xml: string): string {
@@ -684,11 +729,12 @@ function ensureVariableDeclarations(xml: string): string {
   const propPattern = /<x:Property\s[^>]*Name="([^"]+)"/g;
   while ((m = propPattern.exec(xml)) !== null) declaredVars.add(m[1]);
 
-  const referencedVars = new Set<string>();
+  const referencedVarsWithPos = new Map<string, number>();
 
-  const allBracketExprs = xml.matchAll(/\[([^\[\]]+)\]/g);
-  for (const match of allBracketExprs) {
-    const expr = match[1];
+  const bracketExprPattern = /\[([^\[\]]+)\]/g;
+  let bracketMatch;
+  while ((bracketMatch = bracketExprPattern.exec(xml)) !== null) {
+    const expr = bracketMatch[1];
     if (expr.startsWith("&quot;") || expr.startsWith('"')) continue;
     if (expr.includes("xmlns") || expr.includes("clr-namespace")) continue;
 
@@ -710,14 +756,16 @@ function ensureVariableDeclarations(xml: string): string {
         if (prevToken === "." || withoutStrings.includes(`.${token}`)) continue;
       }
 
-      referencedVars.add(token);
+      if (!referencedVarsWithPos.has(token)) {
+        referencedVarsWithPos.set(token, bracketMatch.index);
+      }
     }
   }
 
-  const missingVars: { name: string; type: string }[] = [];
-  for (const varName of referencedVars) {
+  const missingVars: { name: string; type: string; refIndex: number }[] = [];
+  for (const [varName, refIdx] of referencedVarsWithPos) {
     if (!declaredVars.has(varName)) {
-      missingVars.push({ name: varName, type: inferVariableType(varName) });
+      missingVars.push({ name: varName, type: inferVariableType(varName), refIndex: refIdx });
     }
   }
 
@@ -725,25 +773,54 @@ function ensureVariableDeclarations(xml: string): string {
 
   const classMatch = xml.match(/x:Class="([^"]+)"/);
   const workflowName = classMatch ? classMatch[1] : "unknown";
+
+  const seqInsertions = new Map<number, { name: string; type: string }[]>();
   for (const v of missingVars) {
     console.log(`Auto-declared variable ${v.name} as ${v.type} in ${workflowName}`);
+    const seqIdx = findNearestEnclosingSequenceIndex(xml, v.refIndex);
+    const key = seqIdx >= 0 ? seqIdx : 0;
+    if (!seqInsertions.has(key)) seqInsertions.set(key, []);
+    seqInsertions.get(key)!.push({ name: v.name, type: v.type });
   }
 
-  const varsXml = missingVars.map(v =>
-    `      <Variable x:TypeArguments="${v.type}" Name="${v.name}" />`
-  ).join("\n");
+  const sortedKeys = Array.from(seqInsertions.keys()).sort((a, b) => b - a);
 
-  const seqVarsPattern = /(<Sequence[^>]*>)\s*(<Sequence\.Variables>)/;
-  if (seqVarsPattern.test(xml)) {
-    xml = xml.replace(seqVarsPattern, (match, seqTag, varsTag) => {
-      return `${seqTag}\n    ${varsTag}\n${varsXml}`;
-    });
-  } else {
-    const firstSeqPattern = /(<Sequence\s+DisplayName="[^"]*"[^>]*>)/;
-    if (firstSeqPattern.test(xml)) {
-      xml = xml.replace(firstSeqPattern, (match, seqTag) => {
-        return `${seqTag}\n    <Sequence.Variables>\n${varsXml}\n    </Sequence.Variables>`;
-      });
+  for (const seqIdx of sortedKeys) {
+    const vars = seqInsertions.get(seqIdx)!;
+    const varsXml = vars.map(v =>
+      `      <Variable x:TypeArguments="${v.type}" Name="${v.name}" />`
+    ).join("\n");
+
+    if (seqIdx <= 0) {
+      const seqVarsPattern = /(<Sequence[^>]*>)\s*(<Sequence\.Variables>)/;
+      if (seqVarsPattern.test(xml)) {
+        xml = xml.replace(seqVarsPattern, (match, seqTag, varsTag) => {
+          return `${seqTag}\n    ${varsTag}\n${varsXml}`;
+        });
+      } else {
+        const firstSeqPattern = /(<Sequence\s+DisplayName="[^"]*"[^>]*>)/;
+        if (firstSeqPattern.test(xml)) {
+          xml = xml.replace(firstSeqPattern, (match, seqTag) => {
+            return `${seqTag}\n    <Sequence.Variables>\n${varsXml}\n    </Sequence.Variables>`;
+          });
+        }
+      }
+      continue;
+    }
+
+    const seqTagEndIdx = xml.indexOf(">", seqIdx);
+    if (seqTagEndIdx === -1) continue;
+
+    const afterTag = xml.substring(seqTagEndIdx + 1);
+    const existingVarsMatch = afterTag.match(/^\s*<Sequence\.Variables>/);
+    if (existingVarsMatch) {
+      const insertPos = seqTagEndIdx + 1 + existingVarsMatch[0].length;
+      xml = xml.slice(0, insertPos) + "\n" + varsXml + xml.slice(insertPos);
+    } else {
+      const seqTag = xml.substring(seqIdx, seqTagEndIdx + 1);
+      xml = xml.slice(0, seqTagEndIdx + 1) +
+        `\n    <Sequence.Variables>\n${varsXml}\n    </Sequence.Variables>` +
+        xml.slice(seqTagEndIdx + 1);
     }
   }
 
