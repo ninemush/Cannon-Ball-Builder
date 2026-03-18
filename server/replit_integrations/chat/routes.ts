@@ -931,61 +931,20 @@ export function registerChatRoutes(app: Express): void {
       }, 2000);
 
       let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "UIPATH_GEN" | "DHG" | "CHAT" = "CHAT";
-      const lowerContent = content.toLowerCase();
-      const hasPddKeyword = /\b(pdd|process\s+design\s+document)\b/.test(lowerContent);
-      const hasSddKeyword = /\b(sdd|solution\s+design\s+document)\b/.test(lowerContent);
-      const hasDhgKeyword = /\b(dhg|developer\s+handoff(\s+guide)?|handoff\s+guide|deployment\s+handoff)\b/.test(lowerContent);
-      const hasGenVerb = /\b(generate|write|create|regenerate|redo|produce|build|draft)\b/.test(lowerContent);
-      const hasShowVerb = /\b(show|view|open|display|get|see|give)\b/.test(lowerContent);
-      const hasDeployVerb = /\b(deploy|push)\b/.test(lowerContent) && /\b(uipath|orchestrator)\b/.test(lowerContent);
-      const hasUiPathGenVerb = /\b(generate|regenerate|rebuild|build|create|redo)\b/.test(lowerContent) && /\b(uipath|package|nupkg|automation\s+package)\b/.test(lowerContent) && !hasPddKeyword && !hasSddKeyword;
 
       try { res.write(`data: ${JSON.stringify({ liveStatus: "Classifying your request..." })}\n\n`); } catch {}
 
-      console.log(`[Chat] Keyword classification debug — content: "${lowerContent.substring(0, 120)}" | hasDeployVerb=${hasDeployVerb} hasUiPathGenVerb=${hasUiPathGenVerb} hasDhgKeyword=${hasDhgKeyword} hasGenVerb=${hasGenVerb} hasPddKeyword=${hasPddKeyword} hasSddKeyword=${hasSddKeyword}`);
-
-      const hasPackageRegenKeyword = /\b(regenerate|rebuild|redo|build)\b/.test(lowerContent) && /\b(package|nupkg|uipath)\b/.test(lowerContent);
-
-      if (hasPackageRegenKeyword && !hasDeployVerb) {
-        classifiedIntent = "UIPATH_GEN";
-        console.log(`[Chat] Keyword intent classification: UIPATH_GEN (package regen shortcut — matched regen/rebuild/redo/build + package/nupkg/uipath)`);
-      } else if (hasDeployVerb) {
-        classifiedIntent = "DEPLOY";
-        console.log(`[Chat] Keyword intent classification: DEPLOY`);
-      } else if (hasUiPathGenVerb) {
-        classifiedIntent = "UIPATH_GEN";
-        console.log(`[Chat] Keyword intent classification: UIPATH_GEN`);
-      } else if (hasDhgKeyword) {
-        classifiedIntent = "DHG";
-        console.log(`[Chat] Keyword intent classification: DHG`);
-      } else if (hasGenVerb && hasPddKeyword && hasSddKeyword) {
-        classifiedIntent = "PDD_SDD";
-        console.log(`[Chat] Keyword intent classification: PDD_SDD`);
-      } else if (hasGenVerb && hasSddKeyword) {
-        classifiedIntent = "SDD";
-        console.log(`[Chat] Keyword intent classification: SDD`);
-      } else if (hasGenVerb && hasPddKeyword) {
-        classifiedIntent = "PDD";
-        console.log(`[Chat] Keyword intent classification: PDD`);
-      }
-
-      if (classifiedIntent !== "CHAT") {
-        try { res.write(`data: ${JSON.stringify({ intentClassified: classifiedIntent })}\n\n`); } catch {}
-        console.log(`[Chat] Sent early intentClassified SSE event: ${classifiedIntent} (keyword-matched, before service probe)`);
-      }
-
-      if (classifiedIntent === "CHAT") {
-        try {
-          let recentMessages = chatMessages.slice(-4);
-          if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
-            recentMessages = recentMessages.slice(1);
-          }
-          if (recentMessages.length === 0) {
-            recentMessages = chatMessages.slice(-1);
-          }
-          const classifyRes = await getLLM().create({
-            maxTokens: 20,
-            system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, UIPATH_GEN, DEPLOY, DHG, or CHAT.
+      try {
+        let recentMessages = chatMessages.slice(-4);
+        if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
+          recentMessages = recentMessages.slice(1);
+        }
+        if (recentMessages.length === 0) {
+          recentMessages = chatMessages.slice(-1);
+        }
+        const classifyRes = await getLLM().create({
+          maxTokens: 20,
+          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, UIPATH_GEN, DEPLOY, DHG, or CHAT.
 
 CRITICAL RULES:
 - Classify as PDD, SDD, or PDD_SDD ONLY when the user's LATEST message contains an EXPLICIT request to generate, write, create, produce, or regenerate a document. Look for action verbs like "generate", "write", "create", "produce", "draft", "regenerate", "build", "make" paired with "PDD", "SDD", "document", "design document".
@@ -996,23 +955,17 @@ CRITICAL RULES:
 - If the user is APPROVING a document (e.g. "I approve", "looks good, approved"), classify as CHAT — approvals are not generation requests.
 - When in doubt, ALWAYS classify as CHAT. It is much better to incorrectly classify as CHAT than to incorrectly trigger document generation.
 - If both documents are being requested for generation, reply PDD_SDD.`,
-            messages: recentMessages,
-          });
-          const rawClassify = classifyRes.text.trim();
-          const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
-          if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "UIPATH_GEN", "UIPATHGEN", "DEPLOY", "DHG"].includes(classifyText)) {
-            const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText === "UIPATHGEN" ? "UIPATH_GEN" : classifyText;
-            classifiedIntent = normalized as typeof classifiedIntent;
-          }
-          console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
-
-          if ((classifiedIntent as string) === "DEPLOY" && hasPackageRegenKeyword) {
-            console.warn(`[Chat] LLM classified as DEPLOY but user message contains package regen keywords — overriding to UIPATH_GEN`);
-            classifiedIntent = "UIPATH_GEN";
-          }
-        } catch (classifyErr: any) {
-          console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
+          messages: recentMessages,
+        });
+        const rawClassify = classifyRes.text.trim();
+        const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
+        if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "UIPATH_GEN", "UIPATHGEN", "DEPLOY", "DHG"].includes(classifyText)) {
+          const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText === "UIPATHGEN" ? "UIPATH_GEN" : classifyText;
+          classifiedIntent = normalized as typeof classifiedIntent;
         }
+        console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
+      } catch (classifyErr: any) {
+        console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
       }
 
       if (chatApprovalDone && (classifiedIntent === "PDD" || classifiedIntent === "SDD" || classifiedIntent === "PDD_SDD")) {

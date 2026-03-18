@@ -101,7 +101,7 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
     if (classifiedIntent && INTENT_THINKING_MESSAGES[classifiedIntent]) {
       return INTENT_THINKING_MESSAGES[classifiedIntent];
     }
-    return stage ? (STAGE_THINKING_MESSAGES[stage] || "Thinking...") : "Thinking...";
+    return stage ? (STAGE_THINKING_MESSAGES[stage] || "Classifying your request...") : "Classifying your request...";
   };
 
   if (mode === "thinking") {
@@ -763,26 +763,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     return false;
   }, [idea.stage]);
 
-  const preClassifyIntent = useCallback((text: string): string => {
-    const lower = text.toLowerCase();
-    const hasPackageRegenKeyword = /\b(regenerate|rebuild|redo|build)\b/.test(lower) && /\b(package|nupkg|uipath)\b/.test(lower);
-    const hasDeployVerb = /\b(deploy|push)\b/.test(lower) && /\b(uipath|orchestrator)\b/.test(lower);
-    const hasUiPathGenVerb = /\b(generate|regenerate|rebuild|build|create|redo)\b/.test(lower) && /\b(uipath|package|nupkg|automation\s+package)\b/.test(lower);
-    const hasPddKeyword = /\b(pdd|process\s+design\s+document)\b/.test(lower);
-    const hasSddKeyword = /\b(sdd|solution\s+design\s+document)\b/.test(lower);
-    const hasDhgKeyword = /\b(dhg|developer\s+handoff(\s+guide)?|handoff\s+guide|deployment\s+handoff)\b/.test(lower);
-    const hasGenVerb = /\b(generate|write|create|regenerate|redo|produce|build|draft)\b/.test(lower);
-
-    if (hasPackageRegenKeyword && !hasDeployVerb) return "UIPATH_GEN";
-    if (hasDeployVerb) return "DEPLOY";
-    if (hasUiPathGenVerb && !hasPddKeyword && !hasSddKeyword) return "UIPATH_GEN";
-    if (hasDhgKeyword) return "DHG";
-    if (hasGenVerb && hasPddKeyword && hasSddKeyword) return "PDD_SDD";
-    if (hasGenVerb && hasPddKeyword) return "PDD";
-    if (hasGenVerb && hasSddKeyword) return "SDD";
-    return "";
-  }, []);
-
   const sendMessageDirect = useCallback(async (text: string, imageData?: { base64: string; mediaType: string }) => {
     lastUserMessageRef.current = text;
     setClassifiedIntent("");
@@ -790,11 +770,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     if (isToBeRelatedMessage(text)) {
       toBeGeneratingRef.current = true;
       console.log(`[ProcessMap] Detected TO-BE modification from user message, setting toBeGeneratingRef=true`);
-    }
-
-    const preIntent = preClassifyIntent(text);
-    if (preIntent) {
-      setClassifiedIntent(preIntent);
     }
 
     let docGenIdAtStart = docGenIdRef.current;
