@@ -1,75 +1,75 @@
 # CannonBall
 
 ## Overview
-CannonBall is a full-stack web application designed for comprehensive automation pipeline management. Its primary purpose is to guide users from initial idea capture through to the deployment of AI-generated automation packages, aiming to significantly streamline the development and deployment process. Key capabilities include an AI-first approach, a role-based shell, a Kanban board, a three-panel workspace with live AI chat, and a visual process map engine. The platform focuses on automating interactions and generating deployable UiPath automation solutions, with a vision to enhance efficiency in automation development and deployment across various industries.
+CannonBall is a full-stack web application designed for comprehensive automation pipeline management, guiding users from idea capture to the deployment of AI-generated automation packages. It aims to streamline development and deployment by focusing on AI-first interactions, a role-based shell, Kanban boards, a three-panel workspace with live AI chat, and a visual process map engine. The platform specializes in generating deployable UiPath automation solutions, enhancing efficiency in automation development across various industries.
 
 ## User Preferences
 The agent should prioritize an AI-first interaction style, proactively engaging users and providing guidance throughout the automation pipeline. It should facilitate an iterative development process, allowing for dynamic adjustments such as moving ideas to earlier stages if requirements change. The agent should ask for confirmation or approval before making significant changes, especially regarding document generation, process map approvals, and deployment actions. Communication should be clear and concise, with real-time feedback on progress, such as stage transitions and deployment statuses. The agent must adhere to structured outputs for documents and deployment artifacts. Reduce redundant code: Always consolidate duplicated logic into single canonical functions. When implementing shared behavior, create one source of truth and have all callers use it. Update all references across the app when consolidating — do not leave orphaned implementations that could cause discrepancies.
 
 ## System Architecture
-The application employs a modern web stack for scalability and an intuitive user experience.
+The application uses a modern web stack for scalability and an intuitive user experience.
 
 **Frontend**:
--   Built with React (Vite), Tailwind CSS, and shadcn/ui.
--   Uses React Flow for interactive process mapping and wouter for client-side routing.
--   Features a responsive UI, dark mode, and a distinct color palette.
+- Built with React (Vite), Tailwind CSS, and shadcn/ui.
+- Utilizes React Flow for interactive process mapping and wouter for client-side routing.
+- Features a responsive UI, dark mode, and a distinct color palette.
 
 **Backend**:
--   Express.js server handles API requests and session-based authentication.
+- Express.js server handles API requests and session-based authentication.
 
 **Database**:
--   PostgreSQL integrated with Drizzle ORM.
+- PostgreSQL integrated with Drizzle ORM.
 
 **AI Integration**:
--   LLM provider abstraction layer (`server/lib/llm.ts`) supporting provider-agnostic AI calls. Supports three providers: Anthropic Claude, OpenAI, and Google Gemini — all via Replit AI Integrations (managed billing). Provider is auto-resolved from the selected model ID. Model is configurable via admin Settings UI or `LLM_MODEL` env var (default: `claude-sonnet-4-6`). Only chat-compatible models are selectable in the UI (`CHAT_SUPPORTED_MODELS`); code-only models like GPT-5.3 Codex are excluded. Stop reasons are normalized across providers (`normalizeStopReason`: OpenAI's `"length"` → `"max_tokens"`, `"stop"` → `"end_turn"`) so auto-continuation logic works identically regardless of provider. On startup, stored model is validated against chat-compatible models; invalid/unsupported models fall back to the default. New providers can be added by implementing the `LLMProvider` interface and registering in the provider registry.
+- An abstraction layer supports provider-agnostic AI calls from Anthropic Claude, OpenAI, and Google Gemini via Replit AI Integrations, with configurable model selection and normalized stop reasons for consistent auto-continuation logic.
 
 **Authentication**:
--   Session-based authentication supports demo users and role-switching.
+- Session-based authentication supports demo users and role-switching.
 
 **Key Features and Design Choices**:
--   **UI/UX**: Responsive sidebar, top navigation, and a resizable three-panel workspace displaying stage progress, a live React Flow process map, and the AI chat.
--   **UiPath Agent Awareness**: Supports full pipeline for automation type evaluation (RPA, Agent, Hybrid), influencing process maps, PDDs, SDDs, XAML generation, and deployment.
--   **Process Map Engine**: Supports custom node types (Start/End, Task, Decision, Agent-Task, Agent-Decision) with DAG-based layout, confidence scoring, inline editing, and an approval workflow. AS-IS and TO-BE maps are generated as separate, sequential AI calls — AS-IS first from the process narrative, then TO-BE auto-generated after AS-IS approval using the approved AS-IS steps + live Orchestrator service availability as context. No client-side node redistribution. Multi-start node cleanup, orphan node cleanup, and dead-end auto-repair. Supports chat-based map approval via `hasMapApprovalIntent()` — approves one view at a time based on current pipeline state.
--   **Automated Stage Transitions**: An engine automatically transitions ideas across 10 pipeline stages based on predefined criteria, with audit logging. Features frontend auto-chaining for document generation and approvals.
--   **Document Generation**: Automates version-controlled Process Design Documents (PDD) and Solution Design Documents (SDD) post-approvals, including visual process map images. Includes LLM-based intent classification for document generation. Uses a single canonical auto-chain path: AS-IS approval → TO-BE generation → TO-BE approval → PDD generation → PDD approval → SDD generation → SDD approval → UiPath package generation. Approval confirmation responses are capped at 300 tokens with inline doc detection disabled to prevent duplicate generation.
--   **AI-Enriched UiPath Package Generation & Deployment**: Generates near-production-ready UiPath packages with AI-powered enrichment, adhering to UiPath Package Explorer compliance, REFramework, and generating 14 types of production-quality artifacts. Supports conversational deployment to UiPath Orchestrator with live status streaming. Includes robust handling for truncated LLM responses, caching mechanisms, and version conflict retries.
--   **Pre-Package Quality Gate**: Mandatory validation gate (`server/uipath-quality-gate.ts`) that runs before every NuGet package finalization and Orchestrator upload. Uses a shared activity registry (`server/uipath-activity-registry.ts`) that both the generator and quality gate reference. Validates technical completeness (Modern project settings, Main.xaml existence, invoke path integrity, dependency versions, credential scanning, placeholder detection) and technical accuracy (known-activity whitelist with ~45 activity types including Assign/TakeScreenshot/AddLogFields/ShouldRetry, namespace consistency, expression syntax cross-checking for VB.NET/C# framework targeting, type argument validation, empty container detection). Blocked patterns cause immediate rejection. When the quality gate fails, auto-remediation is attempted (strip invalid attributes, fix paths, add stubs, correct prefixes), followed by re-validation; if errors remain, clean Studio-openable baseline stubs are generated as fallback. Results are surfaced in API responses with categorized violations.
--   **Centralized UiPath Pipeline**: All UiPath generation entry points (POST `/generate-uipath`, POST `/push-uipath`, chat DHG) delegate to a single canonical orchestration function `generateUiPathPackage()` in `server/uipath-pipeline.ts`. Returns a `PipelineResult` contract: `packageBuffer`, `gaps`, `usedPackages`, `qualityGateResult`, `dhgContent`, `projectName`, `xamlEntries`, `dependencyMap`, `archiveManifest`, `qualityGateBlocking`, `qualityGateWarnings`, `cacheHit`, `generationMode`, `usedFallbackStubs`. Pipeline-level caching via `getCachedPipelineResult()` serves download and push routes without rebuilding (cache keyed by `ideaId:generationMode`). Shared helpers: `generateDhg()` (DHG from package), `findUiPathMessage()` / `parseUiPathPackage()` (robust parsing). Activity policy centralized in `server/uipath-activity-policy.ts` (pattern-based blocked activities, enforced in `compliancePass` during normalization). `pushToUiPath` accepts optional `prebuiltResult` from pipeline to avoid redundant builds.
--   **Generation Modes**: Two modes via `GenerationMode` type (`server/uipath-integration.ts`, re-exported from `server/uipath-pipeline.ts`): `baseline_openable` (skips AI enrichment, forces flat scaffold without REFramework, demotes quality gate errors to warnings — always delivers a Studio-openable package) and `full_implementation` (default: AI enrichment, REFramework for queue patterns, blocking quality gate enforcement with retry/repair/stub fallback). Routes accept optional `generationMode` parameter.
--   **Regression Test Suite**: Server-side vitest tests (`server/__tests__/uipath-generation.test.ts`, config `vitest.config.server.ts`) covering 34 regression scenarios: stub validity, activity policy enforcement, automation pattern classification, XAML validation (placeholder/invoke-path), quality gate warning/blocking classification, dependency management, project.json validation, InvokeWorkflowFile path integrity, and generation mode contracts. Run with `npx vitest run --config vitest.config.server.ts`.
--   **Automation Pattern Classification**: Before XAML generation, the automation is classified as simple-linear, API/data-driven, UI, transactional/queue-based, or hybrid (`server/uipath-activity-registry.ts`). REFramework is only used for transactional/queue patterns; simple automations get a flat minimal scaffold without screenshot activities, AddLogFields diagnostics, or testing dependencies.
--   **Demand-Driven Dependencies**: Package dependencies start with only `UiPath.System.Activities` as baseline. After all XAML files are generated, emitted activities are scanned to determine which packages are actually needed. Dependency versions use minimum-version syntax (e.g., `23.10.3`) not exact-pin brackets.
--   **Workflow Analyzer Compliance Engine**: Static analysis for 11+ Workflow Analyzer rules with auto-correction, comprehensive reporting, and dynamic governance policy integration from Automation Ops.
--   **UiPath Naming Convention Enforcement**: Standardized naming conventions for variables and arguments enforced throughout XAML generation.
--   **Argument Validation**: Automated argument validation at workflow entry points.
--   **Three-Tier Developer Handoff Guide (DHG)**: Restructured with an AI-first philosophy (Tier 1: AI Completed, Tier 2: Smart Defaults, Tier 3: Human Required), including readiness score, Workflow Analyzer compliance report, code review rubric, and Section 2a for agent artifact import/configuration. Includes process logic validation.
--   **UiPath Integration Layer**: Manages UiPath's multi-resource token architecture with proactive refresh, typed Orchestrator API client, and robust artifact provisioning. Supports artifact upsert on re-deployment and SSE deploy streaming.
--   **Integration Service Connector Discovery**: Queries UiPath Integration Service API to discover available connectors and active connections on the tenant. Discovered connections are injected into SDD generation prompts, chat system prompts, and platform capability profiles so designs reference real connected enterprise systems (SAP, Salesforce, ServiceNow, etc.) by name. The Settings UI shows discovered connections with status badges, and the XAML generator recommends Integration Service connectors over custom HTTP activities for known enterprise systems.
--   **Maestro Process Orchestration**: Generates BPMN-compatible Maestro process definitions with service tasks (linked to Orchestrator processes by name), user tasks (linked to Action Center catalogs), gateways with conditions, and events. Deploys via the Maestro API (`{base}/maestro_/`) using the `PIMS` OAuth scope. Falls back to in-package artifacts with manual import steps when Maestro is unavailable.
--   **Unified Probe Architecture**: Single source of truth for platform service availability with caching and automated configuration changes. Discovers Automation Ops governance policies, attended/unattended robot landscape, and existing Studio processes in parallel. Probes Maestro alongside other services.
--   **Automation Ops Integration**: Discovers governance policies from UiPath Automation Ops and syncs them into the Workflow Analyzer for build-time compliance checking (activity-restriction, naming, error-handling, security). Governance context is injected into SDD generation and AI chat prompts.
--   **Attended Robot & Studio Discovery**: Probes UiPath for attended/Assistant robot sessions and existing Studio processes/releases. Robot landscape and process names are used as context during SDD generation and chat interactions.
--   **Consolidated Streaming Progress Indicator**: A unified component for displaying real-time progress during AI chat, document generation, and deployment. During PDD/SDD generation, a live DocumentCard renders progressively as sections stream in (with pulsing write cursor, auto-expanding latest section, elapsed timer, and cancel button), transitioning seamlessly to the final saved card with Approve/Reject buttons on completion. Uses `docGenIdRef` generation session tracking to prevent stale stream cleanup from resetting active doc generation state during auto-chain transitions.
--   **Document Approval**: Supports approval of PDD/SDD via dedicated buttons, chat phrases, or auto-chain detection.
--   **Document Understanding — Discovery-Based Provisioning**: Manages DU project provisioning by discovering existing projects via API.
--   **Integration Status Bar**: Displays live UiPath connection status, robot count, pending tasks, and latency.
--   **File Upload Content Extraction**: Server-side extraction from various document types (DOCX, PDF, XLSX, TXT, CSV) for AI context.
--   **Image/Screenshot Vision**: Processes image files (PNG, JPEG, WebP, GIF) via Claude's vision API for text extraction and process analysis.
--   **Admin & Review Panels**: Dedicated interfaces for CoE review and administrative tasks.
--   **Role-Based Access**: Authorization enforced based on user ownership and roles for process maps and documents.
--   **Multi-Orchestrator Connection Management**: Supports storing and managing multiple UiPath Orchestrator connection profiles.
--   **Automation Hub & Store Integration**: Connects to UiPath Automation Hub to import automation ideas as Cannonball projects with pre-populated AI context. After successful deployment, completed automations are automatically published to the Automation Store with documentation and deployment metadata. The active connection stores an optional Open API token for Hub authentication (`automation_hub_token` column on `uipath_connections`). API client in `server/automation-hub.ts`, routes added to `server/uipath-routes.ts`, Settings UI panel in `AutomationHubPanel` component.
--   **JSON Sanitization**: Robust parsing of AI-generated JSON with error recovery.
--   **Shared Utilities**: Consolidated server and client utilities for common functions and shared types.
--   **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deploy time.
+- **UI/UX**: Responsive sidebar, top navigation, and a resizable three-panel workspace displaying stage progress, a live React Flow process map, and the AI chat.
+- **UiPath Agent Awareness**: Supports the full pipeline for automation type evaluation (RPA, Agent, Hybrid), influencing process maps, PDDs, SDDs, XAML generation, and deployment.
+- **Process Map Engine**: Supports custom node types with DAG-based layout, confidence scoring, inline editing, and an approval workflow for AS-IS and TO-BE maps. Includes features for map cleanup and auto-repair.
+- **Automated Stage Transitions**: An engine automatically transitions ideas across 10 pipeline stages based on predefined criteria, with audit logging and frontend auto-chaining for document generation and approvals.
+- **Document Generation**: Automates version-controlled Process Design Documents (PDD) and Solution Design Documents (SDD) post-approvals, including visual process map images, using LLM-based intent classification.
+- **AI-Enriched UiPath Package Generation & Deployment**: Generates near-production-ready UiPath packages with AI enrichment, adhering to UiPath standards (Package Explorer, REFramework), and supporting conversational deployment to UiPath Orchestrator with live status streaming.
+- **Pre-Package Quality Gate**: A mandatory validation gate (`server/uipath-quality-gate.ts`) runs before NuGet package finalization and Orchestrator upload. It uses a shared activity registry to validate technical completeness and accuracy, with auto-remediation attempts and fallback stub generation for errors.
+- **Centralized UiPath Pipeline**: All UiPath generation entry points delegate to a single canonical orchestration function (`generateUiPathPackage()`) in `server/uipath-pipeline.ts`, providing consistent package generation and pipeline-level caching.
+- **Generation Modes**: Supports `baseline_openable` (skips AI enrichment, forces flat scaffold, demotes quality gate errors) and `full_implementation` (default: AI enrichment, REFramework, blocking quality gate enforcement).
+- **Regression Test Suite**: Server-side vitest tests cover 34 regression scenarios for stub validity, activity policy, XAML validation, quality gate, and dependency management.
+- **Automation Pattern Classification**: Classifies automation as simple-linear, API/data-driven, UI, transactional/queue-based, or hybrid to determine appropriate REFramework usage and scaffold generation.
+- **Demand-Driven Dependencies**: Dynamically determines and includes necessary UiPath package dependencies based on emitted activities.
+- **Workflow Analyzer Compliance Engine**: Static analysis for 11+ Workflow Analyzer rules with auto-correction, reporting, and dynamic governance policy integration.
+- **UiPath Naming Convention Enforcement**: Standardized naming conventions for variables and arguments enforced during XAML generation.
+- **Argument Validation**: Automated argument validation at workflow entry points.
+- **Three-Tier Developer Handoff Guide (DHG)**: AI-first structured guide (Tier 1: AI Completed, Tier 2: Smart Defaults, Tier 3: Human Required) including readiness score, compliance report, and artifact configuration.
+- **UiPath Integration Layer**: Manages UiPath's multi-resource token architecture, typed Orchestrator API client, robust artifact provisioning, and SSE deploy streaming.
+- **Integration Service Connector Discovery**: Queries UiPath Integration Service API to discover available connectors and active connections, injecting them into SDD generation prompts and chat system prompts.
+- **Maestro Process Orchestration**: Generates BPMN-compatible Maestro process definitions (service tasks, user tasks, gateways, events) and deploys via the Maestro API.
+- **Unified Probe Architecture**: Single source of truth for platform service availability, discovering Automation Ops governance policies, robot landscape, and existing Studio processes.
+- **Automation Ops Integration**: Discovers governance policies from UiPath Automation Ops and syncs them into the Workflow Analyzer for compliance checking and context injection.
+- **Attended Robot & Studio Discovery**: Probes UiPath for attended/Assistant robot sessions and existing Studio processes, using this context during SDD generation and chat.
+- **Consolidated Streaming Progress Indicator**: A unified component for displaying real-time progress during AI chat, document generation, and deployment, with live document rendering and approval.
+- **Document Approval**: Supports approval of PDD/SDD via dedicated buttons, chat phrases, or auto-chain detection.
+- **Document Understanding — Discovery-Based Provisioning**: Manages DU project provisioning by discovering existing projects via API.
+- **Integration Status Bar**: Displays live UiPath connection status, robot count, pending tasks, and latency.
+- **File Upload Content Extraction**: Server-side extraction from various document types (DOCX, PDF, XLSX, TXT, CSV) for AI context.
+- **Image/Screenshot Vision**: Processes image files (PNG, JPEG, WebP, GIF) via Claude's vision API for text extraction and process analysis.
+- **Admin & Review Panels**: Dedicated interfaces for CoE review and administrative tasks.
+- **Role-Based Access**: Authorization enforced based on user ownership and roles for process maps and documents.
+- **Multi-Orchestrator Connection Management**: Supports storing and managing multiple UiPath Orchestrator connection profiles.
+- **Automation Hub & Store Integration**: Connects to UiPath Automation Hub to import ideas and automatically publish completed automations to the Automation Store.
+- **JSON Sanitization**: Robust parsing of AI-generated JSON with error recovery.
+- **Shared Utilities**: Consolidated server and client utilities for common functions and shared types.
+- **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deployment time.
 
 ## External Dependencies
--   **AI Service**: Anthropic Claude (via Replit AI Integrations), OpenAI (via `openai` npm package), Google Gemini (via `@google/generative-ai` npm package)
--   **Database**: PostgreSQL
--   **ORM**: Drizzle ORM
--   **Frontend Libraries**: React Flow, @dagrejs/dagre, shadcn/ui, wouter
--   **Backend Framework**: Express.js
--   **Session Management**: `express-session`, `connect-pg-simple`
--   **File Parsing**: `mammoth`, `pdf-parse`, `xlsx`, `multer`
--   **Image Processing**: `sharp`
--   **UiPath Orchestrator**: For deploying automation packages and API integrations.
+- **AI Services**: Anthropic Claude, OpenAI, Google Gemini (via Replit AI Integrations)
+- **Database**: PostgreSQL
+- **ORM**: Drizzle ORM
+- **Frontend Libraries**: React Flow, @dagrejs/dagre, shadcn/ui, wouter
+- **Backend Framework**: Express.js
+- **Session Management**: `express-session`, `connect-pg-simple`
+- **File Parsing**: `mammoth`, `pdf-parse`, `xlsx`, `multer`
+- **Image Processing**: `sharp`
+- **UiPath Orchestrator**: For deploying automation packages and API integrations.

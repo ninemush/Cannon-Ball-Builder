@@ -48,6 +48,7 @@ import {
   Trash2,
   ArrowRightLeft,
   Database,
+  Code,
 } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -293,13 +294,22 @@ interface LlmModelResponse {
   supportedModels: { id: string; label: string }[];
 }
 
+interface LlmCodeModelResponse {
+  model: string | null;
+  provider: string;
+  supportedModels: { id: string; label: string }[];
+}
+
 function SystemTab() {
   const { toast } = useToast();
   const { data: users } = useQuery<User[]>({ queryKey: ["/api/users"] });
   const { data: ideas } = useQuery<Idea[]>({ queryKey: ["/api/ideas"] });
   const { data: llmData, isLoading: llmLoading } = useQuery<LlmModelResponse>({ queryKey: ["/api/settings/llm-model"] });
+  const { data: codeModelData, isLoading: codeModelLoading } = useQuery<LlmCodeModelResponse>({ queryKey: ["/api/settings/llm-code-model"] });
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [confirmModelOpen, setConfirmModelOpen] = useState(false);
+  const [selectedCodeModel, setSelectedCodeModel] = useState<string | null>(null);
+  const [confirmCodeModelOpen, setConfirmCodeModelOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -310,7 +320,7 @@ function SystemTab() {
     },
     onSuccess: (data: LlmModelResponse) => {
       queryClient.invalidateQueries({ queryKey: ["/api/settings/llm-model"] });
-      toast({ title: "Model updated", description: `Active model changed to ${data.model}` });
+      toast({ title: "Chat model updated", description: `Active chat model changed to ${data.model}` });
       setSelectedModel(null);
       setConfirmModelOpen(false);
     },
@@ -318,6 +328,24 @@ function SystemTab() {
       toast({ title: "Failed to update model", description: err.message, variant: "destructive" });
       setSelectedModel(null);
       setConfirmModelOpen(false);
+    },
+  });
+
+  const updateCodeModelMutation = useMutation({
+    mutationFn: async (model: string | null) => {
+      const res = await apiRequest("PUT", "/api/settings/llm-code-model", { model: model || "" });
+      return res.json();
+    },
+    onSuccess: (data: LlmCodeModelResponse) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/llm-code-model"] });
+      toast({ title: "Code model updated", description: data.model ? `Code model changed to ${data.model}` : "Code model reset to default (chat model)" });
+      setSelectedCodeModel(null);
+      setConfirmCodeModelOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update code model", description: err.message, variant: "destructive" });
+      setSelectedCodeModel(null);
+      setConfirmCodeModelOpen(false);
     },
   });
 
@@ -352,10 +380,10 @@ function SystemTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-4 space-y-2" data-testid="card-model">
+        <Card className="p-4 space-y-2" data-testid="card-chat-model">
           <div className="flex items-center gap-2 text-muted-foreground text-sm">
             <Brain className="h-4 w-4" />
-            Model
+            Chat Model
           </div>
           {llmLoading ? (
             <Skeleton className="h-5 w-32" />
@@ -373,12 +401,12 @@ function SystemTab() {
                   }
                 }}
               >
-                <SelectTrigger className="h-8 text-xs" data-testid="select-model-trigger">
+                <SelectTrigger className="h-8 text-xs" data-testid="select-chat-model-trigger">
                   <SelectValue placeholder="Change model..." />
                 </SelectTrigger>
                 <SelectContent>
                   {llmData?.supportedModels.map((m) => (
-                    <SelectItem key={m.id} value={m.id} data-testid={`select-model-option-${m.id}`}>
+                    <SelectItem key={m.id} value={m.id} data-testid={`select-chat-model-option-${m.id}`}>
                       {m.label}
                     </SelectItem>
                   ))}
@@ -389,9 +417,9 @@ function SystemTab() {
           <AlertDialog open={confirmModelOpen} onOpenChange={(open) => { setConfirmModelOpen(open); if (!open) setSelectedModel(null); }}>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Change LLM Model?</AlertDialogTitle>
+                <AlertDialogTitle>Change Chat Model?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will change the active model from <strong>{llmData?.model}</strong> to <strong>{selectedModel}</strong> for all subsequent AI operations.
+                  This will change the chat model from <strong>{llmData?.model}</strong> to <strong>{selectedModel}</strong> for conversation and document generation.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -404,6 +432,79 @@ function SystemTab() {
                   data-testid="button-confirm-model-change"
                 >
                   {updateModelMutation.isPending ? "Saving..." : "Confirm"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </Card>
+        <Card className="p-4 space-y-2" data-testid="card-code-model">
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Code className="h-4 w-4" />
+            Code Model
+          </div>
+          {codeModelLoading ? (
+            <Skeleton className="h-5 w-32" />
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm font-semibold" data-testid="text-current-code-model">
+                {codeModelData?.model
+                  ? `${codeModelData.provider === "anthropic" ? "Anthropic" : codeModelData.provider === "openai" ? "OpenAI" : codeModelData.provider === "google" ? "Google" : codeModelData.provider} ${codeModelData.model}`
+                  : "Using chat model"}
+              </p>
+              <Select
+                value={selectedCodeModel || codeModelData?.model || "__default__"}
+                onValueChange={(val) => {
+                  const newVal = val === "__default__" ? null : val;
+                  const currentVal = codeModelData?.model || null;
+                  if (newVal !== currentVal) {
+                    setSelectedCodeModel(val === "__default__" ? "__default__" : val);
+                    setConfirmCodeModelOpen(true);
+                  }
+                }}
+              >
+                <SelectTrigger className="h-8 text-xs" data-testid="select-code-model-trigger">
+                  <SelectValue placeholder="(defaults to chat model)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__" data-testid="select-code-model-option-default">
+                    (defaults to chat model)
+                  </SelectItem>
+                  {codeModelData?.supportedModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id} data-testid={`select-code-model-option-${m.id}`}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <AlertDialog open={confirmCodeModelOpen} onOpenChange={(open) => { setConfirmCodeModelOpen(open); if (!open) setSelectedCodeModel(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Change Code Model?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {selectedCodeModel === "__default__"
+                    ? <>This will reset the code model to use the chat model for XAML and package generation.</>
+                    : <>This will change the code model to <strong>{selectedCodeModel}</strong> for XAML enrichment and UiPath package generation.</>
+                  }
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel data-testid="button-cancel-code-model-change">
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    if (selectedCodeModel === "__default__") {
+                      updateCodeModelMutation.mutate(null);
+                    } else if (selectedCodeModel) {
+                      updateCodeModelMutation.mutate(selectedCodeModel);
+                    }
+                  }}
+                  disabled={updateCodeModelMutation.isPending}
+                  data-testid="button-confirm-code-model-change"
+                >
+                  {updateCodeModelMutation.isPending ? "Saving..." : "Confirm"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

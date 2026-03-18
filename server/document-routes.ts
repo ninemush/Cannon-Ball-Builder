@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { getLLM } from "./lib/llm";
+import { getLLM, getCodeLLM } from "./lib/llm";
 import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
@@ -983,7 +983,7 @@ ${content}`
 
       let response;
       try {
-        response = await getLLM().create({
+        response = await getCodeLLM().create({
           maxTokens: 16384,
           system: systemCtx,
           messages: [{ role: "user", content: UIPATH_PROMPT }],

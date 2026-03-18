@@ -282,11 +282,56 @@ class OpenAIProvider implements LLMProvider {
     return p;
   }
 
+  private async createViaResponses(options: LLMOptions): Promise<LLMResponse> {
+    try {
+      type EasyInput = { role: "user" | "assistant" | "system" | "developer"; content: string };
+      const input: EasyInput[] = [];
+      if (options.system) {
+        input.push({ role: "developer", content: options.system });
+      }
+      for (const msg of options.messages) {
+        const role = msg.role as "user" | "assistant";
+        if (typeof msg.content === "string") {
+          input.push({ role, content: msg.content });
+        } else {
+          const textParts = msg.content.filter((b): b is LLMTextContent => b.type === "text");
+          input.push({ role, content: textParts.map((t) => t.text).join("\n") });
+        }
+      }
+
+      const params: OpenAI.Responses.ResponseCreateParamsNonStreaming = {
+        model: this.model,
+        input,
+        max_output_tokens: options.maxTokens ?? undefined,
+      };
+
+      console.log(`[OpenAI Responses API] Request: model=${this.model}, max_output_tokens=${options.maxTokens ?? "<not set>"}`);
+      const response: OpenAI.Responses.Response = await this.client.responses.create(
+        params,
+        options.abortSignal ? { signal: options.abortSignal } : undefined,
+      );
+
+      const text = response.output_text || "";
+      let stopReason: string;
+      if (response.status === "completed") {
+        stopReason = "end_turn";
+      } else if (response.status === "incomplete") {
+        const incompleteReason = response.incomplete_details?.reason;
+        stopReason = incompleteReason === "max_output_tokens" ? "max_tokens" : (incompleteReason || "max_tokens");
+      } else {
+        stopReason = response.status || "";
+      }
+      return { text, stopReason: normalizeStopReason(stopReason) };
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`OpenAI Responses API error for model "${this.model}":`, msg);
+      throw error;
+    }
+  }
+
   async create(options: LLMOptions): Promise<LLMResponse> {
     if (MODELS_NOT_SUPPORTING_CHAT.has(this.model)) {
-      throw new Error(
-        `Model "${this.model}" does not support chat completions. Please select a different model.`
-      );
+      return this.createViaResponses(options);
     }
 
     try {
@@ -666,8 +711,8 @@ let cachedKey: string | null = null;
 let dbModel: string | null = null;
 
 export function setDbModel(model: string | null): void {
-  if (model && !CHAT_SUPPORTED_MODELS.some((m) => m.id === model)) {
-    console.warn(`[LLM] Stored model "${model}" is not chat-compatible or recognized. Falling back to default "${DEFAULT_MODEL}".`);
+  if (model && !SUPPORTED_MODELS.some((m) => m.id === model)) {
+    console.warn(`[LLM] Stored model "${model}" is not recognized. Falling back to default "${DEFAULT_MODEL}".`);
     dbModel = null;
   } else {
     dbModel = model;
@@ -709,4 +754,55 @@ export function getModel(): string {
 export function getProviderName(): string {
   const model = getActiveModel();
   return getProviderForModel(model);
+}
+
+let dbCodeModel: string | null = null;
+let cachedCodeProvider: LLMProvider | null = null;
+let cachedCodeKey: string | null = null;
+
+export function setDbCodeModel(model: string | null): void {
+  if (model && !SUPPORTED_MODELS.some((m) => m.id === model)) {
+    console.warn(`[LLM] Stored code model "${model}" is not recognized. Ignoring.`);
+    dbCodeModel = null;
+  } else {
+    dbCodeModel = model;
+  }
+  cachedCodeProvider = null;
+  cachedCodeKey = null;
+}
+
+export function getActiveCodeModel(): string | null {
+  return dbCodeModel || null;
+}
+
+export function getCodeLLM(): LLMProvider {
+  const codeModel = getActiveCodeModel();
+  if (!codeModel) {
+    return getLLM();
+  }
+
+  const providerName = getProviderForModel(codeModel);
+  const key = `${providerName}:${codeModel}`;
+
+  if (cachedCodeProvider && cachedCodeKey === key) {
+    return cachedCodeProvider;
+  }
+
+  const factory = PROVIDER_REGISTRY[providerName];
+  if (!factory) {
+    throw new Error(
+      `Unknown LLM provider "${providerName}" for code model. Available: ${Object.keys(PROVIDER_REGISTRY).join(", ")}`
+    );
+  }
+
+  cachedCodeProvider = factory(codeModel);
+  cachedCodeKey = key;
+  console.log(`[LLM] Initialized code provider="${providerName}" model="${codeModel}"`);
+  return cachedCodeProvider;
+}
+
+export function getCodeProviderName(): string {
+  const codeModel = getActiveCodeModel();
+  if (!codeModel) return getProviderName();
+  return getProviderForModel(codeModel);
 }

@@ -1,4 +1,4 @@
-import { getLLM } from "./lib/llm";
+import { getCodeLLM } from "./lib/llm";
 import type { ProcessNode, ProcessEdge } from "@shared/schema";
 import { sanitizeJsonString, stripCodeFences } from "./lib/json-utils";
 import { isActivityAllowed } from "./uipath-activity-policy";
@@ -196,7 +196,7 @@ Generate the enriched workflow specification. For each node, provide the specifi
 
     try {
       console.log(`[AI XAML Enricher] Requesting enrichment for ${nodeDescriptions.length} nodes...`);
-      const response = await getLLM().create({
+      const response = await getCodeLLM().create({
         maxTokens: 8192,
         system: ENRICHMENT_PROMPT,
         messages: [{ role: "user", content: userMessage }],

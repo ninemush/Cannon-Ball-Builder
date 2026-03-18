@@ -11,7 +11,7 @@ import { registerDocumentRoutes } from "./document-routes";
 import { registerUiPathRoutes } from "./uipath-routes";
 import { registerFileUploadRoutes } from "./file-upload";
 import { evaluateTransition } from "./stage-transition";
-import { SUPPORTED_MODELS, CHAT_SUPPORTED_MODELS, setDbModel, getActiveModel, getProviderName } from "./lib/llm";
+import { SUPPORTED_MODELS, CHAT_SUPPORTED_MODELS, setDbModel, getActiveModel, getProviderName, setDbCodeModel, getActiveCodeModel, getCodeProviderName } from "./lib/llm";
 
 declare module "express-session" {
   interface SessionData {
@@ -65,6 +65,11 @@ export async function registerRoutes(
   const dbModelValue = await storage.getAppSetting("llm_model");
   if (dbModelValue) {
     setDbModel(dbModelValue);
+  }
+
+  const dbCodeModelValue = await storage.getAppSetting("llm_code_model");
+  if (dbCodeModelValue) {
+    setDbCodeModel(dbCodeModelValue);
   }
 
   registerChatRoutes(app);
@@ -370,7 +375,7 @@ export async function registerRoutes(
     return res.json({
       model: getActiveModel(),
       provider: getProviderName(),
-      supportedModels: CHAT_SUPPORTED_MODELS,
+      supportedModels: SUPPORTED_MODELS,
     });
   });
 
@@ -384,9 +389,9 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Admin access required" });
     }
     const { model } = req.body;
-    if (!model || !CHAT_SUPPORTED_MODELS.some((m) => m.id === model)) {
+    if (!model || !SUPPORTED_MODELS.some((m) => m.id === model)) {
       return res.status(400).json({
-        message: `Invalid model. Supported: ${CHAT_SUPPORTED_MODELS.map((m) => m.id).join(", ")}`,
+        message: `Invalid model. Supported: ${SUPPORTED_MODELS.map((m) => m.id).join(", ")}`,
       });
     }
     const previousModel = getActiveModel();
@@ -405,7 +410,73 @@ export async function registerRoutes(
     return res.json({
       model: getActiveModel(),
       provider: getProviderName(),
-      supportedModels: CHAT_SUPPORTED_MODELS,
+      supportedModels: SUPPORTED_MODELS,
+    });
+  });
+
+  app.get("/api/settings/llm-code-model", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    return res.json({
+      model: getActiveCodeModel(),
+      provider: getCodeProviderName(),
+      supportedModels: SUPPORTED_MODELS,
+    });
+  });
+
+  app.put("/api/settings/llm-code-model", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const dbUser = await storage.getUser(req.session.userId);
+    const effectiveRole = req.session.activeRole || dbUser?.role;
+    if (!dbUser || effectiveRole !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const { model } = req.body;
+    if (model === null || model === "") {
+      const previousModel = getActiveCodeModel() || "(default)";
+      await storage.setAppSetting("llm_code_model", "");
+      setDbCodeModel(null);
+      await storage.createAuditLog({
+        ideaId: null,
+        userId: req.session.userId,
+        userName: dbUser.displayName || "Unknown",
+        userRole: effectiveRole,
+        action: "llm_code_model_changed",
+        fromStage: null,
+        toStage: null,
+        details: `Cleared code model (was "${previousModel}") — now defaults to chat model`,
+      });
+      return res.json({
+        model: null,
+        provider: getCodeProviderName(),
+        supportedModels: SUPPORTED_MODELS,
+      });
+    }
+    if (!model || !SUPPORTED_MODELS.some((m) => m.id === model)) {
+      return res.status(400).json({
+        message: `Invalid model. Supported: ${SUPPORTED_MODELS.map((m) => m.id).join(", ")}`,
+      });
+    }
+    const previousModel = getActiveCodeModel() || "(default)";
+    await storage.setAppSetting("llm_code_model", model);
+    setDbCodeModel(model);
+    await storage.createAuditLog({
+      ideaId: null,
+      userId: req.session.userId,
+      userName: dbUser.displayName || "Unknown",
+      userRole: effectiveRole,
+      action: "llm_code_model_changed",
+      fromStage: null,
+      toStage: null,
+      details: `Changed code model from "${previousModel}" to "${model}"`,
+    });
+    return res.json({
+      model: getActiveCodeModel(),
+      provider: getCodeProviderName(),
+      supportedModels: SUPPORTED_MODELS,
     });
   });
 
