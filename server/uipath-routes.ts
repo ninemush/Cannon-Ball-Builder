@@ -5,7 +5,7 @@ import { getPreviousManifest, reconcileArtifacts, saveManifest, formatReconcilia
 import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { findUiPathMessage, parseUiPathPackage, generateUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline } from "./uipath-pipeline";
+import { findUiPathMessage, parseUiPathPackage, generateUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline, type PipelineProgressEvent } from "./uipath-pipeline";
 import * as auth from "./uipath-auth";
 import * as orch from "./orchestrator-client";
 import * as prereqs from "./prerequisite-checker";
@@ -546,6 +546,7 @@ export function registerUiPathRoutes(app: Express): void {
             version: computeVersion(),
             onProgress: (msg) => sendEvent({ deployStatus: msg }),
             onMetaValidation: (event) => sendEvent({ metaValidation: event }),
+            onPipelineProgress: (event: PipelineProgressEvent) => sendEvent({ pipelineEvent: event, deployStatus: event.message }),
           });
           prebuiltResult = {
             buffer: pipelineResult.packageBuffer,

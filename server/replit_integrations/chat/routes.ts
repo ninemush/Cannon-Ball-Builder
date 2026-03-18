@@ -1231,6 +1231,9 @@ CRITICAL RULES:
                   const evt = JSON.parse(line.slice(6));
                   if (evt.done) genDone = true;
                   if (evt.error) genError = evt.error;
+                  if (evt.pipelineEvent) {
+                    try { res.write(`data: ${JSON.stringify({ pipelineEvent: evt.pipelineEvent })}\n\n`); } catch {}
+                  }
                   if (evt.progress) {
                     try { res.write(`data: ${JSON.stringify({ docProgress: { section: evt.progress, docType: "UiPath" } })}\n\n`); } catch {}
                   }
@@ -1810,7 +1813,9 @@ CRITICAL RULES:
                 try {
                   const event = JSON.parse(line.slice(6));
                   if (event.deployStatus && !event.deployComplete) {
-                    res.write(`data: ${JSON.stringify({ deployStatus: event.deployStatus })}\n\n`);
+                    const fwd: Record<string, any> = { deployStatus: event.deployStatus };
+                    if (event.pipelineEvent) fwd.pipelineEvent = event.pipelineEvent;
+                    res.write(`data: ${JSON.stringify(fwd)}\n\n`);
                   }
                   if (event.deployComplete) {
                     finalEvent = event;

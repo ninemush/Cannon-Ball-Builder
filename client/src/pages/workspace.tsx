@@ -161,6 +161,151 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
   );
 }
 
+interface PipelineLogEntry {
+  id: string;
+  type: "started" | "heartbeat" | "completed" | "warning" | "failed";
+  stage: string;
+  message: string;
+  elapsed?: number;
+  context?: Record<string, any>;
+  timestamp: number;
+}
+
+function PipelineLogPanel({
+  entries,
+  isComplete,
+  onCancel,
+}: {
+  entries: PipelineLogEntry[];
+  isComplete: boolean;
+  onCancel?: () => void;
+}) {
+  const logEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [entries.length]);
+
+  const activeStage = entries.length > 0
+    ? entries.filter(e => e.type === "started").pop()?.stage
+    : null;
+  const completedStages = new Set(entries.filter(e => e.type === "completed").map(e => e.stage));
+  const currentActive = activeStage && !completedStages.has(activeStage) ? activeStage : null;
+
+  const deduped = entries.reduce<PipelineLogEntry[]>((acc, entry) => {
+    if (entry.type === "heartbeat") {
+      const lastIdx = acc.findIndex(e => e.stage === entry.stage && e.type === "heartbeat");
+      if (lastIdx >= 0) {
+        acc[lastIdx] = entry;
+        return acc;
+      }
+    }
+    acc.push(entry);
+    return acc;
+  }, []);
+
+  const renderIcon = (entry: PipelineLogEntry) => {
+    const isActive = entry.stage === currentActive;
+    switch (entry.type) {
+      case "started":
+        return isActive
+          ? <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" data-testid={`pipeline-dot-active-${entry.stage}`} />
+          : <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />;
+      case "heartbeat":
+        return <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />;
+      case "completed":
+        return <Check className="h-3 w-3 text-emerald-400 shrink-0" />;
+      case "warning":
+        return <span className="text-amber-400 text-[10px] shrink-0">&#9888;</span>;
+      case "failed":
+        return <X className="h-3 w-3 text-red-400 shrink-0" />;
+      default:
+        return null;
+    }
+  };
+
+  const renderMessage = (entry: PipelineLogEntry) => {
+    switch (entry.type) {
+      case "started":
+        return <span className="text-muted-foreground/70 text-[11px]">{entry.message}</span>;
+      case "heartbeat":
+        return <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">{entry.message}</span>;
+      case "completed":
+        return <span className="text-foreground/90 text-[11px]">{entry.message}</span>;
+      case "warning":
+        return <span className="text-amber-400 text-[11px]">{entry.message}</span>;
+      case "failed":
+        return <span className="text-red-400 text-[11px]">{entry.message}</span>;
+      default:
+        return <span className="text-muted-foreground text-[11px]">{entry.message}</span>;
+    }
+  };
+
+  const totalElapsed = entries.length > 0
+    ? Math.round((Date.now() - entries[0].timestamp) / 1000)
+    : 0;
+
+  return (
+    <div className="flex justify-start" data-testid="pipeline-log-panel">
+      <div className="max-w-[90%] w-full rounded-lg bg-card border border-card-border rounded-bl-sm overflow-hidden" ref={containerRef}>
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border/30">
+          <div className="flex items-center gap-2">
+            <Package className="h-3.5 w-3.5 text-primary" />
+            <span className="text-[11px] font-semibold text-foreground/80">
+              {isComplete ? "Pipeline Complete" : "Building UiPath Package"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {!isComplete && (
+              <span className="text-[10px] text-muted-foreground/50">{totalElapsed}s</span>
+            )}
+            {onCancel && !isComplete && (
+              <button
+                onClick={onCancel}
+                className="text-[10px] text-muted-foreground hover:text-foreground underline shrink-0"
+                data-testid="button-cancel-pipeline"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="max-h-[240px] overflow-y-auto px-3 py-1.5 space-y-0.5 scrollbar-thin">
+          {deduped.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex items-center gap-2 py-0.5 pipeline-log-entry"
+              data-testid={`pipeline-entry-${entry.type}-${entry.stage}`}
+            >
+              <div className="w-4 flex items-center justify-center shrink-0">
+                {renderIcon(entry)}
+              </div>
+              <div className="flex-1 min-w-0 truncate">
+                {renderMessage(entry)}
+              </div>
+              {entry.type === "completed" && entry.elapsed !== undefined && (
+                <span className="text-[9px] text-muted-foreground/50 shrink-0 tabular-nums ml-auto">{entry.elapsed.toFixed(1)}s</span>
+              )}
+            </div>
+          ))}
+          <div ref={logEndRef} />
+        </div>
+        {isComplete && (
+          <div className="px-3 py-2 border-t border-border/30 pipeline-fade-in">
+            <div className="flex items-center gap-1.5">
+              <Check className="h-3 w-3 text-emerald-400" />
+              <span className="text-[11px] text-emerald-400 font-medium">Ready to deploy</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const DOC_PROGRESS_STEPS: Record<string, string[]> = {
   PDD: [
     "Analyzing process steps...",
@@ -521,6 +666,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [uipathTemplateComplianceScore, setUipathTemplateComplianceScore] = useState<number | undefined>();
   const [metaValidationChipStatus, setMetaValidationChipStatus] = useState<"ready" | "assessing" | "will-validate" | "not-needed" | "active" | "validating" | "fixed" | "clean" | "warning">("ready");
   const [metaValidationFixCount, setMetaValidationFixCount] = useState(0);
+  const [pipelineLogEntries, setPipelineLogEntries] = useState<PipelineLogEntry[]>([]);
+  const [pipelineComplete, setPipelineComplete] = useState(false);
+  const pipelineEntryCounter = useRef(0);
   const [streamingDocContent, setStreamingDocContent] = useState<string>("");
   const [streamingDocElapsed, setStreamingDocElapsed] = useState(0);
   const streamingDocElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -884,6 +1032,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 if (data.intentClassified === "UIPATH_GEN" && !isGeneratingDocRef.current) {
                   startDocStreaming("UiPath");
                   docGenIdAtStart = docGenIdRef.current;
+                  setPipelineLogEntries([]);
+                  setPipelineComplete(false);
+                  pipelineEntryCounter.current = 0;
                 }
               }
               if (data.done) {
@@ -894,6 +1045,22 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 setClassifiedIntent("");
                 setLiveStatus("");
                 setTimeout(() => setMetaValidationChipStatus("ready"), 5000);
+              }
+              if (data.pipelineEvent) {
+                const evt = data.pipelineEvent;
+                pipelineEntryCounter.current++;
+                setPipelineLogEntries(prev => [...prev, {
+                  id: `pe-${pipelineEntryCounter.current}`,
+                  type: evt.type,
+                  stage: evt.stage,
+                  message: evt.message,
+                  elapsed: evt.elapsed,
+                  context: evt.context,
+                  timestamp: Date.now(),
+                }]);
+                if (evt.stage === "complete" && evt.type === "completed") {
+                  setPipelineComplete(true);
+                }
               }
               if (data.docProgress) {
                 if (data.docProgress.started && !isGeneratingDocRef.current) {
@@ -1323,6 +1490,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     setUipathBuildStatus("BUILDING");
     setUipathBuildWarnings(undefined);
     setUipathTemplateComplianceScore(undefined);
+    setPipelineLogEntries([]);
+    setPipelineComplete(false);
+    pipelineEntryCounter.current = 0;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 300000);
@@ -1361,11 +1531,28 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 if (line.startsWith("data: ")) {
                   try {
                     const data = JSON.parse(line.slice(6));
+                    if (data.pipelineEvent) {
+                      const evt = data.pipelineEvent;
+                      pipelineEntryCounter.current++;
+                      setPipelineLogEntries(prev => [...prev, {
+                        id: `pe-${pipelineEntryCounter.current}`,
+                        type: evt.type,
+                        stage: evt.stage,
+                        message: evt.message,
+                        elapsed: evt.elapsed,
+                        context: evt.context,
+                        timestamp: Date.now(),
+                      }]);
+                      if (evt.stage === "complete" && evt.type === "completed") {
+                        setPipelineComplete(true);
+                      }
+                    }
                     if (data.progress) {
                       setDocProgressSection(data.progress);
                     }
                     if (data.done) {
                       success = true;
+                      setPipelineComplete(true);
                     }
                     if (data.status) {
                       setUipathBuildStatus(data.status);
@@ -1806,6 +1993,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
               const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD" | "UiPath";
+              if (docType === "UiPath" && pipelineLogEntries.length > 0) {
+                return <PipelineLogPanel key={`${msg.id}-pipeline-log`} entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={cancelDocGeneration} />;
+              }
               if (docType !== "UiPath" && streamingDocContent && streamingDocContent.length > 10) {
                 return (
                   <div key={`${msg.id}-streaming-doc`} className="flex justify-start" data-testid="streaming-doc-card">

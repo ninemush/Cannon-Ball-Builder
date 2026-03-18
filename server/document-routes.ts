@@ -5,7 +5,7 @@ import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 import { getPlatformCapabilities, QualityGateError } from "./uipath-integration";
-import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline, type IdeaContext } from "./uipath-pipeline";
+import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline, type IdeaContext, type PipelineProgressEvent } from "./uipath-pipeline";
 import type { MetaValidationMode } from "./meta-validation";
 import { evaluateTransition } from "./stage-transition";
 import { approveDocument } from "./document-service";
@@ -1049,6 +1049,13 @@ ${content}`
       }
       const preloadedContext: IdeaContext = { idea, sdd: sddDoc, pdd: pddDoc, mapNodes: mNodes, processEdges: pEdges };
 
+      const sendPipelineEvent = (event: PipelineProgressEvent) => {
+        res.write(`data: ${JSON.stringify({ pipelineEvent: event })}\n\n`);
+        if (event.type === "completed" || event.type === "started") {
+          sendProgress(event.message);
+        }
+      };
+
       let completedTemplateComplianceScore: number | undefined;
       try {
         const requestedMode = (req.body.generationMode === "baseline_openable") ? "baseline_openable" as const : undefined;
@@ -1061,6 +1068,7 @@ ${content}`
         } catch { /* default to Auto */ }
         const pipelineResult = await runBuildPipeline(ideaId, packageJson, {
           onProgress: sendProgress,
+          onPipelineProgress: sendPipelineEvent,
           onMetaValidation: (event) => {
             res.write(`data: ${JSON.stringify({ metaValidation: event })}\n\n`);
           },
