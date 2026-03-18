@@ -1,0 +1,79 @@
+Two corrections to the streaming fix prompt 
+before implementation. Apply these to the 
+previous prompt and then proceed.
+
+CORRECTION TO GAP 3 — handleSSEEvent must 
+be a closure inside sendMessageDirect
+
+Do NOT define handleSSEEvent as a standalone 
+function with parameters. Define it as an 
+inner function inside sendMessageDirect so 
+it closes over docGenIdAtStart directly:
+
+  function sendMessageDirect(...) {
+    let docGenIdAtStart = docGenIdRef.current
+    
+    // define inside sendMessageDirect so it 
+    // closes over docGenIdAtStart and can 
+    // mutate it
+    function handleSSEEvent(data: SSEData): void {
+      // all event handling logic here
+      // accesses and mutates docGenIdAtStart 
+      // directly via closure
+      // no parameter needed
+    }
+    
+    // main path
+    handleSSEEvent(data)
+    
+    // retry path  
+    handleSSEEvent(data)
+  }
+
+This approach:
+- Eliminates the type issue (no genId parameter)
+- Preserves docGenIdAtStart mutation behaviour 
+  (reassignments inside handleSSEEvent update 
+  the closed-over variable directly)
+- Keeps the finally block comparison correct 
+  (docGenIdRef.current === docGenIdAtStart 
+  still works as before)
+
+CORRECTION TO GAP 5 — Add missing client 
+handlers to handleSSEEvent
+
+The forwarded fields (status, warnings, 
+templateComplianceScore) will arrive via the 
+chat SSE stream and be consumed by 
+sendMessageDirect. The generateUiPath handlers 
+at lines 1557-1564 only run on the button path 
+and will not handle these events.
+
+Add these handlers inside handleSSEEvent 
+(the closure defined in Gap 3):
+
+  if (data.status && 
+      classifiedIntent === "UIPATH_GEN") {
+    setUipathBuildStatus(data.status)
+  }
+  
+  if (data.warnings) {
+    setUipathBuildWarnings(data.warnings)
+  }
+  
+  if (data.templateComplianceScore !== undefined) {
+    setUipathTemplateComplianceScore(
+      data.templateComplianceScore
+    )
+  }
+
+The classifiedIntent guard on data.status is 
+required because status is a generic field 
+name used in other contexts. Without the guard 
+any SSE event with a status field would 
+incorrectly set uipathBuildStatus. 
+classifiedIntent is in scope via closure so 
+no parameter is needed.
+
+Everything else in the previous prompt stands 
+unchanged. Proceed with implementation.
