@@ -1,0 +1,230 @@
+Stop fixing individual XAML bugs. The root cause is 
+architectural — the generator produces flat activity 
+lists instead of properly nested hierarchical XAML. 
+This cannot be fixed with prompt constraints alone.
+
+Implement hierarchical generation in three passes:
+
+PASS 1 — Tree-structured decomposition
+
+Change the SDD decomposition output from a flat step 
+list to a typed workflow tree. Each node must explicitly 
+declare its parent-child relationships.
+
+Define this TypeScript structure:
+
+type WorkflowNode =
+  | ActivityNode      // leaf — a single activity
+  | TryCatchNode      // structural — has try/catch children
+  | IfNode            // structural — has then/else children
+  | SequenceNode      // structural — has ordered children
+  | RetryScopeNode    // structural — has body children
+
+type ActivityNode = {
+  kind: 'activity'
+  template: string        // exact template name from catalog
+  displayName: string
+  properties: Record<string, string>  // placeholder values
+  errorHandling: boolean  // wrap in standard TryCatch
+}
+
+type TryCatchNode = {
+  kind: 'trycatch'
+  displayName: string
+  errorNote: string
+  tryChildren: WorkflowNode[]
+  // catch block is always the standard error handler template
+  // no custom catch children needed
+}
+
+type IfNode = {
+  kind: 'if'
+  displayName: string
+  condition: string
+  thenChildren: WorkflowNode[]
+  elseChildren: WorkflowNode[]
+}
+
+type SequenceNode = {
+  kind: 'sequence'
+  displayName: string
+  children: WorkflowNode[]
+}
+
+type RetryScopeNode = {
+  kind: 'retryScope'
+  displayName: string
+  numberOfRetries: number
+  retryInterval: string   // HH:MM:SS format
+  bodyChildren: WorkflowNode[]
+}
+
+type WorkflowSpec = {
+  name: string
+  variables: VariableDeclaration[]
+  root: SequenceNode
+}
+
+type VariableDeclaration = {
+  name: string
+  type: string   // x:String, x:Boolean, x:Int32 etc
+  default?: string
+}
+
+The decomposition LLM call produces a JSON object 
+matching WorkflowSpec. Not prose. Not step lists. 
+A typed tree.
+
+The decomposition prompt must instruct the LLM:
+"Output a JSON object matching the WorkflowSpec type. 
+Every activity that can fail must be a child of a 
+TryCatchNode, not a sibling. Never place activities 
+as direct children of the root Sequence unless they 
+genuinely have no error handling. The catch block is 
+always the standard error handler — do not add custom 
+catch content."
+
+PASS 2 — Leaf node template resolution (no LLM)
+
+For each ActivityNode in the tree, call 
+xamlTemplateBuilder.resolveActivity(node) which:
+1. Looks up the template by node.template name
+2. Fills in each {{placeholder}} from node.properties
+3. If node.errorHandling is true, wraps the activity 
+   in the standard TryCatch structural template
+4. Returns the complete XML string for that leaf
+
+This is deterministic code. No LLM involvement.
+
+For structural nodes (TryCatchNode, IfNode, etc), 
+the templates are fixed — they just need their 
+child XML inserted into the correct slots.
+
+PASS 3 — Bottom-up tree assembly (no LLM)
+
+Walk the WorkflowSpec tree bottom-up:
+
+function assembleNode(node: WorkflowNode): string {
+  if (node.kind === 'activity') {
+    return xamlTemplateBuilder.resolveActivity(node)
+  }
+  if (node.kind === 'trycatch') {
+    const tryXml = node.tryChildren
+      .map(assembleNode).join('\n')
+    return standardTryCatchTemplate
+      .replace('{{tryActivities}}', tryXml)
+      .replace('{{displayName}}', node.displayName)
+      .replace('{{errorHandlingNote}}', node.errorNote)
+      // ... fill other placeholders
+  }
+  if (node.kind === 'if') {
+    const thenXml = node.thenChildren
+      .map(assembleNode).join('\n')
+    const elseXml = node.elseChildren
+      .map(assembleNode).join('\n')
+    return ifTemplate
+      .replace('{{thenActivities}}', thenXml)
+      .replace('{{elseActivities}}', elseXml)
+      .replace('{{condition}}', node.condition)
+      // ... fill other placeholders
+  }
+  if (node.kind === 'sequence') {
+    const childXml = node.children
+      .map(assembleNode).join('\n')
+    return sequenceTemplate
+      .replace('{{activities}}', childXml)
+      // ... fill other placeholders
+  }
+  if (node.kind === 'retryScope') {
+    const bodyXml = node.bodyChildren
+      .map(assembleNode).join('\n')
+    return retryScopeTemplate
+      .replace('{{retryBodyActivities}}', bodyXml)
+      // ... fill other placeholders
+  }
+}
+
+The variable declarations are built programmatically 
+from the WorkflowSpec.variables array — not generated 
+by the LLM. Every variable in the array becomes a 
+Variable element in Sequence.Variables. The LLM 
+populates the variables array in the decomposition 
+output; the system writes the XML.
+
+Wrap the root sequence with the fixed workflow header 
+to produce the complete XAML file.
+
+ALSO FIX THESE CATALOG AND TEMPLATE GAPS
+
+While implementing the above, fix these specific 
+issues identified in the package analysis:
+
+1. ui:Rethrow and Rethrow namespace
+   The bare Rethrow (no namespace) belongs to 
+   System.Activities.Statements. Remove ui: prefix 
+   from Rethrow in all templates and the generator.
+   The template must be: <Rethrow DisplayName="Rethrow"/>
+   Never <ui:Rethrow>.
+
+   ui:Delay IS correct with the ui: prefix — it is 
+   a UiPath activity. Keep that as-is.
+
+2. GetAsset output property
+   The correct attribute is AssetValue not Value.
+   Update the GetAsset template:
+   AssetValue="[{{outputVar:varname}}]"
+   
+   Also the attribute value must be bracket-wrapped 
+   as a VB expression, not a plain string.
+
+3. SendSmtpMailMessage missing Body and literal strings
+   Add Body to the template:
+   Body="[{{body:expression}}]"
+   
+   All string-valued properties that reference 
+   variables must use bracket-wrapped expressions:
+   To="[{{to:expression}}]"
+   From="[{{from:expression}}]"  
+   Subject="[{{subject:expression}}]"
+   Username="[{{username:expression}}]"
+   Password="[{{password:expression}}]"
+
+4. Assign type inference
+   When the target variable type is known from the 
+   variables array, use the specific type in 
+   x:TypeArguments instead of x:Object.
+   x:Object is only acceptable when type genuinely 
+   cannot be determined.
+
+COMPLETION CRITERIA
+
+1. The decomposition stage outputs a typed WorkflowSpec 
+   JSON object — show me a sample of the JSON for 
+   WeatherAndTravelNotification before XAML assembly
+
+2. The XAML assembler is tree-based — no LLM call 
+   produces raw XAML directly
+
+3. Regenerate WeatherAndTravelNotification and confirm:
+   - All activities are correctly nested inside their 
+     parent containers
+   - No activities sitting as flat siblings outside 
+     TryCatch when they should be inside one
+   - Zero ui:Rethrow — all Rethrow uses bare namespace
+   - GetAsset uses AssetValue with bracket-wrapped 
+     expressions
+   - SendSmtpMailMessage includes Body property
+   - All variable x:TypeArguments use specific types 
+     not x:Object where type is known
+   - Zero double-wrapped OutArgument elements
+
+4. All 113 tests still pass — add new tests for:
+   - assembleNode produces correct XML for each 
+     node kind
+   - TryCatchNode always places children inside 
+     Try body not as siblings
+   - WorkflowSpec JSON validates against the type 
+     definitions
+
+5. Send the WorkflowSpec JSON and the package 
+   for inspection

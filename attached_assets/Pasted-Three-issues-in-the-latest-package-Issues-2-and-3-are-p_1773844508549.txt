@@ -1,0 +1,108 @@
+Three issues in the latest package. Issues 2 and 3 are 
+prompt issues to fix at source. Issue 1 is a targeted 
+post-processing fix.
+
+ISSUE 1 — Double-wrapped OutArgument persisting in 
+InitAllSettings.xaml lines 107 and 116 (code fix)
+
+This bug has survived multiple builds. The guard is not 
+catching it. Add a dedicated XML post-processing function 
+that runs after generation and before the quality gate:
+
+function collapseNestedArguments(xaml: string): string {
+  Parse the XAML using fast-xml-parser.
+  Walk every element node in the tree.
+  For every InArgument or OutArgument element:
+    If its only meaningful child is also an InArgument or 
+    OutArgument element of the same type:
+      Replace the outer element with the inner element.
+      Preserve the inner element's x:TypeArguments.
+  Serialize back to string.
+  Return the corrected XAML.
+}
+
+Run this function on every generated XAML file as the 
+final step in makeUiPathCompliant. It must handle both 
+same-line and multi-line nested patterns.
+
+ISSUE 2 — ui:InvokeCode chosen for JSON parsing (prompt fix)
+
+The LLM is using ui:InvokeCode to parse JSON responses 
+from the weather, TfL, and National Rail APIs. InvokeCode 
+is not in the template library and is being stripped, 
+leaving empty TryCatch bodies with no logic.
+
+The previous generation correctly used ui:Assign with 
+Newtonsoft.Json.Linq expressions for JSON parsing. The 
+template-driven prompt must explicitly prevent InvokeCode 
+and provide the correct pattern.
+
+Two changes required:
+
+1. Add ui:InvokeCode to the blocked activities list with 
+   this message: "InvokeCode is not supported. Use 
+   ui:Assign with inline VB expressions instead."
+
+2. Add a JSON parsing guidance block to Section 3 of the 
+   LLM prompt (Variable Declaration Rules), immediately 
+   after the variable rules:
+
+"JSON PARSING PATTERN
+Never use ui:InvokeCode for JSON parsing. Always use 
+ui:Assign with Newtonsoft.Json.Linq inline expressions.
+
+For parsing a JSON object response:
+  Step 1 — Parse to JObject:
+    ui:Assign To=[jsonObj] 
+    Value=[Newtonsoft.Json.Linq.JObject.Parse(responseVar)]
+
+  Step 2 — Extract a string field:
+    ui:Assign To=[targetVar]
+    Value=[jsonObj("fieldName").ToString()]
+
+  Step 3 — Extract a nested field:
+    ui:Assign To=[targetVar]
+    Value=[jsonObj("parent")("child").ToString()]
+
+  Step 4 — Extract from a JSON array:
+    ui:Assign To=[jsonObj]
+    Value=[Newtonsoft.Json.Linq.JArray.Parse(responseVar)]
+    then: [CType(jsonObj, Newtonsoft.Json.Linq.JArray)(0)("field").ToString()]
+
+These are the only valid JSON parsing patterns.
+Never use Deserialize, JsonConvert, or InvokeCode."
+
+ISSUE 3 — Only 6 variables declared in Main.xaml (prompt fix)
+
+The previous package declared all variables correctly. 
+This package has regressed to only 6. The variable 
+declaration rule in Section 3 of the prompt is not being 
+followed consistently.
+
+Strengthen the variable declaration instruction in the 
+prompt with an explicit pre-generation step:
+
+Add this to Section 1 Rule 9 (variable declarations):
+
+"MANDATORY PRE-GENERATION STEP: Before writing a single 
+activity element, you must:
+1. Read the entire workflow specification
+2. List every variable name you will reference in any 
+   OutArgument, InArgument, or Condition expression
+3. Write ALL of them into Sequence.Variables using the 
+   declaration template
+4. Only then begin writing activity elements
+
+This step is not optional. A variable referenced in any 
+expression that is not declared in Sequence.Variables 
+will cause a Studio load error. Declare every variable 
+you use, without exception."
+
+COMPLETION CRITERIA
+1. Zero double-wrapped OutArgument or InArgument elements
+2. Zero ui:InvokeCode stripped comments — JSON parsing 
+   uses ui:Assign with Newtonsoft.Json.Linq expressions
+3. All variables referenced in OutArgument expressions 
+   declared in Sequence.Variables
+4. All 113 tests still pass
+5. Send the package for inspection
