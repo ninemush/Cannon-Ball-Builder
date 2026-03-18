@@ -1,0 +1,239 @@
+Task B has four parts. Complete them in order. Do not mark this task done 
+until all four are complete and a smoke test package opens cleanly in Studio 
+with no red dependencies and no load errors.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 0 — Fix dependency version strategy (do this first)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLEM
+The generated project.json is declaring dependencies with incorrect version 
+strings. Two packages are currently unresolvable in Studio:
+- UiPath.Web.Activities v1.18.0 — "Package not found in any feed"
+- UiPath.Excel.Activities v2.24.0 — "Package version not found in any feed"
+
+These version numbers do not exist in the connected feeds. They were 
+speculative values, not sourced from the actual feed. Additionally, both 
+packages were added without confirming that any generated XAML activity 
+actually requires them.
+
+FIX
+
+1. Scan-before-declare rule
+   Before writing any package to project.json, scan all generated XAML files 
+   for activities that require that package. Only declare a dependency if at 
+   least one activity in the generated XAML requires it.
+
+   Use this package-to-activity mapping:
+   - UiPath.System.Activities: ui:Assign, ui:InvokeWorkflowFile, 
+     ui:LogMessage, ui:GetCredential, ui:RetryScope, ui:ShouldRetry
+   - UiPath.Web.Activities: ui:HttpClient, ui:DeserializeJSON
+   - UiPath.Mail.Activities: ui:SendSMTPMail, ui:GetIMAPMail, 
+     ui:GetOutlookMailMessages, ui:SendOutlookMail
+   - UiPath.Excel.Activities: ui:ExcelApplicationScope, ui:ReadRange, 
+     ui:WriteRange, ui:ReadCell, ui:WriteCell
+   - UiPath.UIAutomation.Activities: ui:TakeScreenshot, ui:Click, 
+     ui:TypeInto, ui:GetText, ui:AttachBrowser
+
+2. Confirmed resolvable version pins
+   Use exact version pinning. These versions are confirmed resolvable in 
+   the target Studio feed:
+   - UiPath.System.Activities: 23.10.3
+   - UiPath.Mail.Activities: 1.20.0
+   - UiPath.UIAutomation.Activities: 23.10.8
+
+   The following packages have NO confirmed resolvable version at this time:
+   - UiPath.Web.Activities — v1.18.0 does not exist in any feed
+   - UiPath.Excel.Activities — v2.24.0 does not exist in any feed
+
+   For these two packages: if the XAML activity scan confirms they are 
+   needed, do NOT declare them in project.json with an unverified version. 
+   Instead, leave the activities in the XAML (they are structurally correct) 
+   and add a pipeline warning:
+   { 
+     code: 'DEPENDENCY_VERSION_UNKNOWN', 
+     message: 'Package [name] is required by generated activities but no 
+       confirmed resolvable version is available. Open Manage Packages in 
+       Studio to resolve manually.',
+     stage: 'dependency_resolution', 
+     recoverable: true 
+   }
+
+   This is honest — Studio will flag the activities as unresolved, which 
+   the developer can fix in one click. Declaring a non-existent version 
+   breaks the entire project silently.
+
+3. Never use >= version syntax or wildcard (*) versions in project.json.
+   Always use exact version strings from the confirmed table above.
+
+4. Update the dependency generation logic in uipath-integration.ts to 
+   implement rules 1–3. The current approach of deriving dependencies from 
+   LLM suggestions or a static list must be replaced with the XAML activity 
+   scan.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 1 — Pre-build failure handling
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLEM
+When the pre-build fails (document-routes.ts lines 1080–1097), the pipeline 
+sends a "skipped" progress message and returns { done: true, package: 
+packageJson } — a success response with no .nupkg on disk. The user gets 
+an active download button that will either cold-rebuild silently or fail.
+
+FIX
+
+1. Introduce a PackageStatus enum in server/types/uipath-package.ts:
+   export enum PackageStatus {
+     BUILDING = 'building',
+     READY = 'ready',
+     READY_WITH_WARNINGS = 'ready_with_warnings',
+     FAILED = 'failed'
+   }
+
+2. When pre-build fails, do NOT return { done: true }. Return:
+   { 
+     done: false, 
+     status: PackageStatus.FAILED, 
+     stage: 'pre_build',
+     error: <error message>, 
+     ideaId, 
+     timestamp 
+   }
+
+   The SSE progress message must clearly state failure:
+   "Package build failed at pre-build stage — [reason]."
+   Not "skipped" or any softened language.
+
+3. Add an fs.existsSync check before setting status to READY. Only set 
+   READY when the .nupkg is confirmed on disk.
+
+4. Add a retryBuild action that re-triggers the full pipeline. Surface 
+   this in the UI whenever status is FAILED.
+
+5. Download and deploy buttons are only enabled in READY and 
+   READY_WITH_WARNINGS states. Visually disabled in all other states —
+   not hidden, just non-interactive with a clear visual treatment.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 2 — Silent error swallowing
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLEM
+Two locations silently catch and discard errors:
+- uipath-pipeline.ts line 223: empty catch {} on AI Center skills fetch
+- uipath-pipeline.ts lines 105–106: silent null return on artifact 
+  extraction failure
+
+Both produce packages with missing content and no signal to the user 
+or the logs.
+
+FIX
+
+1. Add a PipelineWarning type to server/types/uipath-package.ts:
+   export type PipelineWarning = {
+     code: string
+     message: string
+     stage: string
+     recoverable: boolean
+   }
+
+2. Add a warnings array to the pipeline result object.
+
+3. Replace the silent catch on AI Center skills fetch:
+   - Log: log.warn('AI Center skill fetch failed', { ideaId, 
+     error: err.message, timestamp: Date.now() })
+   - Push warning: { 
+       code: 'AI_CENTER_SKILLS_UNAVAILABLE', 
+       message: 'AI Center skill references could not be resolved. 
+         Affected activities may need manual configuration in Studio.',
+       stage: 'skill_resolution', 
+       recoverable: true 
+     }
+
+4. Replace the silent null on artifact extraction:
+   - Log: log.warn('Artifact extraction failed', { ideaId,
+     error: err.message, timestamp: Date.now() })
+   - Push warning: { 
+       code: 'ARTIFACT_EXTRACTION_FAILED',
+       message: 'One or more artifacts could not be extracted. 
+         The package may be incomplete.',
+       stage: 'artifact_extraction', 
+       recoverable: false 
+     }
+
+5. The DEPENDENCY_VERSION_UNKNOWN warning introduced in Part 0 also 
+   feeds into this same warnings array. All three warning types use 
+   the same PipelineWarning type.
+
+6. When warnings are present but the .nupkg was produced, set status 
+   to PackageStatus.READY_WITH_WARNINGS.
+
+7. In the frontend package card for READY_WITH_WARNINGS:
+   - Amber "Review before opening" badge
+   - Warning count shown inline, e.g. "2 warnings"
+   - Expandable panel showing each warning message
+   - Download and deploy buttons remain enabled
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 3 — Redundant database round-trips
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROBLEM
+The route handler in document-routes.ts (lines 988–998) loads idea, PDD, 
+SDD, and process nodes then calls generateUiPathPackage which calls 
+loadIdeaContext internally at line 205, loading the same records again. 
+The IdeaContext interface already exists at line 47 of uipath-pipeline.ts.
+
+FIX
+
+1. Add optional parameter to generateUiPathPackage:
+   generateUiPathPackage(
+     ideaId: string, 
+     pkg: UiPathPackage,
+     options?: { preloadedContext?: IdeaContext }
+   )
+
+2. If preloadedContext is provided, skip loadIdeaContext entirely and 
+   use the provided data.
+
+3. In document-routes.ts, construct IdeaContext from already-loaded 
+   data and pass via options.preloadedContext.
+
+4. Keep loadIdeaContext as a fallback for callers without pre-loaded 
+   data (background jobs, retry handlers). Do not remove it.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMPLETION CRITERIA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All of the following must be true before reporting back:
+
+1. All 99 existing unit tests pass.
+
+2. New tests added and passing for:
+   - Pre-build failure returns PackageStatus.FAILED, not success
+   - READY_WITH_WARNINGS set when warnings present and nupkg exists
+   - loadIdeaContext not called when preloadedContext is provided
+   - Dependency scan correctly excludes packages with no matching 
+     activities in the generated XAML
+   - DEPENDENCY_VERSION_UNKNOWN warning emitted for Web.Activities 
+     and Excel.Activities when those activities are present in XAML
+   - No >= or wildcard versions appear in any generated project.json
+
+3. Smoke test: generate a package, download it, open in Studio:
+   - No red dependencies in Studio Explorer
+   - No errors on file load
+   - All declared dependencies show blue (resolved)
+   - Any unresolved dependencies show as warnings in the CannonBall 
+     UI, not as silent failures
+
+4. No silent catch blocks remain in uipath-pipeline.ts.
+
+5. Download and deploy buttons are visually disabled in FAILED state.
+
+Report back with:
+- Confirmation all unit tests pass with count
+- Screenshot of Studio Explorer showing dependency states
+- Screenshot of the CannonBall package card showing the warning UI 
+  if any DEPENDENCY_VERSION_UNKNOWN warnings were emitted
