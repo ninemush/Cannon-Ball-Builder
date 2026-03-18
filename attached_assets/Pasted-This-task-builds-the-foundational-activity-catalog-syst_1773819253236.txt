@@ -1,0 +1,556 @@
+This task builds the foundational activity catalog system for CannonBall. 
+It is the most important architectural investment in the generation pipeline. 
+Do not rush it. Do not take shortcuts. Every decision here affects the quality 
+of every package CannonBall generates from this point forward.
+
+The task has five parts. Complete them in order. Do not move to the next part 
+until the current one is working and tested.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 1 — GitHub Actions catalog refresh workflow
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create .github/workflows/catalog-refresh.yml
+
+TRIGGER
+- Schedule: 4 times daily (0 */6 * * *)
+- Manual dispatch: workflow_dispatch with optional 
+  force_full_refresh boolean input (default false)
+
+RUNNER
+- windows-latest (required for .NET reflection and Studio 
+  installation)
+
+STEPS IN ORDER
+
+Step 1 — Determine latest stable Studio version
+  Fetch https://docs.uipath.com/releasenotes/docs/studio
+  Parse the page to identify the latest stable Studio version.
+  Also fetch https://docs.uipath.com/overview/docs/product-lifecycle
+  to determine which release train (LTS vs Continuous) it belongs to.
+  Store as environment variables: STUDIO_VERSION, STUDIO_TRAIN
+  If parsing fails, fail the workflow with a clear error — do not 
+  proceed with a stale or unknown Studio version.
+
+Step 2 — Install UiPath Studio silently
+  Download the UiPath Studio installer for STUDIO_VERSION from the 
+  UiPath CDN. Use the silent install flags:
+    UiPathStudio.msi /quiet /norestart
+  Verify installation succeeded by checking that these files exist:
+    C:\Program Files\UiPath\Studio\UiPath.Core.dll
+    C:\Program Files\UiPath\Studio\UiPath.Robot.Activities.Api.dll
+  If either file is missing, fail the workflow — do not proceed 
+  without complete runtime type resolution.
+
+Step 3 — Run the catalog extractor
+  Build and run the .NET extractor (defined in Part 2).
+  Pass as arguments:
+    --studio-version $STUDIO_VERSION
+    --studio-train $STUDIO_TRAIN  
+    --feed-url https://pkgs.dev.azure.com/uipath/Public.Feeds/_packaging/UiPath-Official/nuget/v3/index.json
+    --runtime-path "C:\Program Files\UiPath\Studio"
+    --output catalog/activity-catalog.json
+    --manifest catalog/catalog-manifest.json
+    --force-refresh ${{ inputs.force_full_refresh }}
+
+Step 4 — Validate the output
+  Before committing, run the catalog validator (defined in Part 3).
+  The validator must confirm:
+  - catalog/activity-catalog.json is valid JSON
+  - Schema version field is present
+  - At least 50 activities are present (sanity check — fewer 
+    indicates a failed extraction)
+  - No activity appears in more than one package
+  - No property has an invalid xamlSyntax value
+  - The diff from the previous catalog does not show more than 
+    20% of activities changed in a single run. If it does, fail 
+    the workflow and post a summary explaining which activities 
+    changed — this indicates a potential extraction error, not 
+    a legitimate UiPath update.
+
+Step 5 — Commit and push if changed
+  Compare the new catalog against the committed version.
+  If nothing changed, skip commit and post "No catalog changes 
+  detected" to the workflow summary.
+  If changed, commit with message:
+    "catalog: refresh for Studio {STUDIO_VERSION} — {N} packages, 
+     {M} activities [{timestamp}]"
+  Push to main branch.
+  Post a workflow summary showing:
+  - Studio version anchored
+  - Packages processed
+  - Activities added/removed/changed since last run
+  - Any packages excluded due to incompatibility
+  - Any TypeLoadException gaps that were handled gracefully
+
+Step 6 — Notify on failure
+  If any step fails, post a detailed failure summary to the 
+  workflow annotations. Do not silently succeed with a partial 
+  catalog.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 2 — .NET catalog extractor
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create .github/scripts/extract-catalog/ containing a .NET 8 
+console application.
+
+FILES
+  ExtractCatalog.csproj
+  Program.cs
+  Models/ActivitySchema.cs
+  Models/CatalogManifest.cs
+  Services/FeedService.cs
+  Services/ReflectionService.cs
+  Services/StudioVersionService.cs
+  Services/CatalogBuilder.cs
+
+EXTRACTOR BEHAVIOUR
+
+FeedService — discovers packages
+1. Connect to the UiPath public NuGet feed using NuGet.Protocol 
+   (official NuGet client library — add as NuGet dependency).
+2. Fetch the complete package list.
+3. Filter to packages that meet ALL of these criteria:
+   - Published by UiPath (owners field contains "UiPath")
+   - Do not require authentication (publicly accessible without token)
+   - Contain a lib/ folder with at least one .dll
+   - Are not marked as deprecated on the feed
+4. For each qualifying package, fetch the latest version that is 
+   compatible with STUDIO_VERSION. Use the package's 
+   minClientVersion field from its nuspec to determine 
+   compatibility. Exclude any package whose minClientVersion 
+   is higher than STUDIO_VERSION.
+5. If force_refresh is false, skip packages whose version matches 
+   what is already in the catalog — only process new or updated 
+   packages.
+
+ReflectionService — extracts activity schemas
+For each qualifying package:
+
+1. Download the .nupkg to a temp directory.
+2. Extract the lib/ folder. Prefer lib/net6.0 or lib/net8.0 
+   targets. Fall back to lib/net45 if modern targets are absent.
+3. Load the assembly using MetadataLoadContext (not full 
+   Assembly.LoadFrom — MetadataLoadContext avoids executing 
+   static constructors and is safer for batch reflection).
+   Pass the following as resolver assemblies:
+   - All .dlls from C:\Program Files\UiPath\Studio\ (runtime types)
+   - All .dlls from the package's lib/ folder (package types)
+   - Standard .NET runtime assemblies
+4. For each public type in the assembly:
+   - Check if it inherits from System.Activities.Activity, 
+     System.Activities.NativeActivity, 
+     System.Activities.CodeActivity, or 
+     System.Activities.AsyncCodeActivity (directly or transitively)
+   - If yes, it is an activity — extract its schema
+   - If no, skip it
+5. For each activity type, extract:
+   - Class name (fully qualified)
+   - Display name (from DisplayNameAttribute if present, 
+     otherwise class name)
+   - Category (from CategoryAttribute if present)
+   - All public properties, for each recording:
+     - Property name
+     - CLR type (as string)
+     - Whether it is InArgument<T>, OutArgument<T>, 
+       InOutArgument<T>, or a plain value type
+     - Whether it has [RequiredArgument] attribute
+     - Whether it has [DefaultValue] attribute and what the default is
+     - xamlSyntax: "child-element" for all Argument<T> types, 
+       "attribute" for all plain value types (string, bool, int, 
+       enum, TimeSpan)
+     - argumentWrapper: "InArgument", "OutArgument", 
+       "InOutArgument", or null for plain attributes
+     - typeArguments: the T from InArgument<T> as a string, 
+       or null for plain attributes
+   - Whether the activity is browsable (from BrowsableAttribute — 
+     false means it is internal infrastructure, exclude it)
+6. Handle TypeLoadException and ReflectionTypeLoadException 
+   gracefully. Log which types could not be fully resolved and why. 
+   Extract what is available. Do not fail the entire package 
+   because one type has an unresolvable dependency.
+
+CatalogBuilder — assembles and cleans the catalog
+1. Merge newly extracted schemas with the existing catalog.
+2. Apply deduplication: if the same activity class appears in 
+   multiple packages, assign it to the package where it is the 
+   primary export (not a re-export). Use the package that declares 
+   the type's namespace as the canonical owner.
+3. Remove any activities from the catalog that no longer appear 
+   in the current feed extraction. Do not retain stale entries.
+4. Remove any packages from the catalog that are no longer 
+   compatible with STUDIO_VERSION.
+5. Write the final catalog to the output path.
+6. Write the manifest (what changed, what was added, what was 
+   removed, what was excluded and why) to the manifest path.
+
+CATALOG JSON SCHEMA
+Write to catalog/activity-catalog.json:
+
+{
+  "catalogVersion": "1.0",
+  "generatedAt": "ISO8601 timestamp",
+  "studioVersion": "2025.10.x",
+  "studioTrain": "Continuous",
+  "feedUrl": "https://...",
+  "packages": {
+    "UiPath.System.Activities": {
+      "version": "25.10.x",
+      "compatibleStudioVersions": ["2025.10", "2024.10", "23.10"],
+      "activities": {
+        "ui:Assign": {
+          "className": "System.Activities.Statements.Assign",
+          "displayName": "Assign",
+          "category": "Workflow",
+          "browsable": true,
+          "properties": {
+            "To": {
+              "direction": "Out",
+              "required": true,
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "OutArgument",
+              "clrType": "System.Object",
+              "typeArguments": "inferred-from-value"
+            },
+            "Value": {
+              "direction": "In",
+              "required": true,
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "InArgument",
+              "clrType": "System.Object",
+              "typeArguments": "inferred-from-value"
+            },
+            "DisplayName": {
+              "direction": "In",
+              "required": false,
+              "xamlSyntax": "attribute",
+              "argumentWrapper": null,
+              "clrType": "System.String",
+              "typeArguments": null
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+MANIFEST JSON SCHEMA
+Write to catalog/catalog-manifest.json:
+
+{
+  "runAt": "ISO8601 timestamp",
+  "studioVersion": "2025.10.x",
+  "previousStudioVersion": "2025.10.x",
+  "packagesProcessed": 12,
+  "packagesExcluded": 3,
+  "activitiesTotal": 487,
+  "changes": {
+    "added": ["UiPath.NewPackage.Activities.SomeActivity"],
+    "removed": ["UiPath.OldPackage.Activities.OldActivity"],
+    "modified": ["UiPath.System.Activities.Assign — To property type changed"]
+  },
+  "exclusions": [
+    { "package": "UiPath.SomePackage", "reason": "minClientVersion 2026.1 exceeds current Studio 2025.10" }
+  ],
+  "typeLoadGaps": [
+    { "package": "UiPath.UIAutomation.Activities", "type": "SomeInternalType", "reason": "UiPath.Core.SomeType not resolvable" }
+  ]
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 3 — Catalog validator
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create server/catalog/catalog-validator.ts
+
+This runs in two contexts:
+1. In GitHub Actions after extraction (called from the workflow)
+2. In Replit at startup when loading the catalog into memory
+
+VALIDATION RULES
+
+Schema integrity:
+- catalogVersion field present and is a known version string
+- generatedAt is a valid ISO8601 timestamp not older than 48 hours 
+  (if older, emit a warning — catalog may be stale)
+- studioVersion is present and matches semver format
+- packages is a non-empty object
+
+Per-package rules:
+- version is a valid semver string
+- activities is a non-empty object
+- No package appears more than once at the top level
+
+Per-activity rules:
+- className is present and is a valid fully-qualified type name
+- displayName is present and non-empty
+- browsable is present and is boolean
+- properties is present (may be empty for marker activities)
+
+Per-property rules:
+- direction is one of: "In", "Out", "InOut", "None"
+- xamlSyntax is one of: "child-element", "attribute"
+- argumentWrapper is one of: "InArgument", "OutArgument", 
+  "InOutArgument", null — and must be null when xamlSyntax 
+  is "attribute"
+- required is boolean
+- clrType is present and non-empty
+
+Diff validation (GitHub Actions only):
+- Load the previous catalog from git
+- Count total activities in previous and new catalog
+- If the change exceeds 20% in either direction, fail validation 
+  with a detailed diff report
+
+Export:
+- validateCatalog(catalog: ActivityCatalog): ValidationResult
+- ValidationResult: { valid: boolean, errors: string[], 
+    warnings: string[] }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 4 — Replit catalog consumption layer
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create server/catalog/catalog-service.ts
+
+BEHAVIOUR
+
+Startup:
+1. Read catalog/activity-catalog.json from the repo root
+2. Run validateCatalog() — if validation fails, log errors and 
+   continue with an empty catalog rather than crashing. Generation 
+   will still work but will lose catalog-driven constraints and 
+   emit a server-level warning.
+3. Cache the catalog in memory as a singleton
+4. Log: "Activity catalog loaded: {N} packages, {M} activities, 
+   Studio {version}"
+
+Query interface — expose these methods:
+
+getActivitySchema(activityTag: string): ActivitySchema | null
+  - activityTag is the XAML tag e.g. "ui:Assign", "ui:HttpClient"
+  - Returns the full schema or null if not in catalog
+
+getPackageForActivity(activityTag: string): string | null
+  - Returns the canonical package name for the activity
+  - Used by dependency scanner to build project.json
+
+getActivitiesForPackage(packageName: string): ActivitySchema[]
+  - Returns all activities in a package
+  - Used by LLM prompt builder
+
+buildActivityPalette(processType: string): ActivityPalette
+  - processType: "api-integration" | "document-processing" | 
+    "attended-ui" | "unattended-ui" | "orchestration" | "general"
+  - Returns a scoped subset of the catalog relevant to that 
+    process type — not the entire catalog
+  - Mapping:
+    api-integration: System.Activities + Web.Activities + 
+      Mail.Activities
+    document-processing: System.Activities + 
+      DocumentUnderstanding.Activities
+    attended-ui: System.Activities + UIAutomation.Activities
+    unattended-ui: System.Activities + UIAutomation.Activities + 
+      Web.Activities
+    orchestration: System.Activities
+    general: System.Activities + Web.Activities
+  - Each activity in the palette includes only the fields the LLM 
+    needs: displayName, xaml tag, required properties, xamlSyntax 
+    for each property. Strip internal fields to keep prompt size down.
+
+getConfirmedVersion(packageName: string): string | null
+  - Returns the confirmed resolvable version for a package
+  - Used by dependency scanner to replace the current hardcoded 
+    version table entirely
+  - Returns null if package not in catalog — triggers 
+    DEPENDENCY_VERSION_UNKNOWN warning
+
+validateEmittedActivity(tag: string, 
+  attributes: Record<string, string>,
+  children: string[]): ActivityValidationResult
+  - Called by the post-generation XAML validator for each activity 
+    in generated XAML
+  - Checks: activity exists in catalog, all required properties 
+    present, attribute-syntax properties are attributes not children,
+    child-element properties are children not attributes, no 
+    unrecognised properties
+  - Returns: { valid: boolean, errors: string[], 
+      autoCorrections: AutoCorrection[] }
+  - AutoCorrection: { type: "wrap-in-argument" | 
+      "move-to-attribute" | "add-missing-required", 
+      property: string, suggestedXaml: string }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 5 — Wire catalog into the generation pipeline
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This part integrates the catalog service into CannonBall's existing 
+generation pipeline. Three integration points.
+
+INTEGRATION POINT 1 — LLM prompt injection
+
+In the LLM spec generation stage, before the prompt is sent:
+
+1. Determine the process type from the SDD content. Use a simple 
+   classifier based on keywords in the SDD — look for signals like 
+   "HTTP", "API", "email", "browser", "click", "document", "queue" 
+   to classify into one of the processType values.
+
+2. Call catalogService.buildActivityPalette(processType) to get 
+   the scoped activity set.
+
+3. Inject the palette into the LLM system prompt as a structured 
+   constraint block:
+
+   "ACTIVITY CONSTRAINTS
+   You must only use activities from the following catalog. 
+   Do not invent activities, properties, or namespaces that are 
+   not listed here. For each activity, use exactly the property 
+   syntax specified in the 'xamlSyntax' field.
+
+   If a property has xamlSyntax 'child-element', you MUST emit 
+   it as a child XML element with the correct argument wrapper.
+   If a property has xamlSyntax 'attribute', you MUST emit it 
+   as an XML attribute on the activity element.
+
+   Available activities:
+   [serialized palette JSON]
+
+   If you cannot implement a required step using only these 
+   activities, emit a ui:Comment explaining what is needed and 
+   mark the enclosing Sequence with DisplayName prefixed with 
+   'MANUAL: '."
+
+4. If the catalog is empty or unavailable, log a warning and 
+   proceed without the constraint block. Do not fail generation — 
+   degrade gracefully.
+
+INTEGRATION POINT 2 — Post-generation XAML validator
+
+After XAML generation, before the quality gate, add a new 
+validation pass:
+
+For each XAML file generated:
+1. Parse the XAML using fast-xml-parser (already in the codebase)
+2. Walk every element node
+3. For elements with the ui: namespace prefix, call 
+   catalogService.validateEmittedActivity()
+4. Collect all validation results
+5. For each result with autoCorrections available, apply the 
+   correction automatically and log what was corrected
+6. For each result with errors and no auto-correction, add to 
+   the quality gate error list as a blocking error with code 
+   CATALOG_VIOLATION
+
+This validator runs AFTER the existing makeUiPathCompliant pass 
+and BEFORE the quality gate. It is a new stage in the pipeline, 
+not a replacement for existing stages.
+
+INTEGRATION POINT 3 — Dependency declaration
+
+Replace the current hardcoded version table in 
+uipath-integration.ts with catalog-driven lookup:
+
+1. After XAML generation, scan all generated files for ui: 
+   prefixed activity tags (already implemented in Task B Part 0)
+2. For each unique activity tag found, call 
+   catalogService.getPackageForActivity(tag) to get the 
+   canonical package
+3. Call catalogService.getConfirmedVersion(packageName) to get 
+   the exact pinned version
+4. If getConfirmedVersion returns null, emit 
+   DEPENDENCY_VERSION_UNKNOWN warning (already implemented in 
+   Task B) — do not declare the package
+5. Write only confirmed packages at confirmed versions to 
+   project.json
+
+Remove the hardcoded version table entirely once this is wired. 
+The catalog is now the single source of truth for all package 
+versions.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BOOTSTRAP — initial catalog
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The GitHub Action will produce the live catalog on its first run. 
+But CannonBall needs a catalog to function before the first Action 
+run completes.
+
+Create a bootstrap catalog at catalog/activity-catalog.json 
+covering only the packages and activities we have confirmed are 
+needed and working based on current smoke tests:
+
+- UiPath.System.Activities 23.10.3:
+  ui:Assign (with correct child-element syntax for To and Value)
+  ui:LogMessage
+  ui:InvokeWorkflowFile
+  ui:GetCredential
+  ui:GetAsset
+  ui:RetryScope
+  ui:ShouldRetry
+  ui:TryCatch (structural — no properties to validate)
+  ui:If (structural)
+  ui:Sequence (structural)
+
+- UiPath.UIAutomation.Activities 23.10.8:
+  ui:TakeScreenshot (FileName attribute only — no Result property)
+
+Mark the bootstrap catalog with:
+  "catalogVersion": "bootstrap",
+  "generatedAt": "[current timestamp]",
+  "studioVersion": "23.10.6"
+
+The GitHub Action will replace it on first successful run.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMPLETION CRITERIA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. The GitHub Actions workflow file exists at 
+   .github/workflows/catalog-refresh.yml and is valid YAML 
+   that passes workflow syntax validation.
+
+2. The .NET extractor project builds without errors locally 
+   using: dotnet build .github/scripts/extract-catalog/
+
+3. The bootstrap catalog exists at catalog/activity-catalog.json 
+   and passes validateCatalog() with no errors.
+
+4. The catalog service loads on Replit startup with no errors 
+   and logs the expected "Activity catalog loaded" message.
+
+5. A test generation run uses the catalog:
+   - The LLM prompt contains the ACTIVITY CONSTRAINTS block
+   - The generated XAML passes the catalog validator with no 
+     CATALOG_VIOLATION errors for the activities in the bootstrap 
+     catalog
+   - project.json dependencies are derived from the catalog, 
+     not the hardcoded table
+   - ui:Assign is generated with correct child-element syntax 
+     for To and Value in every workflow that uses it
+
+6. All existing 113 unit tests still pass.
+
+7. New tests added for:
+   - catalogService.getActivitySchema returns correct schema 
+     for bootstrap activities
+   - validateEmittedActivity correctly identifies attribute 
+     vs child-element violations
+   - validateEmittedActivity returns autoCorrections for 
+     the Assign.To plain-attribute case
+   - buildActivityPalette returns correct subset for each 
+     processType
+   - getConfirmedVersion returns null for unknown packages
+
+8. Trigger the GitHub Action manually via workflow_dispatch 
+   and confirm it completes without errors. Share the workflow 
+   run summary output.
+
+Report back with:
+- Confirmation all 113+ tests pass
+- The workflow run summary from the first manual Action trigger
+- A smoke test package generated using the new catalog-driven 
+  pipeline
+- Screenshot of Studio opening the package with no errors
