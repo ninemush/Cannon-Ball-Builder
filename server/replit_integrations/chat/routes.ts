@@ -929,7 +929,7 @@ export function registerChatRoutes(app: Express): void {
         }
       }, 5000);
 
-      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "DHG" | "CHAT" = "CHAT";
+      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "UIPATH_GEN" | "DHG" | "CHAT" = "CHAT";
       const lowerContent = content.toLowerCase();
       const hasPddKeyword = /\b(pdd|process\s+design\s+document)\b/.test(lowerContent);
       const hasSddKeyword = /\b(sdd|solution\s+design\s+document)\b/.test(lowerContent);
@@ -939,12 +939,14 @@ export function registerChatRoutes(app: Express): void {
       const hasDeployVerb = /\b(deploy|push)\b/.test(lowerContent) && /\b(uipath|orchestrator)\b/.test(lowerContent);
       const hasUiPathGenVerb = /\b(generate|regenerate|rebuild|build|create|redo)\b/.test(lowerContent) && /\b(uipath|package|nupkg|automation\s+package)\b/.test(lowerContent) && !hasPddKeyword && !hasSddKeyword;
 
+      try { res.write(`data: ${JSON.stringify({ liveStatus: "Classifying your request..." })}\n\n`); } catch {}
+
       if (hasDeployVerb) {
         classifiedIntent = "DEPLOY";
         console.log(`[Chat] Keyword intent classification: DEPLOY`);
       } else if (hasUiPathGenVerb) {
-        classifiedIntent = "DEPLOY";
-        console.log(`[Chat] Keyword intent classification: DEPLOY (uipath package generation)`);
+        classifiedIntent = "UIPATH_GEN";
+        console.log(`[Chat] Keyword intent classification: UIPATH_GEN`);
       } else if (hasDhgKeyword) {
         classifiedIntent = "DHG";
         console.log(`[Chat] Keyword intent classification: DHG`);
@@ -968,22 +970,23 @@ export function registerChatRoutes(app: Express): void {
           }
           const classifyRes = await getLLM().create({
             maxTokens: 20,
-            system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, DHG, or CHAT.
+            system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, UIPATH_GEN, DEPLOY, DHG, or CHAT.
 
 CRITICAL RULES:
 - Classify as PDD, SDD, or PDD_SDD ONLY when the user's LATEST message contains an EXPLICIT request to generate, write, create, produce, or regenerate a document. Look for action verbs like "generate", "write", "create", "produce", "draft", "regenerate", "build", "make" paired with "PDD", "SDD", "document", "design document".
 - Classify as DHG when the user asks to see, generate, show, or view the Developer Handoff Guide, DHG, or handoff guide. This includes phrases like "show me the DHG", "generate the handoff guide", "developer handoff guide", "the DHG", etc.
+- Classify as UIPATH_GEN when the user asks to generate, regenerate, rebuild, build, or create the UiPath package, automation package, or nupkg. This is for BUILDING the package, not deploying it.
+- DEPLOY should only be used when the user explicitly requests deployment to Orchestrator (e.g. "deploy", "push to orchestrator"). This is DIFFERENT from generating/building a package.
 - Short responses, feedback, confirmations, opinions, or general discussion about the process should ALWAYS be classified as CHAT. Examples of CHAT: "no i think they make sense in this scenario", "yes that looks right", "I agree", "sounds good", "let's go with that", "what about edge cases?", "can you explain more?", "that's correct".
 - If the user is APPROVING a document (e.g. "I approve", "looks good, approved"), classify as CHAT — approvals are not generation requests.
-- DEPLOY should only be used when the user explicitly requests deployment (e.g. "deploy", "push to orchestrator").
 - When in doubt, ALWAYS classify as CHAT. It is much better to incorrectly classify as CHAT than to incorrectly trigger document generation.
 - If both documents are being requested for generation, reply PDD_SDD.`,
             messages: recentMessages,
           });
           const rawClassify = classifyRes.text.trim();
           const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
-          if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY", "DHG"].includes(classifyText)) {
-            const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
+          if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "UIPATH_GEN", "UIPATHGEN", "DEPLOY", "DHG"].includes(classifyText)) {
+            const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText === "UIPATHGEN" ? "UIPATH_GEN" : classifyText;
             classifiedIntent = normalized as typeof classifiedIntent;
           }
           console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
@@ -1008,9 +1011,13 @@ CRITICAL RULES:
       } else if (classifiedIntent === "SDD") {
         earlyDocType = "SDD";
         try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
+      } else if (classifiedIntent === "UIPATH_GEN") {
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "UiPath" } })}\n\n`); } catch {}
       } else if (classifiedIntent === "DEPLOY") {
         try { res.write(`data: ${JSON.stringify({ deployStatus: "Analyzing your request..." })}\n\n`); } catch {}
       }
+
+      try { res.write(`data: ${JSON.stringify({ liveStatus: "Loading document context..." })}\n\n`); } catch {}
 
       let docContext = "";
       try {
@@ -1035,6 +1042,8 @@ CRITICAL RULES:
           docContext += `\nEXISTING AS-IS MAP (${existingNodes.length} steps): ${stepList}\nDo NOT recreate these steps. Reference them by step number in FROM fields when adding new steps.`;
         }
       } catch (e) { /* non-critical */ }
+
+      try { res.write(`data: ${JSON.stringify({ liveStatus: "Probing UiPath services..." })}\n\n`); } catch {}
 
       let serviceAvailability: ServiceAvailabilityMap | null = null;
       try {
@@ -1207,6 +1216,105 @@ CRITICAL RULES:
         }
       }
 
+      if (classifiedIntent === "UIPATH_GEN") {
+        try { res.write(`data: ${JSON.stringify({ liveStatus: "Starting UiPath package generation..." })}\n\n`); } catch {}
+        try {
+          const genUrl = `http://localhost:${process.env.PORT || 5000}/api/ideas/${ideaId}/generate-uipath?force=true`;
+          const genRes = await fetch(genUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Cookie": req.headers.cookie || "",
+            },
+          });
+          if (!genRes.ok) {
+            const genErr = await genRes.json().catch(() => ({}));
+            const errMsg = `UiPath package generation failed: ${genErr.message || "Unknown error"}`;
+            await chatStorage.createMessage(ideaId, "assistant", errMsg);
+            try {
+              res.write(`data: ${JSON.stringify({ token: errMsg })}\n\n`);
+              res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+            } catch {}
+            if (heartbeat) clearInterval(heartbeat);
+            res.end();
+            return;
+          }
+          const contentType = genRes.headers.get("content-type") || "";
+          if (contentType.includes("text/event-stream") && genRes.body) {
+            const reader = genRes.body.getReader();
+            const decoder = new TextDecoder();
+            let sseBuffer = "";
+            let genDone = false;
+            let genError: string | null = null;
+            while (true) {
+              const { done: readDone, value } = await reader.read();
+              if (readDone) break;
+              sseBuffer += decoder.decode(value, { stream: true });
+              const lines = sseBuffer.split("\n");
+              sseBuffer = lines.pop() || "";
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                try {
+                  const evt = JSON.parse(line.slice(6));
+                  if (evt.done) genDone = true;
+                  if (evt.error) genError = evt.error;
+                  if (evt.progress) {
+                    try { res.write(`data: ${JSON.stringify({ docProgress: { section: evt.progress, docType: "UiPath" } })}\n\n`); } catch {}
+                  }
+                  if (evt.status) {
+                    try { res.write(`data: ${JSON.stringify({ docProgress: { section: `Build status: ${evt.status}`, docType: "UiPath" } })}\n\n`); } catch {}
+                  }
+                } catch {}
+              }
+            }
+            if (genError) {
+              const errMsg = `UiPath package generation failed: ${genError}`;
+              await chatStorage.createMessage(ideaId, "assistant", errMsg);
+              try {
+                res.write(`data: ${JSON.stringify({ token: errMsg })}\n\n`);
+                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+              } catch {}
+              if (heartbeat) clearInterval(heartbeat);
+              res.end();
+              return;
+            }
+            if (!genDone) {
+              const errMsg = "UiPath package generation stream ended without completion.";
+              await chatStorage.createMessage(ideaId, "assistant", errMsg);
+              try {
+                res.write(`data: ${JSON.stringify({ token: errMsg })}\n\n`);
+                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+              } catch {}
+              if (heartbeat) clearInterval(heartbeat);
+              res.end();
+              return;
+            }
+          }
+          const successMsg = "UiPath automation package generated successfully. You can now deploy it to UiPath Orchestrator.";
+          await chatStorage.createMessage(ideaId, "assistant", successMsg);
+          try {
+            res.write(`data: ${JSON.stringify({ token: successMsg })}\n\n`);
+            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+          } catch {}
+          if (heartbeat) clearInterval(heartbeat);
+          res.end();
+          return;
+        } catch (uipathGenErr: any) {
+          console.error("[Chat] UIPATH_GEN failed:", uipathGenErr?.message);
+          const errMsg = `UiPath package generation error: ${uipathGenErr?.message || "Unknown error"}`;
+          await chatStorage.createMessage(ideaId, "assistant", errMsg);
+          try {
+            res.write(`data: ${JSON.stringify({ token: errMsg })}\n\n`);
+            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+          } catch {}
+          if (heartbeat) clearInterval(heartbeat);
+          res.end();
+          return;
+        }
+      }
+
+      try { res.write(`data: ${JSON.stringify({ liveStatus: "Building AI context..." })}\n\n`); } catch {}
+
       const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null, toBeMapMode, asIsContextForToBe || undefined) + intentOverride;
 
       let finalMessages: LLMMessage[] = chatMessages;
@@ -1222,6 +1330,8 @@ CRITICAL RULES:
           return m;
         });
       }
+
+      try { res.write(`data: ${JSON.stringify({ liveStatus: "Generating response..." })}\n\n`); } catch {}
 
       const stream = getLLM().stream({
         maxTokens: (mapApprovalDone || asIsApprovalDone) ? 300 : 8192,

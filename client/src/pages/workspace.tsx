@@ -63,7 +63,8 @@ const STAGE_THINKING_MESSAGES: Record<string, string> = {
 };
 
 const INTENT_THINKING_MESSAGES: Record<string, string> = {
-  "DEPLOY": "Generating UiPath package...",
+  "DEPLOY": "Preparing deployment...",
+  "UIPATH_GEN": "Generating UiPath package...",
   "PDD": "Generating Process Design Document...",
   "SDD": "Generating Solution Design Document...",
   "PDD_SDD": "Generating documents...",
@@ -72,6 +73,7 @@ const INTENT_THINKING_MESSAGES: Record<string, string> = {
 
 interface StreamingProgressProps {
   mode: "thinking" | "doc" | "deploy";
+  liveStatus?: string;
   docType?: string;
   currentSection?: string;
   deployStep?: string;
@@ -80,7 +82,7 @@ interface StreamingProgressProps {
   classifiedIntent?: string;
 }
 
-function StreamingProgressIndicator({ mode, docType, currentSection, deployStep, onCancel, stage, classifiedIntent }: StreamingProgressProps) {
+function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection, deployStep, onCancel, stage, classifiedIntent }: StreamingProgressProps) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -93,13 +95,12 @@ function StreamingProgressIndicator({ mode, docType, currentSection, deployStep,
   const fallbackStep = steps[Math.min(Math.floor(elapsed / stepDuration), steps.length - 1)];
 
   const getThinkingMessage = () => {
+    if (liveStatus) {
+      return liveStatus;
+    }
     if (classifiedIntent && INTENT_THINKING_MESSAGES[classifiedIntent]) {
-      if (elapsed >= 60) return "This is taking longer than usual, hang tight...";
-      if (elapsed >= 45) return "Still working on this...";
       return INTENT_THINKING_MESSAGES[classifiedIntent];
     }
-    if (elapsed >= 45) return "This is taking longer than usual, hang tight...";
-    if (elapsed >= 35) return "Still working on this...";
     return stage ? (STAGE_THINKING_MESSAGES[stage] || "Thinking...") : "Thinking...";
   };
 
@@ -513,6 +514,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [docProgressSection, setDocProgressSection] = useState<string>("");
   const [deployStep, setDeployStep] = useState<string>("");
   const [classifiedIntent, setClassifiedIntent] = useState<string>("");
+  const [liveStatus, setLiveStatus] = useState<string>("");
   const [uipathBuildStatus, setUipathBuildStatus] = useState<string | undefined>();
   const [uipathBuildWarnings, setUipathBuildWarnings] = useState<Array<{ code: string; message: string; stage: string; recoverable: boolean }> | undefined>();
   const [streamingDocContent, setStreamingDocContent] = useState<string>("");
@@ -787,6 +789,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     };
     setStreamingMsg(streamMsg);
     streamingMsgRef.current = "";
+    setLiveStatus("");
+    setClassifiedIntent("");
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -823,6 +827,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             try {
               const data = JSON.parse(line.slice(6));
               if (data.token) {
+                if (!streamingMsgRef.current) {
+                  setLiveStatus("");
+                }
                 streamingMsgRef.current += data.token;
                 const docTagMatch = streamingMsgRef.current.match(/^\[DOC:(PDD|SDD):/);
                 if (docTagMatch && !isGeneratingDocRef.current) {
@@ -839,8 +846,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                   prev ? { ...prev, content: prev.content + data.token } : prev
                 );
               }
+              if (data.liveStatus) {
+                setLiveStatus(data.liveStatus);
+              }
               if (data.intentClassified) {
                 setClassifiedIntent(data.intentClassified);
+                if (data.intentClassified === "UIPATH_GEN" && !isGeneratingDocRef.current) {
+                  startDocStreaming("UiPath");
+                  docGenIdAtStart = docGenIdRef.current;
+                }
               }
               if (data.done) {
                 setStreamingMsg((prev) =>
@@ -848,6 +862,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 );
                 setDocProgressSection("");
                 setClassifiedIntent("");
+                setLiveStatus("");
               }
               if (data.docProgress) {
                 if (data.docProgress.started && !isGeneratingDocRef.current) {
@@ -1616,8 +1631,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               return <StreamingProgressIndicator key={`${msg.id}-deploy`} mode="deploy" deployStep={deployStep} />;
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
-              const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD";
-              if (streamingDocContent && streamingDocContent.length > 10) {
+              const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD" | "UiPath";
+              if (docType !== "UiPath" && streamingDocContent && streamingDocContent.length > 10) {
                 return (
                   <div key={`${msg.id}-streaming-doc`} className="flex justify-start" data-testid="streaming-doc-card">
                     <div className="max-w-[95%] w-full">
@@ -1637,7 +1652,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="doc" docType={docType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />;
             }
             if (!msg.content) {
-              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" stage={idea.stage} classifiedIntent={classifiedIntent} />;
+              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" liveStatus={liveStatus} stage={idea.stage} classifiedIntent={classifiedIntent} />;
             }
           }
 
