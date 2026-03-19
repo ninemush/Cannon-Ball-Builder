@@ -1,0 +1,128 @@
+Root cause confirmed. The value is 
+correctly bracketed but XML-level 
+escaping is missing for < inside 
+InArgument and OutArgument text content.
+
+The XML parser processes the file 
+before UiPath sees it. Any bare < in 
+element text content — even inside 
+[...] brackets — is invalid XML.
+
+TWO FIXES REQUIRED:
+
+FIX 1 — Add < escaping to the 
+unconditional sanitizer pass
+
+In uipath-integration.ts, in the 
+unconditional sanitizer pass that 
+runs before the quality gate, add 
+a step that escapes bare < characters 
+inside InArgument and OutArgument 
+text content.
+
+The regex must be context-aware:
+- Only target text content inside 
+  InArgument and OutArgument elements
+- Escape < to &lt; only when it is 
+  NOT already part of a valid XML 
+  entity (&lt; &gt; &amp; etc.)
+- Do NOT escape < that is part of 
+  an XML tag (opening or closing)
+- Do NOT escape < in attribute values 
+  (those are already handled)
+
+Pattern to target:
+  (<(?:InArgument|OutArgument)[^>]*>)
+  ([^<]*)<(?!/)([^>]*?)
+  (</(?:InArgument|OutArgument)>)
+
+For each match, replace bare < in 
+the text content with &lt;
+
+This is the same pattern as the 
+ampersand sanitizer but for < in 
+element text content.
+
+FIX 2 — Add < escaping to 
+buildExpression in expression-builder.ts
+
+When buildExpression produces a 
+bracketed VB expression that contains 
+< (from operators like <>, <=, <), 
+escape the < to &lt; in the output:
+
+  case 'expression':
+    const vbExpr = `${value.left} 
+      ${toVbOperator(value.operator)} 
+      ${value.right}`
+    // Escape < for XML element content
+    const xmlSafeExpr = vbExpr
+      .replace(/</g, '&lt;')
+    return `[${xmlSafeExpr}]`
+
+This means [str_C2CNextDeparture <> 
+"time unavailable"] becomes 
+[str_C2CNextDeparture &lt;&gt; 
+"time unavailable"] in the XML file.
+
+UiPath's expression evaluator correctly 
+unescapes &lt;&gt; back to <> at 
+runtime, so the VB expression executes 
+correctly.
+
+Apply the same escaping to the 
+url type when building the VB 
+concatenation — & inside brackets 
+should be &amp; at XML level.
+
+Wait — actually no. & inside [...] 
+brackets is the VB concatenation 
+operator. If we escape it to &amp; 
+the VB expression breaks. Test this 
+in the existing codebase — does UiPath 
+correctly handle &amp; inside [...] 
+as the & operator, or does it need 
+the literal &?
+
+Answer this question before 
+implementing FIX 2 for the url type. 
+Only apply < escaping for now — that 
+is confirmed needed. Hold on & 
+escaping inside expressions until 
+we know UiPath's behaviour.
+
+FIX 3 — Add < to meta-validation 
+error categories
+
+The meta-validation currently catches 
+& but not <> inside element content. 
+Add a check to the LITERAL_EXPRESSIONS 
+category in meta-validator.ts:
+
+Flag any InArgument or OutArgument 
+text content that contains a bare < 
+character not part of an XML entity. 
+Auto-correct by escaping to &lt;.
+
+This is the third layer of defence 
+after FIX 1 (unconditional sanitizer) 
+and FIX 2 (expression builder).
+
+VERIFICATION
+
+1. Generate WeatherAndTravelNotification
+2. Confirm the specific expression 
+   [Not String.IsNullOrWhiteSpace(
+   str_C2CNextDeparture) AndAlso 
+   str_C2CNextDeparture <> 
+   "time unavailable"] appears as
+   [Not String.IsNullOrWhiteSpace(
+   str_C2CNextDeparture) AndAlso 
+   str_C2CNextDeparture &lt;&gt; 
+   "time unavailable"] in the XAML
+3. Zero XML parse errors
+4. Package builds successfully
+5. All existing tests pass
+6. New test: InArgument containing 
+   <> operator produces &lt;&gt; 
+   in XAML output

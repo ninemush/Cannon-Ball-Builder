@@ -1,0 +1,118 @@
+Create a task for these three fixes. 
+All three are confirmed safe based 
+on the evidence above.
+
+FIX 1 — Unconditional sanitizer: 
+escape bare < in InArgument and 
+OutArgument text content
+
+In uipath-integration.ts, in the 
+unconditional sanitizer pass that 
+runs before the quality gate, add 
+a step after the ampersand sanitizer 
+that escapes bare < characters inside 
+InArgument and OutArgument text 
+content to &lt;
+
+Use this pattern — target only text 
+content between argument tags, not 
+XML tags themselves:
+
+  content = content.replace(
+    /(<(?:InArgument|OutArgument)[^>]*>)([\s\S]*?)(<\/(?:InArgument|OutArgument)>)/g,
+    (match, open, text, close) => {
+      const escaped = text.replace(
+        /<(?![\/a-zA-Z!?])/g, 
+        '&lt;'
+      )
+      return open + escaped + close
+    }
+  )
+
+The negative lookahead (?![\/a-zA-Z!?]) 
+ensures only bare < is escaped — 
+not < that starts a valid XML tag 
+like </tag> or <!-- comment -->.
+
+FIX 2 — buildExpression: escape < 
+and & in generated expressions
+
+In server/xaml/expression-builder.ts, 
+after building any VB expression 
+string that will appear in XML element 
+text content, apply XML escaping:
+
+  function xmlEscapeExpression(
+    expr: string
+  ): string {
+    return expr
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+  }
+
+Apply xmlEscapeExpression to the 
+inner content of every bracketed 
+output from buildExpression — the 
+part inside the [...] brackets.
+
+For example:
+  expression type: 
+    [str_C2CNextDeparture <> "x"]
+    → [str_C2CNextDeparture &lt;&gt; "x"]
+  
+  url type:
+    ["https://api.com?" & str_Lat]
+    → ["https://api.com?" &amp; str_Lat]
+
+The brackets [...] themselves are 
+not escaped — only the content 
+inside them.
+
+This is confirmed safe: the XML parser 
+unescapes &lt; to < and &amp; to & 
+before UiPath evaluates the VB 
+expression. Line 1250 in the existing 
+output already uses &amp; for the & 
+concatenation operator and works 
+correctly.
+
+FIX 3 — Meta-validation: add < 
+detection to LITERAL_EXPRESSIONS 
+category
+
+In meta-validator.ts, add to the 
+LITERAL_EXPRESSIONS check:
+
+Flag any InArgument or OutArgument 
+text content containing a bare < 
+not part of an XML entity reference. 
+Auto-correct by escaping to &lt;.
+
+This is the third layer of defence 
+after FIX 1 (unconditional sanitizer) 
+and FIX 2 (expression builder).
+
+COMPLETION CRITERIA
+
+1. Generate WeatherAndTravelNotification 
+   — zero XML parse errors
+
+2. Confirm the specific expression 
+   containing <> appears as &lt;&gt; 
+   in the generated XAML
+
+3. Confirm URL expressions use &amp; 
+   for the & concatenation operator
+
+4. All existing tests pass
+
+5. New tests:
+   - InArgument containing <> operator 
+     produces &lt;&gt; in output
+   - InArgument containing & operator 
+     produces &amp; in output
+   - XML tags inside InArgument content 
+     are NOT incorrectly escaped by 
+     FIX 1
+   - buildExpression url type produces 
+     &amp; for concatenation operators
