@@ -51,6 +51,20 @@ import { formatEST, getStageBadgeClass } from "@/lib/utils";
 
 let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
 
+function guessIntentFromMessage(text: string): string {
+  const lower = text.toLowerCase().trim();
+  const hasDeployKeyword = /\bdeploy(ing|ment|ed)?\b/.test(lower);
+  const hasUipathKeyword = /\buipath\b/.test(lower);
+  const hasPackageVerb = /\b(generate|create|build|regenerate|gen|regen)\b/.test(lower);
+  if (hasDeployKeyword && !hasUipathKeyword) return "DEPLOY";
+  if (hasUipathKeyword || (/\bpackage\b/.test(lower) && hasPackageVerb)) return "UIPATH_GEN";
+  if (/\b(generate|create|regenerate|write)\b.*\bpdd\b/.test(lower) || /\bpdd\b.*\b(generate|create|regenerate|write)\b/.test(lower) || /\bprocess design doc/.test(lower)) return "PDD";
+  if (/\b(generate|create|regenerate|write)\b.*\bsdd\b/.test(lower) || /\bsdd\b.*\b(generate|create|regenerate|write)\b/.test(lower) || /\bsolution design doc/.test(lower)) return "SDD";
+  if (/\b(generate|create|regenerate|write)\b.*\bdhg\b/.test(lower) || /\bdhg\b.*\b(generate|create|regenerate|write)\b/.test(lower) || /\bdeveloper handoff/.test(lower)) return "DHG";
+  if (hasDeployKeyword) return "DEPLOY";
+  return "";
+}
+
 const STAGE_THINKING_MESSAGES: Record<string, string> = {
   "Idea": "Analyzing your process...",
   "Design": "Designing automation...",
@@ -927,7 +941,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
 
   const sendMessageDirect = useCallback(async (text: string, imageData?: { base64: string; mediaType: string }) => {
     lastUserMessageRef.current = text;
-    setClassifiedIntent("");
+    setClassifiedIntent(guessIntentFromMessage(text));
     setDeployStep("");
     if (isToBeRelatedMessage(text)) {
       toBeGeneratingRef.current = true;
