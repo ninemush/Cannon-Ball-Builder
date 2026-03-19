@@ -2007,7 +2007,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 );
               }
               if (docType === "UiPath" && pipelineLogEntries.length === 0) {
-                return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="thinking" liveStatus={liveStatus || "Preparing UiPath package generation..."} stage={idea.stage} classifiedIntent={classifiedIntent} onCancel={cancelDocGeneration} />;
+                return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="thinking" liveStatus={liveStatus} stage={idea.stage} classifiedIntent={classifiedIntent} onCancel={cancelDocGeneration} />;
               }
               return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="doc" docType={docType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />;
             }
