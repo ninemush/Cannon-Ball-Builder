@@ -1,0 +1,78 @@
+Confirmed on both. Create the task with 
+exactly this approach:
+
+1. Add "DisplayName" to PSEUDO_XAML_ATTR_KEYS 
+   at line 1773 in xaml-generator.ts
+
+2. Add a generic duplicate-attribute stripper 
+   to the post-processing pipeline in 
+   uipath-integration.ts. For each XAML file, 
+   parse with fast-xml-parser and check every 
+   element for repeated attribute names. Keep 
+   first occurrence, remove duplicates. This 
+   is a generic safety net — not specific to 
+   DisplayName.
+
+3. Apply escapeXml() at the three high-risk 
+   interpolation sites identified:
+   
+   a) Lines 549-560 — HTTP endpoint/URL values. 
+      Wrap ${val} in escapeXml() before 
+      interpolating into attribute values. URLs 
+      with query parameters containing & are 
+      the most common source of this error.
+   
+   b) Line 570 — Header/parameter map values. 
+      Same treatment — escapeXml() before 
+      interpolation.
+   
+   c) sanitizePropertyValue() in xaml-generator.ts 
+      line 1733 — add escapeXml() as the final 
+      step in this function so its output is 
+      always XML-safe regardless of which code 
+      path calls it. This is the highest-leverage 
+      fix because sanitizePropertyValue is called 
+      from multiple places. One change covers 
+      all callers.
+
+4. Keep the existing post-processing sanitizer 
+   as a final safety net — do not remove it.
+
+IMPORTANT: Fix 3c (adding escapeXml to 
+sanitizePropertyValue) must not double-escape 
+content that is already escaped. Before adding 
+escapeXml() at the end of sanitizePropertyValue, 
+check whether any callers pass already-escaped 
+content into it. If they do, the function needs 
+to unescape first before re-escaping, or the 
+callers need to be updated to pass raw content.
+
+Show me the sanitizePropertyValue function 
+and its callers before implementing fix 3c 
+so we can confirm there is no double-escape 
+risk.
+
+Do not fix the medium-risk sites (variable 
+names, display names from regex captures) 
+in this task — those are lower priority and 
+can be addressed separately if they cause 
+failures. Focus on the three high-risk sites 
+that are the most likely source of the 
+ampersand failures we are seeing.
+
+COMPLETION CRITERIA
+1. Generate WeatherAndTravelNotification 
+   and confirm zero XML parse errors
+2. No duplicate attribute errors in any 
+   generated XAML file
+3. grep for unescaped & in all generated 
+   XAML files returns zero results
+4. All existing tests still pass
+5. New tests for:
+   - sanitizePropertyValue returns 
+     XML-safe output for input containing &
+   - Duplicate attribute stripper removes 
+     second DisplayName from a test element
+   - renderActivity does not produce 
+     duplicate DisplayName when properties 
+     dict contains DisplayName key
