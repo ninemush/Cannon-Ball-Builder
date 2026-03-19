@@ -15,6 +15,7 @@ import type { AutomationPattern } from "./uipath-activity-registry";
 import { ACTIVITY_NAME_ALIAS_MAP } from "./uipath-activity-registry";
 import type { XamlGenerationContext } from "./types/uipath-package";
 import { XMLValidator } from "fast-xml-parser";
+import { catalogService } from "./catalog/catalog-service";
 
 export function ensureBracketWrapped(val: string): string {
   const trimmed = val.trim();
@@ -32,6 +33,19 @@ export function looksLikeVariableRef(val: string): boolean {
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null" || trimmed === "") return false;
   if (/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$/.test(trimmed)) return true;
   return false;
+}
+
+export function smartBracketWrap(val: string): string {
+  const trimmed = val.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+  if (trimmed.startsWith("<InArgument") || trimmed.startsWith("<OutArgument")) return trimmed;
+  if (/^".*"$/.test(trimmed)) return trimmed;
+  if (/^'.*'$/.test(trimmed)) return trimmed;
+  if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
+  if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
+  if (/^[0-9]+$/.test(trimmed)) return trimmed;
+  return `[${trimmed}]`;
 }
 
 export type GenerationMode = "baseline_openable" | "full_implementation";
@@ -478,7 +492,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     const dispName = displayMatch ? displayMatch[1] : "Assign";
     const cleanAttrs = (before + mid + after).replace(/\s*(To|Value|DisplayName)="[^"]*"/g, "").trim();
     const wrappedTo = ensureBracketWrapped(toVal);
-    const wrappedVal = looksLikeVariableRef(valVal) ? ensureBracketWrapped(valVal) : valVal;
+    const wrappedVal = smartBracketWrap(valVal);
     return `<Assign DisplayName="${dispName}"${cleanAttrs ? " " + cleanAttrs : ""}>
               <Assign.To><OutArgument x:TypeArguments="x:String">${wrappedTo}</OutArgument></Assign.To>
               <Assign.Value><InArgument x:TypeArguments="x:String">${wrappedVal}</InArgument></Assign.Value>
@@ -489,7 +503,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     const dispName = displayMatch ? displayMatch[1] : "Assign";
     const cleanAttrs = (before + mid + after).replace(/\s*(To|Value|DisplayName)="[^"]*"/g, "").trim();
     const wrappedTo = ensureBracketWrapped(toVal);
-    const wrappedVal = looksLikeVariableRef(valVal) ? ensureBracketWrapped(valVal) : valVal;
+    const wrappedVal = smartBracketWrap(valVal);
     return `<Assign DisplayName="${dispName}"${cleanAttrs ? " " + cleanAttrs : ""}>
               <Assign.To><OutArgument x:TypeArguments="x:String">${wrappedTo}</OutArgument></Assign.To>
               <Assign.Value><InArgument x:TypeArguments="x:String">${wrappedVal}</InArgument></Assign.Value>
@@ -606,7 +620,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   });
 
   xml = xml.replace(/<Assign\.Value>\s*<InArgument([^>]*)>([^<]*)<\/InArgument>\s*<\/Assign\.Value>/g, (_match, attrs, expr) => {
-    const wrappedExpr = looksLikeVariableRef(expr) ? ensureBracketWrapped(expr) : expr;
+    const wrappedExpr = smartBracketWrap(expr);
     return `<Assign.Value><InArgument${attrs}>${wrappedExpr}</InArgument></Assign.Value>`;
   });
 
@@ -618,8 +632,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
 
   xml = xml.replace(/<(\w+(?::\w+)?\.[\w.]+)>\s*<InArgument([^>]*)>([^<]*)<\/InArgument>\s*<\/\1>/g, (_match, propTag, attrs, expr) => {
     if (propTag.startsWith("Assign.")) return _match;
-    const trimmedExpr = expr.trim();
-    const wrappedExpr = (trimmedExpr && !trimmedExpr.startsWith("[")) ? ensureBracketWrapped(trimmedExpr) : trimmedExpr;
+    const wrappedExpr = smartBracketWrap(expr);
     return `<${propTag}><InArgument${attrs}>${wrappedExpr}</InArgument></${propTag}>`;
   });
 
@@ -1995,7 +2008,7 @@ function renderControlFlowActivity(
   return renderActivity(activityType, displayName, properties as Record<string, string>, undefined, undefined, undefined, targetFramework);
 }
 
-function renderActivity(
+export function renderActivity(
   activityType: string,
   displayName: string,
   properties: Record<string, string>,
@@ -2004,6 +2017,26 @@ function renderActivity(
   annotationOpts?: { stepNumber?: number; stepName?: string; businessContext?: string; errorStrategy?: string; placeholders?: string[]; aiReasoning?: string },
   targetFramework?: TargetFramework
 ): string {
+  const BUILTIN_ACTIVITY_TYPES = new Set([
+    "Assign", "If", "TryCatch", "Sequence", "Delay", "Rethrow", "Throw",
+    "While", "DoWhile", "ForEach", "Switch", "Flowchart", "FlowDecision",
+    "FlowStep", "FlowSwitch", "Parallel", "ParallelForEach",
+    "InvokeWorkflowFile", "StateMachine", "State", "FinalState",
+  ]);
+
+  if (catalogService.isLoaded()) {
+    const lookupName = activityType.replace(/^ui:/, "");
+    if (!BUILTIN_ACTIVITY_TYPES.has(lookupName) && !BUILTIN_ACTIVITY_TYPES.has(activityType)) {
+      const schema = catalogService.getActivitySchema(lookupName);
+      if (!schema) {
+        console.warn(`[renderActivity] Unknown activity type "${activityType}" — not in catalog, emitting comment placeholder`);
+        return `
+          <!-- UNKNOWN ACTIVITY: ${escapeXml(activityType)} — "${escapeXml(displayName)}" -->
+          <ui:Comment Text="Unknown activity type: ${escapeXml(activityType)}. Manual implementation required." DisplayName="${escapeXml(displayName)} (stub)" />`;
+      }
+    }
+  }
+
   const enforced = enforceDisplayName(activityType, displayName);
   const isCrossPlatform = targetFramework === "Portable";
   let propAttrs = "";
@@ -2068,10 +2101,10 @@ function renderActivity(
     const rawAssignValue = properties["Value"] || properties["value"] || "[value]";
     const toType = properties["TypeArgument"] || "x:String";
     const toValue = ensureBracketWrapped(rawToValue);
-    const assignValue = looksLikeVariableRef(rawAssignValue) ? ensureBracketWrapped(rawAssignValue) : rawAssignValue;
+    const assignValue = smartBracketWrap(rawAssignValue);
     innerActivity = `<Assign DisplayName="${escapeXml(enforced)}"${propAttrs.replace(/\s+(To|Value|to|value|TypeArgument)="[^"]*"/g, "")}>
               <Assign.To><OutArgument x:TypeArguments="${toType}">${escapeXml(toValue)}</OutArgument></Assign.To>
-              <Assign.Value><InArgument x:TypeArguments="${toType}">${escapeXml(assignValue)}</InArgument></Assign.Value>
+              <Assign.Value><InArgument x:TypeArguments="${toType}">${assignValue}</InArgument></Assign.Value>
             </Assign>`;
   } else if (hasConvertedArgs) {
     let argsContent = "";

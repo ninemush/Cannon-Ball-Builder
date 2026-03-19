@@ -70,6 +70,19 @@ function looksLikeVariableRef(expr: string): boolean {
   return false;
 }
 
+function smartBracketWrap(val: string): string {
+  const trimmed = val.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
+  if (trimmed.startsWith("<InArgument") || trimmed.startsWith("<OutArgument")) return trimmed;
+  if (/^".*"$/.test(trimmed)) return trimmed;
+  if (/^'.*'$/.test(trimmed)) return trimmed;
+  if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
+  if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
+  if (/^[0-9]+$/.test(trimmed)) return trimmed;
+  return `[${trimmed}]`;
+}
+
 export function resolveActivityTemplate(
   node: ActivityNode,
   allVariables: VariableDeclaration[],
@@ -156,7 +169,7 @@ function resolveAssignTemplate(node: ActivityNode, allVariables: VariableDeclara
   const value = props.Value || props.value || '""';
   const typeArg = inferAssignType(toVar, allVariables);
   const wrappedTo = ensureBracketWrapped(toVar);
-  const wrappedVal = looksLikeVariableRef(value) ? ensureBracketWrapped(value) : value;
+  const wrappedVal = smartBracketWrap(value);
 
   return `<Assign DisplayName="${displayName}">\n` +
     `  <Assign.To>\n` +
@@ -200,10 +213,7 @@ function resolveGetCredentialTemplate(node: ActivityNode): string {
 
 function wrapSmtpPropValue(val: string): string {
   if (!val) return val;
-  if (val.startsWith("[") && val.endsWith("]")) return val;
-  if (looksLikeVariableRef(val)) return ensureBracketWrapped(val);
-  if (val.startsWith('"') || val.startsWith("'")) return val;
-  return val;
+  return smartBracketWrap(val);
 }
 
 function resolveSendSmtpMailMessageTemplate(node: ActivityNode): string {
@@ -286,7 +296,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
         isChildElement = true;
         const wrapper = propDef.argumentWrapper || "InArgument";
         const typeArg = propDef.typeArguments ? ` x:TypeArguments="${propDef.typeArguments}"` : "";
-        const wrappedValue = looksLikeVariableRef(value) ? ensureBracketWrapped(value) : value;
+        const wrappedValue = smartBracketWrap(value);
         childParts.push(
           `  <${tag}.${key}>\n` +
           `    <${wrapper}${typeArg}>${wrappedValue}</${wrapper}>\n` +
