@@ -1,0 +1,156 @@
+Confirmed. Create one task covering 
+all three fixes plus the prompt change.
+
+FIX 1 — Generator safe defaults 
+(upstream fix)
+
+In xaml-generator.ts, replace the 
+TODO_ fallbacks at lines 1846, 1884, 
+1922, 2554, and 2625 with valid safe 
+defaults:
+
+If activity (lines 1846, 2554, 2625):
+  Change: Condition="[TODO_Condition]"
+  To:     Condition="[True]"
+  Add a ui:Comment immediately before 
+  the If element:
+  <ui:Comment Text="REVIEW: If condition 
+  could not be determined — defaults to 
+  True (always takes Then branch). 
+  Replace with the correct condition." />
+
+Switch activity (line 1884):
+  Change: Expression="[TODO_Expression]"
+  To:     Expression="[Nothing]"
+  Add ui:Comment:
+  <ui:Comment Text="REVIEW: Switch 
+  expression could not be determined — 
+  defaults to Nothing (falls to Default 
+  case). Replace with the correct 
+  expression." />
+
+ForEach activity (line 1922):
+  Change: Values="[TODO_Collection]"
+  To:     Values="[New List(Of Object)]"
+  Add ui:Comment:
+  <ui:Comment Text="REVIEW: ForEach 
+  collection could not be determined — 
+  defaults to empty list (loop body 
+  will not execute). Replace with the 
+  correct collection." />
+
+These safe defaults produce valid XAML 
+that opens in Studio. The ui:Comment 
+annotations signal to the developer 
+that manual review is needed.
+
+FIX 2 — Sanitizer safe replacement 
+(defensive fix)
+
+In uipath-integration.ts line 1135, 
+replace the current logic:
+
+  Current (broken):
+  content.replace(/PLACEHOLDER_\w*/g, '""')
+         .replace(/TODO_\w*/g, '""')
+
+  Replace with context-aware handling:
+  
+  // Inside VB expression context [...]
+  // replace with safe VB expression
+  content = content.replace(
+    /\[(?:[^\]]*?)(?:TODO_\w*|PLACEHOLDER_\w*)(?:[^\]]*?)\]/g,
+    '[Nothing]'
+  )
+  
+  // Outside expression context 
+  // (plain attribute values)
+  // replace with empty string
+  content = content.replace(
+    /(?:TODO_\w*|PLACEHOLDER_\w*)/g, 
+    ''
+  )
+
+The first replacement handles tokens 
+inside [...] VB expression brackets — 
+replaces the entire expression with 
+[Nothing] which is valid VB for null.
+
+The second replacement handles any 
+remaining tokens outside brackets — 
+replaces with empty string (not "").
+
+This ensures no token ever produces 
+malformed XML regardless of context.
+
+FIX 3 — g flag bug at line 1293-1295
+
+The fix-invalid-value regex uses the 
+g flag for both .test() and .replace(). 
+Calling .test() on a g-flagged regex 
+advances lastIndex, causing the 
+subsequent .replace() to potentially 
+miss the first match.
+
+Fix: Remove the .test() check entirely 
+and just run .replace() unconditionally. 
+If there are no matches, .replace() 
+returns the original string unchanged 
+with no performance cost worth worrying 
+about. The .test() guard is unnecessary 
+and actively harmful with the g flag.
+
+FIX 4 — Prompt constraint (upstream 
+prevention)
+
+Add this constraint to Section 1 of 
+the XAML generation prompt:
+
+"CRITICAL — never use placeholder tokens:
+Never generate TODO_Condition, 
+TODO_Expression, TODO_Collection, 
+PLACEHOLDER_, or any other placeholder 
+token as an attribute value or 
+expression. These break XML validation.
+
+If you cannot determine the correct 
+value for a required attribute, use 
+these safe defaults and add a comment:
+  If condition → [True]
+  Switch expression → [Nothing]  
+  ForEach collection → [New List(Of Object)]
+  Any other required expression → [Nothing]
+
+Always generate a ui:Comment above any 
+activity that uses a safe default so 
+the developer knows to review it."
+
+COMPLETION CRITERIA
+
+1. Generate WeatherAndTravelNotification 
+   — zero XML parse errors, package 
+   completes successfully
+
+2. If any If/Switch/ForEach activities 
+   used safe defaults, confirm they 
+   appear as ui:Comment annotations 
+   in the generated XAML — not as 
+   broken TODO_ tokens
+
+3. Confirm the Attribute '""' error 
+   does not recur
+
+4. All existing tests still pass
+
+5. New tests:
+   - TODO_Condition inside [...] is 
+     replaced with [Nothing] not ""
+   - TODO_Condition outside [...] is 
+     replaced with empty string not ""
+   - If activity fallback produces 
+     Condition="[True]" not 
+     Condition="[TODO_Condition]"
+   - g flag fix: fix-invalid-value 
+     correctly fixes the first 
+     occurrence of an invalid value 
+     in an attribute list

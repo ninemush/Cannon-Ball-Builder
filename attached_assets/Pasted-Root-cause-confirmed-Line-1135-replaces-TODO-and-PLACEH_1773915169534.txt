@@ -1,0 +1,76 @@
+Root cause confirmed. Line 1135 replaces 
+TODO_ and PLACEHOLDER_ tokens with the 
+literal string "" (two double-quote 
+characters) which produces malformed 
+XML like Condition="""".
+
+The fix depends on context — what should 
+happen when a TODO_ or PLACEHOLDER_ 
+token survives to this point?
+
+These tokens represent activities or 
+conditions the LLM failed to fill in. 
+The correct handling is NOT to replace 
+them with an empty string or "" — that 
+produces broken XAML. The correct 
+handling is one of:
+
+A) Remove the entire attribute if it 
+   contains a TODO_ or PLACEHOLDER_ 
+   value and the attribute is optional
+
+B) Replace with a safe sentinel value 
+   that is valid XML and signals to 
+   the developer that manual 
+   intervention is needed — for 
+   example Condition="True" for an 
+   If condition (always takes the 
+   Then branch, safe fallback), or 
+   DisplayName="TODO: implement this"
+
+C) Flag the workflow as requiring 
+   manual review via the warnings 
+   array rather than silently 
+   producing broken XML
+
+Answer this before fixing: 
+
+Show me the context around line 1135. 
+What types of attributes typically 
+contain TODO_ or PLACEHOLDER_ tokens? 
+Are they structural (like Condition on 
+an If activity) or optional metadata?
+
+Also show me where TODO_Condition is 
+generated in xaml-generator.ts line 
+1846. Understanding why the LLM falls 
+back to this token will determine 
+whether the fix should be in the 
+generator prompt (prevent the token 
+from being generated) or in the 
+sanitiser (handle it gracefully when 
+it arrives).
+
+If TODO_Condition is a prompt fix — 
+the LLM should never generate an If 
+activity without a real condition — 
+then the upstream fix is to add this 
+to the generation prompt constraints:
+
+"Never use TODO_Condition, 
+PLACEHOLDER_, or any other placeholder 
+token as an attribute value. If you 
+cannot determine the correct condition 
+for an If activity, use the expression 
+[True] as a safe default and add a 
+ui:Comment above the activity noting 
+that the condition needs review."
+
+If it is a code fix only, the sanitiser 
+at line 1135 should replace 
+PLACEHOLDER_ and TODO_ tokens with 
+safe XML-valid defaults per attribute 
+type rather than "" which breaks XML.
+
+Show me the context and then recommend 
+which approach is right.
