@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ValueIntentSchema, type ValueIntent } from "./xaml/expression-builder";
 
 export const VariableDeclarationSchema = z.object({
   name: z.string().min(1),
@@ -8,11 +9,20 @@ export const VariableDeclarationSchema = z.object({
 
 export type VariableDeclaration = z.infer<typeof VariableDeclarationSchema>;
 
+const PrimitivePropertySchema = z.union([z.string(), z.number(), z.boolean()]).transform(v => String(v));
+
+const PropertyValueSchema = z.union([
+  ValueIntentSchema,
+  PrimitivePropertySchema,
+]);
+
+export type PropertyValue = string | ValueIntent;
+
 export const ActivityNodeSchema = z.object({
   kind: z.literal("activity"),
   template: z.string().min(1),
   displayName: z.string().min(1),
-  properties: z.record(z.union([z.string(), z.number(), z.boolean()]).transform(v => String(v))).default({}),
+  properties: z.record(PropertyValueSchema).default({}),
   outputVar: z.string().nullable().optional(),
   outputType: z.string().nullable().optional(),
   errorHandling: z.enum(["retry", "catch", "escalate", "none"]).default("none"),
@@ -38,14 +48,14 @@ const BaseWorkflowNodeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("if"),
     displayName: z.string().min(1),
-    condition: z.string().min(1),
+    condition: z.union([z.string().min(1), ValueIntentSchema]),
     thenChildren: z.lazy(() => WorkflowNodeSchema.array()).default([]),
     elseChildren: z.lazy(() => WorkflowNodeSchema.array()).default([]),
   }),
   z.object({
     kind: z.literal("while"),
     displayName: z.string().min(1),
-    condition: z.string().min(1),
+    condition: z.union([z.string().min(1), ValueIntentSchema]),
     bodyChildren: z.lazy(() => WorkflowNodeSchema.array()).default([]),
   }),
   z.object({
@@ -85,7 +95,7 @@ export type TryCatchNode = {
 export type IfNode = {
   kind: "if";
   displayName: string;
-  condition: string;
+  condition: string | ValueIntent;
   thenChildren: WorkflowNode[];
   elseChildren: WorkflowNode[];
 };
@@ -93,7 +103,7 @@ export type IfNode = {
 export type WhileNode = {
   kind: "while";
   displayName: string;
-  condition: string;
+  condition: string | ValueIntent;
   bodyChildren: WorkflowNode[];
 };
 

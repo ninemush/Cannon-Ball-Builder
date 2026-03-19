@@ -164,7 +164,26 @@ VARIABLE PRE-DECLARATION: ALL variables MUST be listed in the top-level "variabl
 - Loops MUST use WhileNode or ForEachNode with activities in bodyChildren.
 - Each "template" value in an ActivityNode MUST reference a template name from Section 2.
 
-IMPORTANT: Respond with ONLY the JSON object. No markdown fences, no explanation.`;
+IMPORTANT: Respond with ONLY the JSON object. No markdown fences, no explanation.
+
+=== SECTION 5: STRUCTURED VALUE DESCRIPTIONS (ValueIntent) ===
+For TWO specific high-risk patterns, you MAY use structured ValueIntent objects instead of plain strings in activity "properties" values. All other values MUST remain plain strings.
+
+1. URL endpoints with query parameters — use type "url_with_params":
+   { "type": "url_with_params", "baseUrl": "https://api.example.com/data", "params": { "city": "str_CityName", "units": "metric" } }
+   This avoids & characters in URLs being incorrectly XML-escaped.
+
+2. Conditions with comparison operators (<, >, <>, >=, <=) — use type "expression":
+   { "type": "expression", "left": "int_StatusCode", "operator": "<>", "right": "200" }
+   This avoids <> being incorrectly XML-escaped to &lt;&gt;.
+
+Additional types (use sparingly):
+- Literal string: { "type": "literal", "value": "Hello World" }
+- Variable reference: { "type": "variable", "name": "str_MyVar" }
+
+Rules:
+- "expression" left/right fields must be simple variable names or literals only.
+- All other property values should remain plain strings — do NOT convert everything to ValueIntent.`;
 
 export async function enrichWithAI(
   nodes: ProcessNode[],

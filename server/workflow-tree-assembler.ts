@@ -9,11 +9,13 @@ import type {
   WhileNode,
   ForEachNode,
   RetryScopeNode,
+  PropertyValue,
 } from "./workflow-spec-types";
 import { catalogService } from "./catalog/catalog-service";
 import { buildTemplateBlock } from "./catalog/xaml-template-builder";
 import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml } from "./lib/xml-utils";
+import { buildExpression, isValueIntent, type ValueIntent } from "./xaml/expression-builder";
 
 function mapClrType(type: string): string {
   const lower = type.toLowerCase();
@@ -83,6 +85,33 @@ function smartBracketWrap(val: string): string {
   return `[${trimmed}]`;
 }
 
+export function resolvePropertyValue(value: PropertyValue): string {
+  if (isValueIntent(value)) {
+    return buildExpression(value as ValueIntent);
+  }
+  return smartBracketWrap(String(value));
+}
+
+export function resolvePropertyValueRaw(value: PropertyValue): string {
+  if (isValueIntent(value)) {
+    return buildExpression(value as ValueIntent);
+  }
+  return String(value);
+}
+
+function getPropString(props: Record<string, PropertyValue>, ...keys: string[]): string {
+  for (const key of keys) {
+    if (props[key] !== undefined) {
+      const val = props[key];
+      if (isValueIntent(val)) {
+        return buildExpression(val as ValueIntent);
+      }
+      return String(val);
+    }
+  }
+  return "";
+}
+
 export function resolveActivityTemplate(
   node: ActivityNode,
   allVariables: VariableDeclaration[],
@@ -97,13 +126,13 @@ export function resolveActivityTemplate(
   }
 
   if (templateName === "LogMessage") {
-    const level = props.Level || props.level || "Info";
-    const message = props.Message || props.message || `"${displayName}"`;
+    const level = getPropString(props, "Level", "level") || "Info";
+    const message = getPropString(props, "Message", "message") || `"${displayName}"`;
     return `<ui:LogMessage Level="${escapeXml(level)}" Message="${escapeXml(message)}" DisplayName="${displayName}" />`;
   }
 
   if (templateName === "Delay") {
-    const duration = props.Duration || props.duration || "00:00:05";
+    const duration = getPropString(props, "Duration", "duration") || "00:00:05";
     return `<Delay Duration="${escapeXml(duration)}" DisplayName="${displayName}" />`;
   }
 
@@ -112,7 +141,7 @@ export function resolveActivityTemplate(
   }
 
   if (templateName === "InvokeWorkflowFile") {
-    const fileName = props.WorkflowFileName || props.workflowFileName || "Workflow.xaml";
+    const fileName = getPropString(props, "WorkflowFileName", "workflowFileName") || "Workflow.xaml";
     return `<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
       `  <ui:InvokeWorkflowFile.Arguments>\n` +
       `  </ui:InvokeWorkflowFile.Arguments>\n` +
@@ -136,7 +165,7 @@ export function resolveActivityTemplate(
   }
 
   if (templateName === "DeserializeJson") {
-    const input = props.JsonString || props.jsonString || props.Input || "";
+    const input = getPropString(props, "JsonString", "jsonString", "Input") || "";
     const outputVar = node.outputVar || "obj_Result";
     return `<ui:DeserializeJson DisplayName="${displayName}" JsonString="${escapeXml(input)}">\n` +
       `  <ui:DeserializeJson.Result>\n` +
@@ -146,7 +175,7 @@ export function resolveActivityTemplate(
   }
 
   if (templateName === "Comment") {
-    const text = props.Text || props.text || "";
+    const text = getPropString(props, "Text", "text") || "";
     return `<ui:Comment Text="${escapeXml(text)}" DisplayName="${displayName}" />`;
   }
 
@@ -165,11 +194,14 @@ export function resolveActivityTemplate(
 function resolveAssignTemplate(node: ActivityNode, allVariables: VariableDeclaration[]): string {
   const props = node.properties || {};
   const displayName = escapeXml(node.displayName);
-  const toVar = props.To || props.to || node.outputVar || "obj_Result";
-  const value = props.Value || props.value || '""';
-  const typeArg = inferAssignType(toVar, allVariables);
-  const wrappedTo = ensureBracketWrapped(toVar);
-  const wrappedVal = smartBracketWrap(value);
+  const toRaw = props.To || props.to || node.outputVar || "obj_Result";
+  const valRaw = props.Value || props.value || '""';
+  const toVarName = isValueIntent(toRaw) && (toRaw as ValueIntent).type === "variable"
+    ? (toRaw as ValueIntent & { type: "variable" }).name
+    : isValueIntent(toRaw) ? buildExpression(toRaw as ValueIntent) : String(toRaw);
+  const typeArg = inferAssignType(toVarName, allVariables);
+  const wrappedTo = ensureBracketWrapped(toVarName);
+  const wrappedVal = resolvePropertyValue(valRaw as PropertyValue);
 
   return `<Assign DisplayName="${displayName}">\n` +
     `  <Assign.To>\n` +
@@ -184,8 +216,8 @@ function resolveAssignTemplate(node: ActivityNode, allVariables: VariableDeclara
 function resolveGetAssetTemplate(node: ActivityNode): string {
   const props = node.properties || {};
   const displayName = escapeXml(node.displayName);
-  const assetName = props.AssetName || props.assetName || "PLACEHOLDER_AssetName";
-  const outputVar = node.outputVar || props.AssetValue || props.Value || "str_AssetValue";
+  const assetName = getPropString(props, "AssetName", "assetName") || "PLACEHOLDER_AssetName";
+  const outputVar = node.outputVar || getPropString(props, "AssetValue", "Value") || "str_AssetValue";
 
   return `<ui:GetAsset DisplayName="${displayName}" AssetName="${escapeXml(assetName)}">\n` +
     `  <ui:GetAsset.AssetValue>\n` +
@@ -197,9 +229,9 @@ function resolveGetAssetTemplate(node: ActivityNode): string {
 function resolveGetCredentialTemplate(node: ActivityNode): string {
   const props = node.properties || {};
   const displayName = escapeXml(node.displayName);
-  const assetName = props.AssetName || props.assetName || "PLACEHOLDER_CredentialName";
-  const usernameVar = props.Username || props.username || "str_Username";
-  const passwordVar = props.Password || props.password || "sec_Password";
+  const assetName = getPropString(props, "AssetName", "assetName") || "PLACEHOLDER_CredentialName";
+  const usernameVar = getPropString(props, "Username", "username") || "str_Username";
+  const passwordVar = getPropString(props, "Password", "password") || "sec_Password";
 
   return `<ui:GetCredential DisplayName="${displayName}" AssetName="${escapeXml(assetName)}">\n` +
     `  <ui:GetCredential.Username>\n` +
@@ -219,16 +251,16 @@ function wrapSmtpPropValue(val: string): string {
 function resolveSendSmtpMailMessageTemplate(node: ActivityNode): string {
   const props = node.properties || {};
   const displayName = escapeXml(node.displayName);
-  const to = props.To || props.to || "PLACEHOLDER_To";
-  const from = props.From || props.from || "";
-  const subject = props.Subject || props.subject || "PLACEHOLDER_Subject";
-  const body = props.Body || props.body || "PLACEHOLDER_Body";
-  const server = props.Server || props.server || "PLACEHOLDER_SmtpServer";
-  const port = props.Port || props.port || "587";
-  const email = props.Email || props.email || "";
-  const password = props.Password || props.password || "";
-  const username = props.Username || props.username || "";
-  const isBodyHtml = props.IsBodyHtml || props.isBodyHtml || "False";
+  const to = getPropString(props, "To", "to") || "PLACEHOLDER_To";
+  const from = getPropString(props, "From", "from");
+  const subject = getPropString(props, "Subject", "subject") || "PLACEHOLDER_Subject";
+  const body = getPropString(props, "Body", "body") || "PLACEHOLDER_Body";
+  const server = getPropString(props, "Server", "server") || "PLACEHOLDER_SmtpServer";
+  const port = getPropString(props, "Port", "port") || "587";
+  const email = getPropString(props, "Email", "email");
+  const password = getPropString(props, "Password", "password");
+  const username = getPropString(props, "Username", "username");
+  const isBodyHtml = getPropString(props, "IsBodyHtml", "isBodyHtml") || "False";
 
   const wrappedTo = wrapSmtpPropValue(to);
   const wrappedSubject = wrapSmtpPropValue(subject);
@@ -248,17 +280,20 @@ function resolveSendSmtpMailMessageTemplate(node: ActivityNode): string {
 function resolveHttpClientTemplate(node: ActivityNode): string {
   const props = node.properties || {};
   const displayName = escapeXml(node.displayName);
-  const endpoint = props.Endpoint || props.endpoint || props.URL || props.url || "PLACEHOLDER_URL";
-  const method = props.Method || props.method || "GET";
+  const endpointRaw = props.Endpoint || props.endpoint || props.URL || props.url || "PLACEHOLDER_URL";
+  const endpointResolved = resolvePropertyValueRaw(endpointRaw as PropertyValue);
+  const method = getPropString(props, "Method", "method") || "GET";
   const outputVar = node.outputVar || "str_ResponseBody";
 
-  let xml = `<ui:HttpClient DisplayName="${displayName}" Endpoint="${escapeXml(endpoint)}" Method="${escapeXml(method)}"`;
+  let xml = `<ui:HttpClient DisplayName="${displayName}" Endpoint="${escapeXml(endpointResolved)}" Method="${escapeXml(method)}"`;
 
-  if (props.Headers || props.headers) {
-    xml += ` Headers="${escapeXml(props.Headers || props.headers)}"`;
+  const headers = getPropString(props, "Headers", "headers");
+  if (headers) {
+    xml += ` Headers="${escapeXml(headers)}"`;
   }
-  if (props.Body || props.body) {
-    xml += ` Body="${escapeXml(props.Body || props.body)}"`;
+  const body = getPropString(props, "Body", "body");
+  if (body) {
+    xml += ` Body="${escapeXml(body)}"`;
   }
 
   xml += `>\n`;
@@ -286,8 +321,10 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
     schema = catalogService.getActivitySchema(templateName);
   }
 
-  for (const [key, value] of Object.entries(props)) {
+  for (const [key, rawValue] of Object.entries(props)) {
     if (key.startsWith("_") || key === "displayName") continue;
+
+    const value = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : String(rawValue);
 
     let isChildElement = false;
     if (schema) {
@@ -296,7 +333,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
         isChildElement = true;
         const wrapper = propDef.argumentWrapper || "InArgument";
         const typeArg = propDef.typeArguments ? ` x:TypeArguments="${propDef.typeArguments}"` : "";
-        const wrappedValue = smartBracketWrap(value);
+        const wrappedValue = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : smartBracketWrap(value);
         childParts.push(
           `  <${tag}.${key}>\n` +
           `    <${wrapper}${typeArg}>${wrappedValue}</${wrapper}>\n` +
@@ -483,6 +520,21 @@ function assembleTryCatchNode(
   return xml;
 }
 
+function resolveConditionValue(condition: string | ValueIntent): string {
+  if (isValueIntent(condition)) {
+    const built = buildExpression(condition as ValueIntent);
+    return escapeXml(built);
+  }
+  const trimmed = (condition as string).trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return escapeXml(trimmed);
+  if (trimmed === "True" || trimmed === "False") return trimmed;
+  if (/[<>=]/.test(trimmed) || /\b(And|Or|Not|AndAlso|OrElse|Is|IsNot|Like)\b/.test(trimmed)) {
+    return escapeXml(`[${trimmed}]`);
+  }
+  return escapeXml(trimmed);
+}
+
 function assembleIfNode(
   node: IfNode,
   allVariables: VariableDeclaration[],
@@ -490,7 +542,7 @@ function assembleIfNode(
   depthLevel: number,
 ): string {
   const displayName = escapeXml(node.displayName);
-  const condition = escapeXml(node.condition);
+  const condition = resolveConditionValue(node.condition);
 
   const thenXml = node.thenChildren
     .map(child => assembleNode(child, allVariables, processType, depthLevel + 1))
@@ -525,7 +577,7 @@ function assembleWhileNode(
   depthLevel: number,
 ): string {
   const displayName = escapeXml(node.displayName);
-  const condition = escapeXml(node.condition);
+  const condition = resolveConditionValue(node.condition);
 
   const bodyXml = node.bodyChildren
     .map(child => assembleNode(child, allVariables, processType, depthLevel + 1))
