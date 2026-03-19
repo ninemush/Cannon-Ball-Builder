@@ -1,0 +1,165 @@
+Audit confirms three precise upstream 
+fixes. Implement exactly these changes.
+
+UPSTREAM FIX 1 — Fix looksLikeVariableRef 
+bypass at all six write points
+
+The six write points (B, C, E, G, N, Q) 
+gate bracketing behind looksLikeVariableRef 
+which rejects any expression containing 
+operators, spaces, or parentheses — 
+exactly the expressions that need 
+brackets most.
+
+Change the logic at all six write points 
+from:
+
+  if (looksLikeVariableRef(value)) {
+    // bracket wrap
+  } else {
+    // use raw value
+  }
+
+To:
+
+  // Always bracket-wrap unless the value 
+  // is already bracketed, a quoted string 
+  // literal, or a known safe literal
+  if (!isAlreadyBracketed(value) && 
+      !isQuotedStringLiteral(value) && 
+      !isSafeLiteral(value)) {
+    value = `[${value}]`
+  }
+
+Where:
+  isAlreadyBracketed: value starts with 
+    [ and ends with ]
+  isQuotedStringLiteral: value matches 
+    ^".*"$ or ^&quot;.*&quot;$
+  isSafeLiteral: value is exactly True, 
+    False, Nothing, null, or empty string
+
+This means int_SeverityCode <> 10 gets 
+bracketed to [int_SeverityCode <> 10]. 
+Inside brackets, UiPath's expression 
+evaluator handles VB syntax. The XML 
+parser never sees the raw <>.
+
+Do NOT apply escapeXml to VB expressions 
+that should be bracketed — escaping 
+<> to &lt;&gt; produces valid XML but 
+wrong VB semantics. Bracketing is the 
+correct fix, not escaping.
+
+Apply this change at write points B, C, 
+E, G (xaml-generator.ts) and N, Q 
+(workflow-tree-assembler.ts).
+
+Write point H (line 2074) already calls 
+escapeXml after — this is wrong for VB 
+expressions. Change H to use the same 
+bracket-first logic above, removing 
+the escapeXml call for the Value 
+argument specifically. The To argument 
+(OutArgument) is already handled 
+correctly with ensureBracketWrapped.
+
+UPSTREAM FIX 2 — Add catalog validation 
+to renderActivity in xaml-generator.ts
+
+In renderActivity at line 1998, before 
+emitting <${activityType} ...>, add a 
+catalog validation check mirroring what 
+workflow-tree-assembler.ts already does 
+at line 140:
+
+  if (catalogService.isLoaded()) {
+    const schema = catalogService
+      .getActivitySchema(activityType)
+    if (!schema) {
+      log.warn(
+        `[XAML Generator] Unknown activity 
+        type: ${activityType} — emitting 
+        ui:Comment placeholder`
+      )
+      return `<ui:Comment Text="REVIEW: 
+        Unknown activity '${activityType}' 
+        — implement manually" />`
+    }
+  }
+
+This prevents any made-up activity name, 
+TODO_ token, or hallucinated activity 
+from being emitted as an XML tag. If 
+the catalog is not loaded, skip the 
+check and proceed as today — graceful 
+degradation.
+
+UPSTREAM FIX 3 — Remove looksLikeVariableRef 
+from escapeXml decision at write point H
+
+Write point H (line 2074) currently 
+escapes VB expressions with escapeXml, 
+turning [x <> 10] into [x &lt;&gt; 10]. 
+This is semantically wrong — UiPath's 
+expression evaluator cannot parse 
+&lt;&gt; as the not-equal operator.
+
+After applying Fix 1 to write point H, 
+remove the escapeXml call on the Value 
+argument. The bracket wrapping from 
+Fix 1 makes the content safe for XML 
+because the brackets tell UiPath's 
+XAML parser this is an expression — 
+it does not need XML entity escaping.
+
+Keep escapeXml on the To argument 
+(OutArgument) as it handles variable 
+names which should not contain XML-
+special characters anyway.
+
+ALSO — keep the downstream sanitisers 
+as safety nets but do not add new ones
+
+The TODO_ two-pass replacement and the 
+collapseDoubledArguments loop are still 
+worth having as last-resort catches. 
+Keep them. But do not add any more 
+sanitiser rules — if Fix 1 and Fix 2 
+are implemented correctly, no new 
+sanitiser rules should be needed.
+
+COMPLETION CRITERIA
+
+1. Show me the updated code at all six 
+   write points (B, C, E, G, N, Q) 
+   confirming the new bracket-first 
+   logic before generating any package
+
+2. Show me the catalog validation block 
+   added to renderActivity
+
+3. Generate WeatherAndTravelNotification 
+   — zero XML parse errors
+
+4. Confirm int_SeverityCode <> 10 
+   appears as [int_SeverityCode <> 10] 
+   in the generated XAML, not as raw 
+   text or as &lt;&gt; escaped
+
+5. All existing tests still pass
+
+6. New tests:
+   - looksLikeVariableRef bypass: 
+     value "x <> 10" gets bracketed 
+     to "[x <> 10]" at all six write 
+     points
+   - renderActivity returns ui:Comment 
+     for an activity name not in the 
+     catalog
+   - renderActivity passes through 
+     normally for a known catalog 
+     activity
+
+Show me the code changes at steps 1 
+and 2 before triggering a generation.
