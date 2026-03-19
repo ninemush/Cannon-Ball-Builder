@@ -546,17 +546,17 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   xml = xml.replace(/<(ui:HttpClient\s)([^>]*?)>/g, (match, prefix, attrs) => {
     let fixed = attrs;
     fixed = fixed.replace(/\bURL="([^"]*)"/g, (m: string, val: string) => {
-      if (val.startsWith("[")) return `Endpoint="${val}"`;
+      if (val.startsWith("[")) return `Endpoint="${escapeXml(val)}"`;
       if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
-      return `Endpoint="[&quot;${val.replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
+      return `Endpoint="[&quot;${escapeXml(val).replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
     });
     fixed = fixed.replace(/\bEndPoint="([^"]*)"/g, (m: string, val: string) => {
-      if (val.startsWith("[")) return `Endpoint="${val}"`;
+      if (val.startsWith("[")) return `Endpoint="${escapeXml(val)}"`;
       if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
-      return `Endpoint="[&quot;${val.replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
+      return `Endpoint="[&quot;${escapeXml(val).replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
     });
     fixed = fixed.replace(/\bOutput="([^"]*)"/g, (m: string, val: string) => {
-      if (val.startsWith("[")) return `ResponseContent="${val}"`;
+      if (val.startsWith("[")) return `ResponseContent="${escapeXml(val)}"`;
       if (/^[a-zA-Z_]\w*$/.test(val)) return `ResponseContent="[${val}]"`;
       return `ResponseContent="[str_HttpResponse]"`;
     });
@@ -567,7 +567,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
       const pairPattern = /"([^"]+)"\s*:\s*"([^"]*)"/g;
       let pm;
       while ((pm = pairPattern.exec(decoded)) !== null) {
-        pairs.push(`{&quot;${pm[1]}&quot;, &quot;${pm[2]}&quot;}`);
+        pairs.push(`{&quot;${escapeXml(pm[1])}&quot;, &quot;${escapeXml(pm[2])}&quot;}`);
       }
       if (pairs.length > 0) {
         return `Headers="[New Dictionary(Of String, String) From {${pairs.join(", ")}}]"`;
@@ -1770,7 +1770,7 @@ function sanitizePropertyValue(key: string, value: any): string {
   return String(value);
 }
 
-const PSEUDO_XAML_ATTR_KEYS = new Set(["Then", "Else", "Cases", "Body", "Finally", "Try", "_convertedInputArgs", "_convertedOutputArgs"]);
+const PSEUDO_XAML_ATTR_KEYS = new Set(["Then", "Else", "Cases", "Body", "Finally", "Try", "_convertedInputArgs", "_convertedOutputArgs", "DisplayName"]);
 
 const CONTROL_FLOW_ACTIVITY_TYPES = new Set(["If", "Switch", "ForEach", "TryCatch"]);
 

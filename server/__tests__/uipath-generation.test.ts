@@ -3,7 +3,7 @@ import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generat
 import { runQualityGate, classifyQualityIssues, getBlockingFiles, type QualityGateInput } from "../uipath-quality-gate";
 import { getBlockedActivities, isActivityAllowed, filterBlockedActivitiesFromXaml } from "../uipath-activity-policy";
 import { scanXamlForRequiredPackages, classifyAutomationPattern, ACTIVITY_REGISTRY, normalizeActivityName, ACTIVITY_NAME_ALIAS_MAP } from "../uipath-activity-registry";
-import { normalizePackageName, UIPATH_PACKAGE_ALIAS_MAP, buildNuGetPackage } from "../uipath-integration";
+import { normalizePackageName, UIPATH_PACKAGE_ALIAS_MAP, buildNuGetPackage, removeDuplicateAttributes } from "../uipath-integration";
 import {
   simpleLinearNodes,
   simpleLinearEdges,
@@ -1883,6 +1883,119 @@ describe("UiPath Generation Regression Tests", () => {
       expect(result).toContain('Name="str_Name"');
       expect(result).toContain('Name="int_Count"');
       expect(result).toContain('Name="bool_Flag"');
+    });
+  });
+
+  describe("Regression: Duplicate attribute stripping", () => {
+    it("removeDuplicateAttributes removes second DisplayName from an element", () => {
+      const xmlWithDup = `<ui:LogMessage DisplayName="First" Level="Info" Message="[&quot;test&quot;]" DisplayName="Second" />`;
+      const result = removeDuplicateAttributes(xmlWithDup);
+      expect(result.changed).toBe(true);
+      expect(result.fixedTags).toContain("ui:LogMessage");
+      const dnCount = (result.content.match(/DisplayName="/g) || []).length;
+      expect(dnCount).toBe(1);
+      expect(result.content).toContain('DisplayName="First"');
+      expect(result.content).not.toContain('DisplayName="Second"');
+    });
+
+    it("removeDuplicateAttributes returns unchanged for elements without duplicates", () => {
+      const xmlNoDup = `<ui:LogMessage DisplayName="Only" Level="Info" Message="[&quot;test&quot;]" />`;
+      const result = removeDuplicateAttributes(xmlNoDup);
+      expect(result.changed).toBe(false);
+      expect(result.fixedTags).toHaveLength(0);
+    });
+
+    it("generateRichXamlFromSpec does not produce duplicate DisplayName when properties contain DisplayName", () => {
+      const spec = {
+        name: "TestWorkflow",
+        steps: [{
+          activityType: "ui:LogMessage",
+          activity: "Log Message",
+          displayName: "Log Test",
+          properties: {
+            DisplayName: "Duplicate Display Name",
+            Level: "Info",
+            Message: "test message",
+          } as Record<string, unknown>,
+        }],
+      };
+      const result = generateRichXamlFromSpec(spec, undefined, undefined, "Windows");
+      const compliant = makeUiPathCompliant(result.xaml, "Windows");
+      const logElements = compliant.match(/<ui:LogMessage[^>]*\/?>/g) || [];
+      expect(logElements.length).toBeGreaterThan(0);
+      for (const el of logElements) {
+        const dnCount = (el.match(/DisplayName="/g) || []).length;
+        expect(dnCount).toBeLessThanOrEqual(1);
+      }
+    });
+  });
+
+  describe("Regression: Ampersand escaping in HTTP endpoint values", () => {
+    it("escapes ampersands in URL values for HttpClient activities", () => {
+      const xamlWithAmpersand = makeValidXaml("Main",
+        `<ui:HttpClient URL="https://api.example.com/search?q=test&limit=10" Method="GET" DisplayName="Call API" />`
+      );
+      const result = makeUiPathCompliant(xamlWithAmpersand, "Windows");
+      expect(result).not.toMatch(/q=test&limit/);
+      expect(result).toContain("&amp;limit");
+    });
+
+    it("escapes ampersands in header parameter values", () => {
+      const xamlWithHeaderAmp = makeValidXaml("Main",
+        `<ui:HttpClient Headers="{&quot;X-Key&quot;: &quot;a&b&quot;}" URL="https://api.example.com" Method="GET" DisplayName="Call API" />`
+      );
+      const result = makeUiPathCompliant(xamlWithHeaderAmp, "Windows");
+      expect(result).not.toMatch(/a&b/);
+    });
+
+    it("generated XAML for HTTP activities produces zero XML parse errors", () => {
+      const xaml = makeValidXaml("Main",
+        `<ui:HttpClient URL="https://api.example.com/data?page=1&size=20&sort=name" Method="GET" DisplayName="Fetch Data" />`
+      );
+      const result = makeUiPathCompliant(xaml, "Windows");
+      const violations = validateXamlContent([{ name: "Main.xaml", content: result }]);
+      const xmlErrors = violations.filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+      const rawAmpersands = result.match(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[\da-fA-F]+;)/g);
+      expect(rawAmpersands).toBeNull();
+    });
+
+    it("end-to-end: generated XAML for process with email and HTTP activities has zero XML parse errors", () => {
+      const spec = {
+        name: "MixedWorkflow",
+        steps: [
+          {
+            activityType: "ui:SendOutlookMailMessage",
+            activity: "Send Email",
+            displayName: "Send Notification",
+            properties: {
+              To: "user@example.com",
+              Subject: "Report for Q1 & Q2",
+              Body: "See attached data from https://api.example.com?key=val&other=2",
+            } as Record<string, unknown>,
+          },
+          {
+            activityType: "ui:HttpClient",
+            activity: "HTTP Request",
+            displayName: "Fetch API Data",
+            properties: {
+              URL: "https://api.example.com/search?q=test&limit=10&offset=0",
+              Method: "GET",
+            } as Record<string, unknown>,
+          },
+        ],
+      };
+      const result = generateRichXamlFromSpec(spec, undefined, undefined, "Windows");
+      const compliant = makeUiPathCompliant(result.xaml, "Windows");
+      const violations = validateXamlContent([{ name: "Main.xaml", content: compliant }]);
+      const xmlErrors = violations.filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors).toHaveLength(0);
+      const allElements = compliant.match(/<[a-zA-Z_][\w.:]*\s[^>]*>/g) || [];
+      for (const el of allElements) {
+        const attrNames = [...el.matchAll(/\s([a-zA-Z_][\w.:]*)\s*=/g)].map(m => m[1]);
+        const uniqueAttrs = new Set(attrNames);
+        expect(uniqueAttrs.size).toBe(attrNames.length);
+      }
     });
   });
 });

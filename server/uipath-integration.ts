@@ -475,6 +475,28 @@ export type BuildResult = {
   dependencyWarnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
 };
 
+export function removeDuplicateAttributes(content: string): { content: string; changed: boolean; fixedTags: string[] } {
+  const fixedTags: string[] = [];
+  const result = content.replace(/<([a-zA-Z_][\w.:]*)\s([^>]*?)(\s*\/?>)/g, (match, tag, attrStr, closing) => {
+    const seen = new Set<string>();
+    let hasDuplicates = false;
+    const cleaned = attrStr.replace(/([a-zA-Z_][\w.:]*)\s*=\s*"[^"]*"/g, (attrMatch: string, attrName: string) => {
+      if (seen.has(attrName)) {
+        hasDuplicates = true;
+        return "";
+      }
+      seen.add(attrName);
+      return attrMatch;
+    });
+    if (hasDuplicates) {
+      fixedTags.push(tag);
+      return `<${tag} ${cleaned.replace(/\s{2,}/g, " ").trim()}${closing}`;
+    }
+    return match;
+  });
+  return { content: result, changed: fixedTags.length > 0, fixedTags };
+}
+
 export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void): Promise<BuildResult> {
   const projectName = (pkg.projectName || "Automation").replace(/\s+/g, "_");
   const sddContent = pkg.internal?.sddContent || "";
@@ -1465,6 +1487,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         if (ampersandRegex.test(content)) {
           content = content.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[\da-fA-F]+;)/g, "&amp;");
           autoFixSummary.push(`Escaped raw ampersands in ${xamlEntries[i].name}`);
+          wasFixed = true;
+        }
+
+        const dupResult = removeDuplicateAttributes(content);
+        if (dupResult.changed) {
+          content = dupResult.content;
+          for (const tag of dupResult.fixedTags) {
+            autoFixSummary.push(`Removed duplicate attributes on <${tag}> in ${xamlEntries[i].name}`);
+          }
           wasFixed = true;
         }
 
