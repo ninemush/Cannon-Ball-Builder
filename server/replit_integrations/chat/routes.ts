@@ -1558,12 +1558,15 @@ CRITICAL RULES:
       } else if (docTagMatch) {
         const tagDocType = docTagMatch[1] as "PDD" | "SDD";
         const existingApproval = await documentStorage.getApproval(ideaId, tagDocType);
-        const hasExplicitRegenRequest = /\b(regenerat|redo|rewrite|generate|create|draft|produce|build)\b/i.test(content) &&
+        const hasExplicitRegenRequest = /\b(re-?generat\w*|redo|rewrite|re-?create|re-?draft|re-?produce|re-?build|update|generate|create|draft|produce|build)\b/i.test(content) &&
           new RegExp(`\\b${tagDocType}\\b`, "i").test(content);
         if (existingApproval && !hasExplicitRegenRequest) {
           console.log(`[Chat] Skipping inline doc creation — ${tagDocType} already approved (approval id ${existingApproval.id}), no explicit regen request`);
           cleanedResponse = cleanedResponse.slice(docTagMatch[0].length).trim();
         } else {
+          if (existingApproval && hasExplicitRegenRequest) {
+            console.log(`[Chat] Regen request detected for ${tagDocType} — overriding existing approval (id ${existingApproval.id})`);
+          }
           detectedDocType = tagDocType;
           docContent = cleanedResponse.slice(docTagMatch[0].length).trim();
         }
@@ -1580,11 +1583,14 @@ CRITICAL RULES:
         }
         if (patternDocType) {
           const patternApproval = await documentStorage.getApproval(ideaId, patternDocType);
-          const hasExplicitRegenRequest = /\b(regenerat|redo|rewrite|generate|create|draft|produce|build)\b/i.test(content) &&
+          const hasExplicitRegenRequest = /\b(re-?generat\w*|redo|rewrite|re-?create|re-?draft|re-?produce|re-?build|update|generate|create|draft|produce|build)\b/i.test(content) &&
             new RegExp(`\\b${patternDocType}\\b`, "i").test(content);
           if (patternApproval && !hasExplicitRegenRequest) {
             console.log(`[Chat] Skipping inline doc creation — ${patternDocType} already approved (approval id ${patternApproval.id}), no explicit regen request`);
           } else {
+            if (patternApproval && hasExplicitRegenRequest) {
+              console.log(`[Chat] Regen request detected for ${patternDocType} — overriding existing approval (id ${patternApproval.id})`);
+            }
             detectedDocType = patternDocType;
             docContent = cleanedResponse;
           }

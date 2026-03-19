@@ -948,6 +948,11 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       console.log(`[ProcessMap] Detected TO-BE modification from user message, setting toBeGeneratingRef=true`);
     }
 
+    if (isGeneratingDocRef.current && !abortControllerRef.current) {
+      isGeneratingDocRef.current = false;
+      generatingDocTypeRef.current = "";
+    }
+
     let localClassifiedIntent = "";
     let localDeployStarted = false;
     let docGenIdAtStart = docGenIdRef.current;
@@ -1237,6 +1242,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       });
     } finally {
       setIsStreaming(false);
+      abortControllerRef.current = null;
       const wasGeneratingDoc = isGeneratingDocRef.current;
       const isOwnGeneration = docGenIdRef.current === docGenIdAtStart;
       if (isOwnGeneration && wasGeneratingDoc) {
