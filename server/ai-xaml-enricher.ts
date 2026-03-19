@@ -77,7 +77,8 @@ ABSOLUTE RULES:
 9. ALL variables must be declared in the Sequence.Variables block BEFORE their first use. Use the Variable Declaration template from Section 3.
 10. Variable names must be CONTEXT-SPECIFIC with type prefixes (str_, int_, bool_, dt_, dbl_, dec_, obj_, ts_, drow_, qi_).
 11. For Headers properties, return a proper VB.NET Dictionary initializer string, not a JSON object.
-12. DOMAIN-SPECIFIC BUSINESS LOGIC FIDELITY: Reflect exact priority ordering, fallback sequences, and routing rules from the SDD. Do NOT reorder steps arbitrarily.`;
+12. DOMAIN-SPECIFIC BUSINESS LOGIC FIDELITY: Reflect exact priority ordering, fallback sequences, and routing rules from the SDD. Do NOT reorder steps arbitrarily.
+13. NEVER use TODO_ or PLACEHOLDER_ tokens as attribute values (e.g. TODO_Condition, PLACEHOLDER_Expression). When you cannot determine the correct value, use safe defaults: "True" for If Conditions, "Nothing" for Switch Expressions, "New List(Of Object)" for ForEach Values. Add a ui:Comment element immediately before the activity explaining what needs review.`;
 
 const SECTION_3_VARIABLES = `=== SECTION 3: VARIABLE DECLARATION RULES ===
 Every variable MUST be declared before first use using this template:

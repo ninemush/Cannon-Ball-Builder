@@ -1843,7 +1843,9 @@ function renderControlFlowActivity(
   const baseType = activityType.replace("System.Activities.", "");
 
   if (baseType === "If") {
-    const condition = properties["Condition"] || rawProperties["Condition"] || "TODO_Condition";
+    const rawCondition = properties["Condition"] || rawProperties["Condition"] || "";
+    const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
+    const condition = needsConditionReview ? "True" : rawCondition;
 
     let thenContent = "";
     const thenProp = rawProperties["Then"];
@@ -1867,7 +1869,7 @@ function renderControlFlowActivity(
       elseContent = `\n                <ui:LogMessage Level="Info" Message="'Else path: ${escapeXml(enforced)}'" DisplayName="Else Path" />`;
     }
 
-    return `
+    return `${needsConditionReview ? `\n          <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(enforced)}" DisplayName="Review Condition" />` : ""}
           <If DisplayName="${escapeXml(enforced)}" Condition="[${escapeXml(String(condition))}]">
             <If.Then>
               <Sequence DisplayName="Then: ${escapeXml(enforced)}">${thenContent}
@@ -1881,7 +1883,9 @@ function renderControlFlowActivity(
   }
 
   if (baseType === "Switch") {
-    const expression = properties["Expression"] || rawProperties["Expression"] || "TODO_Expression";
+    const rawExpression = properties["Expression"] || rawProperties["Expression"] || "";
+    const needsExpressionReview = !rawExpression || rawExpression === "TODO_Expression" || rawExpression.startsWith("TODO_") || rawExpression.startsWith("PLACEHOLDER_");
+    const expression = needsExpressionReview ? "Nothing" : rawExpression;
     const casesProp = rawProperties["Cases"];
     let caseElements = "";
 
@@ -1905,7 +1909,7 @@ function renderControlFlowActivity(
                 </Sequence>`;
     }
 
-    return `
+    return `${needsExpressionReview ? `\n          <ui:Comment Text="TODO: Replace default Nothing expression with actual value for: ${escapeXml(enforced)}" DisplayName="Review Expression" />` : ""}
           <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="[${escapeXml(String(expression))}]">
             <Switch.Cases>${caseElements}
             </Switch.Cases>
@@ -1919,7 +1923,9 @@ function renderControlFlowActivity(
 
   if (baseType === "ForEach") {
     const itemType = properties["TypeArgument"] || rawProperties["TypeArgument"] || "x:Object";
-    const values = properties["Values"] || rawProperties["Values"] || "TODO_Collection";
+    const rawValues = properties["Values"] || rawProperties["Values"] || "";
+    const needsValuesReview = !rawValues || rawValues === "TODO_Collection" || rawValues.startsWith("TODO_") || rawValues.startsWith("PLACEHOLDER_");
+    const values = needsValuesReview ? "New List(Of Object)" : rawValues;
 
     let bodyContent = "";
     const bodyProp = rawProperties["Body"];
@@ -1930,7 +1936,7 @@ function renderControlFlowActivity(
       bodyContent = `\n                <ui:LogMessage Level="Info" Message="'Processing item in: ${escapeXml(enforced)}'" DisplayName="Loop Body" />`;
     }
 
-    return `
+    return `${needsValuesReview ? `\n          <ui:Comment Text="TODO: Replace default empty collection with actual data source for: ${escapeXml(enforced)}" DisplayName="Review Collection" />` : ""}
           <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="[${escapeXml(String(values))}]">
             <ForEach.Body>
               <ActivityAction x:TypeArguments="${escapeXml(String(itemType))}">
@@ -2551,7 +2557,9 @@ export function generateRichXamlFromNodes(
         const edgeLabels = outEdges.map(e => `"${e.label || "unlabeled"}" → node #${e.target}`).join(", ");
         activities += `
         <!-- Decision: ${nodeTrace} | Branches: ${edgeLabels} -->`;
-        const condition = outEdges.find(e => e.label)?.label || "TODO_Condition";
+        const rawCondition = outEdges.find(e => e.label)?.label || "";
+        const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
+        const condition = needsConditionReview ? "True" : rawCondition;
         allVariables.push({ name: `bool_${node.name.replace(/[^A-Za-z0-9]/g, "")}`, type: "Boolean", defaultValue: "False" });
 
         let thenActivities = "";
@@ -2582,6 +2590,10 @@ export function generateRichXamlFromNodes(
         if (!thenActivities) thenActivities = `\n            <ui:LogMessage Level="Info" Message="'Then: ${escapeXml(node.name)}'" DisplayName="Then Path" />`;
         if (!elseActivities) elseActivities = `\n              <ui:LogMessage Level="Info" Message="'Else: ${escapeXml(node.name)}'" DisplayName="Else Path" />`;
 
+        if (needsConditionReview) {
+          activities += `
+        <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
+        }
         activities += `
         <If DisplayName="Decision: ${escapeXml(node.name)}" Condition="[${escapeXml(condition)}]">
           <If.Then>
@@ -2622,7 +2634,9 @@ export function generateRichXamlFromNodes(
       const edgeLabels = outEdges.map(e => `"${e.label || "unlabeled"}" → node #${e.target}`).join(", ");
       activities += `
         <!-- Decision: ${nodeTrace} | Branches: ${edgeLabels} -->`;
-      const condition = outEdges.find(e => e.label)?.label || "TODO_Condition";
+      const rawCondition = outEdges.find(e => e.label)?.label || "";
+      const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
+      const condition = needsConditionReview ? "True" : rawCondition;
 
       allVariables.push({ name: "bool_Decision", type: "Boolean", defaultValue: "False" });
       allGaps.push({
@@ -2662,6 +2676,10 @@ export function generateRichXamlFromNodes(
             <ui:LogMessage Level="Info" Message="'Then branch: ${escapeXml(node.name)}'" DisplayName="Then Path" />`;
       }
 
+      if (needsConditionReview) {
+        activities += `
+        <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
+      }
       activities += `
         <If DisplayName="Decision: ${escapeXml(node.name)}" Condition="[${escapeXml(condition)}]">
           <If.Then>

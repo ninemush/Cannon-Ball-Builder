@@ -1132,7 +1132,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       const content = xamlEntries[i].content;
       if (content.includes("PLACEHOLDER_") || content.includes("TODO_")) {
         const placeholderCount = (content.match(/PLACEHOLDER_|TODO_/g) || []).length;
-        const cleaned = content.replace(/PLACEHOLDER_\w*/g, '""').replace(/TODO_\w*/g, '""');
+        const cleaned = content
+          .replace(/\[[^\]]*(?:PLACEHOLDER_\w*|TODO_\w*)[^\]]*\]/g, '[Nothing]')
+          .replace(/PLACEHOLDER_\w*/g, '')
+          .replace(/TODO_\w*/g, '');
         xamlEntries[i] = { ...xamlEntries[i], content: cleaned };
         const archivePath = Array.from(deferredWrites.keys()).find(
           p => (p.split("/").pop() || p) === (xamlEntries[i].name.split("/").pop() || xamlEntries[i].name)
@@ -1291,8 +1294,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                     const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const escapedOldVal = oldVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const attrRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedOldVal}"`, "g");
-                    if (attrRegex.test(content)) {
-                      content = content.replace(attrRegex, `$1${propName}="${correction.correctedValue}"`);
+                    const newContent = content.replace(attrRegex, `$1${propName}="${correction.correctedValue}"`);
+                    if (newContent !== content) {
+                      content = newContent;
                       correctedProperties.add(propName);
                       modified = true;
                       autoFixSummary.push(`Catalog: Corrected ${fullTag}.${propName} value from "${oldVal}" to "${correction.correctedValue}" in ${fileName}`);

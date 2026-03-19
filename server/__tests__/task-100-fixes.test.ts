@@ -112,3 +112,98 @@ describe("Task 100 Fixes", () => {
     });
   });
 });
+
+describe("Task 102 Fixes — TODO/PLACEHOLDER token malformed XML", () => {
+  describe("Sanitizer context-aware replacement (uipath-integration.ts line 1135)", () => {
+    function simulateSanitizer(content: string): string {
+      return content
+        .replace(/\[[^\]]*(?:PLACEHOLDER_\w*|TODO_\w*)[^\]]*\]/g, '[Nothing]')
+        .replace(/PLACEHOLDER_\w*/g, '')
+        .replace(/TODO_\w*/g, '');
+    }
+
+    it("TODO_Condition inside brackets is replaced with [Nothing] not double-quotes", () => {
+      const input = `Condition="[TODO_Condition]"`;
+      const result = simulateSanitizer(input);
+      expect(result).toBe(`Condition="[Nothing]"`);
+      expect(result).not.toContain('""');
+    });
+
+    it("PLACEHOLDER_Expression inside brackets is replaced with [Nothing]", () => {
+      const input = `Expression="[PLACEHOLDER_Expression]"`;
+      const result = simulateSanitizer(input);
+      expect(result).toBe(`Expression="[Nothing]"`);
+    });
+
+    it("TODO_Condition outside brackets is replaced with empty string", () => {
+      const input = `Condition="TODO_Condition"`;
+      const result = simulateSanitizer(input);
+      expect(result).toBe(`Condition=""`);
+    });
+
+    it("PLACEHOLDER_Values outside brackets is replaced with empty string", () => {
+      const input = `Values="PLACEHOLDER_Values"`;
+      const result = simulateSanitizer(input);
+      expect(result).toBe(`Values=""`);
+    });
+
+    it("mixed tokens inside and outside brackets are handled correctly", () => {
+      const input = `<If Condition="[TODO_Condition]" DisplayName="TODO_Name" />`;
+      const result = simulateSanitizer(input);
+      expect(result).toBe(`<If Condition="[Nothing]" DisplayName="" />`);
+    });
+  });
+
+  describe("If activity fallback produces valid condition", () => {
+    it("If activity with missing condition uses True instead of TODO_Condition", () => {
+      const properties: Record<string, string> = {};
+      const rawProperties: Record<string, string> = {};
+      const rawCondition = properties["Condition"] || rawProperties["Condition"] || "";
+      const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
+      const condition = needsConditionReview ? "True" : rawCondition;
+
+      expect(condition).toBe("True");
+      expect(needsConditionReview).toBe(true);
+    });
+
+    it("If activity with real condition preserves original value", () => {
+      const properties: Record<string, string> = { Condition: "str_Status = \"Active\"" };
+      const rawProperties: Record<string, string> = {};
+      const rawCondition = properties["Condition"] || rawProperties["Condition"] || "";
+      const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
+      const condition = needsConditionReview ? "True" : rawCondition;
+
+      expect(condition).toBe("str_Status = \"Active\"");
+      expect(needsConditionReview).toBe(false);
+    });
+  });
+
+  describe("fix-invalid-value g-flag regex bug", () => {
+    it("replace without test() correctly fixes the first occurrence with g flag", () => {
+      const content = `<ui:SendEmail DisplayName="Send" Subject="old_value" Other="ok" />`;
+      const escapedTag = "ui\\:SendEmail";
+      const propName = "Subject";
+      const escapedOldVal = "old_value";
+      const correctedValue = "new_value";
+      const attrRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedOldVal}"`, "g");
+      const newContent = content.replace(attrRegex, `$1${propName}="${correctedValue}"`);
+      expect(newContent).not.toBe(content);
+      expect(newContent).toContain(`Subject="new_value"`);
+    });
+
+    it("replace() returns original string unchanged when there is no match (no test guard needed)", () => {
+      const content = `<ui:SendEmail DisplayName="Send" Subject="correct_value" />`;
+      const attrRegex = new RegExp(`(<ui\\:SendEmail\\s[^>]*?)Subject="nonexistent"`, "g");
+      const newContent = content.replace(attrRegex, `$1Subject="new_value"`);
+      expect(newContent).toBe(content);
+    });
+
+    it("test() with g-flag advances lastIndex, proving the regex state concern", () => {
+      const content = `<ui:SendEmail DisplayName="Send" Subject="old_value" />`;
+      const attrRegex = new RegExp(`(<ui\\:SendEmail\\s[^>]*?)Subject="old_value"`, "g");
+      expect(attrRegex.lastIndex).toBe(0);
+      attrRegex.test(content);
+      expect(attrRegex.lastIndex).toBeGreaterThan(0);
+    });
+  });
+});
