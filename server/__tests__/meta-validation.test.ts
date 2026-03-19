@@ -517,3 +517,47 @@ describe("Cost Tracker", () => {
     expect(summary.metaValidationEngagementRate).toBe(0);
   });
 });
+
+describe("Bare < sanitizer in argument content", () => {
+  const bareLtRegex = /(<(?:In|Out)Argument[^>]*>)([\s\S]*?)(<\/(?:In|Out)Argument>)/g;
+  function sanitizeBareAngleBrackets(content: string): string {
+    return content.replace(bareLtRegex, (_match: string, open: string, inner: string, close: string) => {
+      const escapedInner = inner.replace(/<(?![\/a-zA-Z!?])/g, "&lt;").replace(/&lt;>/g, "&lt;&gt;");
+      return open + escapedInner + close;
+    });
+  }
+
+  it("escapes <> operator inside InArgument to &lt;&gt;", () => {
+    const input = '<InArgument x:TypeArguments="x:Boolean">[int_Status <> 200]</InArgument>';
+    const result = sanitizeBareAngleBrackets(input);
+    expect(result).toContain("&lt;&gt;");
+    expect(result).not.toContain("<>");
+  });
+
+  it("escapes & inside InArgument to &amp; (via ampersand sanitizer)", () => {
+    const input = '<InArgument x:TypeArguments="x:String">[str_A & str_B]</InArgument>';
+    const ampSanitized = input.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[\da-fA-F]+;)/g, "&amp;");
+    expect(ampSanitized).toContain("&amp;");
+    expect(ampSanitized).toContain("[str_A &amp; str_B]");
+  });
+
+  it("does NOT escape < that starts a valid XML tag inside InArgument", () => {
+    const input = '<InArgument x:TypeArguments="x:String"><SomeTag>value</SomeTag></InArgument>';
+    const result = sanitizeBareAngleBrackets(input);
+    expect(result).toContain("<SomeTag>");
+    expect(result).toContain("</SomeTag>");
+    expect(result).not.toContain("&lt;SomeTag");
+  });
+
+  it("escapes bare < inside OutArgument content", () => {
+    const input = '<OutArgument x:TypeArguments="x:Int32">[int_Result <> 0]</OutArgument>';
+    const result = sanitizeBareAngleBrackets(input);
+    expect(result).toContain("&lt;&gt;");
+  });
+
+  it("does not modify content outside argument tags", () => {
+    const input = '<If Condition="[x <> 0]"><InArgument>safe</InArgument></If>';
+    const result = sanitizeBareAngleBrackets(input);
+    expect(result).toContain('[x <> 0]');
+  });
+});

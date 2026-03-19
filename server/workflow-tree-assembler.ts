@@ -523,7 +523,7 @@ function assembleTryCatchNode(
 function resolveConditionValue(condition: string | ValueIntent): string {
   if (isValueIntent(condition)) {
     const built = buildExpression(condition as ValueIntent);
-    return escapeXml(built);
+    return built.replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
   const trimmed = (condition as string).trim();
   if (!trimmed) return trimmed;

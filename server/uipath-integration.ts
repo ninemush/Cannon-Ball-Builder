@@ -1385,6 +1385,17 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         wasFixed = true;
       }
 
+      const bareLtRegex = /(<(?:In|Out)Argument[^>]*>)([\s\S]*?)(<\/(?:In|Out)Argument>)/g;
+      const bareLtFixed = content.replace(bareLtRegex, (_match: string, open: string, inner: string, close: string) => {
+        const escapedInner = inner.replace(/<(?![\/a-zA-Z!?])/g, "&lt;").replace(/&lt;>/g, "&lt;&gt;");
+        return open + escapedInner + close;
+      });
+      if (bareLtFixed !== content) {
+        content = bareLtFixed;
+        autoFixSummary.push(`Escaped bare < in argument content in ${xamlEntries[i].name}`);
+        wasFixed = true;
+      }
+
       const dupResult = removeDuplicateAttributes(content);
       if (dupResult.changed) {
         content = dupResult.content;

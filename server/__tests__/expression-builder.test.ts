@@ -76,7 +76,7 @@ describe("ValueIntent Expression Builder", () => {
       expect(result).toContain("[");
       expect(result).toContain("]");
       expect(result).toContain("str_CityName");
-      expect(result).toContain('"&"');
+      expect(result).toContain('"&amp;"');
       expect(result).not.toContain("&&");
     });
 
@@ -108,7 +108,7 @@ describe("ValueIntent Expression Builder", () => {
         operator: "<>",
         right: "200",
       });
-      expect(result).toBe("[int_StatusCode <> 200]");
+      expect(result).toBe("[int_StatusCode &lt;&gt; 200]");
     });
 
     it("builds a > comparison", () => {
@@ -118,7 +118,7 @@ describe("ValueIntent Expression Builder", () => {
         operator: ">",
         right: "0",
       });
-      expect(result).toBe("[int_Count > 0]");
+      expect(result).toBe("[int_Count &gt; 0]");
     });
 
     it("builds a >= comparison", () => {
@@ -128,7 +128,7 @@ describe("ValueIntent Expression Builder", () => {
         operator: ">=",
         right: "100.5",
       });
-      expect(result).toBe("[dbl_Amount >= 100.5]");
+      expect(result).toBe("[dbl_Amount &gt;= 100.5]");
     });
 
     it("builds equality with string literal on right", () => {
@@ -138,7 +138,7 @@ describe("ValueIntent Expression Builder", () => {
         operator: "=",
         right: '"Active"',
       });
-      expect(result).toBe('[str_Status = "Active"]');
+      expect(result).toBe("[str_Status = \"Active\"]");
     });
 
     it("falls back to escaped bracket-wrapping for complex left operand", () => {
@@ -282,7 +282,7 @@ describe("ValueIntent Expression Builder", () => {
         right: "0",
       };
       const result = resolvePropertyValue(intent);
-      expect(result).toBe("[int_Code <> 0]");
+      expect(result).toBe("[int_Code &lt;&gt; 0]");
     });
   });
 
@@ -400,7 +400,7 @@ describe("ValueIntent Expression Builder", () => {
       const result = ValueIntentSchema.safeParse({ type: "expression", left: "x", operator: "!=", right: "5" });
       expect(result.success).toBe(true);
       const built = buildExpression({ type: "expression", left: "x", operator: "!=", right: "5" });
-      expect(built).toBe("[x <> 5]");
+      expect(built).toBe("[x &lt;&gt; 5]");
     });
 
     it("rejects unsupported operators like + or *", () => {
@@ -554,8 +554,39 @@ describe("ValueIntent Expression Builder", () => {
         errorHandling: "none",
       };
       const result = resolveActivityTemplate(node, []);
-      expect(result).toContain("[int_StatusCode <> 200]");
-      expect(result).not.toContain("&lt;&gt;");
+      expect(result).toContain("[int_StatusCode &lt;&gt; 200]");
+    });
+  });
+
+  describe("buildExpression XML escaping", () => {
+    it("expression type escapes <> to &lt;&gt; for not-equals", () => {
+      const result = buildExpression({
+        type: "expression",
+        left: "int_StatusCode",
+        operator: "<>",
+        right: "200",
+      });
+      expect(result).toBe("[int_StatusCode &lt;&gt; 200]");
+    });
+
+    it("expression type escapes < to &lt; for less-than", () => {
+      const result = buildExpression({
+        type: "expression",
+        left: "int_Count",
+        operator: "<",
+        right: "100",
+      });
+      expect(result).toBe("[int_Count &lt; 100]");
+    });
+
+    it("url type escapes & concatenation operators to &amp;", () => {
+      const result = buildExpression({
+        type: "url_with_params",
+        baseUrl: "https://api.example.com/data",
+        params: { city: "str_City", key: "str_Key" },
+      });
+      expect(result).toContain("&amp;");
+      expect(result).not.toMatch(/(?<![&])&(?!amp;)/);
     });
   });
 });

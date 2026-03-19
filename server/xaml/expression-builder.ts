@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { escapeXml } from "../lib/xml-utils";
 
+function escapeXmlInner(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 const VARIABLE_NAME_ONLY = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 const SIMPLE_LITERAL = /^(".*"|'.*'|\d+(\.\d+)?|True|False|Nothing|null)$/;
@@ -100,13 +104,13 @@ export function buildUrlExpression(baseUrl: string, params: Record<string, strin
     }
   }
 
-  return `[${parts.join(" & ")}]`;
+  return `[${escapeXmlInner(parts.join(" & "))}]`;
 }
 
 function buildComparisonExpression(left: string, operator: string, right: string): string {
   const normalizedOp = OPERATOR_NORMALIZE[operator] || operator;
   if (isAllowedLeft(left) && isAllowedRight(right)) {
-    return `[${left.trim()} ${normalizedOp} ${right.trim()}]`;
+    return `[${escapeXmlInner(`${left.trim()} ${normalizedOp} ${right.trim()}`)}]`;
   }
 
   const rawExpression = `${left.trim()} ${normalizedOp} ${right.trim()}`;
