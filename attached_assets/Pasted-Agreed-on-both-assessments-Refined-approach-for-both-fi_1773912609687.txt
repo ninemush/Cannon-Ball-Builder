@@ -1,0 +1,110 @@
+Agreed on both assessments. Refined 
+approach for both fixes:
+
+FIX 1 — Unconditional sanitizer pass
+
+Do NOT move the entire auto-fix loop 
+(lines 1418-1521) outside the quality 
+gate block. Some fixes in that loop 
+depend on qualityGateResult.violations 
+(specifically unknown activity removal 
+at lines 1434-1447) and must stay inside 
+the failure block.
+
+Instead, extract ONLY the quality-gate-
+independent fixes into a new 
+unconditional pass that runs BEFORE 
+the quality gate check. These fixes 
+should run unconditionally:
+
+- Ampersand sanitizer (lines 1486-1491)
+- LogMessage level normalisation 
+  (line 1468)
+- Duplicate attribute removal (line 1493)
+- Message quote fixing (line 1512)
+- TakeScreenshot OutputPath stripping 
+  (line 1459)
+- ViewStateManager removal (line 1483)
+- ContinueOnError stripping (line 1507)
+
+Leave these inside the quality gate 
+failure block because they depend on 
+qualityGateResult.violations:
+
+- Unknown activity removal (lines 
+  1434-1447)
+- Activity alias normalisation 
+  (line 1422) — only needed when 
+  quality gate flags unknown activities
+
+Leave these inside the failure block 
+as they are structural fixes that only 
+apply when the gate catches something:
+
+- ui:Assign prefix stripping (line 1449)
+- WorkflowFileName path fixes (line 1452)
+- Dictionary type fixes (line 1465)
+
+The new unconditional pass runs as a 
+separate loop over xamlEntries before 
+the quality gate call. The existing 
+failure-block loop stays intact for 
+the violation-dependent fixes.
+
+FIX 2 — Pipeline events not reaching 
+chat SSE stream
+
+GAP A only — add flush to 
+sendPipelineEvent in document-routes.ts:
+
+  const sendPipelineEvent = (
+    event: PipelineProgressEvent
+  ) => {
+    res.write(
+      `data: ${JSON.stringify(
+        { pipelineEvent: event }
+      )}\n\n`
+    )
+    if (typeof (res as any).flush === 
+        'function') {
+      ;(res as any).flush()
+    }
+  }
+
+Also add flush to sendProgress in the 
+same file — it carries the progress 
+messages that the chat path forwards 
+as docProgress events. Without flush 
+those may also be buffered.
+
+Drop GAP B entirely — the 
+Transfer-Encoding and X-Accel-Buffering 
+headers are environment-specific and 
+unlikely to be the actual fix. The fetch 
+response is already consumed 
+incrementally. GAP A is the real fix.
+
+COMPLETION CRITERIA
+
+1. Generate WeatherAndTravelNotification 
+   via chat — package completes 
+   successfully with zero XML parse errors
+
+2. Auto-remediation log shows "Escaped 
+   raw ampersands in 
+   WeatherAndTravelNotification.xaml" — 
+   confirms sanitizer ran before quality 
+   gate, not after
+
+3. PipelineLogPanel shows at least one 
+   stage entry during generation via chat
+
+4. At least one heartbeat entry appears 
+   in the PipelineLogPanel during the 
+   tree enrichment phase
+
+5. All existing tests still pass
+
+6. New test: ampersand sanitizer runs 
+   and escapes & when quality gate 
+   passes with warnings only
