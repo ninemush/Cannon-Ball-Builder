@@ -1033,6 +1033,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           }
         }
         if (data.done) {
+          isGeneratingDocRef.current = false;
+          generatingDocTypeRef.current = "";
           setStreamingMsg((prev) =>
             prev ? { ...prev, isStreaming: false } : prev
           );
