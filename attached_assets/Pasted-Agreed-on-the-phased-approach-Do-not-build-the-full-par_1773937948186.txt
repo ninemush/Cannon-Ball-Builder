@@ -1,0 +1,215 @@
+Agreed on the phased approach. Do not 
+build the full parallel pipeline. 
+Implement Phase 1 only.
+
+PHASE 1 — ValueIntent and buildExpression 
+retrofitted into existing pipeline
+
+This delivers XML-correctness-by-
+construction for all expression values 
+without rewriting the decomposition 
+prompt, the assembly layer, or the 
+LLM output format.
+
+STEP 1 — Create ValueIntent types and 
+buildExpression
+
+Create server/xaml/expression-builder.ts 
+as specified in the original prompt 
+with these corrections:
+
+1. The expression ValueIntent type 
+   must use strict allowlist for 
+   left and right fields:
+   - left must be a variable name 
+     only: /^[a-zA-Z_]\w*$/
+   - right must be a variable name 
+     or a simple literal (number, 
+     quoted string, True, False, 
+     Nothing)
+   - If left or right contains 
+     anything else (spaces, operators, 
+     function calls), reject the 
+     expression type and fall back 
+     to wrapping the raw value.value 
+     in brackets with escapeXml 
+     applied first as a safety net.
+
+   This closes the loophole where the 
+   LLM puts complex VB in left/right.
+
+2. Keep all ValueIntent types from 
+   the original spec:
+   literal-string, literal-number, 
+   literal-bool, variable, expression, 
+   asset, credential, url, nothing
+
+3. buildExpression must be a pure 
+   function with no side effects. 
+   100% unit test coverage.
+
+STEP 2 — Add ValueIntent to existing 
+WorkflowSpec properties
+
+In server/workflow-spec-types.ts, 
+change the properties type in 
+ActivityNode from:
+
+  properties: Record<string, string>
+
+To:
+
+  properties: Record<string, 
+    ValueIntent | string>
+
+The string fallback preserves 
+compatibility with all existing code 
+that passes plain strings. ValueIntent 
+objects get processed through 
+buildExpression. Plain strings go 
+through the existing 
+ensureBracketWrapped logic as before.
+
+This is a backward-compatible change — 
+no existing code breaks.
+
+STEP 3 — Update workflow-tree-assembler 
+to use buildExpression
+
+In server/workflow-tree-assembler.ts, 
+at every write point that currently 
+calls ensureBracketWrapped or 
+looksLikeVariableRef, add a check:
+
+  function resolvePropertyValue(
+    value: ValueIntent | string,
+    context: 'in-argument' | 
+             'out-argument' | 
+             'attribute'
+  ): string {
+    if (typeof value === 'object' && 
+        'type' in value) {
+      return buildExpression(value)
+    }
+    // Existing string handling — 
+    // unchanged
+    return existingBracketWrapLogic(
+      value, context
+    )
+  }
+
+Replace all direct property value 
+interpolation with resolvePropertyValue. 
+This is the integration point where 
+ValueIntent values get converted to 
+correctly bracketed VB expressions.
+
+STEP 4 — Update decomposition prompt 
+for common value types only
+
+Do NOT change the full LLM output 
+format. Make one targeted addition 
+to the existing decomposition prompt:
+
+Add a section that instructs the LLM 
+to use structured value descriptions 
+for these specific high-risk patterns:
+
+"For HTTP endpoint URLs with query 
+parameters, describe them as:
+{
+  'type': 'url',
+  'value': 'https://base-url.com',
+  'urlParams': {
+    'param1': 'variableName',
+    'param2': 'literalValue'
+  }
+}
+
+For conditions in If activities, 
+describe them as:
+{
+  'type': 'expression',
+  'left': 'variableName',
+  'operator': '!=',
+  'right': 'comparisonValue'
+}
+
+For all other values, use plain 
+strings as before."
+
+This is a minimal prompt change that 
+targets the two patterns that have 
+caused the most XML errors — URL 
+query strings with & and comparison 
+operators with <>.
+
+STEP 5 — Keep all existing sanitisers
+
+Do not remove any existing sanitisers 
+in uipath-integration.ts. They remain 
+as safety nets. Once Phase 1 is proven 
+across 20+ generations, we will 
+evaluate which sanitisers are still 
+being triggered and remove them in 
+a separate cleanup task.
+
+WHAT THIS DELIVERS
+
+After Phase 1:
+- URL query strings with & never 
+  produce unescaped & in XML because 
+  buildExpression wraps in brackets
+- Comparison operators like <> never 
+  produce invalid XML because 
+  buildExpression wraps in brackets
+- All existing functionality preserved
+- Existing tests continue to pass
+- REFramework, arguments, all current 
+  step types — unchanged
+
+WHAT IS EXPLICITLY OUT OF SCOPE
+
+- New LLM output format
+- New PackageIntent schema
+- Parallel pipeline
+- New decomposition prompt structure
+- Removing existing sanitisers
+- REFramework changes
+
+These are Phase 2 and beyond.
+
+COMPLETION CRITERIA
+
+1. buildExpression unit tests pass 
+   for all ValueIntent types including:
+   - url with urlParams containing & 
+     → correct bracketed VB 
+     concatenation, zero raw &
+   - expression with != operator → 
+     [var <> value] not var <> value
+   - literal-string with & → 
+     ["text & more"] not text & more
+
+2. WorkflowSpec properties accept 
+   ValueIntent objects without 
+   breaking existing string-based 
+   callers
+
+3. resolvePropertyValue correctly 
+   routes ValueIntent to 
+   buildExpression and strings to 
+   existing logic
+
+4. Generate WeatherAndTravelNotification 
+   — zero XML parse errors
+
+5. All existing tests pass
+
+6. New unit tests: at minimum 15 tests 
+   covering buildExpression for every 
+   ValueIntent type and edge cases
+
+7. Show me the buildExpression 
+   implementation and tests before 
+   triggering a generation
