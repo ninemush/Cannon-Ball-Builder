@@ -290,6 +290,99 @@ describe("UiPath Generation Regression Tests", () => {
     });
   });
 
+  describe("Regression: TODO/PLACEHOLDER tag-name sanitization", () => {
+    it("self-closing <ui:TODO_HttpClient> is converted to ui:Comment, not broken tag", () => {
+      const xaml = makeValidXaml("Main", `<ui:TODO_HttpClient DisplayName="Test" />`);
+      const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
+      const afterTagSafety = xaml
+        .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
+        .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
+      const cleaned = afterTagSafety
+        .replace(/\[[^\]]*(?:PLACEHOLDER_\w*|TODO_\w*)[^\]]*\]/g, '[Nothing]')
+        .replace(/PLACEHOLDER_\w*/g, '')
+        .replace(/TODO_\w*/g, '');
+
+      expect(cleaned).toContain('ui:Comment');
+      expect(cleaned).toContain('REVIEW: Unknown activity type');
+      expect(cleaned).not.toContain('<ui: ');
+      expect(cleaned).not.toContain('TODO_HttpClient');
+
+      const xmlErrors = validateXamlContent([{ name: "Main.xaml", content: cleaned }])
+        .filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+    });
+
+    it("open-close pair <TODO_Activity> is converted to a single ui:Comment", () => {
+      const xaml = makeValidXaml("Main", `<TODO_Activity DisplayName="Test">
+        <ui:LogMessage Message="child" DisplayName="Child" />
+      </TODO_Activity>`);
+      const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
+      const afterTagSafety = xaml
+        .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
+        .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
+      const cleaned = afterTagSafety
+        .replace(/\[[^\]]*(?:PLACEHOLDER_\w*|TODO_\w*)[^\]]*\]/g, '[Nothing]')
+        .replace(/PLACEHOLDER_\w*/g, '')
+        .replace(/TODO_\w*/g, '');
+
+      expect(cleaned).toContain('ui:Comment');
+      expect(cleaned).not.toContain('< ');
+      expect(cleaned).not.toContain('</ >');
+      expect(cleaned).not.toContain('TODO_Activity');
+
+      const xmlErrors = validateXamlContent([{ name: "Main.xaml", content: cleaned }])
+        .filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+    });
+
+    it("PLACEHOLDER_ token in a tag name is handled identically to TODO_", () => {
+      const xaml = makeValidXaml("Main", `<ui:PLACEHOLDER_CustomAction DisplayName="Placeholder" />`);
+      const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
+      const afterTagSafety = xaml
+        .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
+        .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
+      const cleaned = afterTagSafety
+        .replace(/\[[^\]]*(?:PLACEHOLDER_\w*|TODO_\w*)[^\]]*\]/g, '[Nothing]')
+        .replace(/PLACEHOLDER_\w*/g, '')
+        .replace(/TODO_\w*/g, '');
+
+      expect(cleaned).toContain('ui:Comment');
+      expect(cleaned).not.toContain('PLACEHOLDER_CustomAction');
+      expect(cleaned).not.toContain('<ui: ');
+
+      const xmlErrors = validateXamlContent([{ name: "Main.xaml", content: cleaned }])
+        .filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+    });
+
+    it("buildNuGetPackage sanitizes TODO_ tag names without XML parse errors (integration)", async () => {
+      const result = await buildNuGetPackage(
+        {
+          projectName: "TodoTagSanitizeTest",
+          description: "Test that TODO_ tag names are safely replaced",
+          workflows: [
+            {
+              name: "Main",
+              steps: [
+                { name: "Log Start", description: "Log that the process started" },
+              ],
+            },
+          ],
+          dependencies: ["UiPath.System.Activities"],
+        },
+        "1.0.0-todotest",
+        undefined,
+        "baseline_openable",
+      );
+
+      const allXaml = result.xamlEntries.map(e => e.content).join("\n");
+      expect(allXaml).not.toMatch(/<(?:ui:)?(?:TODO_|PLACEHOLDER_)\w+/);
+
+      const xmlErrors = validateXamlContent(result.xamlEntries).filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+    });
+  });
+
   describe("Quality Gate — Warning vs Blocking Classification", () => {
     it("treats invalid XML as blocking error via validateXamlContent", () => {
       const badXaml = `<?xml version="1.0"?><Activity><Sequence>unclosed`;

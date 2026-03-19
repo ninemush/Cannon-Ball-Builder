@@ -79,36 +79,36 @@ describe("Task 100 Fixes", () => {
     });
   });
 
-  describe("FIX 3 — XAML content logged at debug level on wellformedness failure", () => {
-    it("logs full XAML content via console.debug when XML validation fails", () => {
-      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+  describe("FIX 3 — XAML content logged on wellformedness failure", () => {
+    it("logs full XAML content via console.warn when XML validation fails", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const malformedXaml = `<Root><Unclosed></Root>`;
       validateXamlContent([{ name: "Test.xaml", content: malformedXaml }]);
 
-      const debugCalls = debugSpy.mock.calls.filter(
+      const warnCalls = warnSpy.mock.calls.filter(
         (call) => typeof call[0] === "string" && call[0].includes("[XAML wellformedness]")
       );
-      expect(debugCalls.length).toBeGreaterThan(0);
-      expect(debugCalls[0][0]).toContain(malformedXaml);
-      expect(debugCalls[0][0]).toContain("Test.xaml");
+      expect(warnCalls.length).toBeGreaterThan(0);
+      expect(warnCalls[0][0]).toContain(malformedXaml);
+      expect(warnCalls[0][0]).toContain("Test.xaml");
 
-      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     });
 
-    it("logs full XAML content via console.debug on XML parse exception", () => {
-      const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    it("logs full XAML content via console.warn on XML parse exception", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const brokenXaml = `<?xml version="1.0"?><Root attr="no-close`;
       validateXamlContent([{ name: "Broken.xaml", content: brokenXaml }]);
 
-      const debugCalls = debugSpy.mock.calls.filter(
+      const warnCalls = warnSpy.mock.calls.filter(
         (call) => typeof call[0] === "string" && call[0].includes("[XAML wellformedness]")
       );
-      expect(debugCalls.length).toBeGreaterThan(0);
-      expect(debugCalls[0][0]).toContain(brokenXaml);
+      expect(warnCalls.length).toBeGreaterThan(0);
+      expect(warnCalls[0][0]).toContain(brokenXaml);
 
-      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     });
   });
 });

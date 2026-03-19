@@ -1132,7 +1132,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       const content = xamlEntries[i].content;
       if (content.includes("PLACEHOLDER_") || content.includes("TODO_")) {
         const placeholderCount = (content.match(/PLACEHOLDER_|TODO_/g) || []).length;
-        const cleaned = content
+        const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
+        const afterTagSafety = content
+          .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
+          .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
+        const cleaned = afterTagSafety
           .replace(/\[[^\]]*(?:PLACEHOLDER_\w*|TODO_\w*)[^\]]*\]/g, '[Nothing]')
           .replace(/PLACEHOLDER_\w*/g, '')
           .replace(/TODO_\w*/g, '');
