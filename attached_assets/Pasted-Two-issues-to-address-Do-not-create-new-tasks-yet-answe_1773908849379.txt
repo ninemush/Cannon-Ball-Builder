@@ -1,0 +1,63 @@
+Two issues to address. Do not create new 
+tasks yet — answer these questions first.
+
+ISSUE 1 — Task #97 marked merged but not 
+implemented
+
+The priority chain that #97 was supposed 
+to add does not exist in the code. A task 
+cannot be marked done without the change 
+being in the codebase. 
+
+Implement #97 now. The specific change is:
+
+In the StreamingProgressIndicator call 
+at line 2009 (the UiPath branch with 
+pipelineLogEntries.length === 0), 
+the component already receives liveStatus, 
+stage, and classifiedIntent as props.
+
+The fix is in getThinkingMessage() — 
+ensure the priority chain is:
+1. liveStatus if non-empty
+2. INTENT_THINKING_MESSAGES[classifiedIntent] 
+   if classifiedIntent is set
+3. STAGE_THINKING_MESSAGES[stage] as 
+   final fallback
+
+Check whether getThinkingMessage() already 
+implements this chain. If it does, the 
+problem is that classifiedIntent is being 
+reset to "" before getThinkingMessage() 
+is called. Show me where classifiedIntent 
+is reset and when — if it is reset at 
+the start of every sendMessageDirect call 
+before the server responds, the fix is 
+to not reset it until the new intent 
+arrives, not to set it to "" on send.
+
+ISSUE 2 — New XAML error: Attribute '""' 
+has no space in starting
+
+This is a different bug from #98. An 
+empty string attribute is being emitted 
+directly adjacent to another attribute 
+without a space separator.
+
+Before creating a task, show me:
+1. The content around line 296 col 175 
+   of WeatherAndTravelNotification.xaml 
+   from the failed 10:01 AM run — what 
+   is the actual malformed attribute?
+2. In xaml-generator.ts, search for any 
+   place where an empty string value 
+   could be interpolated into an attribute 
+   position — specifically places where 
+   optional attributes are conditionally 
+   included and might produce ="" when 
+   the value is empty
+
+Do not create a task for issue 2 until 
+I have seen the actual malformed XAML 
+content. The fix approach depends on 
+what is generating the empty attribute.
