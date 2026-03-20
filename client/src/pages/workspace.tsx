@@ -1059,6 +1059,10 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           setDocProgressSection("");
           if (uipathGenRequestIdRef.current > uipathGenConsumedIdRef.current) {
             console.log("[UiPath Trigger] done received — preserving intent/status for pending UiPath gen (requestId=%d, consumedId=%d)", uipathGenRequestIdRef.current, uipathGenConsumedIdRef.current);
+            console.log("[UiPath Trigger] done handler — clearing isGeneratingDoc blocking state for UiPath handoff");
+            setIsGeneratingDoc(false);
+            setGeneratingDocType("");
+            stopDocStreaming({ force: true });
             setClassifiedIntent("UIPATH_GEN");
             setLiveStatus("Generating UiPath package...");
           } else {
@@ -1084,9 +1088,14 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           }
         }
         if (data.docProgress) {
+          const docType = data.docProgress.docType || "PDD";
           if (data.docProgress.started && !isGeneratingDocRef.current) {
-            startDocStreaming(data.docProgress.docType || "PDD");
-            docGenIdAtStart = docGenIdRef.current;
+            if (docType === "UiPath") {
+              console.log("[UiPath Trigger] docProgress started with docType=UiPath — treated as non-blocking (no startDocStreaming, no isGeneratingDoc)");
+            } else {
+              startDocStreaming(docType);
+              docGenIdAtStart = docGenIdRef.current;
+            }
           }
           if (data.docProgress.section) {
             setDocProgressSection(data.docProgress.section);
@@ -1290,6 +1299,14 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
 
       if (uipathGenRequestIdRef.current > uipathGenConsumedIdRef.current) {
         console.log("[UiPath Trigger] finally block — pending trigger detected (requestId=%d, consumedId=%d), will fire via effect", uipathGenRequestIdRef.current, uipathGenConsumedIdRef.current);
+        if (isGeneratingDocRef.current) {
+          console.log("[UiPath Trigger] finally block — safety clearing isGeneratingDoc for pending UiPath handoff");
+          isGeneratingDocRef.current = false;
+          generatingDocTypeRef.current = "";
+          setIsGeneratingDoc(false);
+          setGeneratingDocType("");
+          stopDocStreaming({ force: true });
+        }
       }
 
       const isToBeRun = toBeGeneratingRef.current;
@@ -1524,7 +1541,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       uipathTriggeredRef.current = false;
       return;
     }
-    console.log("[UiPath Trigger] executing generation (force=%s) — fetch started", force);
+    console.log("[UiPath Trigger] executing generation (force=%s) — POST /api/ideas/%s/generate-uipath being initiated", force, idea.id);
     uipathGenInFlightRef.current = true;
     uipathGenConsumedIdRef.current = uipathGenRequestIdRef.current;
     console.log("[UiPath Trigger] trigger consumed (consumedId=%d)", uipathGenConsumedIdRef.current);
@@ -1716,7 +1733,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     const hasPending = uipathGenRequestId > uipathGenConsumedIdRef.current;
     if (!hasPending) return;
     if (!isStreaming && !isGeneratingDoc && !uipathGenInFlightRef.current) {
-      console.log("[UiPath Trigger] effect re-evaluated after blocking clears — dispatching generation (requestId=%d, consumedId=%d)", uipathGenRequestId, uipathGenConsumedIdRef.current);
+      console.log("[UiPath Trigger] effect eligible and firing — dispatching generation (requestId=%d, consumedId=%d, isStreaming=%s, isGeneratingDoc=%s, inFlight=%s)", uipathGenRequestId, uipathGenConsumedIdRef.current, isStreaming, isGeneratingDoc, uipathGenInFlightRef.current);
       generateUiPathRef.current?.(true);
     } else {
       console.log("[UiPath Trigger] effect deferred — isStreaming=%s, isGeneratingDoc=%s, inFlight=%s (requestId=%d)", isStreaming, isGeneratingDoc, uipathGenInFlightRef.current, uipathGenRequestId);
