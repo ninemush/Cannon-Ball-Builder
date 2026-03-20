@@ -1,5 +1,6 @@
 import { users, ideas, auditLogs, uipathGenerationRuns, type User, type InsertUser, type Idea, type InsertIdea, type AuditLog, type InsertAuditLog, type UipathGenerationRun, type InsertUipathGenerationRun } from "@shared/schema";
 import { appSettings } from "@shared/schema";
+import type { GenerationRunStatus } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and } from "drizzle-orm";
 
@@ -23,8 +24,9 @@ export interface IStorage {
   createGenerationRun(run: InsertUipathGenerationRun): Promise<UipathGenerationRun>;
   getGenerationRun(runId: string): Promise<UipathGenerationRun | undefined>;
   getLatestGenerationRunForIdea(ideaId: string): Promise<UipathGenerationRun | undefined>;
-  updateGenerationRunStatus(runId: string, status: string, currentPhase?: string): Promise<UipathGenerationRun | undefined>;
+  updateGenerationRunStatus(runId: string, status: GenerationRunStatus | string, currentPhase?: string): Promise<UipathGenerationRun | undefined>;
   updateGenerationRunPhaseProgress(runId: string, phaseProgress: string): Promise<UipathGenerationRun | undefined>;
+  updateGenerationRunSpecSnapshot(runId: string, specSnapshot: unknown): Promise<UipathGenerationRun | undefined>;
   completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string }): Promise<UipathGenerationRun | undefined>;
   failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined>;
 }
@@ -143,7 +145,7 @@ export class DatabaseStorage implements IStorage {
     return run;
   }
 
-  async updateGenerationRunStatus(runId: string, status: string, currentPhase?: string): Promise<UipathGenerationRun | undefined> {
+  async updateGenerationRunStatus(runId: string, status: GenerationRunStatus | string, currentPhase?: string): Promise<UipathGenerationRun | undefined> {
     const updates: Record<string, any> = { status, updatedAt: new Date() };
     if (currentPhase !== undefined) updates.currentPhase = currentPhase;
     const [updated] = await db.update(uipathGenerationRuns)
@@ -156,6 +158,15 @@ export class DatabaseStorage implements IStorage {
   async updateGenerationRunPhaseProgress(runId: string, phaseProgress: string): Promise<UipathGenerationRun | undefined> {
     const [updated] = await db.update(uipathGenerationRuns)
       .set({ phaseProgress, updatedAt: new Date() })
+      .where(eq(uipathGenerationRuns.runId, runId))
+      .returning();
+    return updated;
+  }
+
+  async updateGenerationRunSpecSnapshot(runId: string, specSnapshot: unknown): Promise<UipathGenerationRun | undefined> {
+    const [updated] = await db
+      .update(uipathGenerationRuns)
+      .set({ specSnapshot, updatedAt: new Date() })
       .where(eq(uipathGenerationRuns.runId, runId))
       .returning();
     return updated;

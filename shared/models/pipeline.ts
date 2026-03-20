@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, boolean, real } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, boolean, real, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -99,14 +99,28 @@ export const insertDeploymentManifestSchema = createInsertSchema(deploymentManif
 export type DeploymentManifest = typeof deploymentManifests.$inferSelect;
 export type InsertDeploymentManifest = z.infer<typeof insertDeploymentManifestSchema>;
 
+export const GENERATION_RUN_STATUSES = [
+  "spec_generating",
+  "spec_ready",
+  "compiling",
+  "validating",
+  "remediating",
+  "packaging",
+  "dhg_generating",
+  "completed",
+  "failed",
+] as const;
+export type GenerationRunStatus = (typeof GENERATION_RUN_STATUSES)[number];
+
 export const uipathGenerationRuns = pgTable("uipath_generation_runs", {
   id: serial("id").primaryKey(),
   ideaId: text("idea_id").notNull(),
   runId: text("run_id").notNull().unique(),
-  status: text("status").notNull().default("pending"),
-  generationMode: text("generation_mode"),
+  status: text("status").notNull().default("spec_generating"),
+  generationMode: text("generation_mode").notNull().default("full_implementation"),
   currentPhase: text("current_phase"),
   phaseProgress: text("phase_progress"),
+  specSnapshot: jsonb("spec_snapshot"),
   outcomeReport: text("outcome_report"),
   dhgContent: text("dhg_content"),
   errorMessage: text("error_message"),
@@ -124,3 +138,6 @@ export const insertUipathGenerationRunSchema = createInsertSchema(uipathGenerati
 });
 export type UipathGenerationRun = typeof uipathGenerationRuns.$inferSelect;
 export type InsertUipathGenerationRun = z.infer<typeof insertUipathGenerationRunSchema>;
+
+export type GenerationRun = UipathGenerationRun;
+export type InsertGenerationRun = InsertUipathGenerationRun;

@@ -442,70 +442,61 @@ function buildDhgFromBuildResult(
   };
 }
 
-export async function generateUiPathPackage(
+export interface SpecGenerationResult {
+  ctx: IdeaContext;
+  enrichedPkg: UiPathPackage;
+  fingerprint: string;
+  aiSkills: any[];
+  artifacts: any | null;
+  pipelineWarnings: PipelineWarning[];
+  usedAIFallback: boolean;
+}
+
+export async function generateWorkflowSpecs(
   ideaId: string,
   pkg: UiPathPackageSpec,
   options?: {
-    version?: string;
     generationMode?: GenerationMode;
     onProgress?: (message: string) => void;
-    onMetaValidation?: (event: MetaValidationEvent) => void;
     onPipelineProgress?: PipelineProgressCallback;
     preloadedContext?: IdeaContext;
-    metaValidationMode?: MetaValidationMode;
-    maxDowngradeAttempts?: number;
-    _downgradeAttempt?: number;
-    _accumulatedDowngrades?: DowngradeEvent[];
-    _accumulatedWarnings?: PipelineWarning[];
-    _usedAIFallback?: boolean;
+    runId?: string;
   },
-): Promise<PipelineResult> {
-  const ver = options?.version || computeVersion();
+): Promise<SpecGenerationResult> {
   const mode: GenerationMode = options?.generationMode || "full_implementation";
-  const pipelineWarnings: PipelineWarning[] = options?._accumulatedWarnings ? [...options._accumulatedWarnings] : [];
-  const downgrades: DowngradeEvent[] = options?._accumulatedDowngrades ? [...options._accumulatedDowngrades] : [];
-  let usedAIFallback = options?._usedAIFallback || false;
-  const maxDowngradeAttempts = options?.maxDowngradeAttempts ?? 1;
-  const currentDowngradeAttempt = options?._downgradeAttempt ?? 0;
+  const pipelineWarnings: PipelineWarning[] = [];
+  let usedAIFallback = false;
 
-  const emitLegacy = options?.onProgress;
   const noop: PipelineProgressCallback = () => {};
   const tracker = new PipelineStageTracker(options?.onPipelineProgress || noop);
-  const hasTracker = !!options?.onPipelineProgress;
-
-  const mvMode: MetaValidationMode = options?.metaValidationMode || "Auto";
+  const emitLegacy = options?.onProgress;
 
   try {
-    tracker.start("sdd_validation", "Validating SDD and loading context");
-    tracker.heartbeat("sdd_validation", () => "Loading idea, SDD, and process map data");
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "spec_generating");
+      } catch (e) { /* best-effort */ }
+    }
+
+    tracker.start("spec_generating", "Loading context and preparing spec generation");
+    tracker.heartbeat("spec_generating", () => "Loading idea, SDD, and process map data");
     const ctx = options?.preloadedContext || await loadIdeaContext(ideaId);
     const artifacts = await extractOrchestratorArtifacts(ctx.sdd?.content, pipelineWarnings);
-    tracker.complete("sdd_validation", "Context loaded", {
+    tracker.complete("spec_generating", "Context loaded for spec generation", {
       hasSdd: !!ctx.sdd,
       hasPdd: !!ctx.pdd,
       nodeCount: ctx.mapNodes.length,
     });
 
-    tracker.start("decomposition", "Computing fingerprint and checking cache");
     const fp = computeFingerprint(pkg, ctx.sdd?.content || "", ctx.mapNodes, ctx.processEdges);
-    const degradationKey = (downgrades.length > 0 || usedAIFallback) ? "degraded" : "clean";
-    const cacheKey = `${ideaId}:${mode}:${mvMode}:${degradationKey}`;
-    const cached = pipelineCache.get(cacheKey);
-    if (cached && cached.fingerprint === fp) {
-      tracker.complete("decomposition", "Cache hit — serving cached result");
-      tracker.cleanup();
-      return cached;
-    }
-    const workflowCount = (pkg as any).workflows?.length || 0;
-    tracker.complete("decomposition", `Decomposed into ${workflowCount} workflow(s)`, { workflowCount });
 
     if (emitLegacy) emitLegacy(mode === "baseline_openable" ? "Generating baseline Studio-openable package..." : "AI-enriching XAML workflows...");
 
+    let aiSkills: any[] = [];
     if (mode !== "baseline_openable") {
       tracker.start("confidence_assessment", "Fetching AI Center skills");
       tracker.heartbeat("confidence_assessment", () => "Checking AI Center availability");
     }
-    let aiSkills: any[] = [];
     try {
       const aiResult = await getAICenterSkills();
       if (aiResult.available) aiSkills = aiResult.skills;
@@ -527,16 +518,87 @@ export async function generateUiPathPackage(
       }
     }
 
-    tracker.start("variable_resolution", "Resolving variables and enriching package");
-    const enriched = enrichPackageWithContext(pkg, ctx, artifacts, aiSkills);
-    tracker.complete("variable_resolution", "Package enriched with context");
+    const enrichedPkg = enrichPackageWithContext(pkg, ctx, artifacts, aiSkills);
 
-    tracker.start("template_resolution", "Resolving XAML templates");
-    tracker.complete("template_resolution", "Templates resolved");
+    tracker.start("spec_ready", "Spec generation complete");
+    tracker.complete("spec_ready", "WorkflowSpecs ready for compilation");
 
-    tracker.start("xaml_assembly", "Assembling XAML workflows");
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "spec_ready");
+        await storage.updateGenerationRunSpecSnapshot(options.runId, {
+          pkg: enrichedPkg,
+          fingerprint: fp,
+          generationMode: mode,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn(`[Pipeline] Failed to persist spec snapshot: ${(e as Error).message}`);
+      }
+    }
+
+    return {
+      ctx,
+      enrichedPkg: enrichedPkg,
+      fingerprint: fp,
+      aiSkills,
+      artifacts,
+      pipelineWarnings,
+      usedAIFallback,
+    };
+  } finally {
+    tracker.cleanup();
+  }
+}
+
+export async function compilePackageFromSpecs(
+  ideaId: string,
+  specResult: SpecGenerationResult,
+  pkg: UiPathPackageSpec,
+  options?: {
+    version?: string;
+    generationMode?: GenerationMode;
+    onProgress?: (message: string) => void;
+    onMetaValidation?: (event: MetaValidationEvent) => void;
+    onPipelineProgress?: PipelineProgressCallback;
+    metaValidationMode?: MetaValidationMode;
+    maxDowngradeAttempts?: number;
+    _downgradeAttempt?: number;
+    _accumulatedDowngrades?: DowngradeEvent[];
+    _accumulatedWarnings?: PipelineWarning[];
+    runId?: string;
+  },
+): Promise<PipelineResult> {
+  const ver = options?.version || computeVersion();
+  const mode: GenerationMode = options?.generationMode || "full_implementation";
+  const pipelineWarnings: PipelineWarning[] = [
+    ...specResult.pipelineWarnings,
+    ...(options?._accumulatedWarnings || []),
+  ];
+  const downgrades: DowngradeEvent[] = options?._accumulatedDowngrades ? [...options._accumulatedDowngrades] : [];
+  let usedAIFallback = specResult.usedAIFallback;
+  const maxDowngradeAttempts = options?.maxDowngradeAttempts ?? 1;
+  const currentDowngradeAttempt = options?._downgradeAttempt ?? 0;
+
+  const noop: PipelineProgressCallback = () => {};
+  const tracker = new PipelineStageTracker(options?.onPipelineProgress || noop);
+  const mvMode: MetaValidationMode = options?.metaValidationMode || "Auto";
+
+  const ctx = specResult.ctx;
+  const enriched = specResult.enrichedPkg;
+  const fp = specResult.fingerprint;
+
+  try {
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "compiling");
+      } catch (e) { /* best-effort */ }
+    }
+
+    tracker.start("compiling", "Assembling XAML workflows");
+    const workflowCount = (pkg as any).workflows?.length || 0;
     let currentWorkflowIdx = 0;
-    tracker.heartbeat("xaml_assembly", () => {
+    tracker.heartbeat("compiling", () => {
       return `Building workflow ${currentWorkflowIdx + 1} of ${workflowCount || "?"}`;
     });
     let buildResult: BuildResult;
@@ -550,28 +612,25 @@ export async function generateUiPathPackage(
           fromMode: "full_implementation",
           toMode: "baseline_openable",
           reason: `Quality gate failed after auto-remediation: ${err.message.slice(0, 200)}`,
-          triggerStage: "xaml_assembly",
+          triggerStage: "compiling",
           timestamp: new Date(),
         };
         downgrades.push(downgradeEvent);
         pipelineWarnings.push({
           code: "AUTO_DOWNGRADE_QUALITY_GATE",
           message: `Auto-downgraded from full_implementation to baseline_openable: quality gate failed after remediation`,
-          stage: "xaml_assembly",
+          stage: "compiling",
           recoverable: true,
         });
-        tracker.warn("xaml_assembly", `Quality gate failed — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
+        tracker.warn("compiling", `Quality gate failed — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
         tracker.cleanup();
         console.log(`[Pipeline] Auto-downgrade: full_implementation → baseline_openable due to QualityGateError (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
-        return generateUiPathPackage(ideaId, pkg, {
+        return compilePackageFromSpecs(ideaId, specResult, pkg, {
           ...options,
           generationMode: "baseline_openable",
-          preloadedContext: ctx,
           _downgradeAttempt: currentDowngradeAttempt + 1,
           _accumulatedDowngrades: downgrades,
           _accumulatedWarnings: pipelineWarnings,
-          _usedAIFallback: usedAIFallback,
-          maxDowngradeAttempts,
         });
       }
       throw err;
@@ -582,7 +641,7 @@ export async function generateUiPathPackage(
     }
 
     currentWorkflowIdx = workflowCount > 0 ? workflowCount - 1 : 0;
-    tracker.complete("xaml_assembly", `${buildResult.xamlEntries.length} XAML file(s) assembled`, {
+    tracker.complete("compiling", `${buildResult.xamlEntries.length} XAML file(s) assembled`, {
       xamlCount: buildResult.xamlEntries.length,
       cacheHit: buildResult.cacheHit,
     });
@@ -590,52 +649,51 @@ export async function generateUiPathPackage(
     if (buildResult.dependencyWarnings) {
       pipelineWarnings.push(...buildResult.dependencyWarnings);
       for (const w of buildResult.dependencyWarnings) {
-        tracker.warn("xaml_assembly", w.message);
+        tracker.warn("compiling", w.message);
       }
     }
 
-    tracker.start("archive_validation", "Validating archive structure");
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "validating");
+      } catch (e) { /* best-effort */ }
+    }
+
+    tracker.start("validating", "Validating archive and catalog compliance");
     const archiveValidation = validateArchiveStructure(buildResult.buffer);
     if (!archiveValidation.valid) {
-      tracker.warn("archive_validation", `Archive validation failed: ${archiveValidation.errors.join("; ")}`);
+      tracker.warn("validating", `Archive validation failed: ${archiveValidation.errors.join("; ")}`);
       if (mode !== "baseline_openable" && currentDowngradeAttempt < maxDowngradeAttempts) {
         const downgradeEvent: DowngradeEvent = {
           fromMode: mode,
           toMode: "baseline_openable",
           reason: `Archive validation failed: ${archiveValidation.errors.join("; ")}`,
-          triggerStage: "archive_validation",
+          triggerStage: "validating",
           timestamp: new Date(),
         };
         downgrades.push(downgradeEvent);
         pipelineWarnings.push({
           code: "AUTO_DOWNGRADE_ARCHIVE_INVALID",
           message: `Auto-downgraded to baseline_openable: archive validation failed (${archiveValidation.errors.join("; ")})`,
-          stage: "archive_validation",
+          stage: "validating",
           recoverable: true,
         });
         tracker.cleanup();
         console.log(`[Pipeline] Auto-downgrade: ${mode} → baseline_openable due to archive validation failure`);
-        return generateUiPathPackage(ideaId, pkg, {
+        return compilePackageFromSpecs(ideaId, specResult, pkg, {
           ...options,
           generationMode: "baseline_openable",
-          preloadedContext: ctx,
           _downgradeAttempt: currentDowngradeAttempt + 1,
           _accumulatedDowngrades: downgrades,
           _accumulatedWarnings: pipelineWarnings,
-          _usedAIFallback: usedAIFallback,
-          maxDowngradeAttempts,
         });
       }
       const archiveError = `Archive validation failed and no downgrade available: ${archiveValidation.errors.join("; ")}`;
-      tracker.fail("archive_validation", archiveError);
+      tracker.fail("validating", archiveError);
       tracker.cleanup();
       throw new Error(archiveError);
-    } else {
-      tracker.complete("archive_validation", "Archive structure valid");
     }
 
-    tracker.start("catalog_validation", "Validating against activity catalog");
-    tracker.heartbeat("catalog_validation", () => "Checking template compliance for each workflow");
     let templateComplianceScore: number | undefined;
     try {
       if (buildResult.xamlEntries.length > 0) {
@@ -654,13 +712,10 @@ export async function generateUiPathPackage(
       }
     } catch (err: any) {
       console.warn(`[Pipeline] Template compliance calculation failed: ${err.message}`);
-      tracker.warn("catalog_validation", `Template compliance check failed: ${err.message}`);
+      tracker.warn("validating", `Template compliance check failed: ${err.message}`);
     }
-    tracker.complete("catalog_validation", templateComplianceScore !== undefined
-      ? `Compliance score: ${(templateComplianceScore * 100).toFixed(0)}%`
-      : "Validation complete", { templateComplianceScore });
+    tracker.complete("validating", "Validation complete", { templateComplianceScore });
 
-    tracker.start("quality_gate", "Running quality gate checks");
     const qgResult = buildResult.qualityGateResult;
     let qualityGateBlocking = mode === "baseline_openable"
       ? false
@@ -671,33 +726,20 @@ export async function generateUiPathPackage(
           .map((v: any) => v.detail)
       : [];
     let postCorrectionQualityGate: QualityGateResult | null = null;
-    if (qualityGateBlocking) {
-      tracker.warn("quality_gate", `Quality gate blocked: ${qgResult?.violations.length || 0} violation(s)`);
-    }
-    tracker.complete("quality_gate", qgResult
-      ? `${qgResult.passed ? "Passed" : "Failed"} — ${qgResult.violations.length} violation(s)`
-      : "No quality gate result", { passed: qgResult?.passed, violations: qgResult?.violations.length });
 
-    tracker.start("dependency_resolution", "Resolving package dependencies");
-    tracker.complete("dependency_resolution", `${Object.keys(buildResult.dependencyMap).length} dependencies resolved`, {
-      dependencyCount: Object.keys(buildResult.dependencyMap).length,
-    });
-
-    tracker.start("packaging", "Building .nupkg archive");
-    const hasNupkg = buildResult.buffer && buildResult.buffer.length > 0;
-    if (hasNupkg) {
-      tracker.complete("packaging", `Package built (${Math.round(buildResult.buffer.length / 1024)}KB)`, {
-        sizeBytes: buildResult.buffer.length,
-      });
-    } else {
-      tracker.fail("packaging", "Package build produced no output");
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "remediating");
+      } catch (e) { /* best-effort */ }
     }
 
+    tracker.start("remediating", "Running meta-validation and remediation");
     let metaValidationResult: MetaValidationResult | undefined;
     let finalXamlEntries = buildResult.xamlEntries;
     let finalPackageBuffer = buildResult.buffer;
     let mvInputTokens = 0;
     let mvOutputTokens = 0;
+    const hasNupkg = buildResult.buffer && buildResult.buffer.length > 0;
 
     if (hasNupkg) {
       try {
@@ -722,8 +764,6 @@ export async function generateUiPathPackage(
         if (shouldEngage) {
           options?.onMetaValidation?.({ status: "will-validate", confidenceScore: confidenceResult.score });
           if (options?.onProgress) options.onProgress("Running meta-validation review...");
-          tracker.start("meta_validation", "Running meta-validation review");
-          tracker.heartbeat("meta_validation", () => "Reviewing XAML for corrections");
           console.log(`[Pipeline] Meta-validation engaged (mode=${mvMode}, score=${confidenceResult.score.toFixed(2)}, categories=${confidenceResult.triggeredCategories.join(",")})`);
 
           options?.onMetaValidation?.({ status: "started" });
@@ -766,7 +806,7 @@ export async function generateUiPathPackage(
                   pipelineWarnings.push({
                     code: `POST_MV_XAML_${v.check.toUpperCase().replace(/-/g, "_")}`,
                     message: `[Post-MV] ${v.detail}`,
-                    stage: "meta-validation",
+                    stage: "remediating",
                     recoverable: true,
                   });
                 }
@@ -799,7 +839,7 @@ export async function generateUiPathPackage(
                     pipelineWarnings.push({
                       code: "POST_MV_QG_ERROR",
                       message: `[Post-MV QG] ${e.detail}`,
-                      stage: "meta-validation",
+                      stage: "remediating",
                       recoverable: false,
                     });
                   }
@@ -822,7 +862,7 @@ export async function generateUiPathPackage(
             pipelineWarnings.push({
               code: "META_VALIDATION_FLAT_STRUCTURE",
               message: `${applicationResult.flatStructureWarnings} FLAT_STRUCTURE issue(s) detected — manual review recommended`,
-              stage: "meta-validation",
+              stage: "remediating",
               recoverable: true,
             });
           }
@@ -846,11 +886,6 @@ export async function generateUiPathPackage(
           };
 
           console.log(`[Pipeline] Meta-validation complete: ${applicationResult.applied} applied, ${applicationResult.skipped} skipped, ${applicationResult.failed} failed (${metaValidationResult.durationMs}ms)`);
-          tracker.complete("meta_validation", `${applicationResult.applied} correction(s) applied`, {
-            applied: applicationResult.applied,
-            skipped: applicationResult.skipped,
-            failed: applicationResult.failed,
-          });
 
           const completionEvent: MetaValidationEvent = {
             status: mvStatus === "fixed" ? "completed" : mvStatus === "warnings" ? "warning" : "completed",
@@ -888,16 +923,38 @@ export async function generateUiPathPackage(
         pipelineWarnings.push({
           code: "META_VALIDATION_FAILED",
           message: `Meta-validation review failed: ${errMsg}`,
-          stage: "meta-validation",
+          stage: "remediating",
           recoverable: true,
         });
       }
     }
+    tracker.complete("remediating", "Remediation complete");
 
-    tracker.start("dhg_generation", "Generating Developer Handoff Guide");
-    tracker.heartbeat("dhg_generation", () => "Analyzing workflows and writing guide");
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "packaging");
+      } catch (e) { /* best-effort */ }
+    }
+
+    tracker.start("packaging", "Building .nupkg archive");
+    if (hasNupkg) {
+      tracker.complete("packaging", `Package built (${Math.round(finalPackageBuffer.length / 1024)}KB)`, {
+        sizeBytes: finalPackageBuffer.length,
+      });
+    } else {
+      tracker.fail("packaging", "Package build produced no output");
+    }
+
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, "dhg_generating");
+      } catch (e) { /* best-effort */ }
+    }
+
+    tracker.start("dhg_generating", "Generating Developer Handoff Guide");
+    tracker.heartbeat("dhg_generating", () => "Analyzing workflows and writing guide");
     const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries);
-    tracker.complete("dhg_generation", "Handoff Guide generated", {
+    tracker.complete("dhg_generating", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
 
@@ -915,6 +972,12 @@ export async function generateUiPathPackage(
         : (pipelineWarnings.length > 0 || metaValidationResult?.flatStructureWarnings)
           ? "READY_WITH_WARNINGS"
           : "READY";
+
+    if (options?.runId) {
+      try {
+        await storage.updateGenerationRunStatus(options.runId, finalStatus === "FAILED" ? "failed" : "completed");
+      } catch (e) { /* best-effort */ }
+    }
 
     tracker.start("complete", "Finalizing pipeline");
     tracker.complete("complete", `Pipeline complete — ${finalStatus}`, {
@@ -952,8 +1015,8 @@ export async function generateUiPathPackage(
     };
 
     evictOldestPipelineCacheEntry();
-    const finalDegradationKey = (downgrades.length > 0 || usedAIFallback) ? "degraded" : "clean";
-    const finalCacheKey = `${ideaId}:${mode}:${mvMode}:${finalDegradationKey}`;
+    const degradationKey = (downgrades.length > 0 || usedAIFallback) ? "degraded" : "clean";
+    const finalCacheKey = `${ideaId}:${mode}:${mvMode}:${degradationKey}`;
     pipelineCache.set(finalCacheKey, { ...result, fingerprint: fp });
     try {
       const mvTokens = { input: mvInputTokens, output: mvOutputTokens };
@@ -992,6 +1055,107 @@ export async function generateUiPathPackage(
     console.log(`[Pipeline] Cached result for ${ideaId} (mode=${mode}, fingerprint ${fp}, ${finalPackageBuffer.length} bytes, status=${finalStatus}, warnings=${pipelineWarnings.length}, templateCompliance=${templateComplianceScore ?? "N/A"})`);
 
     return result;
+  } finally {
+    tracker.cleanup();
+  }
+}
+
+export async function generateUiPathPackage(
+  ideaId: string,
+  pkg: UiPathPackageSpec,
+  options?: {
+    version?: string;
+    generationMode?: GenerationMode;
+    onProgress?: (message: string) => void;
+    onMetaValidation?: (event: MetaValidationEvent) => void;
+    onPipelineProgress?: PipelineProgressCallback;
+    preloadedContext?: IdeaContext;
+    metaValidationMode?: MetaValidationMode;
+    maxDowngradeAttempts?: number;
+    _downgradeAttempt?: number;
+    _accumulatedDowngrades?: DowngradeEvent[];
+    _accumulatedWarnings?: PipelineWarning[];
+    _usedAIFallback?: boolean;
+  },
+): Promise<PipelineResult> {
+  const ver = options?.version || computeVersion();
+  const mode: GenerationMode = options?.generationMode || "full_implementation";
+  const mvMode: MetaValidationMode = options?.metaValidationMode || "Auto";
+  const pipelineWarnings: PipelineWarning[] = options?._accumulatedWarnings ? [...options._accumulatedWarnings] : [];
+  const downgrades: DowngradeEvent[] = options?._accumulatedDowngrades ? [...options._accumulatedDowngrades] : [];
+  let usedAIFallback = options?._usedAIFallback || false;
+
+  const noop: PipelineProgressCallback = () => {};
+  const tracker = new PipelineStageTracker(options?.onPipelineProgress || noop);
+
+  try {
+    tracker.start("decomposition", "Computing fingerprint and checking cache");
+    const ctx = options?.preloadedContext || await loadIdeaContext(ideaId);
+    const fp = computeFingerprint(pkg, ctx.sdd?.content || "", ctx.mapNodes, ctx.processEdges);
+    const degradationKey = (downgrades.length > 0 || usedAIFallback) ? "degraded" : "clean";
+    const cacheKey = `${ideaId}:${mode}:${mvMode}:${degradationKey}`;
+    const cached = pipelineCache.get(cacheKey);
+    if (cached && cached.fingerprint === fp) {
+      tracker.complete("decomposition", "Cache hit — serving cached result");
+      tracker.cleanup();
+      return cached;
+    }
+    const workflowCount = (pkg as any).workflows?.length || 0;
+    tracker.complete("decomposition", `Decomposed into ${workflowCount} workflow(s)`, { workflowCount });
+
+    const runId = `run-${ideaId}-${Date.now()}`;
+    try {
+      await storage.createGenerationRun({
+        ideaId,
+        runId,
+        status: "spec_generating",
+        generationMode: mode,
+      });
+    } catch (e) {
+      console.warn(`[Pipeline] Failed to create generation run record: ${(e as Error).message}`);
+    }
+
+    let specResult: SpecGenerationResult;
+    try {
+      specResult = await generateWorkflowSpecs(ideaId, pkg, {
+        generationMode: mode,
+        onProgress: options?.onProgress,
+        onPipelineProgress: options?.onPipelineProgress,
+        preloadedContext: ctx,
+        runId,
+      });
+    } catch (specErr) {
+      try {
+        await storage.updateGenerationRunStatus(runId, "failed", (specErr as Error).message);
+      } catch (_) {}
+      throw specErr;
+    }
+
+    specResult.pipelineWarnings.push(...pipelineWarnings);
+    specResult.usedAIFallback = specResult.usedAIFallback || usedAIFallback;
+
+    try {
+      const result = await compilePackageFromSpecs(ideaId, specResult, pkg, {
+        version: ver,
+        generationMode: mode,
+        onProgress: options?.onProgress,
+        onMetaValidation: options?.onMetaValidation,
+        onPipelineProgress: options?.onPipelineProgress,
+        metaValidationMode: mvMode,
+        maxDowngradeAttempts: options?.maxDowngradeAttempts,
+        _downgradeAttempt: options?._downgradeAttempt,
+        _accumulatedDowngrades: downgrades,
+        _accumulatedWarnings: options?._accumulatedWarnings,
+        runId,
+      });
+
+      return result;
+    } catch (compileErr) {
+      try {
+        await storage.updateGenerationRunStatus(runId, "failed", (compileErr as Error).message);
+      } catch (_) {}
+      throw compileErr;
+    }
   } finally {
     tracker.cleanup();
   }

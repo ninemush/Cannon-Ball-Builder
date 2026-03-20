@@ -35,21 +35,25 @@ export const ValueIntentSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("literal"),
     value: z.string(),
+    confidence: z.number().min(0).max(1).optional(),
   }),
   z.object({
     type: z.literal("variable"),
     name: z.string().min(1),
+    confidence: z.number().min(0).max(1).optional(),
   }),
   z.object({
     type: z.literal("url_with_params"),
     baseUrl: z.string().min(1),
     params: z.record(z.string()).default({}),
+    confidence: z.number().min(0).max(1).optional(),
   }),
   z.object({
     type: z.literal("expression"),
     left: z.string().min(1),
     operator: z.enum(ALLOWED_OPERATORS),
     right: z.string().min(1),
+    confidence: z.number().min(0).max(1).optional(),
   }),
 ]);
 

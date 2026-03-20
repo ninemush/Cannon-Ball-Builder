@@ -5,7 +5,8 @@ import { isActivityAllowed } from "./uipath-activity-policy";
 import type { AutomationPattern } from "./uipath-activity-registry";
 import { catalogService, type ProcessType, type PaletteEntry } from "./catalog/catalog-service";
 import { buildTemplateBlock, formatTemplateBlockForPrompt } from "./catalog/xaml-template-builder";
-import { validateWorkflowSpec, type WorkflowSpec as TreeWorkflowSpec } from "./workflow-spec-types";
+import { validateWorkflowSpec, type WorkflowSpec as TreeWorkflowSpec, type WorkflowNode, type PropertyValue } from "./workflow-spec-types";
+import { isValueIntent, type ValueIntent } from "./xaml/expression-builder";
 
 export interface EnrichedActivity {
   activityType: string;
@@ -639,6 +640,7 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
       }
     }
 
+    annotateSpecConfidence(spec);
     console.log(`[AI XAML Enricher Tree] Successfully produced WorkflowSpec tree: "${spec.name}", ${spec.variables.length} variables, REFramework=${spec.useReFramework}`);
     return { workflowSpec: spec, processType, status: "success" };
   } catch (err: any) {
@@ -648,5 +650,89 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
       console.log(`[AI XAML Enricher Tree] Error: ${err.message}`);
     }
     return null;
+  }
+}
+
+const LOW_CONFIDENCE_PATTERNS = [
+  /PLACEHOLDER_/i,
+  /selector/i,
+  /credential/i,
+  /password/i,
+  /secret/i,
+  /api[_-]?key/i,
+  /hostname/i,
+  /environment/i,
+];
+
+const HIGH_CONFIDENCE_PATTERNS = [
+  /^"[^"]*"$/,
+  /^True$/,
+  /^False$/,
+  /^Nothing$/,
+  /^\d+$/,
+  /^Info$|^Warn$|^Error$|^Fatal$|^Trace$/,
+];
+
+function scorePropertyConfidence(key: string, value: PropertyValue): number {
+  if (isValueIntent(value)) {
+    const intent = value as ValueIntent;
+    if (intent.confidence !== undefined) return intent.confidence;
+    if (intent.type === "literal") {
+      const v = intent.value;
+      if (/PLACEHOLDER_/.test(v)) return 0.2;
+      if (/^"[^"]*"$/.test(v) || /^\d+$/.test(v)) return 0.9;
+      return 0.7;
+    }
+    if (intent.type === "variable") return 0.8;
+    if (intent.type === "url_with_params") {
+      if (/PLACEHOLDER_/.test(intent.baseUrl)) return 0.2;
+      return 0.6;
+    }
+    if (intent.type === "expression") return 0.7;
+    return 0.5;
+  }
+
+  const strVal = String(value);
+  const lowerKey = key.toLowerCase();
+
+  if (LOW_CONFIDENCE_PATTERNS.some(p => p.test(strVal) || p.test(lowerKey))) return 0.2;
+  if (HIGH_CONFIDENCE_PATTERNS.some(p => p.test(strVal))) return 0.95;
+  if (/^(DisplayName|Level|Method)$/i.test(key)) return 0.9;
+  if (/^(AssetName|QueueName|Endpoint|To|From|Server)$/i.test(key)) return 0.4;
+
+  return 0.6;
+}
+
+function annotateNodeConfidence(node: WorkflowNode): void {
+  if (node.kind === "activity") {
+    for (const [key, value] of Object.entries(node.properties)) {
+      if (isValueIntent(value)) {
+        const intent = value as ValueIntent;
+        if (intent.confidence === undefined) {
+          (intent as any).confidence = scorePropertyConfidence(key, value);
+        }
+      }
+    }
+  } else if (node.kind === "sequence") {
+    for (const child of node.children) annotateNodeConfidence(child);
+  } else if (node.kind === "tryCatch") {
+    for (const child of node.tryChildren) annotateNodeConfidence(child);
+    for (const child of node.catchChildren) annotateNodeConfidence(child);
+    for (const child of node.finallyChildren) annotateNodeConfidence(child);
+  } else if (node.kind === "if") {
+    for (const child of node.thenChildren) annotateNodeConfidence(child);
+    for (const child of node.elseChildren) annotateNodeConfidence(child);
+  } else if (node.kind === "while") {
+    for (const child of node.bodyChildren) annotateNodeConfidence(child);
+  } else if (node.kind === "forEach") {
+    for (const child of node.bodyChildren) annotateNodeConfidence(child);
+  } else if (node.kind === "retryScope") {
+    for (const child of node.bodyChildren) annotateNodeConfidence(child);
+  }
+}
+
+export function annotateSpecConfidence(spec: TreeWorkflowSpec): void {
+  for (const child of spec.rootSequence.children) {
+    annotateNodeConfidence(child);
   }
 }
