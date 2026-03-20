@@ -967,13 +967,42 @@ ${content}`
         return res.status(500).json({ message: "Invalid package data" });
       }
 
+      if (!pipelineResult.packageBuffer || pipelineResult.packageBuffer.length === 0) {
+        return res.status(500).json({
+          error: "PACKAGE_EMPTY",
+          message: "Package buffer is empty. Please regenerate the package.",
+        });
+      }
+
+      let effectiveBuffer = pipelineResult.packageBuffer;
+      if (pipelineResult.xamlEntries && pipelineResult.xamlEntries.length > 0 && pipelineResult.archiveManifest) {
+        const { rebuildNupkgWithEntries } = await import("./uipath-pipeline");
+        const rebuilt = rebuildNupkgWithEntries(pipelineResult.packageBuffer, pipelineResult.xamlEntries, pipelineResult.archiveManifest);
+        if (rebuilt) {
+          effectiveBuffer = rebuilt;
+          console.log(`[Download] Rebuilt nupkg from cached XAML entries (${rebuilt.length} bytes)`);
+        } else {
+          console.warn(`[Download] Nupkg rebuild failed — serving original cached buffer`);
+        }
+      }
+
       const approvedSdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
       const sddContent = approvedSdd?.content || "";
 
       const isServerless = pkg.internal?.targetFramework === "Portable" || pkg.internal?.isServerless;
       const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";
 
-      const nupkgZip = new AdmZip(pipelineResult.packageBuffer);
+      let nupkgZip: AdmZip;
+      try {
+        nupkgZip = new AdmZip(effectiveBuffer);
+      } catch (zipErr: unknown) {
+        const msg = zipErr instanceof Error ? zipErr.message : String(zipErr);
+        console.error(`[Download] Failed to open nupkg buffer: ${msg}`);
+        return res.status(500).json({
+          error: "PACKAGE_CORRUPT",
+          message: "Package file is corrupted. Please regenerate the package.",
+        });
+      }
       const nupkgEntries = nupkgZip.getEntries();
 
       const archive = archiver("zip", { zlib: { level: 9 } });
