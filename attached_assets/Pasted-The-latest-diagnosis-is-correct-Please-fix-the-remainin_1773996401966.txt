@@ -1,0 +1,61 @@
+The latest diagnosis is correct. Please fix the remaining UiPath generation deadlock by correcting the client state model, not just patching timing.
+
+Observed root cause:
+There is a deadlock between isGeneratingDoc and the deferred UiPath trigger effect.
+
+Exact sequence:
+1. The server sends docProgress: { started: true, docType: "UiPath" } during the chat stream.
+2. The client treats this like document generation and calls startDocStreaming("UiPath"), which sets isGeneratingDoc = true.
+3. The server then sends triggerUiPathGen: true and done: true.
+4. The client preserves the UiPath progress message and does not clear isGeneratingDoc.
+5. The deferred trigger effect sees hasPending=true but isGeneratingDoc=true, so it defers forever.
+6. POST /api/ideas/:ideaId/generate-uipath never starts.
+
+This is the key architectural issue:
+For UIPATH_GEN, the chat stream is only an acknowledgement/trigger channel. The actual package generation runs in a separate POST request. Therefore the client must not treat UiPath package generation as an active "doc stream" blocker in the same way as PDD/SDD/DHG streaming.
+
+What I want:
+Fix this by separating UI progress state from dispatch-blocking state.
+
+Required changes:
+1. Do not let UiPath generation acknowledgements from the chat SSE path permanently set isGeneratingDoc=true in a way that blocks the real generate-uipath request.
+2. For docProgress/docType === "UiPath", either:
+   - do not call startDocStreaming at all, or
+   - map it to a dedicated UiPath handoff/progress state that does not block generateUiPath dispatch.
+3. The pending UiPath trigger effect must only be blocked by states representing real conflicting work, not by cosmetic progress state carried over from the chat acknowledgement stream.
+4. In the done/finally path, if a UiPath trigger is pending, ensure the blocking doc-generation state is explicitly cleared so the effect can dispatch.
+5. Preserve the good parts of the previous fix:
+   - durable pending trigger
+   - idempotent generation request
+   - instrumentation logs
+   - correct UiPath-specific progress text
+6. Add instrumentation showing:
+   - whether a UiPath docProgress event is ignored, remapped, or treated as non-blocking
+   - when blocking state is cleared for the handoff
+   - when the trigger effect becomes eligible and actually fires
+   - when POST /api/ideas/:ideaId/generate-uipath starts
+
+Implementation preference:
+- Prefer a clean state-model correction over a one-off patch.
+- The ideal model is:
+  - chat stream may show a UiPath acknowledgement/progress message
+  - actual generation dispatch is controlled separately
+  - the handoff cannot deadlock because a UI-only state is never used as the hard dispatch blocker
+
+Files to inspect:
+- client/src/pages/workspace.tsx
+- specifically:
+  - docProgress handling
+  - startDocStreaming / stopDocStreaming
+  - triggerUiPathGen handling
+  - done/finally cleanup
+  - pending UiPath trigger effect
+  - generateUiPath()
+
+Deliverable:
+1. Brief explanation of the corrected state model
+2. The fix
+3. Why the deadlock can no longer occur
+4. What I should test immediately after the change
+
+Do not change the backend package generation pipeline in this task. This is a frontend trigger/state orchestration fix.
