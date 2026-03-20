@@ -102,6 +102,7 @@ type CachedBuild = {
   archiveManifest: string[];
   referencedMLSkillNames?: string[];
   usedAIFallback?: boolean;
+  projectJsonContent?: string;
 };
 
 const packageBuildCache = new Map<string, CachedBuild>();
@@ -285,6 +286,7 @@ export type BuildResult = {
   dependencyWarnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
   usedAIFallback: boolean;
   outcomeReport?: PipelineOutcomeReport;
+  projectJsonContent?: string;
 };
 
 export function removeDuplicateAttributes(content: string): { content: string; changed: boolean; fixedTags: string[] } {
@@ -482,7 +484,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         packageBuildCache.delete(buildCacheKey);
       } else {
         console.log(`[UiPath Cache] HIT for ${buildCacheKey} — skipping AI enrichment and XAML generation`);
-        return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true, qualityGateResult: cached.qualityGateResult, xamlEntries: cached.xamlEntries, dependencyMap: cached.dependencyMap, archiveManifest: cached.archiveManifest, usedFallbackStubs: false, generationMode, referencedMLSkillNames: cached.referencedMLSkillNames || [], usedAIFallback: cached.usedAIFallback || false };
+        return { buffer: cached.buffer, gaps: cached.gaps, usedPackages: cached.usedPackages, cacheHit: true, qualityGateResult: cached.qualityGateResult, xamlEntries: cached.xamlEntries, dependencyMap: cached.dependencyMap, archiveManifest: cached.archiveManifest, usedFallbackStubs: false, generationMode, referencedMLSkillNames: cached.referencedMLSkillNames || [], usedAIFallback: cached.usedAIFallback || false, projectJsonContent: cached.projectJsonContent };
       }
     }
     if (cached && cached.fingerprint === fingerprint && cached.version !== version) {
@@ -606,35 +608,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     || orchestratorArtifacts?.queues?.[0]?.name
     || "TransactionQueue";
 
-  const buffers: Buffer[] = [];
-  const passthrough = new PassThrough();
-  passthrough.on("data", (chunk: Buffer) => buffers.push(chunk));
-
-  const streamDone = new Promise<Buffer>((resolve, reject) => {
-    passthrough.on("end", () => resolve(Buffer.concat(buffers)));
-    passthrough.on("error", reject);
-  });
-
-  const _archive = archiver("zip", { zlib: { level: 9 } });
-  _archive.pipe(passthrough);
-
-  const _archiveManifestTracker: string[] = [];
-  const _appendedContentHashes = new Map<string, string>();
-  const archive = {
-    append(data: any, opts: { name: string }) {
-      opts.name = opts.name.replace(/\\/g, "/").replace(/^[./]+/, "");
-      _archiveManifestTracker.push(opts.name);
-      if (typeof data === "string") {
-        _appendedContentHashes.set(opts.name, createHash("sha256").update(data).digest("hex"));
-      } else if (Buffer.isBuffer(data)) {
-        _appendedContentHashes.set(opts.name, createHash("sha256").update(data).digest("hex"));
-      }
-      return _archive.append(data, opts);
-    },
-    finalize() {
-      return _archive.finalize();
-    },
-  };
+  const trackedArchive = createTrackedArchive();
+  const _archiveManifestTracker = trackedArchive.manifest;
+  const _appendedContentHashes = trackedArchive.contentHashes;
+  const archive = trackedArchive;
 
   const explicitFramework = pkg.internal?.targetFramework;
   const isServerless = explicitFramework === "Portable"
@@ -1955,71 +1932,9 @@ ${depEntries}
       );
     }
 
-    archive.finalize();
+  const buffer = await archive.finalize();
 
-  const buffer = await streamDone;
-
-  const parityErrors: string[] = [];
-  const appendedPathSet = new Set(_archiveManifestTracker);
-
-  const zip = new AdmZip(buffer);
-  const zipEntries = zip.getEntries();
-  const zipPathSet = new Set<string>();
-
-  for (const entry of zipEntries) {
-    if (entry.isDirectory) continue;
-    const entryName = entry.entryName;
-    zipPathSet.add(entryName);
-
-    const expectedHash = _appendedContentHashes.get(entryName);
-    if (expectedHash) {
-      const actualHash = createHash("sha256").update(entry.getData()).digest("hex");
-      if (actualHash !== expectedHash) {
-        parityErrors.push(`Content mismatch for "${entryName}": expected hash ${expectedHash.substring(0, 12)}..., got ${actualHash.substring(0, 12)}...`);
-      }
-    }
-
-    if (!appendedPathSet.has(entryName)) {
-      parityErrors.push(`Unexpected file "${entryName}" found in final ZIP archive but was not in the appended manifest`);
-    }
-  }
-
-  for (const appendedPath of _archiveManifestTracker) {
-    if (!zipPathSet.has(appendedPath)) {
-      parityErrors.push(`Appended file "${appendedPath}" is missing from the final ZIP archive`);
-    }
-  }
-
-  for (const entry of xamlEntries) {
-    const normalizedName = entry.name.replace(/\\/g, "/").replace(/^[./]+/, "");
-    const basename = normalizedName.split("/").pop() || normalizedName;
-    const archivePath = `${libPath}/${basename}`;
-    if (!zipPathSet.has(archivePath)) {
-      const altMatch = Array.from(zipPathSet).find(p => p.endsWith("/" + basename) || p === basename);
-      if (!altMatch) {
-        parityErrors.push(`Validated XAML "${basename}" not found in final archive at expected path "${archivePath}"`);
-      }
-    } else {
-      const entryData = zip.getEntry(archivePath)?.getData();
-      if (entryData) {
-        const actualContent = entryData.toString("utf-8");
-        const expectedContent = entry.content;
-        if (actualContent !== expectedContent) {
-          const actualHash = createHash("sha256").update(actualContent).digest("hex").substring(0, 12);
-          const expectedHash = createHash("sha256").update(expectedContent).digest("hex").substring(0, 12);
-          parityErrors.push(`Content mismatch for validated XAML "${basename}": validated hash ${expectedHash}..., archive hash ${actualHash}...`);
-        }
-      }
-    }
-  }
-
-  if (parityErrors.length > 0) {
-    const details = parityErrors.map(e => `  - ${e}`).join("\n");
-    console.error(`[UiPath Post-Archive Parity] FAILED with ${parityErrors.length} mismatch(es):\n${details}`);
-    throw new Error(`UiPath post-archive parity check failed with ${parityErrors.length} mismatch(es):\n${details}`);
-  } else {
-    console.log(`[UiPath Post-Archive Parity] PASSED — all ${_archiveManifestTracker.length} appended files verified, ${zipPathSet.size} ZIP entries checked bidirectionally`);
-  }
+  runPostArchiveParityCheck(buffer, _archiveManifestTracker, _appendedContentHashes, xamlEntries, libPath);
 
   const finalXamlEntries = xamlEntries.map(e => ({ name: e.name, content: e.content }));
   const finalDependencyMap = { ...deps };
@@ -2070,10 +1985,200 @@ ${depEntries}
 
   if (buildCacheKey && fingerprint) {
     evictOldestCacheEntry();
-    packageBuildCache.set(buildCacheKey, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment, qualityGatePassed: qualityGateResult.passed, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], usedAIFallback: _usedAIFallback });
+    packageBuildCache.set(buildCacheKey, { fingerprint, version, buffer, gaps: allGaps, usedPackages: allUsedPkgs, enrichment, qualityGatePassed: qualityGateResult.passed, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], usedAIFallback: _usedAIFallback, projectJsonContent: finalProjectJsonStr });
     console.log(`[UiPath Cache] Stored build for ${buildCacheKey} (${buffer.length} bytes, v${version})`);
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, usedAIFallback: _usedAIFallback, outcomeReport };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr };
+}
+
+export function createTrackedArchive() {
+  const buffers: Buffer[] = [];
+  const passthrough = new PassThrough();
+  passthrough.on("data", (chunk: Buffer) => buffers.push(chunk));
+
+  const streamDone = new Promise<Buffer>((resolve, reject) => {
+    passthrough.on("end", () => resolve(Buffer.concat(buffers)));
+    passthrough.on("error", reject);
+  });
+
+  const _archive = archiver("zip", { zlib: { level: 9 } });
+  _archive.pipe(passthrough);
+
+  const manifest: string[] = [];
+  const contentHashes = new Map<string, string>();
+  const tracked = {
+    append(data: Buffer | string, opts: { name: string }) {
+      opts.name = opts.name.replace(/\\/g, "/").replace(/^[./]+/, "");
+      manifest.push(opts.name);
+      if (typeof data === "string") {
+        contentHashes.set(opts.name, createHash("sha256").update(data).digest("hex"));
+      } else if (Buffer.isBuffer(data)) {
+        contentHashes.set(opts.name, createHash("sha256").update(data).digest("hex"));
+      }
+      return _archive.append(data, opts);
+    },
+    async finalize(): Promise<Buffer> {
+      await _archive.finalize();
+      return streamDone;
+    },
+    manifest,
+    contentHashes,
+  };
+
+  return tracked;
+}
+
+export function runPostArchiveParityCheck(
+  buffer: Buffer,
+  archiveManifest: string[],
+  appendedContentHashes: Map<string, string>,
+  xamlEntries?: Array<{ name: string; content: string }>,
+  libPath?: string,
+): void {
+  const parityErrors: string[] = [];
+  const appendedPathSet = new Set(archiveManifest);
+
+  const zip = new AdmZip(buffer);
+  const zipEntries = zip.getEntries();
+  const zipPathSet = new Set<string>();
+
+  for (const entry of zipEntries) {
+    if (entry.isDirectory) continue;
+    const entryName = entry.entryName;
+    zipPathSet.add(entryName);
+
+    const expectedHash = appendedContentHashes.get(entryName);
+    if (expectedHash) {
+      const actualHash = createHash("sha256").update(entry.getData()).digest("hex");
+      if (actualHash !== expectedHash) {
+        parityErrors.push(`Content mismatch for "${entryName}": expected hash ${expectedHash.substring(0, 12)}..., got ${actualHash.substring(0, 12)}...`);
+      }
+    }
+
+    if (!appendedPathSet.has(entryName)) {
+      parityErrors.push(`Unexpected file "${entryName}" found in final ZIP archive but was not in the appended manifest`);
+    }
+  }
+
+  for (const appendedPath of archiveManifest) {
+    if (!zipPathSet.has(appendedPath)) {
+      parityErrors.push(`Appended file "${appendedPath}" is missing from the final ZIP archive`);
+    }
+  }
+
+  if (xamlEntries && libPath) {
+    for (const entry of xamlEntries) {
+      const normalizedName = entry.name.replace(/\\/g, "/").replace(/^[./]+/, "");
+      const basename = normalizedName.split("/").pop() || normalizedName;
+      const archivePath = `${libPath}/${basename}`;
+      if (!zipPathSet.has(archivePath)) {
+        const altMatch = Array.from(zipPathSet).find(p => p.endsWith("/" + basename) || p === basename);
+        if (!altMatch) {
+          parityErrors.push(`Validated XAML "${basename}" not found in final archive at expected path "${archivePath}"`);
+        }
+      } else {
+        const entryData = zip.getEntry(archivePath)?.getData();
+        if (entryData) {
+          const actualContent = entryData.toString("utf-8");
+          const expectedContent = entry.content;
+          if (actualContent !== expectedContent) {
+            const actualHash = createHash("sha256").update(actualContent).digest("hex").substring(0, 12);
+            const expectedHash = createHash("sha256").update(expectedContent).digest("hex").substring(0, 12);
+            parityErrors.push(`Content mismatch for validated XAML "${basename}": validated hash ${expectedHash}..., archive hash ${actualHash}...`);
+          }
+        }
+      }
+    }
+  }
+
+  if (parityErrors.length > 0) {
+    const details = parityErrors.map(e => `  - ${e}`).join("\n");
+    console.error(`[UiPath Post-Archive Parity] FAILED with ${parityErrors.length} mismatch(es):\n${details}`);
+    throw new Error(`UiPath post-archive parity check failed with ${parityErrors.length} mismatch(es):\n${details}`);
+  } else {
+    console.log(`[UiPath Post-Archive Parity] PASSED — all ${archiveManifest.length} appended files verified, ${zipPathSet.size} ZIP entries checked bidirectionally`);
+  }
+}
+
+export async function rebuildNupkgWithEntries(
+  originalBuffer: Buffer,
+  xamlEntries: Array<{ name: string; content: string }>,
+  archiveManifest: string[],
+): Promise<Buffer | null> {
+  try {
+    if (!originalBuffer || originalBuffer.length === 0) {
+      console.warn("[Nupkg Rebuild] Original buffer is empty — cannot rebuild");
+      return null;
+    }
+
+    const zip = new AdmZip(originalBuffer);
+
+    const xamlOverrides = new Map<string, string>();
+    for (const entry of xamlEntries) {
+      const archivePaths = archiveManifest.filter(
+        p => p === entry.name || p.endsWith(`/${entry.name}`) || p.endsWith(`\\${entry.name}`)
+      );
+      for (const archivePath of archivePaths) {
+        xamlOverrides.set(archivePath, entry.content);
+      }
+      if (archivePaths.length === 0) {
+        console.warn(`[Nupkg Rebuild] No archive path found for XAML entry: ${entry.name}`);
+      }
+    }
+
+    const arc = createTrackedArchive();
+    let overriddenCount = 0;
+
+    const missingEntries: string[] = [];
+    for (const entryPath of archiveManifest) {
+      let data: Buffer | string;
+      if (xamlOverrides.has(entryPath)) {
+        data = xamlOverrides.get(entryPath)!;
+        overriddenCount++;
+      } else {
+        const zipEntry = zip.getEntry(entryPath);
+        if (zipEntry) {
+          data = zipEntry.getData();
+        } else {
+          missingEntries.push(entryPath);
+          console.error(`[Nupkg Rebuild] Manifest entry not found in original archive: ${entryPath}`);
+          continue;
+        }
+      }
+      arc.append(data, { name: entryPath });
+    }
+
+    if (missingEntries.length > 0) {
+      console.error(`[Nupkg Rebuild] ${missingEntries.length} manifest entries missing from original archive — rebuild aborted`);
+      return null;
+    }
+
+    const rebuilt = await arc.finalize();
+
+    if (rebuilt.length === 0) {
+      console.warn("[Nupkg Rebuild] Rebuilt buffer is empty");
+      return null;
+    }
+
+    const libPath = archiveManifest.find(p => p.startsWith("lib/net6.0/"))
+      ? "lib/net6.0"
+      : "lib/net45";
+
+    try {
+      runPostArchiveParityCheck(rebuilt, archiveManifest, arc.contentHashes, xamlEntries, libPath);
+    } catch (parityErr: unknown) {
+      const msg = parityErr instanceof Error ? parityErr.message : String(parityErr);
+      console.error(`[Nupkg Rebuild] Post-rebuild parity check failed: ${msg}`);
+      return null;
+    }
+
+    console.log(`[Nupkg Rebuild] Success — ${arc.manifest.length} entries (${overriddenCount} overridden), ${rebuilt.length} bytes`);
+    return rebuilt;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Nupkg Rebuild] Failed: ${msg}`);
+    return null;
+  }
 }
 
 export async function uploadNupkgBuffer(

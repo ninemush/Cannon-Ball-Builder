@@ -8,6 +8,7 @@ import {
   buildNuGetPackage,
   QualityGateError,
   getAICenterSkills,
+  rebuildNupkgWithEntries,
   type BuildResult,
   type GenerationMode,
 } from "./uipath-integration";
@@ -770,6 +771,8 @@ export async function compilePackageFromSpecs(
     let finalPackageBuffer = buildResult.buffer;
     let mvInputTokens = 0;
     let mvOutputTokens = 0;
+    let canonicalRebuildFailed = false;
+    let canonicalRebuildErrorMsg = "";
     const hasNupkg = buildResult.buffer && buildResult.buffer.length > 0;
 
     if (hasNupkg) {
@@ -812,18 +815,15 @@ export async function compilePackageFromSpecs(
           finalXamlEntries = applicationResult.updatedXamlEntries;
 
           if (applicationResult.applied > 0 && buildResult.buffer.length > 0) {
-            const rebuilt = rebuildNupkgWithEntries(buildResult.buffer, finalXamlEntries, buildResult.archiveManifest);
+            const rebuilt = await rebuildNupkgWithEntries(buildResult.buffer, finalXamlEntries, buildResult.archiveManifest);
             if (rebuilt) {
               finalPackageBuffer = rebuilt;
               console.log(`[Pipeline] Rebuilt .nupkg with ${applicationResult.applied} correction(s) applied (${finalPackageBuffer.length} bytes)`);
             } else {
-              console.warn(`[Pipeline] Nupkg rebuild failed — corrected XAML will NOT be in the downloadable package`);
-              pipelineWarnings.push({
-                code: "NUPKG_REBUILD_FAILED",
-                message: "Package could not be rebuilt after meta-validation corrections. Download may contain pre-correction XAML.",
-                stage: "remediating",
-                recoverable: true,
-              });
+              canonicalRebuildFailed = true;
+              canonicalRebuildErrorMsg =
+                `Canonical nupkg rebuild failed after ${applicationResult.applied} meta-validation correction(s). ` +
+                `Cannot produce a structurally valid package with corrected XAML.`;
             }
           }
 
@@ -842,13 +842,7 @@ export async function compilePackageFromSpecs(
                 }
               }
 
-              const projectJsonEntry = buildResult.archiveManifest.find(p => p.endsWith("project.json"));
-              let projectJsonContent = "{}";
-              if (projectJsonEntry) {
-                const zip = new AdmZip(buildResult.buffer);
-                const pjEntry = zip.getEntry(projectJsonEntry);
-                if (pjEntry) projectJsonContent = pjEntry.getData().toString("utf-8");
-              }
+              const projectJsonContent = buildResult.projectJsonContent || "{}";
               const revalidationResult = runQualityGate({
                 xamlEntries: finalXamlEntries,
                 projectJsonContent,
@@ -957,6 +951,10 @@ export async function compilePackageFromSpecs(
           recoverable: true,
         });
       }
+    }
+    if (canonicalRebuildFailed) {
+      console.error(`[Pipeline] ${canonicalRebuildErrorMsg}`);
+      throw new Error(canonicalRebuildErrorMsg);
     }
     tracker.complete("remediating", "Remediation complete");
 
@@ -1188,63 +1186,6 @@ export async function generateUiPathPackage(
     }
   } finally {
     tracker.cleanup();
-  }
-}
-
-export function rebuildNupkgWithEntries(
-  originalBuffer: Buffer,
-  xamlEntries: Array<{ name: string; content: string }>,
-  archiveManifest: string[],
-): Buffer | null {
-  try {
-    if (!originalBuffer || originalBuffer.length === 0) {
-      console.warn("[Nupkg Rebuild] Original buffer is empty — cannot rebuild");
-      return null;
-    }
-    const zip = new AdmZip(originalBuffer);
-    let updatedCount = 0;
-    for (const entry of xamlEntries) {
-      const archivePaths = archiveManifest.filter(
-        p => p === entry.name || p.endsWith(`/${entry.name}`) || p.endsWith(`\\${entry.name}`)
-      );
-      for (const archivePath of archivePaths) {
-        const existing = zip.getEntry(archivePath);
-        if (existing) {
-          zip.updateFile(archivePath, Buffer.from(entry.content, "utf-8"));
-          updatedCount++;
-        } else {
-          console.warn(`[Nupkg Rebuild] Entry not found in archive: ${archivePath} — adding as new`);
-          zip.addFile(archivePath, Buffer.from(entry.content, "utf-8"));
-          updatedCount++;
-        }
-      }
-      if (archivePaths.length === 0) {
-        console.warn(`[Nupkg Rebuild] No archive path found for XAML entry: ${entry.name}`);
-      }
-    }
-    const rebuilt = zip.toBuffer();
-    if (rebuilt.length === 0) {
-      console.warn("[Nupkg Rebuild] Rebuilt buffer is empty");
-      return null;
-    }
-    try {
-      const verify = new AdmZip(rebuilt);
-      const verifyEntries = verify.getEntries();
-      if (verifyEntries.length === 0) {
-        console.warn("[Nupkg Rebuild] Rebuilt ZIP has no entries");
-        return null;
-      }
-    } catch (verifyErr: unknown) {
-      const msg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
-      console.warn(`[Nupkg Rebuild] Rebuilt ZIP verification failed: ${msg}`);
-      return null;
-    }
-    console.log(`[Nupkg Rebuild] Success — updated ${updatedCount} entries, ${rebuilt.length} bytes`);
-    return rebuilt;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[Nupkg Rebuild] Failed: ${msg}`);
-    return null;
   }
 }
 

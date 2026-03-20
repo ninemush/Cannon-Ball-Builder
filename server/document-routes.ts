@@ -968,6 +968,13 @@ ${content}`
         return res.status(500).json({ message: "Invalid package data" });
       }
 
+      if (!pipelineResult.packageBuffer || pipelineResult.packageBuffer.length === 0) {
+        return res.status(500).json({
+          error: "PACKAGE_EMPTY",
+          message: "Package buffer is empty. Please regenerate the package.",
+        });
+      }
+
       const approvedSdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
       const sddContent = approvedSdd?.content || "";
 

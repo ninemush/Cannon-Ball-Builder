@@ -42,6 +42,7 @@ export {
   removeDuplicateAttributes,
   clearPackageCache,
   normalizePackageName,
+  rebuildNupkgWithEntries,
 } from "./package-assembler";
 
 import { buildNuGetPackage, type BuildResult, isValidNuGetVersion, uploadNupkgBuffer } from "./package-assembler";
