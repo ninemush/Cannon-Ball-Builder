@@ -62,6 +62,11 @@ The application uses a modern web stack for scalability and an intuitive user ex
 - **Role-Based Access**: Authorization enforced based on user ownership and roles for process maps and documents.
 - **Multi-Orchestrator Connection Management**: Supports storing and managing multiple UiPath Orchestrator connection profiles.
 - **Automation Hub & Store Integration**: Connects to UiPath Automation Hub to import ideas and automatically publish completed automations to the Automation Store.
+- **Modular Backend Architecture**: Monolithic backend files decomposed into focused sub-modules:
+  - `server/xaml-generator.ts` → `server/xaml/xaml-compliance.ts` (XAML compliance, bracket wrapping, variable inference) + `server/xaml/gap-analyzer.ts` (validation, stub generation, DHG summary)
+  - `server/uipath-integration.ts` → `server/package-assembler.ts` (NuGet package building, ZIP creation, REFramework scaffolding, config XLSX) + `server/uipath-shared.ts` (shared types: UiPathConfig, QualityGateError, package alias map)
+  - `server/uipath-deploy.ts` → `server/orchestrator/manifest-manager.ts` (artifact type definitions, SDD parsing, LLM extraction) + `server/orchestrator/artifact-provisioner.ts` (Orchestrator API provisioning, deployment orchestration)
+  - Original files remain thin re-export facades preserving all import paths.
 - **JSON Sanitization**: Robust parsing of AI-generated JSON with error recovery.
 - **Shared Utilities**: Consolidated server and client utilities for common functions and shared types.
 - **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deployment time.
