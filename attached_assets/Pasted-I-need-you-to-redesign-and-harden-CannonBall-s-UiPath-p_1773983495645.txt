@@ -1,0 +1,99 @@
+I need you to redesign and harden CannonBall’s UiPath package generation pipeline so it becomes systemic, upstream, and reliable across every idea in the app.
+
+Context:
+CannonBall takes a natural-language automation idea, generates the AS-IS process map, generates the TO-BE process based on available UiPath services, then generates the PDD, then SDD, then generates a UiPath package, and finally deploys it directly to UiPath. Users must also be able to download the package and open it in UiPath Studio.
+
+Primary goal:
+Get CannonBall’s package generation to produce near-executable, enterprise-grade output with minimal developer work, as close as possible to what a strong Sr UiPath Developer or Solution Architect would produce for production deployment.
+
+Important product constraints:
+- I do NOT want patch-style fixes.
+- I want systemic, architecture-level improvements that affect every idea.
+- I do NOT want the pipeline to fail the entire build just because some parts are imperfect.
+- If some workflows or parts are invalid, unsafe, or incomplete, the system should replace only those specific parts with safe executable stubs or deterministic fallbacks.
+- The final package should still be:
+  - deployable directly from CannonBall to UiPath
+  - downloadable from CannonBall
+  - openable in UiPath Studio
+- The DHG (Developer Handoff Guide) should clearly document every downgraded/stubbed/replaced component and the exact remaining developer work.
+- UX is critical. If users frequently end with “no package generated,” trust will collapse and CannonBall will fail as a product.
+
+Existing architecture to preserve and improve:
+- There is already a canonical package pipeline.
+- There is already an activity registry/catalog and policy layer.
+- There is already a quality gate.
+- There is already a meta-validator / review-and-repair capability.
+- There is already fallback stub generation.
+- There is already DHG generation.
+- There are already baseline/full generation concepts.
+- The fixes must build on this architecture, not replace it with ad hoc logic.
+
+What I want you to implement conceptually:
+Redesign package generation around a progressive convergence model with one canonical output contract.
+
+Recommended architecture:
+1. Enterprise Attempt
+- Try to generate the highest-quality, near-production implementation first.
+- Use deterministic scaffolds and canonical workflow structures.
+- Constrain LLM use to bounded enrichment tasks, not unconstrained package structure generation.
+- Prefer registry-backed activities, canonical arguments, canonical properties, and deterministic packaging.
+
+2. Auto-Repair + Targeted Replacement
+- Run analyzer, meta-validator, normalization, and quality gate on each workflow.
+- If a workflow has invalid or unsafe parts, do NOT fail the whole package.
+- Replace only the smallest failing unit possible:
+  - ideally a step/activity
+  - if needed, a sequence
+  - only as a last resort, the workflow
+- Preserve all valid upstream/downstream structure where possible.
+- Keep the package executable and coherent.
+
+3. Guaranteed Openable / Deployable Fallback
+- If enterprise-level implementation cannot be achieved for some parts, still ship a valid package.
+- The final fallback package must remain deployable and Studio-openable.
+- All unresolved gaps must be surfaced in the DHG clearly and precisely.
+- Only truly catastrophic package-level corruption should block output.
+
+Core design principles:
+- The package contract is more important than perfect workflow completeness.
+- Package generation should converge to one of:
+  - READY
+  - READY_WITH_WARNINGS
+  - FALLBACK_READY
+- It should almost never end in total package failure unless the archive/package itself is fundamentally invalid.
+- “Near executable” is the optimization target.
+- “Always produce a usable package” is the reliability contract.
+
+Specific implementation direction:
+- Separate package viability from workflow excellence.
+- Only package-level structural failures should block delivery.
+- Workflow-level issues should trigger targeted downgrade, repair, or stub replacement.
+- Baseline-openable mode should be treated as a first-class reliable delivery mode, not a weak backup.
+- Full implementation mode should optimize toward enterprise quality.
+- DHG should be the truth layer:
+  - what was fully generated
+  - what was auto-repaired
+  - what was stubbed
+  - why it was stubbed
+  - what exactly the developer must do next
+
+Very important:
+I want this solved upstream and systemically. Do not add scattered one-off conditionals for specific ideas. Improve the architecture so every idea benefits.
+
+What I want from you:
+1. Review the current UiPath generation pipeline in detail.
+2. Identify where the current system still fails closed instead of degrading gracefully.
+3. Propose an architecture refactor centered on:
+   - deterministic scaffolding
+   - bounded LLM enrichment
+   - per-workflow or per-step survivability
+   - guaranteed package output
+   - precise DHG reporting
+4. Recommend concrete changes to the canonical pipeline so CannonBall becomes much more reliable without sacrificing the long-term goal of Sr Dev / SA quality output.
+5. Preserve direct deploy from CannonBall and downloadable Studio-openable output as non-negotiable requirements.
+
+Deliverable format:
+- First give me a concise architecture diagnosis of the current weaknesses.
+- Then give me a concrete recommended target architecture.
+- Then give me an implementation plan in priority order.
+- Emphasize systemic fixes, survivability, and UX preservation.
