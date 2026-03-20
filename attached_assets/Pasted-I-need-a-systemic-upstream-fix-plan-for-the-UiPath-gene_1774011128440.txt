@@ -1,0 +1,46 @@
+I need a systemic upstream fix plan for the UiPath generation UX/state model, not another narrow patch.
+
+New diagnosis:
+The current problem is bigger than just trigger timing or cache-hit metadata. In the live CB2 code, historical UiPath package cards are rendered from saved chat messages, but their displayed build status/warnings are driven by current global workspace state. This means older package cards can visually pick up the status of a newer generation attempt, making the message sequence and failure/retry story look wrong even when the underlying events are different.
+
+What I need you to do:
+1. Review the live CB2 UiPath generation path and confirm whether package-card rendering is mixing:
+   - per-message historical package data
+   - global current-run build state
+2. Diagnose all current UiPath generation entry points:
+   - chat-triggered UIPATH_GEN
+   - Retry Build button
+   - SDD approval auto-trigger
+   - savedMessages auto-trigger on load
+3. Propose a single canonical run model for UiPath generation where each generation attempt is a first-class run with:
+   - runId
+   - source (chat, retry, approval, auto)
+   - startedAt
+   - status
+   - warnings
+   - templateComplianceScore
+   - outcomeSummary
+   - package/result linkage
+4. Recommend how to bind the UI so:
+   - historical package cards show the correct historical status/result
+   - the active run shows current progress
+   - old runs do not visually inherit new statuses
+5. Identify the minimum upstream changes needed to get there without rewriting the whole app.
+
+Important:
+- Do not just patch the screenshot symptom.
+- Do not focus only on the 30-second timer.
+- Focus on the root UX/data-model issue: distinct package runs vs global generation state.
+- Preserve CannonBall’s current architecture where possible.
+- Preserve direct deploy, download, fallback visibility, and DHG transparency.
+
+Deliverable:
+- concise root-cause summary
+- top architecture flaws in the current UiPath run model
+- recommended target design
+- minimal implementation plan in priority order
+
+Also explicitly answer:
+- Is the current screenshot confusion caused by global UiPath build state being applied to historical package cards?
+- Which existing code paths are causing duplicate or overlapping generation attempts?
+- What should be the single source of truth for a UiPath generation run?
