@@ -2237,10 +2237,13 @@ ${depEntries}
     else if (fix.includes("Per-activity stub") || fix.includes("Per-sequence stub") || fix.includes("per-workflow")) continue;
 
     const fileMatch = fix.match(/in\s+([\w/.-]+\.xaml)/);
+    const repairFile = fileMatch ? fileMatch[1] : "unknown";
     outcomeAutoRepairs.push({
       repairCode,
-      file: fileMatch ? fileMatch[1] : "unknown",
+      file: repairFile,
       description: fix,
+      developerAction: `No action required — auto-repaired (${repairCode}) in ${repairFile}`,
+      estimatedEffortMinutes: 1,
     });
   }
 
@@ -2255,15 +2258,24 @@ ${depEntries}
       file: v.file || "unknown",
       detail: v.detail,
       severity: v.severity as "warning",
+      developerAction: `Review warning in ${v.file || "unknown"}: ${v.check} — ${v.detail.slice(0, 80)}`,
+      estimatedEffortMinutes: 5,
     }));
+
+  const propertyRemediations = outcomeRemediations.filter(r => r.level === "property");
+  const nonPropertyRemediations = outcomeRemediations.filter(r => r.level !== "property");
+
+  const allRemediationEffort = outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0);
+  const qualityWarningEffort = qualityWarnings.reduce((s, w) => s + (w.estimatedEffortMinutes || 0), 0);
 
   const outcomeReport: PipelineOutcomeReport = {
     fullyGeneratedFiles: fullyGenerated,
     autoRepairs: outcomeAutoRepairs,
-    remediations: outcomeRemediations,
+    remediations: nonPropertyRemediations,
+    propertyRemediations,
     downgradeEvents: [],
     qualityWarnings,
-    totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
+    totalEstimatedEffortMinutes: allRemediationEffort + qualityWarningEffort,
   };
 
   if (buildCacheKey && fingerprint) {

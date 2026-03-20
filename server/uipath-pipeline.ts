@@ -17,6 +17,7 @@ import {
   validateXamlContent,
   type XamlGap,
 } from "./xaml-generator";
+import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import { runQualityGate, type QualityGateResult } from "./uipath-quality-gate";
@@ -143,15 +144,20 @@ export interface DowngradeEvent {
   timestamp: Date;
 }
 
-export type RemediationLevel = "activity" | "sequence" | "workflow";
+export type RemediationLevel = "property" | "activity" | "sequence" | "workflow" | "package";
 
 export type RemediationCode =
+  | "STUB_PROPERTY_BAD_EXPRESSION"
+  | "STUB_PROPERTY_MISSING_SELECTOR"
+  | "STUB_PROPERTY_UNSUPPORTED_TYPE"
+  | "STUB_PROPERTY_INVALID_VALUE"
   | "STUB_ACTIVITY_CATALOG_VIOLATION"
   | "STUB_ACTIVITY_BLOCKED_PATTERN"
   | "STUB_ACTIVITY_OBJECT_OBJECT"
   | "STUB_ACTIVITY_PSEUDO_XAML"
   | "STUB_ACTIVITY_WELLFORMEDNESS"
   | "STUB_ACTIVITY_UNKNOWN"
+  | "STUB_ACTIVITY_PROPERTY_ESCALATION"
   | "STUB_SEQUENCE_MULTIPLE_FAILURES"
   | "STUB_SEQUENCE_WELLFORMEDNESS"
   | "STUB_WORKFLOW_BLOCKING"
@@ -180,6 +186,7 @@ export interface RemediationEntry {
   remediationCode: RemediationCode;
   originalTag?: string;
   originalDisplayName?: string;
+  propertyName?: string;
   reason: string;
   classifiedCheck: string;
   developerAction: string;
@@ -190,6 +197,8 @@ export interface AutoRepairEntry {
   repairCode: RepairCode;
   file: string;
   description: string;
+  developerAction: string;
+  estimatedEffortMinutes: number;
 }
 
 export interface DowngradeEventEntry {
@@ -197,6 +206,8 @@ export interface DowngradeEventEntry {
   fromMode: string;
   toMode: string;
   triggerReason: string;
+  developerAction: string;
+  estimatedEffortMinutes: number;
 }
 
 export interface QualityWarningEntry {
@@ -204,10 +215,15 @@ export interface QualityWarningEntry {
   check: string;
   detail: string;
   severity: "warning" | "blocking";
+  developerAction: string;
+  estimatedEffortMinutes: number;
 }
+
+export const PROPERTY_REMEDIATION_ESCALATION_THRESHOLD = 3;
 
 export interface PipelineOutcomeReport {
   remediations: RemediationEntry[];
+  propertyRemediations: RemediationEntry[];
   autoRepairs: AutoRepairEntry[];
   downgradeEvents: DowngradeEventEntry[];
   qualityWarnings: QualityWarningEntry[];
@@ -397,12 +413,14 @@ function buildDhgFromBuildResult(
   ctx: IdeaContext,
   buildResult: BuildResult,
   overrideXamlEntries?: { name: string; content: string }[],
+  generationMode?: GenerationMode,
 ): DhgResult {
   const sddContent = ctx.sdd?.content || "";
   const workflows = pkg.workflows || [];
   const xamlEntries = overrideXamlEntries || buildResult.xamlEntries;
 
   const wfNames = workflows.map((wf: { name?: string }) => (wf.name || "Workflow").replace(/\s+/g, "_"));
+  const effectiveWfNames = wfNames.length > 0 ? wfNames : xamlEntries.map(e => e.name.replace(".xaml", ""));
 
   const analysisReports: Array<{ fileName: string; report: AnalysisReport }> = [];
   for (const entry of xamlEntries) {
@@ -418,13 +436,14 @@ function buildDhgFromBuildResult(
   }));
 
   const extractedArtifacts = pkg.internal?.extractedArtifacts || undefined;
+  const projectName = pkg.projectName || ctx.idea.title.replace(/\s+/g, "_");
 
-  const dhgContent = generateDeveloperHandoffGuide({
-    projectName: pkg.projectName || ctx.idea.title.replace(/\s+/g, "_"),
+  const legacyDhgContent = generateDeveloperHandoffGuide({
+    projectName,
     description: pkg.description || ctx.idea.description,
     gaps: buildResult.gaps,
     usedPackages: buildResult.usedPackages,
-    workflowNames: wfNames.length > 0 ? wfNames : xamlEntries.map(e => e.name.replace(".xaml", "")),
+    workflowNames: effectiveWfNames,
     sddContent: sddContent || undefined,
     enrichment,
     useReFramework,
@@ -434,6 +453,18 @@ function buildDhgFromBuildResult(
     analysisReports,
     outcomeReport: buildResult.outcomeReport,
   });
+
+  let dhgContent = legacyDhgContent;
+
+  if (buildResult.outcomeReport) {
+    const dhgContext: DhgContext = {
+      projectName,
+      workflowNames: effectiveWfNames,
+      generationMode: generationMode || undefined,
+    };
+    const structuredDhg = generateDhgFromOutcomeReport(buildResult.outcomeReport, dhgContext);
+    dhgContent = legacyDhgContent + "\n\n---\n\n" + structuredDhg;
+  }
 
   return {
     dhgContent,
@@ -951,10 +982,10 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("dhg_generating", "Generating Developer Handoff Guide");
-    tracker.heartbeat("dhg_generating", () => "Analyzing workflows and writing guide");
-    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries);
-    tracker.complete("dhg_generating", "Handoff Guide generated", {
+    tracker.start("dhg_generation", "Generating Developer Handoff Guide");
+    tracker.heartbeat("dhg_generation", () => "Analyzing workflows and writing guide");
+    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode);
+    tracker.complete("dhg_generation", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
 

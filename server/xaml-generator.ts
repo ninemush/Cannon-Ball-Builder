@@ -3667,6 +3667,20 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
       md += `\n`;
     }
 
+    if (report.propertyRemediations && report.propertyRemediations.length > 0) {
+      md += `### Remediated — Per-Property (${report.propertyRemediations.length})\n\n`;
+      md += `Individual properties were replaced with safe defaults or placeholders. The rest of the activity remains intact.\n\n`;
+      md += `| # | File | Activity | Property | Code | Developer Action | Est. Minutes |\n`;
+      md += `|---|------|----------|----------|------|-----------------|-------------|\n`;
+      report.propertyRemediations.forEach((r, i) => {
+        const actName = r.originalDisplayName || r.originalTag || "—";
+        const propName = r.propertyName || "—";
+        const action = (r.developerAction || "").length > 80 ? (r.developerAction || "").slice(0, 77) + "..." : (r.developerAction || "—");
+        md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${propName}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes || "—"} |\n`;
+      });
+      md += `\n`;
+    }
+
     const activityRemediations = report.remediations.filter(r => r.level === "activity");
     const sequenceRemediations = report.remediations.filter(r => r.level === "sequence");
     const workflowRemediations = report.remediations.filter(r => r.level === "workflow");

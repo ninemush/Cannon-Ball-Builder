@@ -16,6 +16,120 @@ import { buildTemplateBlock } from "./catalog/xaml-template-builder";
 import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml } from "./lib/xml-utils";
 import { buildExpression, isValueIntent, type ValueIntent } from "./xaml/expression-builder";
+import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
+import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
+
+export interface PropertyRemediationRecord {
+  propertyName: string;
+  remediationCode: RemediationCode;
+  reason: string;
+  originalValue: string;
+  replacementValue: string;
+}
+
+export interface AssemblyRemediationContext {
+  fileName: string;
+  propertyRemediations: RemediationEntry[];
+  escalationThreshold: number;
+}
+
+let _activeRemediationContext: AssemblyRemediationContext | null = null;
+
+export function setRemediationContext(ctx: AssemblyRemediationContext): void {
+  _activeRemediationContext = ctx;
+}
+
+export function clearRemediationContext(): AssemblyRemediationContext | null {
+  const ctx = _activeRemediationContext;
+  _activeRemediationContext = null;
+  return ctx;
+}
+
+function recordPropertyRemediation(
+  propertyName: string,
+  remediationCode: RemediationCode,
+  reason: string,
+  activityTemplate: string,
+  displayName: string,
+): void {
+  if (!_activeRemediationContext) return;
+  _activeRemediationContext.propertyRemediations.push({
+    level: "property",
+    file: _activeRemediationContext.fileName,
+    remediationCode,
+    originalTag: activityTemplate,
+    originalDisplayName: displayName,
+    propertyName,
+    reason,
+    classifiedCheck: remediationCode,
+    developerAction: `Fix property "${propertyName}" on "${displayName}" (${activityTemplate}) in ${_activeRemediationContext.fileName} — ${reason}`,
+    estimatedEffortMinutes: estimatePropertyEffort(remediationCode),
+  });
+}
+
+function estimatePropertyEffort(code: RemediationCode): number {
+  const effortMap: Record<string, number> = {
+    "STUB_PROPERTY_BAD_EXPRESSION": 10,
+    "STUB_PROPERTY_MISSING_SELECTOR": 15,
+    "STUB_PROPERTY_UNSUPPORTED_TYPE": 5,
+    "STUB_PROPERTY_INVALID_VALUE": 5,
+  };
+  return effortMap[code] || 5;
+}
+
+function validatePropertyValue(
+  key: string,
+  value: string,
+  schema: any,
+  templateName: string,
+): { valid: boolean; code: RemediationCode; reason: string } | null {
+  if (value === "[object Object]" || value === "undefined" || value === "null") {
+    return {
+      valid: false,
+      code: "STUB_PROPERTY_BAD_EXPRESSION",
+      reason: `Property "${key}" contains serialization artifact "${value}"`,
+    };
+  }
+
+  if (key.toLowerCase() === "selector" || key.toLowerCase().endsWith("selector")) {
+    if (!value || value === "" || value === '""') {
+      return {
+        valid: false,
+        code: "STUB_PROPERTY_MISSING_SELECTOR",
+        reason: `Property "${key}" has empty or missing selector value`,
+      };
+    }
+  }
+
+  if (schema) {
+    const propDef = schema.activity?.properties?.find((p: any) => p.name === key);
+    if (propDef?.validValues && propDef.validValues.length > 0) {
+      const normalizedValue = value.replace(/^\[|\]$/g, "").trim();
+      if (!propDef.validValues.includes(normalizedValue) && !propDef.validValues.includes(value)) {
+        return {
+          valid: false,
+          code: "STUB_PROPERTY_INVALID_VALUE",
+          reason: `Property "${key}" has value "${value}" which is not in valid values: ${propDef.validValues.join(", ")}`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function getSafeDefaultForProperty(key: string, code: RemediationCode): string {
+  if (code === "STUB_PROPERTY_MISSING_SELECTOR") {
+    return '[TODO: Capture selector using UiExplorer]';
+  }
+  if (code === "STUB_PROPERTY_BAD_EXPRESSION") {
+    return '[TODO: Replace with valid expression]';
+  }
+  if (code === "STUB_PROPERTY_INVALID_VALUE") {
+    return '[TODO: Set valid value]';
+  }
+  return `[TODO: Fix ${key}]`;
+}
 
 function mapClrType(type: string): string {
   const lower = type.toLowerCase();
@@ -321,10 +435,55 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
     schema = catalogService.getActivitySchema(templateName);
   }
 
+  const escalationThreshold = _activeRemediationContext?.escalationThreshold ?? PROPERTY_REMEDIATION_ESCALATION_THRESHOLD;
+  const propertyFailures: PropertyRemediationRecord[] = [];
+  const pendingPropertyRemediations: Array<{ propertyName: string; code: RemediationCode; reason: string }> = [];
+
   for (const [key, rawValue] of Object.entries(props)) {
     if (key.startsWith("_") || key === "displayName") continue;
 
     const value = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : String(rawValue);
+
+    const validationResult = validatePropertyValue(key, value, schema, templateName);
+    if (validationResult && _activeRemediationContext) {
+      const safeDefault = getSafeDefaultForProperty(key, validationResult.code);
+      propertyFailures.push({
+        propertyName: key,
+        remediationCode: validationResult.code,
+        reason: validationResult.reason,
+        originalValue: value,
+        replacementValue: safeDefault,
+      });
+    }
+
+    if (propertyFailures.length > escalationThreshold) {
+      if (_activeRemediationContext) {
+        _activeRemediationContext.propertyRemediations.push({
+          level: "activity",
+          file: _activeRemediationContext.fileName,
+          remediationCode: "STUB_ACTIVITY_PROPERTY_ESCALATION",
+          originalTag: templateName,
+          originalDisplayName: node.displayName,
+          propertyName: "(escalated)",
+          reason: `${propertyFailures.length} properties failed validation (threshold: ${escalationThreshold}) — escalating to activity-level stub`,
+          classifiedCheck: "STUB_ACTIVITY_PROPERTY_ESCALATION",
+          developerAction: `Re-implement "${node.displayName}" (${templateName}) in ${_activeRemediationContext.fileName} — ${propertyFailures.length} properties failed: ${propertyFailures.map(f => f.propertyName).join(', ')}`,
+          estimatedEffortMinutes: 20,
+        });
+      }
+      return `<ui:Comment Text="[TODO: Re-implement ${escapeXml(templateName)} activity — ${escapeXml(node.displayName)}. ${propertyFailures.length} properties failed validation. Original properties: ${propertyFailures.map(f => f.propertyName).join(', ')}]" DisplayName="${displayName} (stub)" />`;
+    }
+
+    let effectiveValue = value;
+    if (validationResult && _activeRemediationContext) {
+      const safeDefault = getSafeDefaultForProperty(key, validationResult.code);
+      effectiveValue = safeDefault;
+      pendingPropertyRemediations.push({
+        propertyName: key,
+        code: validationResult.code,
+        reason: validationResult.reason,
+      });
+    }
 
     let isChildElement = false;
     if (schema) {
@@ -333,7 +492,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
         isChildElement = true;
         const wrapper = propDef.argumentWrapper || "InArgument";
         const typeArg = propDef.typeArguments ? ` x:TypeArguments="${propDef.typeArguments}"` : "";
-        const wrappedValue = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : smartBracketWrap(value);
+        const wrappedValue = validationResult ? effectiveValue : (isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : smartBracketWrap(effectiveValue));
         childParts.push(
           `  <${tag}.${key}>\n` +
           `    <${wrapper}${typeArg}>${wrappedValue}</${wrapper}>\n` +
@@ -343,8 +502,12 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
     }
 
     if (!isChildElement) {
-      attrParts.push(`${key}="${escapeXml(value)}"`);
+      attrParts.push(`${key}="${escapeXml(effectiveValue)}"`);
     }
+  }
+
+  for (const pending of pendingPropertyRemediations) {
+    recordPropertyRemediation(pending.propertyName, pending.code, pending.reason, templateName, node.displayName);
   }
 
   if (node.outputVar) {
