@@ -940,9 +940,12 @@ ${content}`
           const existingData = JSON.parse(existingUiPath.content.slice(8, -1));
           if ((existingData.workflows || []).length > 0) {
             res.setHeader("Content-Type", "text/event-stream");
-            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Cache-Control", "no-cache, no-transform");
             res.setHeader("Connection", "keep-alive");
+            res.setHeader("X-Accel-Buffering", "no");
             res.flushHeaders();
+            res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
+            if (typeof (res as any).flush === "function") (res as any).flush();
 
             const cachedResult = getCachedPipelineResult(ideaId as string);
             let cachedStatus = "READY";
@@ -981,9 +984,12 @@ ${content}`
       }
 
       res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
       res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
+      if (typeof (res as any).flush === "function") (res as any).flush();
 
       const sendProgress = (message: string) => {
         res.write(`data: ${JSON.stringify({ progress: message })}\n\n`);
@@ -1101,6 +1107,14 @@ ${content}`
           sendProgress(event.message);
         }
       };
+
+      const heartbeatInterval = setInterval(() => {
+        try {
+          res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
+          if (typeof (res as any).flush === "function") (res as any).flush();
+        } catch {}
+      }, 15000);
+      req.on("close", () => clearInterval(heartbeatInterval));
 
       let completedTemplateComplianceScore: number | undefined;
       let completedPipelineStatus: string = "READY";

@@ -683,7 +683,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [deployStep, setDeployStep] = useState<string>("");
   const [classifiedIntent, setClassifiedIntent] = useState<string>("");
   const [liveStatus, setLiveStatus] = useState<string>("");
-  type UiPathRunStatus = "BUILDING" | "READY" | "READY_WITH_WARNINGS" | "FALLBACK_READY" | "FAILED";
+  type UiPathRunStatus = "BUILDING" | "STALLED" | "READY" | "READY_WITH_WARNINGS" | "FALLBACK_READY" | "FAILED";
   type UiPathRunWarning = { code: string; message: string; stage: string; recoverable: boolean };
   type UiPathOutcomeSummary = { stubbedActivities: number; stubbedSequences: number; stubbedWorkflows: number; autoRepairs: number; fullyGenerated: number; totalEstimatedMinutes: number };
   interface UiPathRunState {
@@ -815,6 +815,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const uipathGenRequestIdRef = useRef(0);
   const uipathGenConsumedIdRef = useRef(0);
   const uipathGenInFlightRef = useRef(false);
+  const uipathAbortControllerRef = useRef<AbortController | null>(null);
+  const uipathUserCancelledRef = useRef(false);
   const generateDocRef = useRef<((type: "PDD" | "SDD") => void) | null>(null);
   const generateUiPathRef = useRef<((force?: boolean, source?: "chat" | "retry" | "approval" | "auto") => void) | null>(null);
   const generateToBeRef = useRef<(() => void) | null>(null);
@@ -1621,6 +1623,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     const runId = crypto.randomUUID();
     console.log("[UiPath Trigger] starting run %s (source=%s, force=%s) — POST /api/ideas/%s/generate-uipath", runId, source, force, idea.id);
     uipathGenInFlightRef.current = true;
+    uipathUserCancelledRef.current = false;
     uipathGenConsumedIdRef.current = uipathGenRequestIdRef.current;
     console.log("[UiPath Trigger] trigger consumed (consumedId=%d)", uipathGenConsumedIdRef.current);
     setIsGeneratingDoc(true);
@@ -1645,6 +1648,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     setPipelineComplete(false);
     pipelineEntryCounter.current = 0;
     let safetyTimer: ReturnType<typeof setTimeout> | null = null;
+    let stalledLivenessInterval: ReturnType<typeof setInterval> | null = null;
     const activeRunId = runId;
     const updateRun = (patch: Partial<UiPathRunState>) => {
       setCurrentUiPathRun(prev => {
@@ -1656,23 +1660,30 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     };
     const resetSafetyTimer = () => {
       if (safetyTimer) clearTimeout(safetyTimer);
+      if (stalledLivenessInterval) { clearInterval(stalledLivenessInterval); stalledLivenessInterval = null; }
+      const currentStatus = currentUiPathRunRef.current?.status;
+      if (currentStatus === "STALLED") {
+        updateRun({ status: "BUILDING" });
+        setLiveStatus("Generating UiPath package...");
+      }
       safetyTimer = setTimeout(() => {
         if (uipathGenInFlightRef.current && currentUiPathRunRef.current?.runId === activeRunId) {
-          console.warn("[UiPath Trigger] safety timeout — no progress in 90s, resetting stuck state (run=%s)", activeRunId);
-          uipathGenInFlightRef.current = false;
-          setIsGeneratingDoc(false);
-          setGeneratingDocType("");
-          setLiveStatus("");
-          setClassifiedIntent("");
-          isGeneratingDocRef.current = false;
-          generatingDocTypeRef.current = "";
-          updateRun({ status: "FAILED" });
+          console.warn("[UiPath Trigger] safety timeout — no progress in 90s, entering STALLED state (run=%s)", activeRunId);
+          updateRun({ status: "STALLED" });
+          setLiveStatus("Still processing — waiting for server updates...");
+          stalledLivenessInterval = setInterval(() => {
+            if (uipathGenInFlightRef.current && currentUiPathRunRef.current?.runId === activeRunId && currentUiPathRunRef.current?.status === "STALLED") {
+              console.log("[UiPath Trigger] liveness check — still waiting for server (run=%s, elapsed=%ds)", activeRunId, Math.round((Date.now() - newRun.startedAt) / 1000));
+              setLiveStatus(`Still processing — waiting for server updates... (${Math.round((Date.now() - newRun.startedAt) / 1000)}s)`);
+            }
+          }, 30000);
         }
       }, 90000);
     };
     resetSafetyTimer();
     try {
       const controller = new AbortController();
+      uipathAbortControllerRef.current = controller;
       const timeout = setTimeout(() => controller.abort(), 300000);
       const url = force ? `/api/ideas/${idea.id}/generate-uipath?force=true` : `/api/ideas/${idea.id}/generate-uipath`;
       const res = await fetch(url, {
@@ -1711,6 +1722,10 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 if (line.startsWith("data: ")) {
                   try {
                     const data = JSON.parse(line.slice(6));
+                    if (data.heartbeat) {
+                      resetSafetyTimer();
+                      continue;
+                    }
                     if (data.pipelineEvent) {
                       resetSafetyTimer();
                       const evt = data.pipelineEvent;
@@ -1770,7 +1785,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             }
             if (success) {
               const currentStatus = currentUiPathRunRef.current?.status;
-              if (!currentStatus || currentStatus === "BUILDING") {
+              if (!currentStatus || currentStatus === "BUILDING" || currentStatus === "STALLED") {
                 updateRun({ status: "READY" });
               }
               toast({
@@ -1781,7 +1796,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           }
         } else {
           const currentStatus = currentUiPathRunRef.current?.status;
-          if (!currentStatus || currentStatus === "BUILDING") {
+          if (!currentStatus || currentStatus === "BUILDING" || currentStatus === "STALLED") {
             updateRun({ status: "READY" });
           }
           toast({
@@ -1793,11 +1808,18 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     } catch (err: any) {
       updateRun({ status: "FAILED" });
       if (err?.name === "AbortError") {
-        toast({
-          title: "Timed out",
-          description: "Package generation took too long. Please try again.",
-          variant: "destructive",
-        });
+        if (uipathUserCancelledRef.current) {
+          toast({
+            title: "Cancelled",
+            description: "Package generation was cancelled.",
+          });
+        } else {
+          toast({
+            title: "Timed out",
+            description: "Package generation took too long. Please try again.",
+            variant: "destructive",
+          });
+        }
       } else {
         console.error("Error generating UiPath package:", err);
         toast({
@@ -1808,6 +1830,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       }
     } finally {
       if (safetyTimer) clearTimeout(safetyTimer);
+      if (stalledLivenessInterval) clearInterval(stalledLivenessInterval);
+      uipathAbortControllerRef.current = null;
       const finalRun = currentUiPathRunRef.current;
       if (finalRun && finalRun.runId === activeRunId) {
         setCompletedUiPathRuns(prev => {
@@ -2325,6 +2349,45 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           </div>
         )}
 
+        {currentUiPathRun?.status === "STALLED" && (
+          <div className="flex justify-center py-2" data-testid="uipath-stalled-indicator">
+            <div className="flex flex-col items-center gap-2">
+              <div className="flex items-center gap-2 text-xs text-amber-500">
+                <Package className="h-3.5 w-3.5 animate-pulse" />
+                <span>Still processing — waiting for server updates...</span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                onClick={() => {
+                  uipathUserCancelledRef.current = true;
+                  if (uipathAbortControllerRef.current) {
+                    uipathAbortControllerRef.current.abort();
+                    uipathAbortControllerRef.current = null;
+                  }
+                  setCurrentUiPathRun(prev => {
+                    if (!prev) return prev;
+                    const updated = { ...prev, status: "FAILED" as UiPathRunStatus };
+                    currentUiPathRunRef.current = updated;
+                    return updated;
+                  });
+                  uipathGenInFlightRef.current = false;
+                  setIsGeneratingDoc(false);
+                  setGeneratingDocType("");
+                  setLiveStatus("");
+                  setClassifiedIntent("");
+                  isGeneratingDocRef.current = false;
+                  generatingDocTypeRef.current = "";
+                }}
+                data-testid="button-cancel-stalled"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
         {currentUiPathRun?.status === "FAILED" && !isGeneratingDoc && (
           <div className="flex justify-center py-2" data-testid="uipath-failed-section">
             <div className="flex flex-col items-center gap-2">
@@ -2346,7 +2409,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         {(() => {
           const hasUiPath = displayMessages.some((m) => m.uipathData);
           const hasSddApproval = !!(sddApprovalData?.approval);
-          if (hasSddApproval && !hasUiPath && !isGeneratingDoc && (!currentUiPathRun || (currentUiPathRun.status !== "BUILDING" && currentUiPathRun.status !== "FAILED"))) {
+          if (hasSddApproval && !hasUiPath && !isGeneratingDoc && (!currentUiPathRun || (currentUiPathRun.status !== "BUILDING" && currentUiPathRun.status !== "STALLED" && currentUiPathRun.status !== "FAILED"))) {
             return (
               <div className="flex justify-center py-2" data-testid="uipath-generate-section">
                 <Button

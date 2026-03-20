@@ -503,9 +503,12 @@ export function registerUiPathRoutes(app: Express): void {
     }
 
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
+    if (typeof (res as any).flush === "function") (res as any).flush();
 
     const sendEvent = (data: Record<string, any>) => {
       try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {}
