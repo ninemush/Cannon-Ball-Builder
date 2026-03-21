@@ -1,0 +1,97 @@
+I want a focused impact/migration analysis for moving UiPath integration to MetadataService as the single source of truth.
+
+Question:
+What would it take to switch from the current mixed model (MetadataService + hardcoded endpoint/scope logic) to using only MetadataService for UiPath integration metadata?
+
+I want this analyzed concretely against the current codebase.
+
+What I need you to analyze
+
+1. Current hardcoded integration truth
+Identify all current hardcoded UiPath integration truth that should eventually be retired, including:
+- endpoint roots
+- token endpoint usage
+- scope maps
+- service URL builders
+- probe-specific hardcoded assumptions
+- any hardcoded availability/optimistic logic
+
+2. Current MetadataService coverage
+Identify what MetadataService already covers today for UiPath integration metadata, including:
+- endpoints
+- scopes
+- confidence
+- reachability
+- freshness/verification info
+- any related snapshot-backed logic
+
+3. Gaps
+Identify what services / endpoint families / scope families are still missing from MetadataService that are currently used by probes, calls, deploy/push flows, or diagnostics.
+
+I want this broken down by service area at minimum:
+- Orchestrator
+- Test Manager
+- Document Understanding
+- Data Fabric / Data Service
+- Integration Service
+- Automation Ops
+- Automation Hub
+- IXP / Communications Mining
+- AI Center
+- Maestro / PIMS
+- Identity / token endpoint
+- any other currently probed or deployed UiPath services
+
+4. Impact on live API calls and flows
+For each area, analyze impact on:
+- GET/probe calls
+- POST/PUT/PATCH/DELETE deployment/provisioning calls
+- package push/upload calls
+- connection tests/diagnostics
+- UI-facing status/probe summaries
+
+I want to know:
+- which paths would be unaffected
+- which paths would need a simple resolver swap
+- which paths would need deeper refactoring
+- which paths are highest regression risk
+
+5. Migration feasibility
+Based on the above, tell me:
+- whether moving to MetadataService-only is practical now
+- what additions MetadataService would need first
+- what the migration sequence should be
+- which hardcoded paths should be switched first
+- which should be switched last
+- whether any temporary compatibility layer is needed during migration
+
+Deliverable
+Please return:
+
+1. concise summary:
+- can we realistically move to MetadataService-only?
+- yes/no with explanation
+
+2. coverage matrix:
+- current hardcoded truth
+- current MetadataService coverage
+- missing metadata by service
+
+3. impact analysis:
+- probes
+- auth/token
+- deployment/provisioning
+- package push/upload
+- diagnostics/UI status
+
+4. migration plan:
+- prerequisites
+- order of migration
+- highest-risk areas
+- what hardcoded logic can be removed after each phase
+
+Important constraints
+- Do not propose a parallel second metadata system
+- Assume the desired end state is MetadataService as the single source of truth
+- Be explicit about gaps and risks
+- Be explicit about downstream impact on actual GET/POST/PUT/push flows, not just probe logic

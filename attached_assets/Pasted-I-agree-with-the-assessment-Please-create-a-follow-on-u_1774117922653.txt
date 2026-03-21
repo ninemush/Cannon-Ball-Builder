@@ -1,0 +1,75 @@
+I agree with the assessment.
+
+Please create a follow-on upstream task for catalog enforcement, with Task #148 as an explicit dependency.
+
+Reason:
+Task #148 fixes real generator correctness issues, but it does not fully solve the deeper problem that the activity catalog is still not acting as a hard executable contract for final activity emission.
+
+I want a separate task that focuses specifically on making the activity catalog authoritative at emission time.
+
+Requirements for the new task:
+1. Task #148 is a dependency / prerequisite
+2. The task must be upstream only — no manual patching of generated packages
+3. The task must include impact analysis and flow-safety constraints
+4. The goal is to eliminate activity-shape drift from catalog truth
+
+What I want the task to cover
+
+A. Root problem
+- the catalog is currently:
+  - a strong prompt aid
+  - a partial validation aid
+  - not a true executable contract for the most common emitted activities
+- hardcoded activity templates can emit shapes that drift from catalog truth
+- catalogService.isLoaded() false can silently degrade dynamic emission
+- post-assembly compliance can re-corrupt catalog-correct output
+- catalog validation currently warns/fixes but does not block enough
+
+B. Scope of the task
+The task should address:
+1. hardcoded template catalog-awareness
+   - validate or derive emitted property syntax from the catalog for core hardcoded activities
+2. fail-safe behavior when the catalog is not loaded
+   - no silent degradation into schema-less emission
+3. final-emission catalog validation
+   - after compliance/remediation, verify emitted activities still conform to catalog truth
+4. blocking severity for catalog-breaking violations
+   - property syntax mismatches that directly create Studio ErrorActivity behavior should not pass as soft warnings
+
+C. Impact analysis
+Please explicitly analyze:
+- what generator layers are affected:
+  - workflow-tree-assembler
+  - xaml-generator
+  - xaml-compliance
+  - package-assembler
+  - catalog-service
+- what adjacent app flows could be impacted:
+  - package generation
+  - package download
+  - deployment/provisioning
+  - document generation
+  - UI status/reporting
+- how regressions will be avoided
+
+D. Flow safety
+Include the non-negotiable constraint:
+- this must not break the rest of the app flow
+- current successful app behavior is the compatibility contract unless correctness requires an explicit change
+
+Deliverable
+Please return the new task with:
+1. task title/number
+2. root-cause summary
+3. impact analysis
+4. objective
+5. done looks like
+6. out of scope
+7. tasks
+8. relevant files
+9. acceptance criteria
+
+Important:
+- This should be a follow-on to #148, not a rewrite of #148
+- It should be focused on making the catalog authoritative at final emission time
+- The goal is to stop emitting activity XML that can drift away from catalog truth
