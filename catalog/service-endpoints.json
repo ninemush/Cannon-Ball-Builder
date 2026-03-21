@@ -44,6 +44,10 @@
     },
     "TM": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/testmanager_",
+      "alternateUrlTemplates": [
+        "https://cloud.uipath.com/{orgName}/{tenantName}/tmapi_",
+        "https://cloud.uipath.com/{orgName}/{tenantName}/testmanager"
+      ],
       "apiBasePath": "/api",
       "scopes": [
         "TM.TestCases",
@@ -70,6 +74,9 @@
     },
     "DU": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/du_",
+      "alternateUrlTemplates": [
+        "https://cloud.uipath.com/{orgName}/{tenantName}/documentunderstanding_"
+      ],
       "apiBasePath": "/api",
       "scopes": [
         "Du.Classification.Api",
@@ -126,6 +133,17 @@
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
       "verificationSource": "manual-seed"
     },
+    "REINFER": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/reinfer_",
+      "apiBasePath": "/api/v1",
+      "scopes": [
+        "Ixp.ApiAccess"
+      ],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
     "AI": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/aifabric_",
       "apiBasePath": "/api",
@@ -165,10 +183,73 @@
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
       "verificationSource": "manual-seed"
+    },
+    "INTEGRATIONSERVICE": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/integrationservice_",
+      "apiBasePath": "/api",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
+    "AUTOMATIONOPS": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/automationops_",
+      "apiBasePath": "/api/v1",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
+    "AUTOMATIONSTORE": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/automationstore_",
+      "apiBasePath": "/api/v1",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
+    "APPS": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/apps_",
+      "apiBasePath": "/api/v1",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
+    "ASSISTANT": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/assistant_",
+      "apiBasePath": "/api/v1",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
+    "AGENTS": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/agentstudio_",
+      "apiBasePath": "/api/v1",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
+    },
+    "AUTOPILOT": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/autopilot_",
+      "apiBasePath": "/api/v1",
+      "scopes": [],
+      "confidence": "inferred",
+      "reachabilityStatus": "unknown",
+      "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
+      "verificationSource": "manual-seed"
     }
   },
   "tokenEndpoint": "https://cloud.uipath.com/identity_/connect/token",
   "lastRefreshedAt": "2026-03-21T06:27:36.376Z",
   "lastVerifiedAt": "2026-03-21T06:27:36.376Z",
-  "snapshotVersion": "1.0.0"
+  "snapshotVersion": "1.1.0"
 }

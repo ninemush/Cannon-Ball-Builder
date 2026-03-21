@@ -22,7 +22,7 @@ import {
   BookOpen,
   MessageSquare,
 } from "lucide-react";
-import type { DeploymentResult, DeployReport } from "@shared/models/deployment";
+import type { DeploymentResult, DeployReport, ServiceLimitation } from "@shared/models/deployment";
 
 const artifactIcon = (artifact: string) => {
   const lower = artifact.toLowerCase();
@@ -299,6 +299,31 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           );
         })}
       </div>
+
+      {report.serviceLimitations && report.serviceLimitations.length > 0 && (
+        <div className="px-4 py-2 border-t border-border/50" data-testid="deploy-service-limitations">
+          <p className="text-[10px] font-medium text-amber-400 mb-1 flex items-center gap-1">
+            <AlertTriangle className="h-3 w-3" />
+            Pre-flight service limitations detected
+          </p>
+          <div className="space-y-0.5">
+            {report.serviceLimitations.map((lim, idx) => (
+              <div key={idx} className="flex items-center gap-1.5 text-[10px]" data-testid={`deploy-limitation-${idx}`}>
+                {lim.status === "unavailable" ? (
+                  <XCircle className="h-2.5 w-2.5 text-red-400/60 shrink-0" />
+                ) : lim.status === "limited" ? (
+                  <AlertTriangle className="h-2.5 w-2.5 text-amber-400 shrink-0" />
+                ) : (
+                  <Info className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+                )}
+                <span className="text-muted-foreground">
+                  <span className="text-foreground">{lim.service}</span>: {lim.reason}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className={`px-4 py-2 text-xs border-t border-border/50 ${allSuccess ? "text-green-400" : partialSuccess ? "text-green-400" : "text-muted-foreground"}`}>
         {allSuccess ? (

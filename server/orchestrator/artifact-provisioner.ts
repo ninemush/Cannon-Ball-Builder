@@ -1,6 +1,6 @@
 import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap, type AICenterSkill } from "../uipath-integration";
 import { uipathFetch, isGenuineApiResponse, isValidCreation } from "../uipath-fetch";
-import { getToken as getSharedToken, getTmToken, getTestManagerBaseUrl, type UiPathAuthConfig } from "../uipath-auth";
+import { getAccessToken, getToken as getSharedToken, getTmToken, getTestManagerBaseUrl, type UiPathAuthConfig } from "../uipath-auth";
 import { metadataService } from "../catalog/metadata-service";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { OrchestratorArtifacts, AgentDef, AgentToolDef, AgentEscalationRule, AgentContextGrounding, KnowledgeBaseDef, PromptTemplateDef, MaestroProcessDef } from "./manifest-manager";
@@ -46,7 +46,7 @@ function sanitizeErrorMessage(httpStatus: number, rawText: string): string {
     const parsed = JSON.parse(rawText);
     const msg = parsed.message || parsed.Message || parsed.error?.message || parsed.errorMessage;
     if (msg) return `Error ${httpStatus}: ${msg}`;
-  } catch {}
+  } catch (e: any) { /* JSON parse fallback - expected for non-JSON responses */ }
   const clean = rawText.replace(/[{}"\\]/g, "").replace(/traceId:[^,]+,?/gi, "").replace(/errorCode:\d+,?/gi, "").trim();
   if (clean.length > 150) return `Error ${httpStatus}: ${clean.slice(0, 150)}...`;
   return `Error ${httpStatus}: ${clean || "Request failed"}`;
@@ -61,24 +61,6 @@ function generateUuid(): string {
     else uuid += hex[Math.floor(Math.random() * 16)];
   }
   return uuid;
-}
-
-  async function getAccessToken(config: UiPathConfig): Promise<string> {
-  const params = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
-    scope: config.scopes,
-  });
-  const tokenUrl = metadataService.getTokenEndpoint();
-  const res = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params.toString(),
-  });
-  if (!res.ok) throw new Error(`Auth failed (${res.status})`);
-  const data = await res.json();
-  return data.access_token;
 }
 
 function orchBase(config: UiPathConfig): string {
@@ -117,7 +99,7 @@ function parseOrchestratorResponse(text: string): { data: any; error: string | n
       }
     }
     return { data, error: null };
-  } catch {
+  } catch (e: any) {
     return { data: null, error: `Invalid JSON response: ${text.slice(0, 200)}` };
   }
 }
@@ -159,7 +141,7 @@ function isGenuineServiceResponse(responseText: string): { genuine: boolean; rea
       return { genuine: false, reason: "Empty JSON object — service may not be available" };
     }
     return { genuine: true };
-  } catch {
+  } catch (e: any) {
     return { genuine: false, reason: `Non-JSON response: ${trimmed.slice(0, 100)}` };
   }
 }
@@ -194,7 +176,7 @@ function validateCreationResponse(responseText: string): { valid: boolean; data:
       return { valid: false, data, error: "Response missing expected fields (Id, Name, Key) — creation may not have succeeded" };
     }
     return { valid: true, data };
-  } catch {
+  } catch (e: any) {
     return { valid: false, data: null, error: `Non-JSON creation response: ${responseText.slice(0, 200)}` };
   }
 }
@@ -250,7 +232,7 @@ async function verifyFolderAndRelease(
           console.log(`[UiPath Deploy] Folder verified: ${folderData.value[0].DisplayName} (ID: ${folderId})`);
         }
       }
-    } catch { /* non-blocking */ }
+    } catch (e: any) { console.warn(`[UiPath Deploy] Folder/release verify failed (non-blocking): ${e.message}`); }
   }
 
   if (releaseId) {
@@ -297,11 +279,11 @@ async function provisionQueues(
           const desiredUniqueRef = q.uniqueReference ?? false;
           let desiredJsonSchema: string | undefined;
           if (q.jsonSchema) {
-            try { JSON.parse(q.jsonSchema); desiredJsonSchema = q.jsonSchema; } catch {}
+            try { JSON.parse(q.jsonSchema); desiredJsonSchema = q.jsonSchema; } catch (e: any) { /* invalid JSON schema - skip */ }
           }
           let desiredOutputSchema: string | undefined;
           if (q.outputSchema) {
-            try { JSON.parse(q.outputSchema); desiredOutputSchema = q.outputSchema; } catch {}
+            try { JSON.parse(q.outputSchema); desiredOutputSchema = q.outputSchema; } catch (e: any) { /* invalid output schema - skip */ }
           }
 
           const needsUpdate =
@@ -361,7 +343,7 @@ async function provisionQueues(
         try {
           JSON.parse(q.jsonSchema);
           body.SpecificDataJsonSchema = q.jsonSchema;
-        } catch {
+        } catch (e: any) {
           console.warn(`[UiPath Deploy] Queue "${q.name}" has invalid jsonSchema — skipping schema attachment`);
         }
       }
@@ -369,7 +351,7 @@ async function provisionQueues(
         try {
           JSON.parse(q.outputSchema);
           body.OutputDataJsonSchema = q.outputSchema;
-        } catch {
+        } catch (e: any) {
           console.warn(`[UiPath Deploy] Queue "${q.name}" has invalid outputSchema — skipping`);
         }
       }
@@ -996,7 +978,7 @@ export async function detectAvailableRuntimeType(base: string, hdrs: Record<stri
         result.warning = undefined;
       }
     }
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn(`[UiPath Deploy] Machine template check failed: ${e.message}`); }
 
   try {
     let robotValues: any[];
@@ -1028,7 +1010,7 @@ export async function detectAvailableRuntimeType(base: string, hdrs: Record<stri
         }
       }
     }
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn(`[UiPath Deploy] Robot enumeration check failed: ${e.message}`); }
 
   if (result.hasServerless && result.hasUnattendedSlots) {
     result.runtimeType = "Unattended";
@@ -1453,7 +1435,7 @@ async function provisionEnvironments(
       environmentsDeprecated = true;
       console.log(`[UiPath Deploy] Environments API returned ${probeRes.status} — deprecated on modern folder tenants (post Oct 2023)`);
     }
-  } catch { /* continue with creation attempt */ }
+  } catch (e: any) { console.warn(`[UiPath Deploy] Environment probe failed: ${e.message}`); }
 
   if (environmentsDeprecated) {
     return environments.map(env => ({
@@ -1649,7 +1631,7 @@ async function provisionActionCenter(
         }
         try {
           formSchemaJson = JSON.stringify(formSchema);
-        } catch {}
+        } catch (e: any) { /* form schema serialization failed - skip */ }
       }
 
       const odataBody: Record<string, any> = { Name: ac.taskCatalog, Description: descText };
@@ -1823,8 +1805,8 @@ async function provisionDataFabricEntities(
     const probe = await fetch(`${entityServiceBase}/Entity`, { headers: hdrs });
     serviceReachable = probe.ok || probe.status === 401 || probe.status === 403;
     console.log(`[UiPath Deploy] Data Fabric Entity API probe: ${probe.status} (reachable=${serviceReachable})`);
-  } catch {
-    console.log("[UiPath Deploy] Data Fabric Entity API not reachable");
+  } catch (e: any) {
+    console.log(`[UiPath Deploy] Data Fabric Entity API not reachable: ${e.message}`);
   }
 
   for (const entity of entities) {
@@ -1893,7 +1875,7 @@ async function provisionDataFabricEntities(
         try {
           const parsed = JSON.parse(createText);
           createdId = parsed.Id || parsed.id;
-        } catch {}
+        } catch (e: any) { /* JSON parse of create response - non-critical */ }
         const refsNote = entity.referencedBy?.length ? ` Referenced by: ${entity.referencedBy.join(", ")}` : "";
         results.push({
           artifact: "Data Fabric Entity",
@@ -2092,7 +2074,7 @@ async function provisionDocUnderstanding(
           details += `. Classifiers: ${clNames.length ? clNames.join(", ") : "none"}`;
           details += `. Extractors: ${exNames.length ? exNames.join(", ") : "none"}`;
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath Deploy] DU project probe parse failed: ${e.message}`); }
 
       const approach = artifact.extractionApproach || "classic_du";
       const approachLabel = approach === "generative" ? "Generative Extraction" : approach === "hybrid" ? "Hybrid (Classic DU + Generative)" : "Classic DU";
@@ -2123,7 +2105,7 @@ async function provisionDocUnderstanding(
           details += `. Classifiers: ${clNames.length ? clNames.join(", ") : "none"}`;
           details += `. Extractors: ${exNames.length ? exNames.join(", ") : "none"}`;
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath Deploy] DU existing project parse failed: ${e.message}`); }
 
       const approach = artifact.extractionApproach || "classic_du";
       const approachLabel = approach === "generative" ? "Generative Extraction" : approach === "hybrid" ? "Hybrid (Classic DU + Generative)" : "Classic DU";
@@ -2327,14 +2309,14 @@ async function provisionTestCases(
               console.log(`[UiPath Deploy] No project match for "${normalizedProcessName}" (stripped: "${strippedProcessName}") among ${projects.length} project(s): [${projectNames}] — will create new project`);
             }
           }
-        } catch {}
+        } catch (e: any) { console.warn(`[UiPath Deploy] TM project list parse failed: ${e.message}`); }
         break;
       }
       if (projRes.status === 401) {
         console.log(`[UiPath Deploy] Test Manager returned 401 — TM token may lack required scopes`);
         continue;
       }
-    } catch { continue; }
+    } catch (e: any) { continue; }
   }
 
   if (!activeTmBase) {
@@ -2490,7 +2472,7 @@ async function provisionTestCases(
                 results.push({ artifact: "Test Project", name: projName, status: "failed", message: `Project creation returned 409 but no name match found among ${projects.length} existing project(s) (tried exact, PascalCase-expanded, and normalized matching)` });
               }
             }
-          } catch {}
+          } catch (e: any) { console.warn(`[UiPath Deploy] TM 409 recovery parse failed: ${e.message}`); }
         }
       } else if (createProjResult.status === 403 || createProjResult.status === 401) {
         console.log(`[UiPath Deploy] Test project creation failed with ${createProjResult.status} — insufficient permissions`);
@@ -2794,7 +2776,7 @@ async function provisionTestCases(
                   } else {
                     console.log(`[UiPath Deploy] Swagger JSON probe ${sjUrl} -> ${sjRes.status}`);
                   }
-                } catch {}
+                } catch (e: any) { console.warn(`[UiPath Deploy] Swagger JSON parse failed: ${e.message}`); }
               }
             } catch (swaggerErr: any) {
               console.log(`[UiPath Deploy] Swagger probe failed: ${swaggerErr.message}`);
@@ -2933,7 +2915,7 @@ async function provisionRequirements(
         }
         break;
       }
-    } catch { continue; }
+    } catch (e: any) { continue; }
   }
 
   for (const req of requirements) {
@@ -2978,7 +2960,7 @@ async function provisionRequirements(
           created = true;
           break;
         }
-      } catch { continue; }
+      } catch (e: any) { continue; }
     }
     if (!created) {
       results.push({ artifact: "Requirement", name: req.name, status: "failed", message: "All requirement creation endpoints returned errors" });
@@ -3014,7 +2996,7 @@ async function provisionTestSets(
         console.log(`[UiPath Deploy] Found ${existingTestSets.length} existing test sets in project ${projectId}`);
         break;
       }
-    } catch { continue; }
+    } catch (e: any) { continue; }
   }
 
   for (const ts of testSets) {
@@ -3109,7 +3091,7 @@ async function provisionTestSets(
           created = true;
           break;
         }
-      } catch { continue; }
+      } catch (e: any) { continue; }
     }
     if (!created) {
       results.push({ artifact: "Test Set", name: ts.name, status: "failed", message: "All test set creation endpoints returned errors" });
@@ -3439,7 +3421,7 @@ async function provisionRobotAccounts(
 
           if (res.ok || res.status === 201) {
             let createdId;
-            try { const parsed = JSON.parse(text); createdId = parsed.id || parsed.Id; } catch { continue; }
+            try { const parsed = JSON.parse(text); createdId = parsed.id || parsed.Id; } catch (e: any) { continue; }
             if (config.folderId) {
               try {
                 const assignUrl = `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers`;
@@ -3458,7 +3440,7 @@ async function provisionRobotAccounts(
             created = true;
             break;
           }
-        } catch { continue; }
+        } catch (e: any) { continue; }
       }
     }
 
@@ -3475,7 +3457,7 @@ async function provisionRobotAccounts(
           results.push({ artifact: "Robot Account", name: ra.name, status: "exists", message: "Already exists" });
           created = true;
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath Deploy] Robot account OData creation failed: ${e.message}`); }
     }
 
     if (!created) {
@@ -4043,7 +4025,7 @@ async function provisionMaestroProcesses(
             const existing = checkData.value?.[0] || checkData[0];
             existingId = existing.id || existing.Id;
           }
-        } catch {}
+        } catch (e: any) { console.warn(`[UiPath Deploy] Maestro existing process check failed: ${e.message}`); }
       }
 
       if (existingId) {
@@ -4074,7 +4056,7 @@ async function provisionMaestroProcesses(
           try {
             const created = JSON.parse(createText);
             createdId = created.id || created.Id;
-          } catch {}
+          } catch (e: any) { /* Maestro create response parse - non-critical */ }
           results.push({
             artifact: "Maestro Process",
             name: mp.name,
@@ -4132,7 +4114,7 @@ export async function deployAllArtifacts(
     try {
       svcAvail = await probeServiceAvailability();
       console.log(`[UiPath Deploy] Service availability: AC=${svcAvail.actionCenter}, TM=${svcAvail.testManager}, DU=${svcAvail.documentUnderstanding}, GenExtract=${svcAvail.generativeExtraction}, CommsMining=${svcAvail.communicationsMining}, DS=${svcAvail.dataService}, PM=${svcAvail.platformManagement}, Env=${svcAvail.environments}, Trig=${svcAvail.triggers}, Agents=${svcAvail.agents}, AI=${svcAvail.aiCenter}, Maestro=${svcAvail.maestro}`);
-    } catch { /* non-critical — proceed without filtering */ }
+    } catch (e: any) { console.warn(`[UiPath Deploy] Service availability probe failed (non-critical): ${e.message}`); }
 
     const referencedSkillNames = extractReferencedMLSkillNames(artifacts, trackedMLSkillNames);
     if (referencedSkillNames.length > 0 && svcAvail?.aiCenter && svcAvail.aiCenterSkills && svcAvail.aiCenterSkills.length > 0) {
@@ -4390,7 +4372,33 @@ export async function deployAllArtifacts(
     if (failed > 0) summary += `, ${failed} failed`;
 
     console.log(`[UiPath Deploy] ${summary}`);
-    return { results: allResults, summary };
+
+    const serviceLimitations: Array<{ service: string; status: "limited" | "unavailable" | "unknown"; reason: string }> = [];
+    if (svcAvail?.serviceDetails) {
+      const SERVICE_LABELS: Record<string, string> = {
+        orchestrator: "Orchestrator", actionCenter: "Action Center", testManager: "Test Manager",
+        documentUnderstanding: "Document Understanding", generativeExtraction: "Generative Extraction",
+        communicationsMining: "Communications Mining", dataService: "Data Service",
+        agents: "Agents", maestro: "Maestro", integrationService: "Integration Service",
+        aiCenter: "AI Center", apps: "Apps",
+      };
+      for (const [key, detail] of Object.entries(svcAvail.serviceDetails)) {
+        if (detail.status === "limited" || detail.status === "unavailable" || detail.status === "unknown") {
+          const label = SERVICE_LABELS[key] || key;
+          serviceLimitations.push({
+            service: label,
+            status: detail.status === "unknown" ? "unknown" : detail.status,
+            reason: detail.status === "limited"
+              ? `Detected with limited confidence (${detail.evidence})`
+              : detail.status === "unavailable"
+                ? `Not reachable on this tenant (${detail.evidence})`
+                : `Could not determine availability (${detail.evidence})`,
+          });
+        }
+      }
+    }
+
+    return { results: allResults, summary, serviceLimitations: serviceLimitations.length > 0 ? serviceLimitations : undefined };
   } catch (err: any) {
     console.error(`[UiPath Deploy] Fatal error:`, err.message);
     return { results: allResults, summary: `Deployment failed: ${err.message}` };

@@ -863,6 +863,7 @@ function OrchestratorHealthPanel() {
     tenantName?: string;
     latencyMs?: number;
     checks: Array<{ name: string; status: string; detail: string; remediation?: string }>;
+    serviceDetails?: Record<string, { status: string; confidence: string; evidence: string; reachable: string }>;
   }>({
     queryKey: ["/api/uipath/diagnostics"],
     enabled: false,
@@ -1053,6 +1054,32 @@ function OrchestratorHealthPanel() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {diagExpanded && diagnostics?.serviceDetails && Object.keys(diagnostics.serviceDetails).length > 0 && (
+        <div className="space-y-2" data-testid="service-details-grid">
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Service Availability</h4>
+          <div className="grid grid-cols-2 gap-1.5">
+            {Object.entries(diagnostics.serviceDetails).map(([name, detail]) => {
+              const statusDot = detail.status === "available" ? "bg-green-500"
+                : detail.status === "limited" ? "bg-amber-500"
+                : detail.status === "unavailable" ? "bg-red-500"
+                : "bg-gray-400";
+              const confLabel = detail.confidence === "inferred" ? " (inferred)" : detail.confidence === "deprecated" ? " (deprecated)" : "";
+              return (
+                <div
+                  key={name}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] border border-border/50 bg-muted/30"
+                  title={`${detail.evidence} | reachable: ${detail.reachable}`}
+                  data-testid={`service-detail-${name}`}
+                >
+                  <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDot}`} />
+                  <span className="text-foreground truncate">{name}{confLabel}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

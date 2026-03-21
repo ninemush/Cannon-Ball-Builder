@@ -30,6 +30,8 @@ export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
+const MINIMAL_OR_FALLBACK_SCOPES = "OR.Default OR.Administration OR.Execution";
+
 function getTokenEndpoint(): string {
   return metadataService.getTokenEndpoint();
 }
@@ -49,55 +51,12 @@ function getResourceScopesFromMetadata(resource: ResourceType): string {
   const serviceType = RESOURCE_TO_SERVICE_MAP[resource];
   const scopes = metadataService.getServiceScopesString(serviceType);
   if (scopes) return scopes;
-  return FALLBACK_RESOURCE_SCOPES[resource] || "";
+  if (resource === "OR") return MINIMAL_OR_FALLBACK_SCOPES;
+  console.warn(`[UiPath Auth] No scopes found in MetadataService for resource ${resource}`);
+  return "";
 }
 
-const FALLBACK_RESOURCE_SCOPES: Record<ResourceType, string> = {
-  OR: [
-    "OR.Default", "OR.Administration", "OR.Execution",
-    "OR.Queues", "OR.Queues.Read", "OR.Queues.Write",
-    "OR.Processes", "OR.Folders", "OR.Folders.Read",
-    "OR.Jobs", "OR.Jobs.Read", "OR.Jobs.Write",
-    "OR.Triggers", "OR.Triggers.Read", "OR.Triggers.Write",
-    "OR.Robots", "OR.Robots.Read", "OR.Machines",
-    "OR.Assets", "OR.Assets.Read", "OR.Assets.Write",
-    "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
-    "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
-    "OR.TestDataQueues", "OR.TestDataQueues.Read",
-    "OR.Tasks", "OR.Tasks.Read", "OR.Tasks.Write",
-  ].join(" "),
-  TM: [
-    "TM.TestCases", "TM.TestCases.Read", "TM.TestCases.Write",
-    "TM.TestSets", "TM.TestSets.Read", "TM.TestSets.Write",
-    "TM.TestExecutions", "TM.TestExecutions.Read", "TM.TestExecutions.Write",
-    "TM.Requirements", "TM.Requirements.Read", "TM.Requirements.Write",
-    "TM.Projects", "TM.Projects.Read", "TM.Projects.Write", "TM.Users.Read",
-  ].join(" "),
-  DU: [
-    "Du.Classification.Api", "Du.DataDeletion.Api", "Du.Digitization.Api",
-    "Du.DocumentManager.Document", "Du.Extraction.Api", "Du.Validation.Api",
-  ].join(" "),
-  PM: [
-    "PM.Security", "PM.AuthSetting", "PM.OAuthApp",
-    "PM.RobotAccount", "PM.RobotAccount.Read", "PM.RobotAccount.Write",
-  ].join(" "),
-  DF: [
-    "DataFabric.Schema.Read", "DataFabric.Data.Read", "DataFabric.Data.Write",
-  ].join(" "),
-  PIMS: [
-    "PIMS.Default", "PIMS.Read", "PIMS.Write",
-    "PIMS.Process", "PIMS.Process.Read", "PIMS.Process.Write",
-    "PIMS.Execution", "PIMS.Execution.Read",
-  ].join(" "),
-  IXP: "Ixp.ApiAccess",
-  AI: [
-    "AI.Deployer.Read", "AI.Deployer.Write",
-    "AI.Trainer.Read", "AI.Trainer.Write",
-    "AI.Helper.Read",
-  ].join(" "),
-};
-
-export const DEFAULT_SCOPES = getResourceScopesFromMetadata("OR") || FALLBACK_RESOURCE_SCOPES.OR;
+export const DEFAULT_SCOPES = getResourceScopesFromMetadata("OR") || MINIMAL_OR_FALLBACK_SCOPES;
 
 function resolveOrScopes(stored: string | undefined, defaults: string): string {
   if (!stored) return defaults;
@@ -109,6 +68,10 @@ let cachedConfig: UiPathAuthConfig | null = null;
 const tokenCache: Partial<Record<ResourceType, CachedToken>> = {};
 let configLoadedAt = 0;
 const CONFIG_TTL_MS = 30_000;
+
+export function getConfigLoadedAt(): number {
+  return configLoadedAt;
+}
 
 function maskClientId(clientId: string): string {
   if (clientId.length <= 6) return clientId;
@@ -411,6 +374,30 @@ export function getResourceScopes(): Record<ResourceType, string> {
     resourceTypes.map(rt => [rt, getResourceScopesFromMetadata(rt)])
   ) as Record<ResourceType, string>;
   return result;
+}
+
+export async function getAccessToken(config: { clientId: string; clientSecret: string; scopes: string }): Promise<string> {
+  const params = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    scope: config.scopes,
+  });
+
+  const tokenUrl = getTokenEndpoint();
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new UiPathAuthError(`UiPath auth failed (${res.status}): ${text}`, res.status);
+  }
+
+  const data = await res.json();
+  return data.access_token;
 }
 
 export async function tryAcquireResourceToken(resource: ResourceType): Promise<{ ok: boolean; scopes: string[]; error?: string }> {

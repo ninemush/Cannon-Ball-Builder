@@ -3,6 +3,7 @@ import { appSettings } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import archiver from "archiver";
 import { metadataService as _mdsStatic } from "./catalog/metadata-service";
+import type { ServiceResourceType } from "./catalog/metadata-schemas";
 import AdmZip from "adm-zip";
 import { createHash } from "crypto";
 import { PassThrough } from "stream";
@@ -194,30 +195,7 @@ export async function getLastTestedAt(): Promise<string | null> {
   return rows.length > 0 ? rows[0].value : null;
 }
 
-export async function getAccessToken(config: UiPathConfig): Promise<string> {
-  const params = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
-    scope: config.scopes,
-  });
-
-  const { metadataService } = await import("./catalog/metadata-service");
-  const tokenUrl = metadataService.getTokenEndpoint();
-  const res = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params.toString(),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`UiPath auth failed (${res.status}): ${text}`);
-  }
-
-  const data = await res.json();
-  return data.access_token;
-}
+export { getAccessToken } from "./uipath-auth";
 
 export async function pushToUiPath(pkg: UiPathPackage, ideaId?: string, prebuiltResult?: BuildResult): Promise<{ success: boolean; message: string; details?: any }> {
   const config = await getUiPathConfig();
@@ -289,7 +267,7 @@ export async function pushToUiPath(pkg: UiPathPackage, ideaId?: string, prebuilt
         uploadedKey = responseData.Key || `${uploadedId}:${uploadedVersion}`;
         projectType = responseData.ProjectType || "Process";
       }
-    } catch {
+    } catch (e: any) {
       console.log(`[UiPath] Could not parse response — using defaults. Raw: ${result.responseText.slice(0, 500)}`);
     }
 
@@ -401,7 +379,8 @@ async function resolvePackageVersionFromFeed(packageId: string, knownVersion: st
         }
       }
     }
-  } catch {
+  } catch (e: any) {
+    console.warn(`[UiPath] Version lookup failed: ${e.message}`);
   }
   return isValidNuGetVersion(knownVersion) ? knownVersion : null;
 }
@@ -527,7 +506,7 @@ export async function createProcess(
             .slice(0, 5)
             .map((f: any) => f.DisplayName);
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Failed to fetch suggested folders: ${e.message}`); }
 
       const suggestion = suggestedFolders.length > 0
         ? ` Compatible folders in your tenant: ${suggestedFolders.map(n => `"${n}"`).join(", ")}. Update your folder selection in Admin > Integrations.`
@@ -918,7 +897,7 @@ export async function startJob(
       try {
         const errObj = JSON.parse(text);
         errorDetail = errObj.message || errObj.errorMessage || errorDetail;
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Failed to parse job error response: ${e.message}`); }
       return { success: false, message: `Failed to start job (${res.status}): ${errorDetail}` };
     }
 
@@ -1024,7 +1003,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
           checks.push({ name: "Target Folder", status: "fail", message: `Folder ID ${config.folderId} not found. Re-select in Admin > Integrations.` });
         }
       }
-    } catch {
+    } catch (e: any) {
       checks.push({ name: "Target Folder", status: "warn", message: "Could not verify folder." });
     }
   } else {
@@ -1046,7 +1025,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
           checks.push({ name: "Package", status: "fail", message: `Package "${packageId}" not found in feed. Push it first.` });
         }
       }
-    } catch {
+    } catch (e: any) {
       checks.push({ name: "Package", status: "warn", message: "Could not check package status." });
     }
 
@@ -1069,7 +1048,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
           checks.push({ name: "Process", status: "fail", message: `No process created from package "${packageId}". Create one to run it.` });
         }
       }
-    } catch {
+    } catch (e: any) {
       checks.push({ name: "Process", status: "warn", message: "Could not check process status." });
     }
   }
@@ -1105,7 +1084,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
     } else {
       checks.push({ name: "Robots", status: "warn", message: "Could not check robot sessions. You may need OR.Robots.Read scope." });
     }
-  } catch {
+  } catch (e: any) {
     checks.push({ name: "Robots", status: "warn", message: "Could not check robot sessions." });
   }
 
@@ -1130,7 +1109,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
         });
       }
     }
-  } catch {
+  } catch (e: any) {
     checks.push({ name: "Machines", status: "warn", message: "Could not check machines." });
   }
 
@@ -1179,7 +1158,7 @@ async function fetchLicenseInfo(orchBase: string, hdrs: Record<string, string>):
             runtime.push({ type, allowed, used, available: Math.max(0, allowed - used) });
           }
         }
-      } catch { /* parse error */ }
+      } catch (e: any) { /* runtime license parse error */ }
     }
 
     if (!runtimeRes?.ok) {
@@ -1193,7 +1172,7 @@ async function fetchLicenseInfo(orchBase: string, hdrs: Record<string, string>):
           if (data.Development !== undefined) runtime.push({ type: "Development", allowed: data.Development || 0, used: 0, available: data.Development || 0 });
           if (data.TestAutomation !== undefined) runtime.push({ type: "TestAutomation", allowed: data.TestAutomation || 0, used: 0, available: data.TestAutomation || 0 });
         }
-      } catch { /* fallback also failed */ }
+      } catch (e: any) { /* fallback license query also failed */ }
     }
 
     if (namedUserRes?.ok) {
@@ -1208,7 +1187,7 @@ async function fetchLicenseInfo(orchBase: string, hdrs: Record<string, string>):
             namedUser.push({ type, allowed, used, available: Math.max(0, allowed - used) });
           }
         }
-      } catch { /* parse error */ }
+      } catch (e: any) { /* named user license parse error */ }
     }
 
     if (runtime.length === 0 && namedUser.length === 0) return null;
@@ -1340,6 +1319,7 @@ type UnifiedProbeResult = {
     hasUnattendedSlots: boolean;
   };
   agentCapabilities?: AgentCapabilities;
+  agentConfidence?: "official" | "inferred";
   grantedScopes: string[];
   licenseInfo: LicenseInfo | null;
   aiCenterSkills: AICenterSkill[];
@@ -1354,10 +1334,12 @@ type UnifiedProbeResult = {
 };
 
 let _probeCache: UnifiedProbeResult | null = null;
+let _probeCacheConfigAt = 0;
 const PROBE_CACHE_TTL_MS = 60_000;
 
 export function clearProbeCache(): void {
   _probeCache = null;
+  _probeCacheConfigAt = 0;
 }
 
 export function getProbeCache(): UnifiedProbeResult | null {
@@ -1365,7 +1347,9 @@ export function getProbeCache(): UnifiedProbeResult | null {
 }
 
 async function probeAllServices(): Promise<UnifiedProbeResult> {
-  if (_probeCache && Date.now() - _probeCache.cachedAt < PROBE_CACHE_TTL_MS) {
+  const { getConfigLoadedAt } = await import("./uipath-auth");
+  const currentConfigAt = getConfigLoadedAt();
+  if (_probeCache && Date.now() - _probeCache.cachedAt < PROBE_CACHE_TTL_MS && currentConfigAt === _probeCacheConfigAt) {
     return _probeCache;
   }
 
@@ -1392,6 +1376,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
   const config = await getUiPathConfig();
   if (!config) {
     _probeCache = empty;
+    _probeCacheConfigAt = currentConfigAt;
     return empty;
   }
 
@@ -1411,7 +1396,10 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         const scopeVal = payload.scope || payload.scp;
         if (scopeVal) grantedScopes = Array.isArray(scopeVal) ? scopeVal : scopeVal.split(/\s+/);
       }
-    } catch { grantedScopes = config.scopes.split(/\s+/); }
+    } catch (e: any) {
+      console.warn(`[UiPath Probe] Failed to decode JWT scopes: ${e.message}`);
+      grantedScopes = config.scopes.split(/\s+/);
+    }
 
     const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
     const orchOk = orchRes.ok;
@@ -1423,6 +1411,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         cachedAt: Date.now(),
       };
       _probeCache = result;
+      _probeCacheConfigAt = currentConfigAt;
       return result;
     }
 
@@ -1435,27 +1424,36 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       fetchLicenseInfo(orchBase, hdrs),
     ]);
 
-    let acAvailable = true;
+    let acAvailable = false;
     if (acRes) {
       if (acRes.ok) {
         const acText = await acRes.text();
         const isHTML = acText.trim().startsWith("<");
         if (isHTML) {
-          acAvailable = true;
-          console.log("[UiPath Probe] Action Center returned HTML but Orchestrator is connected — marking as available");
+          acAvailable = false;
+          console.warn("[UiPath Probe] Action Center returned HTML (not a genuine API response) — marking as unavailable");
         } else {
           try {
             const data = JSON.parse(acText);
             const hasError = data.errorCode || data["odata.error"] || (data.message && typeof data.message === "string" && data.message.includes("not onboarded"));
-            acAvailable = true;
             if (hasError) {
-              console.log("[UiPath Probe] Action Center endpoint returned error but is reachable — marking as available");
+              acAvailable = false;
+              console.warn("[UiPath Probe] Action Center endpoint returned error (not onboarded or errored) — marking as unavailable");
+            } else {
+              acAvailable = true;
+              console.log("[UiPath Probe] Action Center API responded with valid data — marking as available");
             }
-          } catch { acAvailable = true; }
+          } catch (e: any) {
+            console.warn(`[UiPath Probe] Action Center response not valid JSON: ${e.message}`);
+            acAvailable = false;
+          }
         }
-      } else {
+      } else if (acRes.status === 401 || acRes.status === 403) {
         acAvailable = true;
-        console.log(`[UiPath Probe] Action Center returned ${acRes.status} — marking as available (Orchestrator is connected)`);
+        console.log(`[UiPath Probe] Action Center returned ${acRes.status} — reachable but unauthorized, marking as available (limited)`);
+      } else {
+        acAvailable = false;
+        console.warn(`[UiPath Probe] Action Center returned ${acRes.status} — marking as unavailable`);
       }
     }
 
@@ -1486,7 +1484,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       console.log("[UiPath Probe] TM token acquired — Test Manager available");
     }
 
-    const isServiceReachable = (res: Response | null) => {
+    const isServiceReachable = (res: Response | null): boolean => {
       if (!res) return false;
       if (res.ok) return true;
       if (res.status === 403 || res.status === 401) return true;
@@ -1494,12 +1492,20 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       return false;
     };
 
+    const getServiceReachabilityStatus = (res: Response | null): "reachable" | "limited" | "unreachable" | "unknown" => {
+      if (!res) return "unknown";
+      if (res.ok) return "reachable";
+      if (res.status === 401 || res.status === 403) return "limited";
+      if (res.status >= 300 && res.status < 400) return "limited";
+      return "unreachable";
+    };
+
     let aiProbeHdrs = hdrs;
     if (aiResult.status === "fulfilled" && aiResult.value.ok) {
       try {
         const aiTok = await (await import("./uipath-auth")).getAiToken();
         aiProbeHdrs = { Authorization: `Bearer ${aiTok}`, "Content-Type": "application/json" };
-      } catch { aiProbeHdrs = hdrs; }
+      } catch (e: any) { console.warn(`[UiPath Probe] AI token acquisition failed: ${e.message}`); aiProbeHdrs = hdrs; }
     }
 
     let duAvailable = false;
@@ -1509,18 +1515,22 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       const duTok = await getDuToken();
       const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
       if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
-      const duProbeUrl = `${base}/du_/api/framework/projects?api-version=1`;
+      const duServiceUrl = metadataService.getServiceUrl("DU", config);
+      const duProbeUrl = `${duServiceUrl}/api/framework/projects?api-version=1`;
       try {
         const duRes = await fetch(duProbeUrl, { headers: duHdrs });
         console.log(`[UiPath Probe] DU Discovery: ${duProbeUrl} -> ${duRes.status}`);
         if (duRes.ok) {
           duAvailable = true;
+          metadataService.updateServiceReachability("DU", "reachable");
         } else if (duRes.status === 403) {
           console.warn(`[UiPath Probe] DU token got 403 — scopes may be insufficient for Discovery API`);
+          metadataService.updateServiceReachability("DU", "limited");
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath Probe] DU probe failed: ${e.message}`); }
 
-      const ixpProbeUrl = `${base}/ixp_/api/v1/projects`;
+      const ixpServiceUrl = metadataService.getServiceUrl("IXP", config);
+      const ixpProbeUrl = `${ixpServiceUrl}/api/v1/projects`;
       try {
         const ixpRes = await fetch(ixpProbeUrl, { headers: duHdrs });
         console.log(`[UiPath Probe] IXP Generative Extraction: ${ixpProbeUrl} -> ${ixpRes.status}`);
@@ -1534,19 +1544,21 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
                 genExtractionAvailable = true;
                 console.log("[UiPath Probe] IXP Generative Extraction available");
               }
-            } catch { /* not valid JSON — not a genuine service */ }
+            } catch (e: any) { console.warn(`[UiPath Probe] IXP response not valid JSON: ${e.message}`); }
           }
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath Probe] IXP Generative Extraction probe failed: ${e.message}`); }
     }
 
-    const cmProbeUrl = `${base}/reinfer_/api/v1/datasets`;
+    const reinferUrl = metadataService.getServiceUrl("REINFER", config);
+    const cmProbeUrl = `${reinferUrl}/api/v1/datasets`;
     let ixpHdrs = hdrs;
     if (ixpResult.status === "fulfilled" && ixpResult.value.ok) {
       try {
         const ixpTok = await (await import("./uipath-auth")).getIxpToken();
         ixpHdrs = { Authorization: `Bearer ${ixpTok}`, "Content-Type": "application/json" };
-      } catch {
+      } catch (e: any) {
+        console.warn(`[UiPath Probe] IXP token acquisition failed: ${e.message}`);
         ixpHdrs = hdrs;
       }
     }
@@ -1561,23 +1573,26 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
             const cmData = JSON.parse(trimmedCm);
             if (!cmData.errorCode && !cmData.ErrorCode && !cmData["odata.error"]) {
               commsMiningAvailable = true;
+              metadataService.updateServiceReachability("REINFER", "reachable");
               console.log("[UiPath Probe] Communications Mining available");
             }
-          } catch { /* not valid JSON — not a genuine service */ }
+          } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining response not valid JSON: ${e.message}`); }
         }
       }
-    } catch {}
+    } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining probe failed: ${e.message}`); }
 
     let aiAvailable = false;
     let aiCenterSkills: AICenterSkill[] = [];
     let aiCenterPackages: AICenterPackage[] = [];
-    const aiProbe = await fetch(`${base}/aifabric_/ai-deployer/v1/projects?$top=1`, { headers: aiProbeHdrs }).catch(() => null);
+    const aiServiceUrl = metadataService.getServiceUrl("AI", config);
+    const aiProbe = await fetch(`${aiServiceUrl}/ai-deployer/v1/projects?$top=1`, { headers: aiProbeHdrs }).catch(() => null);
     if (aiProbe && isServiceReachable(aiProbe)) {
       aiAvailable = true;
+      metadataService.updateServiceReachability("AI", getServiceReachabilityStatus(aiProbe));
       try {
         const [skillsRes, pkgsRes] = await Promise.all([
-          fetch(`${base}/aifabric_/ai-deployer/v1/mlskills?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
-          fetch(`${base}/aifabric_/ai-deployer/v1/mlpackages?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
+          fetch(`${aiServiceUrl}/ai-deployer/v1/mlskills?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
+          fetch(`${aiServiceUrl}/ai-deployer/v1/mlpackages?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
         ]);
         if (skillsRes && skillsRes.ok) {
           const skillsData = await skillsRes.json();
@@ -1617,9 +1632,11 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     let agentsAvailable = false;
     let autopilotAvailable = false;
     let agentCapabilities: { autonomous: boolean; conversational: boolean; coded: boolean } = { autonomous: false, conversational: false, coded: false };
+    const agentsServiceUrl = metadataService.getServiceUrl("AGENTS", config);
+    const autopilotServiceUrl = metadataService.getServiceUrl("AUTOPILOT", config);
     const agentEndpoints = [
-      { url: `${base}/agentstudio_/api/v1/agents?$top=1`, label: "Agent Studio" },
-      { url: `${base}/autopilot_/api/v1/agents?$top=1`, label: "Autopilot" },
+      { url: `${agentsServiceUrl}/api/v1/agents?$top=1`, label: "Agent Studio" },
+      { url: `${autopilotServiceUrl}/api/v1/agents?$top=1`, label: "Autopilot" },
       { url: `${orchBase}/odata/AgentDefinitions?$top=1`, label: "Orchestrator AgentDefinitions" },
     ];
     const agentProbeResults = await Promise.allSettled(
@@ -1643,15 +1660,17 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
             else if (aType.includes("conversational") || aType.includes("chat")) agentCapabilities.conversational = true;
             else if (aType.includes("coded")) agentCapabilities.coded = true;
           }
-        } catch {}
+        } catch (e: any) { console.warn(`[UiPath Probe] Failed to parse agent definitions: ${e.message}`); }
         break;
       }
     }
+    let agentConfidence: "official" | "inferred" = "official";
     if (!agentsAvailable) {
       const assetFallback = await fetch(`${orchBase}/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1`, { headers: hdrs }).catch(() => null);
       if (assetFallback && assetFallback.ok) {
         agentsAvailable = true;
-        console.log("[UiPath Probe] Agent provisioning available via Assets API fallback (no dedicated Agents API found)");
+        agentConfidence = "inferred";
+        console.log("[UiPath Probe] Agent provisioning inferred via Assets API fallback (no dedicated Agents API found) — confidence: inferred, evidence: Asset name prefix match");
       }
     }
     if (agentsAvailable && !agentCapabilities.autonomous && !agentCapabilities.conversational && !agentCapabilities.coded) {
@@ -1663,13 +1682,18 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
 
     let dsAvailable = false;
     if (dfResult.status === "fulfilled" && dfResult.value.ok) {
-      const dfSwagger = await fetch(`${base}/dataservice_/swagger/index.html`, { redirect: "manual" }).catch(() => null);
-      if (dfSwagger && dfSwagger.status === 200) dsAvailable = true;
+      const dfServiceUrl = metadataService.getServiceUrl("DF", config);
+      const dfEntityProbe = await fetch(`${dfServiceUrl}/api/EntityService/Entity`, { headers: hdrs }).catch(() => null);
+      if (dfEntityProbe && (dfEntityProbe.ok || dfEntityProbe.status === 401)) {
+        dsAvailable = true;
+        metadataService.updateServiceReachability("DF", getServiceReachabilityStatus(dfEntityProbe));
+        console.log("[UiPath Probe] Data Fabric Entity API reachable");
+      }
       if (!dsAvailable) {
-        const dfEntityProbe = await fetch(`${base}/dataservice_/api/EntityService/Entity`, { headers: hdrs }).catch(() => null);
-        if (dfEntityProbe && (dfEntityProbe.ok || dfEntityProbe.status === 401)) {
+        const dfSwagger = await fetch(`${dfServiceUrl}/swagger/index.html`, { redirect: "manual" }).catch(() => null);
+        if (dfSwagger && dfSwagger.status === 200) {
           dsAvailable = true;
-          console.log("[UiPath Probe] Data Fabric Entity API reachable");
+          console.log("[UiPath Probe] Data Fabric Swagger endpoint reachable (fallback)");
         }
       }
     }
@@ -1679,7 +1703,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       try {
         const ixpTok2 = await (await import("./uipath-auth")).getIxpToken();
         ixpProbeHdrs = { Authorization: `Bearer ${ixpTok2}`, "Content-Type": "application/json" };
-      } catch { ixpProbeHdrs = hdrs; }
+      } catch (e: any) { console.warn(`[UiPath Probe] IXP token re-acquisition failed: ${e.message}`); ixpProbeHdrs = hdrs; }
     }
 
     let pmProbeHdrs = hdrs;
@@ -1687,18 +1711,27 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       try {
         const pmTok = await (await import("./uipath-auth")).getPmToken();
         pmProbeHdrs = { Authorization: `Bearer ${pmTok}`, "Content-Type": "application/json" };
-      } catch { pmProbeHdrs = hdrs; }
+      } catch (e: any) { console.warn(`[UiPath Probe] PM token acquisition failed: ${e.message}`); pmProbeHdrs = hdrs; }
     }
 
+    const pimsUrl = metadataService.getServiceUrl("PIMS", config);
+    const isUrl = metadataService.getServiceUrl("INTEGRATIONSERVICE", config);
+    const reinferProbeUrl = metadataService.getServiceUrl("REINFER", config);
+    const hubUrl = metadataService.getServiceUrl("HUB", config);
+    const aopsUrl = metadataService.getServiceUrl("AUTOMATIONOPS", config);
+    const astoreUrl = metadataService.getServiceUrl("AUTOMATIONSTORE", config);
+    const appsUrl = metadataService.getServiceUrl("APPS", config);
+    const assistantUrl = metadataService.getServiceUrl("ASSISTANT", config);
+
     const [maestroProbe, integrationServiceProbe, ixpProbe, automationHubProbe, automationOpsProbe, automationStoreProbe, appsProbe, assistantHttpProbe] = await Promise.all([
-      fetch(`${base}/maestro_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/integrationservice_/api/Connections?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/reinfer_/api/v1/datasets`, { headers: ixpProbeHdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/automationhub_/api/v1/ideas?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/automationops_/api/v1/policies?$top=1`, { headers: pmProbeHdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/automationstore_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/apps_/api/v1/apps?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${base}/assistant_/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${pimsUrl}/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${isUrl}/api/Connections?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${reinferProbeUrl}/api/v1/datasets`, { headers: ixpProbeHdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${hubUrl}/api/v1/ideas?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${aopsUrl}/api/v1/policies?$top=1`, { headers: pmProbeHdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${astoreUrl}/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${appsUrl}/api/v1/apps?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
+      fetch(`${assistantUrl}/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
     ]);
 
     const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[] }));
@@ -1749,7 +1782,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
           console.log("[UiPath Probe] Serverless runtime detected from robot sessions");
         }
       }
-    } catch {
+    } catch (e: any) {
+      console.warn(`[UiPath Probe] Session probe failed: ${e.message}`);
     }
     if (!hasUnattendedSlots) {
       try {
@@ -1759,7 +1793,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
           const machines = machData.value || [];
           hasUnattendedSlots = machines.some((m: any) => (m.UnattendedSlots || 0) > 0);
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath Probe] Machine probe failed: ${e.message}`); }
     }
 
     const result: UnifiedProbeResult = {
@@ -1792,6 +1826,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         hasUnattendedSlots,
       },
       agentCapabilities: agentsAvailable ? agentCapabilities : undefined,
+      agentConfidence,
       grantedScopes,
       licenseInfo,
       aiCenterSkills,
@@ -1808,7 +1843,57 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       console.log(`[UiPath Probe] Synced ${result.governancePolicies.length} governance policies to Workflow Analyzer`);
     }
 
+    metadataService.updateServiceReachability("OR", "reachable");
+    if (maestroAvailable) metadataService.updateServiceReachability("PIMS", "reachable");
+    else metadataService.updateServiceReachability("PIMS", acAvailable ? "limited" : "unknown");
+    if (tmAvailable) metadataService.updateServiceReachability("TM", "reachable");
+    if (integrationServiceAvailable) metadataService.updateServiceReachability("INTEGRATIONSERVICE", getServiceReachabilityStatus(integrationServiceProbe));
+    if (ixpAvailable) metadataService.updateServiceReachability("IXP", getServiceReachabilityStatus(ixpProbe));
+    if (automationHubAvailable) metadataService.updateServiceReachability("HUB", getServiceReachabilityStatus(automationHubProbe));
+    if (automationOpsAvailable) metadataService.updateServiceReachability("AUTOMATIONOPS", getServiceReachabilityStatus(automationOpsProbe));
+    if (automationStoreAvailable) metadataService.updateServiceReachability("AUTOMATIONSTORE", getServiceReachabilityStatus(automationStoreProbe));
+    if (appsAvailable) metadataService.updateServiceReachability("APPS", getServiceReachabilityStatus(appsProbe));
+    if (assistantAvailable) metadataService.updateServiceReachability("ASSISTANT", getServiceReachabilityStatus(assistantHttpProbe));
+    if (agentsAvailable) metadataService.updateServiceReachability("AGENTS", agentConfidence === "inferred" ? "limited" : "reachable");
+    if (autopilotAvailable) metadataService.updateServiceReachability("AUTOPILOT", "reachable");
+    if (pmAvailable) metadataService.updateServiceReachability("IDENTITY", "reachable");
+    if (!tmAvailable) metadataService.updateServiceReachability("TM", "unreachable");
+
+    const flagToServiceType: Record<string, ServiceResourceType> = {
+      orchestrator: "OR", actionCenter: "OR", testManager: "TM",
+      documentUnderstanding: "DU", generativeExtraction: "IXP",
+      communicationsMining: "REINFER", dataService: "DF",
+      platformManagement: "IDENTITY", environments: "OR", triggers: "OR",
+      storageBuckets: "OR", aiCenter: "AI", agents: "AGENTS",
+      autopilot: "AUTOPILOT", maestro: "PIMS",
+      integrationService: "INTEGRATIONSERVICE", ixp: "IXP",
+      automationHub: "HUB", automationOps: "AUTOMATIONOPS",
+      automationStore: "AUTOMATIONSTORE", apps: "APPS",
+      assistant: "ASSISTANT", attendedRobots: "OR", studioProjects: "OR",
+      hasUnattendedSlots: "OR",
+    };
+
+    const serviceStatusSummary = Object.entries(result.flags)
+      .map(([k, v]) => {
+        const svcType: ServiceResourceType = flagToServiceType[k] || "OR";
+        const confidence = metadataService.getServiceConfidence(svcType);
+        const reachability = metadataService.getServiceReachability(svcType);
+        return `${k}=${v ? "available" : "unavailable"}(${confidence}/${reachability})`;
+      })
+      .join(", ");
+    console.log(`[UiPath Probe] Probe summary: ${serviceStatusSummary}`);
+
+    const deprecatedServices = Object.keys(result.flags).filter(k => {
+      const svcType: ServiceResourceType = flagToServiceType[k] || "OR";
+      const conf = metadataService.getServiceConfidence(svcType);
+      return conf === "deprecated" || conf === "unknown";
+    });
+    if (deprecatedServices.length > 0) {
+      console.warn(`[UiPath Probe] Services with deprecated/unknown confidence: ${deprecatedServices.join(", ")}`);
+    }
+
     _probeCache = result;
+    _probeCacheConfigAt = currentConfigAt;
     console.log(`[UiPath Probe] Unified probe complete — ${Object.entries(result.flags).filter(([, v]) => v).map(([k]) => k).join(", ")}`);
     return result;
   } catch (err: any) {
@@ -1825,6 +1910,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       probeError: err.message,
     };
     _probeCache = result;
+    _probeCacheConfigAt = currentConfigAt;
     return result;
   }
 }
@@ -1924,7 +2010,8 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     if (caps?.conversational) agentTypes.push("conversational");
     if (caps?.coded) agentTypes.push("coded");
     const typesStr = agentTypes.length > 0 ? ` — supported types: ${agentTypes.join(", ")}` : "";
-    availNames.push(`UiPath Agents (AI agent definitions, tool bindings to Orchestrator processes, context grounding via storage buckets, escalation to Action Center${typesStr})`);
+    const confidenceNote = probe.agentConfidence === "inferred" ? " [detected via asset naming convention — confirm Agent capability in Orchestrator]" : "";
+    availNames.push(`UiPath Agents (AI agent definitions, tool bindings to Orchestrator processes, context grounding via storage buckets, escalation to Action Center${typesStr})${confidenceNote}`);
   } else {
     unavailRecs.push("- **UiPath Agents**: Not available. If enabled, it would allow deploying autonomous, conversational, and coded AI agents that can invoke Orchestrator processes as tools, use storage buckets for context grounding, and escalate to Action Center for human oversight.");
   }
@@ -1950,9 +2037,6 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
   if (avail.assistant) availNames.push("Assistant (robot tray, attended automation triggers, process launcher for end users)");
   else unavailRecs.push("- **Assistant**: Not available. If enabled, it would provide an end-user interface for launching attended automations and interacting with robot processes.");
 
-  if (probe.flags.apps) availNames.push("Apps (citizen-developer UIs, form-based interfaces for human interaction, process-connected web apps)");
-  else unavailRecs.push("- **Apps**: Not available. If enabled, it would allow building citizen-developer web interfaces for manual input, oversight dashboards, and human-in-the-loop form interactions directly connected to automation workflows.");
-
   if (probe.flags.dataService) {
     const dsIdx = availNames.findIndex(n => n.startsWith("Data Service"));
     if (dsIdx === -1) availNames.push("Data Service / Data Fabric (structured data entities, schema-driven storage, cross-process data persistence)");
@@ -1960,7 +2044,9 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
 
   if (probe.flags.automationOps && probe.governancePolicies && probe.governancePolicies.length > 0) {
     const policyNames = probe.governancePolicies.map(p => p.name).slice(0, 10).join(", ");
-    availNames.push(`Automation Ops (${probe.governancePolicies.length} active governance policies: ${policyNames})`);
+    const opsIdx = availNames.findIndex(n => n.startsWith("Automation Ops"));
+    if (opsIdx !== -1) availNames[opsIdx] = `Automation Ops (governance policies: ${policyNames}, deployment rules, environment management)`;
+    else availNames.push(`Automation Ops (${probe.governancePolicies.length} active governance policies: ${policyNames})`);
   }
 
   if (probe.attendedRobotInfo) {
@@ -2025,6 +2111,28 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     console.warn(`[Integration Service] Discovery failed during capabilities check: ${err.message}`);
   }
 
+  const mds = (await import("./catalog/metadata-service")).metadataService;
+  const confidenceNotes: string[] = [];
+  const svcConfidenceMap: Record<string, ServiceResourceType> = {
+    actionCenter: "OR", testManager: "TM", documentUnderstanding: "DU",
+    communicationsMining: "REINFER", aiCenter: "AI", agents: "AGENTS",
+    maestro: "PIMS", integrationService: "INTEGRATIONSERVICE",
+    automationHub: "HUB", automationOps: "AUTOMATIONOPS",
+    automationStore: "AUTOMATIONSTORE", apps: "APPS", assistant: "ASSISTANT",
+  };
+  for (const [svcName, svcType] of Object.entries(svcConfidenceMap)) {
+    if (avail[svcName as keyof typeof avail]) {
+      const conf = mds.getServiceConfidence(svcType);
+      const reach = mds.getServiceReachability(svcType);
+      if (conf === "inferred" || reach === "limited") {
+        confidenceNotes.push(`- **${svcName}**: detected with ${conf} confidence / ${reach} reachability — verify availability before relying on this service in critical solution paths`);
+      }
+    }
+  }
+  const confidenceContext = confidenceNotes.length > 0
+    ? `\n\nSERVICE CONFIDENCE NOTES (some services detected with limited certainty):\n${confidenceNotes.join("\n")}`
+    : "";
+
   return {
     configured: true,
     available: avail,
@@ -2032,7 +2140,7 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     summary: `Connected to ${orgTenant}. ${availNames.length} services available.`,
     availableDescription: (availNames.length > 0
       ? `The following UiPath platform services are AVAILABLE and should be used in the solution design:\n${availNames.map(n => `- ${n}`).join("\n")}`
-      : "No UiPath services detected.") + governanceContext + attendedContext + existingProcessContext,
+      : "No UiPath services detected.") + governanceContext + attendedContext + existingProcessContext + confidenceContext,
     unavailableRecommendations: unavailRecs.length > 0
       ? `The following services are NOT currently available on this tenant. Include a "Platform Recommendations" section explaining how each would enhance the solution if enabled:\n${unavailRecs.join("\n")}`
       : "All major UiPath platform services are available.",
@@ -2093,7 +2201,7 @@ function decodeJwtScopes(token: string): string[] {
     const scopeVal = payload.scope || payload.scp;
     if (!scopeVal) return [];
     return Array.isArray(scopeVal) ? scopeVal : scopeVal.split(/\s+/).filter(Boolean);
-  } catch {
+  } catch (e: any) {
     return [];
   }
 }
@@ -2177,7 +2285,7 @@ export async function autoDetectUiPathScopes(): Promise<{
       const data = await res.json();
       token = data.access_token;
     }
-  } catch {}
+  } catch (e: any) { console.warn(`[UiPath] Auto-detect scopes initial token request failed: ${e.message}`); }
 
   if (!token) {
     for (const tryScope of ["OR.Administration", "OR.Default"]) {
@@ -2200,7 +2308,7 @@ export async function autoDetectUiPathScopes(): Promise<{
           token = data.access_token;
           break;
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Auto-detect scopes fallback (${tryScope}) failed: ${e.message}`); }
     }
   }
 
@@ -2319,7 +2427,7 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
       serviceChecks["Integration Service"] = isDiscovery.available
         ? { available: true, message: `${isDiscovery.connectors.length} connector(s), ${activeConns.length} active connection(s)` }
         : { available: false, message: "Integration Service not accessible" };
-    } catch {
+    } catch (e: any) {
       serviceChecks["Integration Service"] = probe.flags.integrationService
         ? { available: true, message: "Accessible" }
         : { available: false, message: "Could not probe Integration Service" };
@@ -2385,6 +2493,13 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; requeste
   }
 }
 
+export type ServiceStatusDetail = {
+  status: "available" | "limited" | "unavailable" | "unknown";
+  confidence: "official" | "inferred" | "deprecated" | "unknown";
+  evidence: string;
+  reachable: "reachable" | "limited" | "unreachable" | "unknown";
+};
+
 export type ServiceAvailabilityMap = {
   configured: boolean;
   orchestrator: boolean;
@@ -2416,16 +2531,62 @@ export type ServiceAvailabilityMap = {
   governancePolicies?: GovernancePolicy[];
   attendedRobotInfo?: AttendedRobotInfo;
   studioProjectInfo?: StudioProcessesResult;
+  serviceDetails?: Record<string, ServiceStatusDetail>;
 };
 
 export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap> {
   const probe = await probeAllServices();
+  const { metadataService: mds } = await import("./catalog/metadata-service");
   let isDiscovery: IntegrationServiceDiscovery | undefined;
   try {
     isDiscovery = await discoverIntegrationService();
   } catch (err: any) {
     console.warn(`[Integration Service] Discovery failed during service probe: ${err.message}`);
   }
+
+  const buildDetail = (flag: boolean, svcType: ServiceResourceType, evidence: string): ServiceStatusDetail => {
+    const confidence = mds.getServiceConfidence(svcType);
+    const reachable = mds.getServiceReachability(svcType);
+    let status: ServiceStatusDetail["status"];
+    if (flag) {
+      if (reachable === "limited") status = "limited";
+      else status = "available";
+    } else {
+      if (reachable === "unreachable") status = "unavailable";
+      else if (reachable === "limited") status = "limited";
+      else if (reachable === "unknown") status = "unknown";
+      else status = "unavailable";
+    }
+    return { status, confidence, evidence, reachable };
+  };
+
+  const serviceDetails: Record<string, ServiceStatusDetail> = {
+    orchestrator: buildDetail(probe.flags.orchestrator, "OR", "Folders API probe"),
+    actionCenter: buildDetail(probe.flags.actionCenter, "OR", "TaskCatalogs API probe"),
+    testManager: buildDetail(probe.flags.testManager, "TM", "TM token acquisition"),
+    documentUnderstanding: buildDetail(probe.flags.documentUnderstanding, "DU", "DU Discovery API probe"),
+    generativeExtraction: buildDetail(probe.flags.generativeExtraction, "IXP", "IXP projects API probe"),
+    communicationsMining: buildDetail(probe.flags.communicationsMining, "REINFER", "reinfer datasets API probe"),
+    dataService: buildDetail(probe.flags.dataService, "DF", "Entity API probe"),
+    platformManagement: buildDetail(probe.flags.platformManagement, "IDENTITY", "PM token acquisition"),
+    agents: buildDetail(probe.flags.agents, "AGENTS", probe.agentConfidence === "inferred" ? "Asset name prefix match" : "Agent Studio/Autopilot API probe"),
+    maestro: buildDetail(probe.flags.maestro, "PIMS", "Maestro API probe or PIMS token"),
+    integrationService: buildDetail(probe.flags.integrationService, "INTEGRATIONSERVICE", "Connections API probe"),
+    ixp: buildDetail(probe.flags.ixp, "IXP", "IXP datasets API probe"),
+    automationHub: buildDetail(probe.flags.automationHub, "HUB", "Ideas API probe"),
+    automationOps: buildDetail(probe.flags.automationOps, "AUTOMATIONOPS", "Policies API probe"),
+    automationStore: buildDetail(probe.flags.automationStore, "AUTOMATIONSTORE", "API probe"),
+    apps: buildDetail(probe.flags.apps, "APPS", "Apps API probe"),
+    assistant: buildDetail(probe.flags.assistant, "ASSISTANT", "Assistant API probe"),
+    aiCenter: buildDetail(probe.flags.aiCenter ?? false, "AI", "AI Deployer projects probe"),
+    autopilot: buildDetail(probe.flags.autopilot ?? false, "AUTOPILOT", "Autopilot API probe"),
+  };
+
+  if (probe.agentConfidence === "inferred" && serviceDetails.agents) {
+    serviceDetails.agents.confidence = "inferred";
+    serviceDetails.agents.evidence = "Asset name prefix match";
+  }
+
   return {
     configured: probe.configured,
     orchestrator: probe.flags.orchestrator,
@@ -2457,6 +2618,7 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     governancePolicies: probe.governancePolicies,
     attendedRobotInfo: probe.attendedRobotInfo,
     studioProjectInfo: probe.studioProjectInfo,
+    serviceDetails,
   };
 }
 
@@ -2532,8 +2694,9 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
       "Content-Type": "application/json",
     };
 
-    const connectorsUrl = `${base}/integrationservice_/api/ConnectorDefinitions?$top=100`;
-    const connectionsUrl = `${base}/integrationservice_/api/Connections?$top=100`;
+    const isServiceUrl = mdsSvc3.getServiceUrl("INTEGRATIONSERVICE", config);
+    const connectorsUrl = `${isServiceUrl}/api/ConnectorDefinitions?$top=100`;
+    const connectionsUrl = `${isServiceUrl}/api/Connections?$top=100`;
 
     const [connectorRes, connectionRes] = await Promise.allSettled([
       fetch(connectorsUrl, { headers: hdrs }),

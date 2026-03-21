@@ -32,6 +32,7 @@ export type GenerationMetadata = z.infer<typeof generationMetadataSchema>;
 
 export const serviceEndpointEntrySchema = z.object({
   urlTemplate: z.string(),
+  alternateUrlTemplates: z.array(z.string()).optional(),
   apiBasePath: z.string(),
   scopes: z.array(z.string()),
   confidence: z.enum(["official", "inferred", "deprecated"]),
@@ -41,7 +42,7 @@ export const serviceEndpointEntrySchema = z.object({
   deprecationNotes: z.string().optional(),
 });
 
-export type ServiceResourceType = "OR" | "TM" | "DU" | "DF" | "PIMS" | "IXP" | "AI" | "HUB" | "IDENTITY";
+export type ServiceResourceType = "OR" | "TM" | "DU" | "DF" | "PIMS" | "IXP" | "AI" | "HUB" | "IDENTITY" | "INTEGRATIONSERVICE" | "AUTOMATIONOPS" | "AUTOMATIONSTORE" | "APPS" | "ASSISTANT" | "AGENTS" | "AUTOPILOT" | "REINFER";
 
 export const serviceEndpointsSchema = z.object({
   endpoints: z.record(z.string(), serviceEndpointEntrySchema),

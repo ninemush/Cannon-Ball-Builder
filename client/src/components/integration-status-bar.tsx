@@ -8,6 +8,10 @@ import {
   Bot,
   ClipboardList,
   TrendingUp,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  HelpCircle,
 } from "lucide-react";
 
 type HealthData = {
@@ -18,6 +22,53 @@ type HealthData = {
   folderName?: string;
   robotCount: number;
   pendingTasks: number;
+};
+
+type ServiceStatusDetail = {
+  status: "available" | "limited" | "unavailable" | "unknown";
+  confidence: "official" | "inferred" | "deprecated" | "unknown";
+  evidence: string;
+  reachable: "reachable" | "limited" | "unreachable" | "unknown";
+};
+
+type DiagnosticsData = {
+  configured: boolean;
+  connected?: boolean;
+  serviceDetails?: Record<string, ServiceStatusDetail>;
+};
+
+const SERVICE_LABELS: Record<string, string> = {
+  orchestrator: "Orchestrator",
+  actionCenter: "Action Center",
+  testManager: "Test Manager",
+  documentUnderstanding: "Document Understanding",
+  generativeExtraction: "Generative Extraction",
+  communicationsMining: "Communications Mining",
+  dataService: "Data Service",
+  platformManagement: "Platform Mgmt",
+  agents: "Agents",
+  maestro: "Maestro",
+  integrationService: "Integration Service",
+  ixp: "IXP",
+  automationHub: "Automation Hub",
+  automationOps: "Automation Ops",
+  automationStore: "Automation Store",
+  apps: "Apps",
+  assistant: "Assistant",
+  aiCenter: "AI Center",
+};
+
+const statusIcon = (status: string) => {
+  switch (status) {
+    case "available":
+      return <CheckCircle2 className="h-3 w-3 text-green-400" />;
+    case "limited":
+      return <AlertTriangle className="h-3 w-3 text-amber-400" />;
+    case "unavailable":
+      return <XCircle className="h-3 w-3 text-red-400/60" />;
+    default:
+      return <HelpCircle className="h-3 w-3 text-muted-foreground" />;
+  }
 };
 
 export function IntegrationStatusBar() {
@@ -46,6 +97,14 @@ export function IntegrationStatusBar() {
     enabled: !!health?.ok,
   });
 
+  const { data: diagnostics } = useQuery<DiagnosticsData>({
+    queryKey: ["/api/uipath/diagnostics"],
+    refetchInterval: 120000,
+    staleTime: 100000,
+    retry: 1,
+    enabled: !!health?.ok,
+  });
+
   if (!health && !healthError) return null;
 
   const isOk = health?.ok ?? false;
@@ -58,6 +117,15 @@ export function IntegrationStatusBar() {
         : "text-red-400";
 
   const lastDecision = liveOps?.lastProvisioningDecision;
+
+  const serviceDetails = diagnostics?.serviceDetails;
+  const availableCount = serviceDetails
+    ? Object.values(serviceDetails).filter((d) => d.status === "available").length
+    : 0;
+  const limitedCount = serviceDetails
+    ? Object.values(serviceDetails).filter((d) => d.status === "limited").length
+    : 0;
+  const totalServices = serviceDetails ? Object.keys(serviceDetails).length : 0;
 
   return (
     <div
@@ -116,6 +184,18 @@ export function IntegrationStatusBar() {
                 <Wifi className="h-3 w-3" />
                 {health.latencyMs}ms
               </span>
+
+              {totalServices > 0 && (
+                <>
+                  <span className="text-border">|</span>
+                  <span className="flex items-center gap-1 text-muted-foreground" data-testid="status-services-summary">
+                    {availableCount}/{totalServices} services
+                    {limitedCount > 0 && (
+                      <span className="text-amber-400">({limitedCount} limited)</span>
+                    )}
+                  </span>
+                </>
+              )}
             </>
           )}
         </div>
@@ -130,6 +210,34 @@ export function IntegrationStatusBar() {
       </button>
 
       <div id="status-bar-details">
+        {!collapsed && isOk && serviceDetails && (
+          <div className="px-4 pb-2 pt-1 border-t border-border/50">
+            <div className="grid grid-cols-3 gap-x-4 gap-y-0.5" data-testid="service-details-grid">
+              {Object.entries(serviceDetails).map(([key, detail]) => (
+                <div
+                  key={key}
+                  className="flex items-center gap-1.5 text-[11px]"
+                  data-testid={`service-status-${key}`}
+                  title={`${detail.evidence} (${detail.confidence}/${detail.reachable})`}
+                >
+                  {statusIcon(detail.status)}
+                  <span className={
+                    detail.status === "available" ? "text-foreground" :
+                    detail.status === "limited" ? "text-amber-400" :
+                    detail.status === "unavailable" ? "text-muted-foreground line-through" :
+                    "text-muted-foreground"
+                  }>
+                    {SERVICE_LABELS[key] || key}
+                  </span>
+                  {detail.confidence === "inferred" && (
+                    <span className="text-[9px] text-amber-400/70">(inferred)</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {!collapsed && isOk && lastDecision && (
           <div className="px-4 pb-2 pt-0.5 border-t border-border/50">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground" data-testid="status-last-decision">

@@ -36,7 +36,7 @@ The application uses a modern web stack for scalability and an intuitive user ex
 - **Pre-Package Quality Gate**: A mandatory validation gate (`server/uipath-quality-gate.ts`) runs before NuGet package finalization and Orchestrator upload.
 - **Centralized UiPath Pipeline**: All UiPath generation entry points delegate to a single canonical orchestration function (`generateUiPathPackage()`) in `server/uipath-pipeline.ts`, providing consistent package generation and pipeline-level caching.
 - **Generation Modes**: Supports `baseline_openable` (skips AI enrichment, forces flat scaffold, demotes quality gate errors) and `full_implementation` (default: AI enrichment, REFramework, blocking quality gate enforcement).
-- **Unified Metadata Freshness Architecture**: Three snapshot files under `catalog/` provide the single source of truth for generation metadata, service endpoints, and activity catalogs. A centralized `MetadataService` (`server/catalog/metadata-service.ts`) loads and exposes this data.
+- **Unified Metadata Freshness Architecture**: Three snapshot files under `catalog/` provide the single source of truth for generation metadata, service endpoints, and activity catalogs. A centralized `MetadataService` (`server/catalog/metadata-service.ts`) loads and exposes this data, serving as the single authoritative source for all UiPath endpoint URLs, scopes, confidence levels, and reachability status across 17 service types.
 - **Activity Catalog System**: A versioned activity catalog (`catalog/activity-catalog.json`, v1.0.0) serves as the single source of truth for activities, properties, packages, and enum constraints.
 - **Template-Driven XAML Generation**: The template builder (`server/catalog/xaml-template-builder.ts`) provides pre-defined XAML templates with typed placeholders, structured for LLM-based generation.
 - **Hierarchical XAML Generation Architecture**: A three-pass tree-based pipeline (`server/workflow-spec-types.ts`, `server/workflow-tree-assembler.ts`) replaces flat activity list generation, assembling correctly-nested XAML.
@@ -50,7 +50,7 @@ The application uses a modern web stack for scalability and an intuitive user ex
 - **UiPath Integration Layer**: Manages UiPath's multi-resource token architecture, typed Orchestrator API client, robust artifact provisioning, and SSE deploy streaming.
 - **Integration Service Connector Discovery**: Queries UiPath Integration Service API to discover available connectors and active connections.
 - **Maestro Process Orchestration**: Generates BPMN-compatible Maestro process definitions and deploys via the Maestro API.
-- **Unified Probe Architecture**: Single source of truth for platform service availability, discovering Automation Ops governance policies, robot landscape, and existing Studio processes.
+- **Unified Probe Architecture**: Single source of truth for platform service availability with structured per-service status (available/limited/unavailable/unknown), confidence levels (official/inferred/deprecated), evidence tracking, and reachability. Discovers Automation Ops governance policies, robot landscape, and existing Studio processes.
 - **Automation Ops Integration**: Discovers governance policies from UiPath Automation Ops and syncs them into the Workflow Analyzer.
 - **Attended Robot & Studio Discovery**: Probes UiPath for attended/Assistant robot sessions and existing Studio processes.
 - **Consolidated Streaming Progress Indicator**: A unified component for displaying real-time progress during AI chat, document generation, and deployment.

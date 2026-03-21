@@ -238,7 +238,16 @@ class MetadataService {
     return range?.preferred || null;
   }
 
+  private resolvedServiceUrls: Partial<Record<ServiceResourceType, string>> = {};
+  private inMemoryReachability: Partial<Record<ServiceResourceType, "reachable" | "limited" | "unreachable" | "unknown">> = {};
+
   getServiceUrl(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string {
+    const resolved = this.resolvedServiceUrls[resourceType];
+    if (resolved) {
+      return resolved
+        .replace("{orgName}", config.orgName)
+        .replace("{tenantName}", config.tenantName);
+    }
     if (this.serviceEndpoints?.endpoints[resourceType]) {
       const entry = this.serviceEndpoints.endpoints[resourceType];
       return entry.urlTemplate
@@ -246,6 +255,33 @@ class MetadataService {
         .replace("{tenantName}", config.tenantName);
     }
     return this.getHardcodedServiceUrl(resourceType, config);
+  }
+
+  getServiceUrlAlternates(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string[] {
+    const primary = this.getServiceUrl(resourceType, config);
+    const urls = [primary];
+    if (this.serviceEndpoints?.endpoints[resourceType]) {
+      const entry = this.serviceEndpoints.endpoints[resourceType];
+      if (entry.alternateUrlTemplates) {
+        for (const alt of entry.alternateUrlTemplates) {
+          const resolved = alt
+            .replace("{orgName}", config.orgName)
+            .replace("{tenantName}", config.tenantName);
+          if (!urls.includes(resolved)) {
+            urls.push(resolved);
+          }
+        }
+      }
+    }
+    return urls;
+  }
+
+  setResolvedServiceUrl(resourceType: ServiceResourceType, url: string): void {
+    this.resolvedServiceUrls[resourceType] = url;
+  }
+
+  updateServiceReachability(resourceType: ServiceResourceType, status: "reachable" | "limited" | "unreachable" | "unknown"): void {
+    this.inMemoryReachability[resourceType] = status;
   }
 
   private getHardcodedServiceUrl(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string {
@@ -260,6 +296,14 @@ class MetadataService {
       AI: `${base}/aifabric_`,
       HUB: `${base}/automationhub_`,
       IDENTITY: `https://cloud.uipath.com/identity_`,
+      INTEGRATIONSERVICE: `${base}/integrationservice_`,
+      AUTOMATIONOPS: `${base}/automationops_`,
+      AUTOMATIONSTORE: `${base}/automationstore_`,
+      APPS: `${base}/apps_`,
+      ASSISTANT: `${base}/assistant_`,
+      AGENTS: `${base}/agentstudio_`,
+      AUTOPILOT: `${base}/autopilot_`,
+      REINFER: `${base}/reinfer_`,
     };
     return map[resourceType] || `${base}/${resourceType.toLowerCase()}_`;
   }
@@ -283,10 +327,17 @@ class MetadataService {
   }
 
   getServiceReachability(resourceType: ServiceResourceType): "reachable" | "limited" | "unreachable" | "unknown" {
+    const inMem = this.inMemoryReachability[resourceType];
+    if (inMem) return inMem;
     if (this.serviceEndpoints?.endpoints[resourceType]) {
       return this.serviceEndpoints.endpoints[resourceType].reachabilityStatus;
     }
     return "unknown";
+  }
+
+  clearReachability(): void {
+    this.inMemoryReachability = {};
+    this.resolvedServiceUrls = {};
   }
 
   getTokenEndpoint(): string {

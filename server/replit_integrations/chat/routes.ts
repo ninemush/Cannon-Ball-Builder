@@ -97,7 +97,9 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
       if (caps?.conversational) types.push("conversational");
       if (caps?.coded) types.push("coded");
       const typesStr = types.length > 0 ? ` — types: ${types.join(", ")}` : "";
-      available.push(`UiPath Agents (AI agents with tool bindings, context grounding, escalation${typesStr})`);
+      const agentDetail = serviceAvailability.serviceDetails?.agents;
+      const confNote = agentDetail?.confidence === "inferred" ? " [inferred — confirm in Orchestrator]" : "";
+      available.push(`UiPath Agents (AI agents with tool bindings, context grounding, escalation${typesStr})${confNote}`);
     } else {
       unavailable.push("UiPath Agents (AI agent definitions, tool bindings, context grounding)");
     }
@@ -113,8 +115,6 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     else unavailable.push("Automation Ops");
     if (serviceAvailability.automationStore) available.push("Automation Store (reusable components)");
     else unavailable.push("Automation Store");
-    if (serviceAvailability.apps) available.push("Apps (low-code app builder)");
-    else unavailable.push("Apps");
     if (serviceAvailability.assistant) available.push("Assistant (attended automation launcher)");
     else unavailable.push("Assistant");
     if (serviceAvailability.aiCenter) {

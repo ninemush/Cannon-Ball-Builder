@@ -7,6 +7,7 @@ import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 import { findUiPathMessage, parseUiPathPackage, generateUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline, type PipelineProgressEvent } from "./uipath-pipeline";
 import * as auth from "./uipath-auth";
+import { metadataService } from "./catalog/metadata-service";
 import * as orch from "./orchestrator-client";
 import * as prereqs from "./prerequisite-checker";
 import { db } from "./db";
@@ -61,7 +62,7 @@ async function migrateExistingConfigToConnection(): Promise<void> {
   });
   auth.invalidateAllTokens();
   auth.invalidateConfig();
-  clearProbeCache();
+  clearProbeCache(); metadataService.clearReachability();
   migrationDone = true;
   console.log("[UiPath] Migrated existing config to uipath_connections table");
 }
@@ -110,7 +111,7 @@ export function registerUiPathRoutes(app: Express): void {
     if (!requireAdmin(req, res)) return;
     const { folderId, folderName } = req.body;
     await saveUiPathFolder(folderId || null, folderName || null);
-    clearProbeCache();
+    clearProbeCache(); metadataService.clearReachability();
     return res.json({ success: true });
   });
 
@@ -153,7 +154,7 @@ export function registerUiPathRoutes(app: Express): void {
     }
     auth.invalidateAllTokens();
     auth.invalidateConfig();
-    clearProbeCache();
+    clearProbeCache(); metadataService.clearReachability();
 
     const testResult = await testUiPathConnection();
     return res.json({
@@ -208,7 +209,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (isFirst) {
         auth.invalidateAllTokens();
         auth.invalidateConfig();
-        clearProbeCache();
+        clearProbeCache(); metadataService.clearReachability();
       }
       return res.json({ ...row, clientSecret: "••••••••", automationHubToken: row.automationHubToken ? "••••••••" : "" });
     } catch (err: any) {
@@ -239,7 +240,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (updated.isActive) {
         auth.invalidateAllTokens();
         auth.invalidateConfig();
-        clearProbeCache();
+        clearProbeCache(); metadataService.clearReachability();
       }
       return res.json({ ...updated, clientSecret: "••••••••", automationHubToken: updated.automationHubToken ? "••••••••" : "" });
     } catch (err: any) {
@@ -273,7 +274,7 @@ export function registerUiPathRoutes(app: Express): void {
       const [activated] = await db.update(uipathConnections).set({ isActive: true }).where(eq(uipathConnections.id, id)).returning();
       auth.invalidateAllTokens();
       auth.invalidateConfig();
-      clearProbeCache();
+      clearProbeCache(); metadataService.clearReachability();
       return res.json({ ...activated, clientSecret: "••••••••", automationHubToken: activated.automationHubToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
@@ -297,7 +298,7 @@ export function registerUiPathRoutes(app: Express): void {
         scope: orScopes.length > 0 ? orScopes.join(" ") : conn.scopes,
       });
 
-      const tokenRes = await fetch("https://cloud.uipath.com/identity_/connect/token", {
+      const tokenRes = await fetch(metadataService.getTokenEndpoint(), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: tokenParams.toString(),
@@ -310,7 +311,7 @@ export function registerUiPathRoutes(app: Express): void {
       }
 
       const tokenData = await tokenRes.json();
-      const baseUrl = `https://cloud.uipath.com/${conn.orgName}/${conn.tenantName}/orchestrator_`;
+      const baseUrl = metadataService.getServiceUrl("OR", { orgName: conn.orgName, tenantName: conn.tenantName });
       const orchRes = await fetch(`${baseUrl}/odata/Folders?$top=1`, {
         headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
       });
@@ -506,7 +507,7 @@ export function registerUiPathRoutes(app: Express): void {
     let pkg;
     try {
       pkg = parseUiPathPackage(uipathMsg);
-    } catch {
+    } catch (e: any) {
       return res.status(500).json({ message: "Invalid package data" });
     }
 
@@ -519,7 +520,7 @@ export function registerUiPathRoutes(app: Express): void {
     if (typeof (res as any).flush === "function") (res as any).flush();
 
     const sendEvent = (data: Record<string, any>) => {
-      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {}
+      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (e: any) { /* SSE write failed — client disconnected */ }
     };
 
     let clientDisconnected = false;
@@ -529,7 +530,7 @@ export function registerUiPathRoutes(app: Express): void {
     });
 
     const heartbeat = setInterval(() => {
-      try { res.write(`: heartbeat\n\n`); } catch {}
+      try { res.write(`: heartbeat\n\n`); } catch (e: any) { /* SSE heartbeat write failed — client disconnected */ }
     }, 5000);
 
     try {
@@ -730,6 +731,7 @@ export function registerUiPathRoutes(app: Express): void {
               deploymentResults: deployResult.results,
               deploymentSummary: deployResult.summary + (reconSummaryText ? "\n\n" + reconSummaryText : ""),
               reconciliationActions: reconciliationActions.length > 0 ? reconciliationActions : undefined,
+              serviceLimitations: deployResult.serviceLimitations,
             };
           }
         }
@@ -753,6 +755,7 @@ export function registerUiPathRoutes(app: Express): void {
         folderName: result.details?.folderName,
         results: deployResults,
         summary: result.details?.deploymentSummary || "",
+        serviceLimitations: result.details?.serviceLimitations,
       } : null;
 
       let storePublishLine = "";
@@ -827,7 +830,7 @@ export function registerUiPathRoutes(app: Express): void {
         const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(15000) });
         const text = await r.text();
         let data = null;
-        try { data = JSON.parse(text); } catch {}
+        try { data = JSON.parse(text); } catch (e: any) { /* Non-JSON response body — use raw text */ }
         return { status: r.status, text: text.slice(0, 2000), data, ok: r.ok };
       } catch (e: any) {
         return { status: 0, text: e.message, data: null, ok: false };
@@ -836,7 +839,7 @@ export function registerUiPathRoutes(app: Express): void {
 
     try {
       const token = await getAccessToken(config);
-      const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
+      const base = metadataService.getServiceUrl("OR", config);
       const hdrs: Record<string, string> = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };
       if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
       results.tokenAcquired = true;
@@ -968,9 +971,11 @@ export function registerUiPathRoutes(app: Express): void {
 
         if (pmToken) {
           const pmHdrs = { "Authorization": `Bearer ${pmToken}`, "Content-Type": "application/json" };
+          const identityGlobal = metadataService.getServiceUrl("IDENTITY", config);
+          const identityTenantScoped = `${metadataService.getCloudBaseUrl(config)}/identity_`;
           const identityUrls = [
-            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/identity_/api/RobotAccount`,
-            `https://cloud.uipath.com/${config.orgName}/identity_/api/RobotAccount`,
+            `${identityTenantScoped}/api/RobotAccount`,
+            `${identityGlobal}/api/RobotAccount`,
           ];
           const robotBody = { name: `CB_Diag_Robot_${ts}`, displayName: `CB_Diag_Robot_${ts}`, domain: "UiPath" };
           let robotCreated = false;
@@ -1091,15 +1096,15 @@ export function registerUiPathRoutes(app: Express): void {
       // ── DOCUMENT UNDERSTANDING ──
       {
         const sec: any = { artifact: "DocumentUnderstanding", steps: [] };
-        const duBases = [
-          `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/du_/api/framework/projects`,
-          `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/documentunderstanding_/api/framework/projects`,
-        ];
+        const duAlternates = metadataService.getServiceUrlAlternates("DU", config);
+        const duBases = duAlternates.map(u => `${u}/api/framework/projects`);
         for (const duUrl of duBases) {
           const probe = await safeCall("probe", `${duUrl}?$top=1`, { headers: hdrs });
           sec.steps.push({ step: "probe", url: duUrl, ...probe });
           if (probe.ok) {
             sec.overallStatus = "available";
+            const resolvedDuBase = duAlternates[duBases.indexOf(duUrl)];
+            if (resolvedDuBase) metadataService.setResolvedServiceUrl("DU", resolvedDuBase);
             break;
           }
         }
@@ -1111,24 +1116,20 @@ export function registerUiPathRoutes(app: Express): void {
       {
         const sec: any = { artifact: "TestManager", steps: [] };
         let tmToken: string | null = null;
-        const tmScopes = "TM.Projects TM.Projects.Read TM.Projects.Write TM.TestCases TM.TestCases.Read TM.TestCases.Write TM.TestSets TM.TestSets.Read TM.TestSets.Write";
+        const tmScopes = metadataService.getServiceScopesString("TM") || "TM.Projects TM.Projects.Read TM.Projects.Write TM.TestCases TM.TestCases.Read TM.TestCases.Write TM.TestSets TM.TestSets.Read TM.TestSets.Write";
         try {
           const tmParams = new URLSearchParams({ grant_type: "client_credentials", client_id: config.clientId, client_secret: config.clientSecret, scope: tmScopes });
-          const tmRes = await safeCall("tm_token", "https://cloud.uipath.com/identity_/connect/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tmParams.toString() });
+          const tmRes = await safeCall("tm_token", metadataService.getTokenEndpoint(), { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tmParams.toString() });
           sec.steps.push({ step: "tm_token", scopesRequested: tmScopes, scopesGranted: tmRes.data?.scope || null, ...tmRes });
           if (tmRes.ok && tmRes.data?.access_token) tmToken = tmRes.data.access_token;
-        } catch {}
+        } catch (e: any) { console.warn(`[Diagnostics] TM token acquisition failed: ${e.message}`); }
 
         if (!tmToken) {
           sec.overallStatus = "no_tm_token";
           results.testManager = sec;
         } else {
           const tmHdrs: Record<string, string> = { "Authorization": `Bearer ${tmToken}`, "Content-Type": "application/json", "Accept": "application/json" };
-          const tmBases = [
-            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`,
-            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tmapi_`,
-            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager`,
-          ];
+          const tmBases = metadataService.getServiceUrlAlternates("TM", config);
 
           let activeTmBase: string | null = null;
           for (const tmBase of tmBases) {
@@ -1136,6 +1137,7 @@ export function registerUiPathRoutes(app: Express): void {
             sec.steps.push({ step: "probe", url: `${tmBase}/api/v2/Projects?$top=10`, ...probe });
             if (probe.ok && !probe.text.startsWith("<")) {
               activeTmBase = tmBase;
+              metadataService.setResolvedServiceUrl("TM", tmBase);
               break;
             }
           }
@@ -1262,11 +1264,11 @@ export function registerUiPathRoutes(app: Express): void {
         try {
           const robots = await orch.getRobots();
           robotCount = robots.length;
-        } catch {}
+        } catch (e: any) { console.warn(`[UiPath Health] Failed to count robots: ${e.message}`); }
         try {
           const tasks = await orch.getTasks("Pending");
           pendingTasks = tasks.length;
-        } catch {}
+        } catch (e: any) { console.warn(`[UiPath Health] Failed to count pending tasks: ${e.message}`); }
       }
 
       return res.json({
@@ -1387,7 +1389,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${processes.length} process(es) visible`,
           });
-        } catch {
+        } catch (e: any) {
           checks.push({
             name: "Package feed writable",
             status: "warning",
@@ -1405,7 +1407,7 @@ export function registerUiPathRoutes(app: Express): void {
               : "No machines registered",
             remediation: machines.length === 0 ? "Register machines in Orchestrator > Machines." : undefined,
           });
-        } catch {
+        } catch (e: any) {
           checks.push({ name: "Machines available", status: "warning", detail: "Could not check machines" });
         }
 
@@ -1419,7 +1421,7 @@ export function registerUiPathRoutes(app: Express): void {
               : "No robots found",
             remediation: robots.length === 0 ? "Ensure Unattended robots are configured in Orchestrator." : undefined,
           });
-        } catch {
+        } catch (e: any) {
           checks.push({ name: "Robots available", status: "warning", detail: "Could not check robots" });
         }
 
@@ -1430,7 +1432,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${catalogs.length} task catalog(s) available`,
           });
-        } catch {
+        } catch (e: any) {
           checks.push({
             name: "Action Center reachable",
             status: "warning",
@@ -1446,7 +1448,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${testSets.length} test set(s) available`,
           });
-        } catch {
+        } catch (e: any) {
           checks.push({
             name: "Test Manager reachable",
             status: "warning",
@@ -1462,7 +1464,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${queues.length} queue(s) visible in target folder`,
           });
-        } catch {
+        } catch (e: any) {
           checks.push({
             name: "Queue access",
             status: "warning",
@@ -1491,7 +1493,7 @@ export function registerUiPathRoutes(app: Express): void {
               remediation: "AI Center enables custom ML models for classification, prediction, NLP, and anomaly detection. Enable it via UiPath Automation Cloud.",
             });
           }
-        } catch {
+        } catch (e: any) {
           checks.push({
             name: "AI Center reachable",
             status: "warning",
@@ -1500,12 +1502,24 @@ export function registerUiPathRoutes(app: Express): void {
         }
       }
 
+      let serviceDetails: Record<string, any> | undefined;
+      try {
+        const { getProbeCache } = await import("./uipath-integration");
+        const cached = getProbeCache();
+        if (cached) {
+          const { probeServiceAvailability } = await import("./uipath-integration");
+          const svcAvail = await probeServiceAvailability();
+          serviceDetails = svcAvail.serviceDetails;
+        }
+      } catch (e: any) { console.warn(`[UiPath Diagnostics] Failed to attach service details: ${e.message}`); }
+
       return res.json({
         configured: true,
         connected: healthResult.ok,
         tenantName: config.tenantName,
         latencyMs: healthResult.latencyMs,
         checks,
+        serviceDetails,
       });
     } catch (err: any) {
       return res.json({
@@ -1545,7 +1559,7 @@ export function registerUiPathRoutes(app: Express): void {
       let activeJobs: orch.Job[] = [];
       try {
         activeJobs = await orch.getJobs(processName, "Running");
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Failed to fetch active jobs for ${processName}: ${e.message}`); }
 
       return res.json({
         processName,
@@ -1585,7 +1599,7 @@ export function registerUiPathRoutes(app: Express): void {
             await orch.disableTrigger(trigger.Id).catch(() => {});
           }
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Emergency stop trigger disable failed: ${e.message}`); }
 
       await db.insert(provisioningLog).values({
         jobId: `emergency_${Date.now()}`,
@@ -1622,7 +1636,7 @@ export function registerUiPathRoutes(app: Express): void {
       let orchestratorTasks: orch.ActionTask[] = [];
       try {
         orchestratorTasks = await orch.getTasks();
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Failed to fetch Action Center tasks: ${e.message}`); }
 
       return res.json({
         localTasks,
@@ -1888,7 +1902,7 @@ export function registerUiPathRoutes(app: Express): void {
         if (storedMode === "Always" || storedMode === "Off" || storedMode === "Auto") {
           userMetaValidationMode = storedMode;
         }
-      } catch {}
+      } catch (e: any) { console.warn(`[UiPath] Failed to load meta validation mode: ${e.message}`); }
 
       const observerRunId = crypto.randomUUID();
       createObserverRun(observerRunId, ideaId, source);
@@ -1999,8 +2013,8 @@ export function registerUiPathRoutes(app: Express): void {
     const isActive = activeRun && !activeRun.completed && activeRun.runId === dbRun.runId;
     let parsedPhaseProgress = null;
     let parsedOutcomeReport = null;
-    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch {}
-    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch {}
+    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch (e: any) { /* corrupt phaseProgress JSON */ }
+    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch (e: any) { /* corrupt outcomeReport JSON */ }
 
     const statusMap: Record<string, string> = {
       running: "BUILDING",
@@ -2057,8 +2071,8 @@ export function registerUiPathRoutes(app: Express): void {
 
     let parsedPhaseProgress = null;
     let parsedOutcomeReport = null;
-    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch {}
-    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch {}
+    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch (e: any) { /* corrupt phaseProgress JSON */ }
+    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch (e: any) { /* corrupt outcomeReport JSON */ }
     return res.json({
       run: {
         ...dbRun,
@@ -2130,7 +2144,7 @@ export function registerUiPathRoutes(app: Express): void {
           if (event.type === "done" || event.type === "error") {
             res.end();
           }
-        } catch {
+        } catch (e: any) {
           unsubscribe();
         }
       }, replay);
@@ -2165,7 +2179,7 @@ export function registerUiPathRoutes(app: Express): void {
             res.write(`data: ${JSON.stringify({ done: true, status: event.type === "failed" ? "FAILED" : "READY" })}\n\n`);
             res.end();
           }
-        } catch {
+        } catch (e: any) {
           unsubscribe();
         }
       });
@@ -2178,7 +2192,7 @@ export function registerUiPathRoutes(app: Express): void {
             return;
           }
           res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-        } catch {
+        } catch (e: any) {
           clearInterval(heartbeat);
           unsubscribe();
         }
