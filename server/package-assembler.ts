@@ -43,6 +43,7 @@ import archiver from "archiver";
   import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
   import { catalogService, type ProcessType } from "./catalog/catalog-service";
+  import { getPreferredVersion, type StudioProfile } from "./catalog/studio-profile";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, type UiPathConfig } from "./uipath-shared";
 
 async function getProbeCache() {
@@ -467,8 +468,9 @@ function filterWorkflowSpecCatalogProperties(
 }
 
 
-export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void): Promise<BuildResult> {
+export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null): Promise<BuildResult> {
   const _probeCacheSnapshot = await getProbeCache();
+  const _studioProfile = studioProfile !== undefined ? studioProfile : catalogService.getStudioProfile();
   const projectName = (pkg.projectName || "Automation").replace(/\s+/g, "_");
   const sddContent = pkg.internal?.sddContent || "";
   const orchestratorArtifacts = pkg.internal?.orchestratorArtifacts || null;
@@ -596,7 +598,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     hasQueues,
     enrichment?.useReFramework,
   );
-  const modeConfig = selectGenerationMode(automationPattern);
+  const modeConfig = selectGenerationMode(automationPattern, undefined, _studioProfile);
   generationMode = modeConfig.mode;
   const useReFramework = modeConfig.blockReFramework ? false : shouldUseReFramework(automationPattern);
   const genCtx: XamlGenerationContext = {
@@ -619,7 +621,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
   const isServerless = explicitFramework === "Portable"
     || !!pkg.internal?.isServerless
     || (!explicitFramework && !!(_probeCacheSnapshot?.serverlessDetected) && !_probeCacheSnapshot?.flags?.hasUnattendedSlots);
-    const libPath = isServerless ? "lib/net6.0" : "lib/net45";
+    const libPath = _studioProfile
+      ? (_studioProfile.targetFramework === "Portable" ? "lib/net6.0" : "lib/net45")
+      : (isServerless ? "lib/net6.0" : "lib/net45");
     const xamlResults: XamlGeneratorResult[] = [];
 
     const contentTypesXml = `<?xml version="1.0" encoding="utf-8"?>
@@ -651,34 +655,47 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 </coreProperties>`;
     archive.append(coreProps, { name: `package/services/metadata/core-properties/${corePropsId}.psmdcp` });
 
-    const confirmedVersionMap: Record<string, string> = isServerless
-      ? {
-          "UiPath.System.Activities": "25.10.0",
-          "UiPath.UIAutomation.Activities": "25.10.0",
-          "UiPath.Mail.Activities": "2.5.0",
-          "UiPath.Database.Activities": "2.2.0",
-          "UiPath.Persistence.Activities": "25.10.0",
-          "UiPath.MLActivities": "25.10.0",
-        }
-      : {
-          "UiPath.System.Activities": "23.10.3",
-          "UiPath.UIAutomation.Activities": "23.10.8",
-          "UiPath.Mail.Activities": "1.20.0",
-          "UiPath.Database.Activities": "1.8.0",
-          "UiPath.Persistence.Activities": "23.10.0",
-          "UiPath.MLActivities": "23.10.0",
-          "UiPath.IntelligentOCR.Activities": "8.20.0",
-        };
+    const confirmedVersionMap: Record<string, string> = _studioProfile
+      ? Object.fromEntries(
+          Object.entries(_studioProfile.allowedPackageVersionRanges).map(
+            ([pkg, range]) => [pkg, range.preferred]
+          )
+        )
+      : isServerless
+        ? {
+            "UiPath.System.Activities": "25.10.0",
+            "UiPath.UIAutomation.Activities": "25.10.0",
+            "UiPath.Mail.Activities": "2.5.0",
+            "UiPath.Database.Activities": "2.2.0",
+            "UiPath.Persistence.Activities": "25.10.0",
+            "UiPath.MLActivities": "25.10.0",
+          }
+        : {
+            "UiPath.System.Activities": "23.10.3",
+            "UiPath.UIAutomation.Activities": "23.10.8",
+            "UiPath.Mail.Activities": "1.20.0",
+            "UiPath.Database.Activities": "1.8.0",
+            "UiPath.Persistence.Activities": "23.10.0",
+            "UiPath.MLActivities": "23.10.0",
+            "UiPath.IntelligentOCR.Activities": "8.20.0",
+          };
     const UNVERIFIED_PACKAGES = new Set(["UiPath.Web.Activities", "UiPath.Excel.Activities"]);
     const deps: Record<string, string> = {
       "UiPath.System.Activities": confirmedVersionMap["UiPath.System.Activities"],
     };
+    if (_studioProfile) {
+      for (const requiredPkg of _studioProfile.minimumRequiredPackages) {
+        if (!deps[requiredPkg] && confirmedVersionMap[requiredPkg]) {
+          deps[requiredPkg] = confirmedVersionMap[requiredPkg];
+        }
+      }
+    }
     const dependencyWarnings: Array<{ code: string; message: string; stage: string; recoverable: boolean }> = [];
 
     const analysisReports: { fileName: string; report: AnalysisReport }[] = [];
     const xamlEntries: { name: string; content: string }[] = [];
     const deferredWrites = new Map<string, string>();
-    const tf: TargetFramework = isServerless ? "Portable" : "Windows";
+    const tf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (isServerless ? "Portable" : "Windows");
     const apEnabled = !!pkg.internal?.autopilotEnabled || !!(_probeCacheSnapshot?.flags?.autopilot);
     const earlyStubFallbacks: string[] = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
@@ -938,7 +955,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const allGaps = aggregateGaps(xamlResults);
 
     const entryPointId = generateUuid();
-    const studioVer = isServerless ? "24.10.0" : "23.10.6";
+    const studioVer = _studioProfile ? _studioProfile.studioVersion : (isServerless ? "24.10.0" : "23.10.6");
     const projectJson: Record<string, any> = {
       name: projectName,
       description: pkg.description || "",
@@ -969,7 +986,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         fileInfoCollection: [],
         modernBehavior: true,
       },
-      expressionLanguage: isServerless ? "CSharp" : "VisualBasic",
+      expressionLanguage: _studioProfile ? _studioProfile.expressionLanguage : (isServerless ? "CSharp" : "VisualBasic"),
       entryPoints: [
         {
           filePath: "Main.xaml",
@@ -982,7 +999,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       templateProjectData: {},
       publishData: {},
     };
-    if (isServerless) {
+    if (_studioProfile) {
+      projectJson.targetFramework = _studioProfile.targetFramework;
+      projectJson.sourceLanguage = _studioProfile.expressionLanguage;
+    } else if (isServerless) {
       projectJson.targetFramework = "Portable";
       projectJson.sourceLanguage = "CSharp";
     } else {
@@ -1851,7 +1871,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             }
             for (const pkg of stubPackages) {
               if (!deps[pkg]) {
-                deps[pkg] = confirmedVersionMap[pkg] || (tf === "Windows" ? "23.10.0" : "25.10.0");
+                const profileVersion = _studioProfile ? getPreferredVersion(_studioProfile, pkg) : null;
+                deps[pkg] = confirmedVersionMap[pkg] || profileVersion || (tf === "Windows" ? "23.10.0" : "25.10.0");
               }
             }
             if (!deps["UiPath.System.Activities"]) {

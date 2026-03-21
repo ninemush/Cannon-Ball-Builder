@@ -9,6 +9,8 @@ import {
   type AutomationPattern,
 } from "./uipath-activity-registry";
 import { getBlockedActivities } from "./uipath-activity-policy";
+import { catalogService } from "./catalog/catalog-service";
+import { isVersionInRange, type StudioProfile } from "./catalog/studio-profile";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
@@ -1124,12 +1126,29 @@ function checkVersionCompatibility(input: QualityGateInput, violations: QualityG
 
   const deps = projectJson.dependencies || {};
   const isPortable = input.targetFramework === "Portable";
+  const _studioProfile = catalogService.getStudioProfile();
 
   for (const [pkgName, versionStr] of Object.entries(deps)) {
     if (typeof versionStr !== "string") continue;
     const versionNum = (versionStr as string).replace(/[\[\]]/g, "");
     const majorVersion = parseInt(versionNum.split(".")[0], 10);
     if (isNaN(majorVersion)) continue;
+
+    if (_studioProfile) {
+      if (!isVersionInRange(_studioProfile, pkgName, versionNum)) {
+        const range = _studioProfile.allowedPackageVersionRanges[pkgName];
+        if (range) {
+          violations.push({
+            category: "accuracy",
+            severity: "error",
+            check: "version-framework-mismatch",
+            file: "project.json",
+            detail: `Package "${pkgName}" version ${versionStr} is outside allowed range [${range.min}, ${range.max}] for Studio ${_studioProfile.studioLine} ${_studioProfile.targetFramework} profile`,
+          });
+        }
+      }
+      continue;
+    }
 
     const versionRange = PACKAGE_MAJOR_VERSION_RANGES[pkgName];
     if (!versionRange) continue;

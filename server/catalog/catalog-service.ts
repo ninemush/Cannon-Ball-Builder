@@ -1,6 +1,8 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { validateCatalog } from "./catalog-validator";
+import { loadStudioProfile, type StudioProfile } from "./studio-profile";
+export type { StudioProfile } from "./studio-profile";
 
 export type ProcessType = "api-integration" | "document-processing" | "attended-ui" | "unattended-ui" | "orchestration" | "general";
 
@@ -70,8 +72,11 @@ class CatalogService {
   private activityIndex = new Map<string, ActivitySchema>();
   private packageIndex = new Map<string, CatalogPackage>();
   private loaded = false;
+  private studioProfile: StudioProfile | null = null;
 
   load(catalogPath?: string): void {
+    this.studioProfile = loadStudioProfile();
+
     const path = catalogPath || join(process.cwd(), "catalog", "activity-catalog.json");
 
     if (!existsSync(path)) {
@@ -109,6 +114,10 @@ class CatalogService {
       console.warn(`[Activity Catalog] Failed to load catalog: ${err.message} — catalog constraints disabled`);
       this.loaded = false;
     }
+  }
+
+  getStudioProfile(): StudioProfile | null {
+    return this.studioProfile;
   }
 
   isLoaded(): boolean {

@@ -17,6 +17,7 @@ import type { XamlGenerationContext } from "./types/uipath-package";
 import type { PipelineOutcomeReport } from "./uipath-pipeline";
 import { XMLValidator } from "fast-xml-parser";
 import { catalogService } from "./catalog/catalog-service";
+import type { StudioProfile } from "./catalog/studio-profile";
 
 export {
   ensureBracketWrapped,
@@ -77,15 +78,31 @@ const REFRAMEWORK_FILES = new Set([
 export function selectGenerationMode(
   automationPattern: string,
   confidence?: number,
+  profile?: StudioProfile | null,
 ): GenerationModeConfig {
+  const resolvedProfile = profile !== undefined ? profile : catalogService.getStudioProfile();
+
   const isSimpleOrApi = automationPattern === "simple-linear" || automationPattern === "api-data-driven";
   const isLowConfidence = confidence !== undefined && confidence < 0.6;
   const isTransactional = automationPattern === "transactional-queue";
 
+  const targetFramework = resolvedProfile?.targetFramework || "Windows";
+  const projectType = resolvedProfile?.projectType || "Process";
+
+  if (projectType === "Library") {
+    return {
+      mode: "baseline_openable",
+      reason: `Project type "Library" defaults to baseline_openable for reliable Studio-openable output (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
+      flatScaffold: true,
+      blockReFramework: true,
+      blockForbiddenActivities: true,
+    };
+  }
+
   if (isTransactional && !isLowConfidence) {
     return {
       mode: "full_implementation",
-      reason: `Pattern "${automationPattern}" supports full implementation with REFramework`,
+      reason: `Pattern "${automationPattern}" supports full implementation with REFramework (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
       flatScaffold: false,
       blockReFramework: false,
       blockForbiddenActivities: false,
@@ -107,7 +124,7 @@ export function selectGenerationMode(
   if (automationPattern === "ui-automation" || automationPattern === "hybrid") {
     return {
       mode: "full_implementation",
-      reason: `Pattern "${automationPattern}" supports full implementation`,
+      reason: `Pattern "${automationPattern}" supports full implementation (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
       flatScaffold: false,
       blockReFramework: false,
       blockForbiddenActivities: false,

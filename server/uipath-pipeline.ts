@@ -12,6 +12,8 @@ import {
   type BuildResult,
   type GenerationMode,
 } from "./uipath-integration";
+import { catalogService } from "./catalog/catalog-service";
+import type { StudioProfile } from "./catalog/studio-profile";
 import {
   generateDeveloperHandoffGuide,
   makeUiPathCompliant,
@@ -646,9 +648,10 @@ export async function compilePackageFromSpecs(
     });
     let buildResult: BuildResult;
     try {
+      const _pipelineProfile = catalogService.getStudioProfile();
       buildResult = await buildNuGetPackage(enriched, ver, ideaId, mode, options?.onPipelineProgress ? (event) => {
         options.onPipelineProgress!(event);
-      } : undefined);
+      } : undefined, _pipelineProfile);
     } catch (err) {
       if (err instanceof QualityGateError && mode === "full_implementation" && currentDowngradeAttempt < maxDowngradeAttempts) {
         const downgradeEvent: DowngradeEvent = {
