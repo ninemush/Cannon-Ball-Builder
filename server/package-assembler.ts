@@ -35,7 +35,7 @@ import archiver from "archiver";
   import type { XamlGenerationContext, UiPathPackage } from "./types/uipath-package";
   import { enrichWithAI, enrichWithAITree, type EnrichmentResult, type TreeEnrichmentResult } from "./ai-xaml-enricher";
   import { assembleWorkflowFromSpec } from "./workflow-tree-assembler";
-  import type { WorkflowSpec as TreeWorkflowSpec } from "./workflow-spec-types";
+  import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
   import { runQualityGate, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue } from "./uipath-quality-gate";
   import { escapeXml } from "./lib/xml-utils";
@@ -43,7 +43,7 @@ import archiver from "archiver";
   import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
   import { catalogService, type ProcessType } from "./catalog/catalog-service";
-  import { getPreferredVersion, type StudioProfile } from "./catalog/studio-profile";
+  import { getPreferredVersion, isVersionInRange, type StudioProfile } from "./catalog/studio-profile";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, type UiPathConfig } from "./uipath-shared";
 
 async function getProbeCache() {
@@ -72,22 +72,191 @@ export function isValidNuGetVersion(version: string): boolean {
 
 function sanitizeDeps(deps: Record<string, string>): void {
   for (const [key, val] of Object.entries(deps)) {
-    if (val === "*" || val === "[*]" || !isValidNuGetVersion(val)) {
-      console.log(`[UiPath Sanitize] Removing invalid dependency version: ${key}=${val}`);
+    if (val === "*" || val === "[*]") {
+      console.log(`[UiPath Sanitize] Removing wildcard dependency version: ${key}=${val}`);
       delete deps[key];
-    } else if (/^\[\d+\.\d+(\.\d+){0,2},\s*\)$/.test(val)) {
-      // valid minimum-version range format [X.Y.Z, ) — keep as-is
-    } else {
-      const stripped = val.replace(/^\[|\]$/g, "");
-      if (stripped !== val) {
-        deps[key] = stripped;
-      }
+    } else if (!isValidNuGetVersion(val)) {
+      console.log(`[UiPath Sanitize] Removing malformed dependency version: ${key}=${val}`);
+      delete deps[key];
     }
   }
 }
 
 export function normalizePackageName(name: string): string {
   return UIPATH_PACKAGE_ALIAS_MAP[name] || name;
+}
+
+export interface DependencyResolutionResult {
+  deps: Record<string, string>;
+  warnings: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
+}
+
+function collectActivityTemplatesFromNode(node: TreeWorkflowNode): string[] {
+  const templates: string[] = [];
+  if (node.kind === "activity") {
+    templates.push(node.template);
+  } else if (node.kind === "sequence" && node.children) {
+    for (const child of node.children) {
+      templates.push(...collectActivityTemplatesFromNode(child));
+    }
+  } else if (node.kind === "tryCatch") {
+    for (const child of [...(node.tryChildren || []), ...(node.catchChildren || []), ...(node.finallyChildren || [])]) {
+      templates.push(...collectActivityTemplatesFromNode(child));
+    }
+  } else if (node.kind === "if") {
+    for (const child of [...(node.thenChildren || []), ...(node.elseChildren || [])]) {
+      templates.push(...collectActivityTemplatesFromNode(child));
+    }
+  } else if (node.kind === "while" || node.kind === "forEach" || node.kind === "retryScope") {
+    for (const child of (node.bodyChildren || [])) {
+      templates.push(...collectActivityTemplatesFromNode(child));
+    }
+  }
+  return templates;
+}
+
+function collectActivityTemplatesFromSpec(spec: TreeWorkflowSpec): Set<string> {
+  const templates = new Set<string>();
+  templates.add("LogMessage");
+  if (spec.rootSequence?.children) {
+    for (const child of spec.rootSequence.children) {
+      for (const t of collectActivityTemplatesFromNode(child)) {
+        templates.add(t);
+      }
+    }
+  }
+  return templates;
+}
+
+function collectActivityTypesFromWorkflows(workflows: Array<{ steps?: Array<{ activityType?: string; activityPackage?: string }> }>): Set<string> {
+  const packages = new Set<string>();
+  packages.add("UiPath.System.Activities");
+  for (const wf of workflows) {
+    for (const step of wf.steps || []) {
+      if (step.activityPackage) {
+        packages.add(step.activityPackage);
+      }
+      if (step.activityType) {
+        const pkg = catalogService.getPackageForActivity(step.activityType);
+        if (pkg) packages.add(pkg);
+      }
+    }
+  }
+  return packages;
+}
+
+const BASELINE_FALLBACK_VERSIONS: Record<string, { windows: string; portable: string }> = {
+  "UiPath.System.Activities": { windows: "23.10.3", portable: "25.10.0" },
+  "UiPath.UIAutomation.Activities": { windows: "23.10.8", portable: "25.10.0" },
+  "UiPath.Mail.Activities": { windows: "1.20.0", portable: "2.5.0" },
+  "UiPath.Database.Activities": { windows: "1.8.0", portable: "2.2.0" },
+  "UiPath.Persistence.Activities": { windows: "23.10.0", portable: "25.10.0" },
+  "UiPath.MLActivities": { windows: "23.10.0", portable: "25.10.0" },
+  "UiPath.IntelligentOCR.Activities": { windows: "8.20.0", portable: "8.20.0" },
+};
+
+function getBaselineFallbackVersion(pkgName: string, targetFramework: "Windows" | "Portable"): string | null {
+  const entry = BASELINE_FALLBACK_VERSIONS[pkgName];
+  if (!entry) return null;
+  return targetFramework === "Portable" ? entry.portable : entry.windows;
+}
+
+export function resolveDependencies(
+  pkg: { workflows?: Array<{ steps?: Array<{ activityType?: string; activityPackage?: string }> }> },
+  studioProfile: StudioProfile | null,
+  treeSpec: TreeWorkflowSpec | null,
+  targetFramework?: "Windows" | "Portable",
+): DependencyResolutionResult {
+  const deps: Record<string, string> = {};
+  const warnings: DependencyResolutionResult["warnings"] = [];
+  const referencedPackages = new Set<string>();
+  const tf = targetFramework || (studioProfile?.targetFramework) || "Windows";
+
+  referencedPackages.add("UiPath.System.Activities");
+
+  if (treeSpec) {
+    const activityTemplates = collectActivityTemplatesFromSpec(treeSpec);
+    for (const template of activityTemplates) {
+      const pkgId = catalogService.getPackageForActivity(template);
+      if (pkgId) {
+        referencedPackages.add(normalizePackageName(pkgId));
+      }
+    }
+  }
+
+  if (pkg.workflows) {
+    const legacyPackages = collectActivityTypesFromWorkflows(pkg.workflows);
+    for (const p of legacyPackages) {
+      referencedPackages.add(normalizePackageName(p));
+    }
+  }
+
+  if (studioProfile) {
+    for (const requiredPkg of studioProfile.minimumRequiredPackages) {
+      referencedPackages.add(normalizePackageName(requiredPkg));
+    }
+  }
+
+  for (const rawPkgName of referencedPackages) {
+    const pkgName = normalizePackageName(rawPkgName);
+    let version: string | null = null;
+    let source: string = "";
+
+    if (studioProfile) {
+      const preferred = getPreferredVersion(studioProfile, pkgName);
+      if (preferred) {
+        version = preferred;
+        source = "studio-profile";
+      }
+    }
+
+    if (!version && catalogService.isLoaded()) {
+      const catalogVersion = catalogService.getConfirmedVersion(pkgName);
+      if (catalogVersion) {
+        if (studioProfile && !isVersionInRange(studioProfile, pkgName, catalogVersion)) {
+          warnings.push({
+            code: "DEPENDENCY_VERSION_OUT_OF_RANGE",
+            message: `Catalog version ${catalogVersion} for ${pkgName} is outside the studio profile's allowed range — using catalog version anyway`,
+            stage: "dependency-resolution",
+            recoverable: true,
+          });
+        }
+        version = catalogVersion;
+        source = "catalog";
+      }
+    }
+
+    if (!version) {
+      const fallback = getBaselineFallbackVersion(pkgName, tf);
+      if (fallback) {
+        version = fallback;
+        source = "baseline-fallback";
+        warnings.push({
+          code: "DEPENDENCY_USING_BASELINE_FALLBACK",
+          message: `Package ${pkgName} not found in catalog or studio profile — using baseline fallback version ${fallback}`,
+          stage: "dependency-resolution",
+          recoverable: true,
+        });
+        console.warn(`[Dependency Resolution] Using baseline fallback for ${pkgName}: ${fallback} (${tf})`);
+      }
+    }
+
+    if (!version) {
+      warnings.push({
+        code: "DEPENDENCY_NOT_IN_CATALOG",
+        message: `Package ${pkgName} is referenced by activities but has no version in the catalog, studio profile, or baseline fallbacks — omitted from project.json`,
+        stage: "dependency-resolution",
+        recoverable: true,
+      });
+      console.warn(`[Dependency Resolution] Package ${pkgName} not found in any version source — skipping`);
+      continue;
+    }
+
+    deps[pkgName] = version;
+  }
+
+  console.log(`[Dependency Resolution] Resolved ${Object.keys(deps).length} dependencies proactively from ${referencedPackages.size} referenced packages`);
+  return { deps, warnings };
 }
 
 type CachedBuild = {
@@ -655,46 +824,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 </coreProperties>`;
     archive.append(coreProps, { name: `package/services/metadata/core-properties/${corePropsId}.psmdcp` });
 
-    const confirmedVersionMap: Record<string, string> = _studioProfile
-      ? Object.fromEntries(
-          Object.entries(_studioProfile.allowedPackageVersionRanges).map(
-            ([pkg, range]) => [pkg, range.preferred]
-          )
-        )
-      : isServerless
-        ? {
-            "UiPath.System.Activities": "25.10.0",
-            "UiPath.UIAutomation.Activities": "25.10.0",
-            "UiPath.Mail.Activities": "2.5.0",
-            "UiPath.Database.Activities": "2.2.0",
-            "UiPath.Persistence.Activities": "25.10.0",
-            "UiPath.MLActivities": "25.10.0",
-          }
-        : {
-            "UiPath.System.Activities": "23.10.3",
-            "UiPath.UIAutomation.Activities": "23.10.8",
-            "UiPath.Mail.Activities": "1.20.0",
-            "UiPath.Database.Activities": "1.8.0",
-            "UiPath.Persistence.Activities": "23.10.0",
-            "UiPath.MLActivities": "23.10.0",
-            "UiPath.IntelligentOCR.Activities": "8.20.0",
-          };
-    const deps: Record<string, string> = {
-      "UiPath.System.Activities": confirmedVersionMap["UiPath.System.Activities"],
-    };
-    if (_studioProfile) {
-      for (const requiredPkg of _studioProfile.minimumRequiredPackages) {
-        if (!deps[requiredPkg] && confirmedVersionMap[requiredPkg]) {
-          deps[requiredPkg] = confirmedVersionMap[requiredPkg];
-        }
-      }
-    }
-    const dependencyWarnings: Array<{ code: string; message: string; stage: string; recoverable: boolean }> = [];
+    const tf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (isServerless ? "Portable" : "Windows");
+    const treeSpecForDeps = treeEnrichment?.status === "success" ? treeEnrichment.workflowSpec : null;
+    const depResolution = resolveDependencies(pkg, _studioProfile, treeSpecForDeps, tf as "Windows" | "Portable");
+    const deps = depResolution.deps;
+    const dependencyWarnings = depResolution.warnings;
 
     const analysisReports: { fileName: string; report: AnalysisReport }[] = [];
     const xamlEntries: { name: string; content: string }[] = [];
     const deferredWrites = new Map<string, string>();
-    const tf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (isServerless ? "Portable" : "Windows");
     const apEnabled = !!pkg.internal?.autopilotEnabled || !!(_probeCacheSnapshot?.flags?.autopilot);
     const earlyStubFallbacks: string[] = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
@@ -927,37 +1065,43 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
     const allXamlContent = xamlEntries.map(e => e.content).join("\n");
     const scannedPackages = scanXamlForRequiredPackages(allXamlContent);
-    for (const pkgName of scannedPackages) {
+    for (const rawPkgName of scannedPackages) {
+      const pkgName = normalizePackageName(rawPkgName);
       if (deps[pkgName]) continue;
-      if (catalogService.isLoaded() && !catalogService.isPackageVerified(pkgName)) {
-        const preferredVer = catalogService.getPreferredVersion(pkgName);
-        if (preferredVer) {
-          deps[pkgName] = preferredVer;
-          dependencyWarnings.push({
-            code: "DEPENDENCY_FEED_UNVERIFIED",
-            message: `Package ${pkgName} has unverified feed status — using preferred version ${preferredVer} from catalog.`,
-            stage: "dependency-resolution",
-            recoverable: true,
-          });
-          continue;
-        }
-        console.warn(`[UiPath] XAML uses activities from ${pkgName} but feed is unverified and no preferred version — omitting from project.json`);
-        dependencyWarnings.push({
-          code: "DEPENDENCY_VERSION_UNKNOWN",
-          message: `Activities from ${pkgName} are used in XAML but no confirmed-resolvable version is available. This dependency is omitted from project.json.`,
-          stage: "dependency-resolution",
-          recoverable: true,
-        });
-        continue;
-      }
-      if (confirmedVersionMap[pkgName]) {
-        deps[pkgName] = confirmedVersionMap[pkgName];
-        console.log(`[UiPath] Auto-added dependency ${pkgName} v${confirmedVersionMap[pkgName]} (detected in emitted XAML activities)`);
-      } else if (catalogService.isLoaded()) {
+      let resolved = false;
+      if (catalogService.isLoaded()) {
         const catalogVersion = catalogService.getConfirmedVersion(pkgName);
         if (catalogVersion) {
           deps[pkgName] = catalogVersion;
-          console.log(`[Activity Catalog] Providing version for ${pkgName}: ${catalogVersion} (not in confirmedVersionMap)`);
+          dependencyWarnings.push({
+            code: "DEPENDENCY_DISCOVERED_IN_XAML",
+            message: `Package ${pkgName} was not resolved proactively but was discovered in emitted XAML — added from catalog (v${catalogVersion}). This indicates a gap in the activity catalog mapping.`,
+            stage: "dependency-crosscheck",
+            recoverable: true,
+          });
+          console.warn(`[Dependency CrossCheck] Gap detected: ${pkgName} found in XAML but not in proactive resolution — added from catalog v${catalogVersion}`);
+          resolved = true;
+        }
+      }
+      if (!resolved) {
+        const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
+        if (fallback) {
+          deps[pkgName] = fallback;
+          dependencyWarnings.push({
+            code: "DEPENDENCY_DISCOVERED_IN_XAML",
+            message: `Package ${pkgName} was discovered in emitted XAML but not in catalog — using baseline fallback version ${fallback}`,
+            stage: "dependency-crosscheck",
+            recoverable: true,
+          });
+          console.warn(`[Dependency CrossCheck] Using baseline fallback for ${pkgName}: ${fallback}`);
+        } else {
+          dependencyWarnings.push({
+            code: "DEPENDENCY_NOT_IN_CATALOG",
+            message: `Package ${pkgName} is used in XAML but has no version in any source — omitted from project.json`,
+            stage: "dependency-crosscheck",
+            recoverable: true,
+          });
+          console.warn(`[Dependency CrossCheck] Package ${pkgName} found in XAML but no version available — omitting`);
         }
       }
     }
@@ -1601,26 +1745,23 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
 
       const depsAfterScan = scanXamlForRequiredPackages(xamlEntries.map(e => e.content).join("\n"));
-      for (const pkg of depsAfterScan) {
-        if (deps[pkg]) continue;
-        if (catalogService.isLoaded() && !catalogService.isPackageVerified(pkg)) {
-          const preferredVer = catalogService.getPreferredVersion(pkg);
-          if (preferredVer) {
-            deps[pkg] = preferredVer;
-            autoFixSummary.push(`Added unverified dependency with preferred version: ${pkg}@${preferredVer}`);
-          }
-          continue;
-        }
-        if (confirmedVersionMap[pkg]) {
-          deps[pkg] = confirmedVersionMap[pkg];
-          autoFixSummary.push(`Added missing dependency: ${pkg}`);
-        } else if (catalogService.isLoaded()) {
-          const catalogVersion = catalogService.getConfirmedVersion(pkg);
+      for (const rawPkgName of depsAfterScan) {
+        const pkgName = normalizePackageName(rawPkgName);
+        if (deps[pkgName]) continue;
+        if (catalogService.isLoaded()) {
+          const catalogVersion = catalogService.getConfirmedVersion(pkgName);
           if (catalogVersion) {
-            deps[pkg] = catalogVersion;
-            autoFixSummary.push(`Added dependency from catalog: ${pkg}@${catalogVersion}`);
-            console.log(`[Activity Catalog] Providing version for ${pkg}: ${catalogVersion} (not in confirmedVersionMap)`);
+            deps[pkgName] = catalogVersion;
+            autoFixSummary.push(`Added dependency from catalog crosscheck: ${pkgName}@${catalogVersion}`);
+            console.warn(`[Dependency CrossCheck] Post-fix gap: ${pkgName} discovered in XAML after meta-validation — added from catalog v${catalogVersion}`);
+            continue;
           }
+        }
+        const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
+        if (fallback) {
+          deps[pkgName] = fallback;
+          autoFixSummary.push(`Added dependency from baseline fallback: ${pkgName}@${fallback}`);
+          console.warn(`[Dependency CrossCheck] Post-fix: using baseline fallback for ${pkgName}: ${fallback}`);
         }
       }
 
@@ -1889,11 +2030,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             for (const pkg of stubPackages) {
               if (!deps[pkg]) {
                 const profileVersion = _studioProfile ? getPreferredVersion(_studioProfile, pkg) : null;
-                deps[pkg] = confirmedVersionMap[pkg] || profileVersion || (tf === "Windows" ? "23.10.0" : "25.10.0");
+                const catalogVersion = catalogService.isLoaded() ? catalogService.getConfirmedVersion(pkg) : null;
+                const fallbackVersion = profileVersion || catalogVersion || (tf === "Windows" ? "23.10.0" : "25.10.0");
+                deps[pkg] = fallbackVersion;
               }
             }
             if (!deps["UiPath.System.Activities"]) {
-              deps["UiPath.System.Activities"] = confirmedVersionMap["UiPath.System.Activities"];
+              const sysVersion = _studioProfile ? getPreferredVersion(_studioProfile, "UiPath.System.Activities") : null;
+              const sysCatalogVersion = catalogService.isLoaded() ? catalogService.getConfirmedVersion("UiPath.System.Activities") : null;
+              deps["UiPath.System.Activities"] = sysVersion || sysCatalogVersion || (tf === "Windows" ? "23.10.0" : "25.10.0");
             }
             projectJson.dependencies = { ...deps };
             const stubProjectJsonStr = JSON.stringify(projectJson, null, 2);
