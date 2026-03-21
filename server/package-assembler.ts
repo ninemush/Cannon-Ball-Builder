@@ -23,6 +23,7 @@ import archiver from "archiver";
     isReFrameworkFile,
     replaceActivityWithStub,
     replaceSequenceChildrenWithStub,
+    preserveStructureAndStubLeaves,
     type GenerationMode,
     type GenerationModeConfig,
     type XamlGeneratorResult,
@@ -269,6 +270,7 @@ import type {
   AutoRepairEntry,
   RemediationCode,
   RepairCode,
+  StructuralPreservationMetrics,
 } from "./uipath-pipeline";
 
 export type BuildResult = {
@@ -1139,6 +1141,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const autoFixSummary: string[] = [];
     const outcomeRemediations: RemediationEntry[] = [];
     const outcomeAutoRepairs: AutoRepairEntry[] = [];
+    const structuralPreservationMetrics: StructuralPreservationMetrics[] = [];
 
     function mapCheckToRemediationCode(check: string): RemediationCode {
       const codeMap: Record<string, RemediationCode> = {
@@ -1727,41 +1730,112 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           }
 
           if (!qualityGateResult.passed && !hasOnlyWarnings(classifyQualityIssues(qualityGateResult))) {
-            console.log(`[UiPath Escalation] Level 3: Per-workflow stub fallback for remaining blocking files`);
+            console.log(`[UiPath Escalation] Level 3: Structural-preservation stub for remaining blocking files`);
             const wfClassified = classifyQualityIssues(qualityGateResult);
             const wfBlockingFiles = getBlockingFiles(wfClassified);
             usedFallback = true;
+
+            let anyStructuralPreserved = false;
 
             for (let i = 0; i < xamlEntries.length; i++) {
               const entryName = xamlEntries[i].name;
               const shortName = entryName.split("/").pop() || entryName;
               if (!wfBlockingFiles.has(shortName)) continue;
 
-              const className = shortName.replace(".xaml", "");
               const blockingDetails = wfClassified.filter(ci => ci.file === shortName && ci.severity === "blocking");
-              const stubXaml = generateStubWorkflow(className, {
-                reason: `Blocking quality gate issues: ${blockingDetails.map(d => d.check).join(", ")}`,
-                isBlockingFallback: true,
-              });
-              const stubCompliant = makeUiPathCompliant(stubXaml, tf);
-              xamlEntries[i] = { name: entryName, content: stubCompliant };
+              const isMainFile = shortName === "Main.xaml";
 
-              const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === shortName);
-              if (archivePath) {
-                deferredWrites.set(archivePath, stubCompliant);
-              }
-              earlyStubFallbacks.push(shortName);
-              autoFixSummary.push(`Replaced ${entryName} with per-workflow Studio-openable stub (blocking issues: ${blockingDetails.map(d => d.check).join(", ")})`);
-              for (const bd of blockingDetails) {
-                outcomeRemediations.push({
-                  level: "workflow",
+              const spResult = preserveStructureAndStubLeaves(
+                xamlEntries[i].content,
+                blockingDetails,
+                { isMainXaml: isMainFile },
+              );
+
+              if (spResult.preserved) {
+                console.log(`[UiPath Escalation] Structural preservation succeeded for ${shortName}: ${spResult.preservedActivities} preserved, ${spResult.stubbedActivities} stubbed out of ${spResult.totalActivities} total`);
+                const compliant = makeUiPathCompliant(spResult.content, tf);
+                xamlEntries[i] = { name: entryName, content: compliant };
+
+                const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === shortName);
+                if (archivePath) {
+                  deferredWrites.set(archivePath, compliant);
+                }
+
+                anyStructuralPreserved = true;
+                autoFixSummary.push(`Structural-leaf stub: preserved skeleton of ${shortName} (${spResult.preservedActivities}/${spResult.totalActivities} activities kept, ${spResult.stubbedActivities} stubbed)`);
+
+                structuralPreservationMetrics.push({
                   file: shortName,
-                  remediationCode: "STUB_WORKFLOW_BLOCKING",
-                  reason: bd.detail,
-                  classifiedCheck: bd.check,
-                  developerAction: `Re-implement entire workflow ${shortName} — per-activity and per-sequence repair could not produce valid XAML`,
-                  estimatedEffortMinutes: 60,
+                  totalActivities: spResult.totalActivities,
+                  preservedActivities: spResult.preservedActivities,
+                  stubbedActivities: spResult.stubbedActivities,
+                  preservedStructures: spResult.preservedStructures,
                 });
+
+                for (const stubbed of spResult.stubbedDetails) {
+                  outcomeRemediations.push({
+                    level: "structural-leaf",
+                    file: shortName,
+                    remediationCode: "STUB_STRUCTURAL_LEAF",
+                    originalTag: stubbed.tag,
+                    originalDisplayName: stubbed.displayName,
+                    reason: stubbed.reason,
+                    classifiedCheck: stubbed.check,
+                    developerAction: `Re-implement ${stubbed.tag}${stubbed.displayName ? ` ("${stubbed.displayName}")` : ""} in ${shortName} — workflow skeleton preserved, only this leaf activity needs work`,
+                    estimatedEffortMinutes: estimateEffortForCheck(stubbed.check),
+                  });
+                }
+              } else if (spResult.parseableXml) {
+                console.log(`[UiPath Escalation] ${shortName} is parseable XML${isMainFile ? " (Main.xaml)" : ""} — preserving structure unchanged, blocking issues could not be mapped to specific leaves`);
+                anyStructuralPreserved = true;
+                autoFixSummary.push(`Structural preservation: ${shortName} preserved unchanged — XML is valid but blocking issues could not be mapped to specific leaf activities`);
+
+                structuralPreservationMetrics.push({
+                  file: shortName,
+                  totalActivities: spResult.totalActivities,
+                  preservedActivities: spResult.totalActivities,
+                  stubbedActivities: 0,
+                  preservedStructures: spResult.preservedStructures,
+                });
+
+                for (const bd of blockingDetails) {
+                  outcomeRemediations.push({
+                    level: "structural-leaf",
+                    file: shortName,
+                    remediationCode: "STUB_STRUCTURAL_LEAF",
+                    reason: bd.detail,
+                    classifiedCheck: bd.check,
+                    developerAction: `Review and fix ${bd.check} issue in ${shortName} — workflow structure was preserved intact`,
+                    estimatedEffortMinutes: estimateEffortForCheck(bd.check),
+                  });
+                }
+              } else {
+                console.log(`[UiPath Escalation] Structural preservation failed for ${shortName} (unparseable XML), falling back to full stub`);
+                const className = shortName.replace(".xaml", "");
+                const stubXaml = generateStubWorkflow(className, {
+                  reason: `Blocking quality gate issues: ${blockingDetails.map(d => d.check).join(", ")}`,
+                  isBlockingFallback: true,
+                });
+                const stubCompliant = makeUiPathCompliant(stubXaml, tf);
+                xamlEntries[i] = { name: entryName, content: stubCompliant };
+
+                const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === shortName);
+                if (archivePath) {
+                  deferredWrites.set(archivePath, stubCompliant);
+                }
+                earlyStubFallbacks.push(shortName);
+                autoFixSummary.push(`Replaced ${entryName} with per-workflow Studio-openable stub (blocking issues: ${blockingDetails.map(d => d.check).join(", ")})`);
+                for (const bd of blockingDetails) {
+                  outcomeRemediations.push({
+                    level: "workflow",
+                    file: shortName,
+                    remediationCode: "STUB_WORKFLOW_BLOCKING",
+                    reason: bd.detail,
+                    classifiedCheck: bd.check,
+                    developerAction: `Re-implement entire workflow ${shortName} — XAML was not parseable for structural preservation`,
+                    estimatedEffortMinutes: 60,
+                  });
+                }
               }
             }
 
@@ -1801,13 +1875,17 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             if (!qualityGateResult.passed) {
               const finalClassified = classifyQualityIssues(qualityGateResult);
               if (hasOnlyWarnings(finalClassified)) {
-                console.log(`[UiPath Quality Gate] After per-workflow stub fallback, only warnings remain — passing`);
+                console.log(`[UiPath Quality Gate] After structural-preservation stub, only warnings remain — passing`);
                 qualityGateResult = { ...qualityGateResult, passed: true };
               } else {
-                console.log(`[UiPath Quality Gate] After per-workflow stub fallback, some blocking issues remain — passing with warnings`);
+                console.log(`[UiPath Quality Gate] After structural-preservation stub, some blocking issues remain — passing with warnings`);
                 qualityGateResult = { ...qualityGateResult, passed: true };
-                autoFixSummary.push(`Skipped full-package stub escalation — per-workflow stubs already cover affected files`);
+                autoFixSummary.push(`Skipped full-package stub escalation — structural-preservation stubs already cover affected files`);
               }
+            }
+
+            if (anyStructuralPreserved) {
+              console.log(`[UiPath Escalation] Structural preservation summary: ${structuralPreservationMetrics.map(m => `${m.file}: ${m.preservedActivities}/${m.totalActivities} preserved`).join(", ")}`);
             }
           }
         } else {
@@ -1981,6 +2059,7 @@ ${depEntries}
     downgradeEvents: [],
     qualityWarnings,
     totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
+    structuralPreservationMetrics: structuralPreservationMetrics.length > 0 ? structuralPreservationMetrics : undefined,
   };
 
   if (buildCacheKey && fingerprint) {

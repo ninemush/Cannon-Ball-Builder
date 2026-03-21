@@ -145,7 +145,7 @@ export interface DowngradeEvent {
   timestamp: Date;
 }
 
-export type RemediationLevel = "property" | "activity" | "sequence" | "workflow" | "package";
+export type RemediationLevel = "property" | "activity" | "sequence" | "structural-leaf" | "workflow" | "package";
 
 export type RemediationCode =
   | "STUB_PROPERTY_BAD_EXPRESSION"
@@ -161,6 +161,7 @@ export type RemediationCode =
   | "STUB_ACTIVITY_PROPERTY_ESCALATION"
   | "STUB_SEQUENCE_MULTIPLE_FAILURES"
   | "STUB_SEQUENCE_WELLFORMEDNESS"
+  | "STUB_STRUCTURAL_LEAF"
   | "STUB_WORKFLOW_BLOCKING"
   | "STUB_WORKFLOW_GENERATOR_FAILURE";
 
@@ -222,6 +223,14 @@ export interface QualityWarningEntry {
 
 export const PROPERTY_REMEDIATION_ESCALATION_THRESHOLD = 3;
 
+export interface StructuralPreservationMetrics {
+  file: string;
+  totalActivities: number;
+  preservedActivities: number;
+  stubbedActivities: number;
+  preservedStructures: string[];
+}
+
 export interface PipelineOutcomeReport {
   remediations: RemediationEntry[];
   propertyRemediations: RemediationEntry[];
@@ -230,6 +239,7 @@ export interface PipelineOutcomeReport {
   qualityWarnings: QualityWarningEntry[];
   fullyGeneratedFiles: string[];
   totalEstimatedEffortMinutes: number;
+  structuralPreservationMetrics?: StructuralPreservationMetrics[];
 }
 
 export interface PipelineResult {

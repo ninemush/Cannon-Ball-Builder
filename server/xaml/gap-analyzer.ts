@@ -447,6 +447,346 @@ export function generateStubWorkflow(fileName: string, options?: StubWorkflowOpt
 </Activity>`;
 }
 
+export interface StructuralPreservationResult {
+  content: string;
+  preserved: boolean;
+  parseableXml: boolean;
+  totalActivities: number;
+  preservedActivities: number;
+  stubbedActivities: number;
+  stubbedDetails: Array<{
+    tag: string;
+    displayName?: string;
+    reason: string;
+    check: string;
+  }>;
+  preservedStructures: string[];
+}
+
+const STRUCTURAL_ELEMENTS = new Set([
+  "Sequence", "If", "TryCatch", "ForEach", "While", "DoWhile",
+  "Switch", "Flowchart", "FlowDecision", "FlowSwitch", "FlowStep",
+  "Parallel", "ParallelForEach", "Pick", "PickBranch",
+]);
+
+const STRUCTURAL_CHILD_ELEMENTS = new Set([
+  "If.Then", "If.Else", "TryCatch.Try", "TryCatch.Catches", "TryCatch.Finally",
+  "Catch", "ForEach.Body", "While.Body", "DoWhile.Body",
+  "Switch.Default", "Flowchart.StartNode", "ActivityAction",
+  "Sequence.Variables", "Activity",
+]);
+
+function isStructuralTag(tag: string): boolean {
+  const bare = tag.replace(/^ui:/, "");
+  return STRUCTURAL_ELEMENTS.has(bare) || STRUCTURAL_CHILD_ELEMENTS.has(bare);
+}
+
+function isInvokeTag(tag: string): boolean {
+  return tag === "ui:InvokeWorkflowFile" || tag === "InvokeWorkflowFile";
+}
+
+function isVariableOrArgumentDecl(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("<Variable ") ||
+    trimmed.startsWith("<Variable>") ||
+    trimmed.startsWith("</Variable>") ||
+    trimmed.startsWith("<x:Property ") ||
+    trimmed.startsWith("<x:Members") ||
+    trimmed.startsWith("</x:Members") ||
+    trimmed.startsWith("<Sequence.Variables") ||
+    trimmed.startsWith("</Sequence.Variables");
+}
+
+function countActivities(xamlContent: string): number {
+  const activityPattern = /<((?:ui:)?[A-Z][A-Za-z]*)\s/g;
+  let count = 0;
+  let match;
+  while ((match = activityPattern.exec(xamlContent)) !== null) {
+    const tag = match[1];
+    if (!isStructuralTag(tag) && tag !== "Activity" && !tag.startsWith("x:") && tag !== "Variable") {
+      count++;
+    }
+  }
+  return count;
+}
+
+export function preserveStructureAndStubLeaves(
+  xamlContent: string,
+  blockingIssues: Array<{ file: string; check: string; detail: string }>,
+  options?: { isMainXaml?: boolean },
+): StructuralPreservationResult {
+  const unparseableResult: StructuralPreservationResult = {
+    content: xamlContent,
+    preserved: false,
+    parseableXml: false,
+    totalActivities: 0,
+    preservedActivities: 0,
+    stubbedActivities: 0,
+    stubbedDetails: [],
+    preservedStructures: [],
+  };
+
+  try {
+    const xmlHeader = '<?xml version="1.0" encoding="utf-8"?>';
+    const xmlContent = xamlContent.startsWith("<?xml") ? xamlContent : xmlHeader + "\n" + xamlContent;
+    const validationResult = XMLValidator.validate(xmlContent, { allowBooleanAttributes: true });
+    if (validationResult !== true) {
+      return unparseableResult;
+    }
+  } catch {
+    return unparseableResult;
+  }
+
+  const totalActivities = countActivities(xamlContent);
+
+  const failingLineNumbers = new Set<number>();
+  const issuesByLine = new Map<number, { check: string; detail: string }>();
+  for (const issue of blockingIssues) {
+    const lineMatch = issue.detail.match(/Line (\d+)/);
+    if (lineMatch) {
+      const lineNum = parseInt(lineMatch[1], 10);
+      failingLineNumbers.add(lineNum);
+      issuesByLine.set(lineNum, { check: issue.check, detail: issue.detail });
+    }
+  }
+
+  const failingDisplayNames = new Set<string>();
+  for (const issue of blockingIssues) {
+    const dnMatch = issue.detail.match(/DisplayName="([^"]+)"/);
+    if (dnMatch) failingDisplayNames.add(dnMatch[1]);
+    const actLabel = issue.detail.match(/activity "([^"]+)"/i);
+    if (actLabel) failingDisplayNames.add(actLabel[1]);
+  }
+
+  const lines = xamlContent.split("\n");
+  const linesToStub: Array<{
+    startLine: number;
+    endLine: number;
+    tag: string;
+    displayName?: string;
+    check: string;
+    detail: string;
+  }> = [];
+
+  const preservedStructures: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    const dottedMatch = trimmed.match(/^<((?:ui:)?[A-Z][A-Za-z]*\.[A-Za-z]+)/);
+    if (dottedMatch) {
+      const dottedTag = dottedMatch[1].replace(/^ui:/, "");
+      if (STRUCTURAL_CHILD_ELEMENTS.has(dottedTag)) {
+        preservedStructures.push(dottedTag);
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith("</")) continue;
+
+    const tagMatch = line.match(/<((?:ui:)?[A-Z][A-Za-z]*)[\s>\/]/);
+    if (!tagMatch) continue;
+
+    const tag = tagMatch[1];
+
+    if (isStructuralTag(tag)) {
+      const dnMatch = line.match(/DisplayName="([^"]*)"/);
+      preservedStructures.push(tag + (dnMatch ? ` (${dnMatch[1]})` : ""));
+      continue;
+    }
+
+    if (isVariableOrArgumentDecl(line)) continue;
+
+    if (isInvokeTag(tag)) {
+      continue;
+    }
+
+    const lineNum = i + 1;
+    let isBlocking = false;
+    let matchedCheck = "";
+    let matchedDetail = "";
+
+    if (failingLineNumbers.has(lineNum)) {
+      isBlocking = true;
+      const issueInfo = issuesByLine.get(lineNum);
+      matchedCheck = issueInfo?.check || "unknown";
+      matchedDetail = issueInfo?.detail || "";
+    }
+
+    if (!isBlocking) {
+      const contextWindow = 3;
+      for (let offset = 1; offset <= contextWindow; offset++) {
+        if (failingLineNumbers.has(lineNum + offset) || failingLineNumbers.has(lineNum - offset)) {
+          const nearLine = failingLineNumbers.has(lineNum + offset) ? lineNum + offset : lineNum - offset;
+          const issueInfo = issuesByLine.get(nearLine);
+          if (issueInfo) {
+            const nearLineContent = lines[nearLine - 1] || "";
+            const nearTag = nearLineContent.match(/<((?:ui:)?[A-Z][A-Za-z]*)\s/);
+            if (!nearTag) {
+              isBlocking = true;
+              matchedCheck = issueInfo.check;
+              matchedDetail = issueInfo.detail;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!isBlocking) {
+      const dnMatch = line.match(/DisplayName="([^"]*)"/);
+      if (dnMatch && failingDisplayNames.has(dnMatch[1])) {
+        isBlocking = true;
+        matchedCheck = "display-name-match";
+        matchedDetail = `Activity "${dnMatch[1]}" matched by display name`;
+      }
+    }
+
+    if (!isBlocking) continue;
+
+    const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const isSelfClosing = /\/>\s*$/.test(line);
+    let startLine = i;
+    let endLine = i;
+
+    if (isSelfClosing) {
+      let tmpLine = i;
+      while (tmpLine > 0 && !lines[tmpLine].match(new RegExp(`<${escapedTag}\\s`))) {
+        tmpLine--;
+      }
+      if (lines[tmpLine].match(new RegExp(`<${escapedTag}\\s`))) {
+        startLine = tmpLine;
+      }
+    } else {
+      let tmpLine = i;
+      while (tmpLine >= 0 && !lines[tmpLine].match(new RegExp(`<${escapedTag}[\\s>]`))) {
+        tmpLine--;
+      }
+      if (tmpLine >= 0) startLine = tmpLine;
+
+      let depth = 0;
+      let foundOpen = false;
+      for (let j = startLine; j < lines.length; j++) {
+        const l = lines[j];
+        const opens = (l.match(new RegExp(`<${escapedTag}[\\s>]`, 'g')) || []).length;
+        const closes = (l.match(new RegExp(`</${escapedTag}>`, 'g')) || []).length;
+        const selfCloses = (l.match(new RegExp(`<${escapedTag}[^>]*/\\s*>`, 'g')) || []).length;
+        depth += opens - selfCloses;
+        if (opens > 0) foundOpen = true;
+        depth -= closes;
+        if (foundOpen && depth <= 0) {
+          endLine = j;
+          break;
+        }
+        if (j - startLine > 200) {
+          endLine = j;
+          break;
+        }
+      }
+    }
+
+    const displayNameMatch = lines[startLine].match(/DisplayName="([^"]*)"/);
+    linesToStub.push({
+      startLine,
+      endLine,
+      tag,
+      displayName: displayNameMatch?.[1],
+      check: matchedCheck,
+      detail: matchedDetail,
+    });
+  }
+
+  if (linesToStub.length === 0) {
+    return {
+      content: xamlContent,
+      preserved: blockingIssues.length === 0,
+      parseableXml: true,
+      totalActivities,
+      preservedActivities: totalActivities,
+      stubbedActivities: 0,
+      stubbedDetails: [],
+      preservedStructures: [...new Set(preservedStructures)],
+    };
+  }
+
+  const sortedStubs = [...linesToStub].sort((a, b) => b.startLine - a.startLine);
+
+  const seen = new Set<number>();
+  const deduped = sortedStubs.filter(s => {
+    if (seen.has(s.startLine)) return false;
+    seen.add(s.startLine);
+    return true;
+  });
+
+  let result = [...lines];
+  const stubbedDetails: StructuralPreservationResult["stubbedDetails"] = [];
+
+  for (const stub of deduped) {
+    const indent = result[stub.startLine].match(/^(\s*)/)?.[1] || "    ";
+    const reason = stub.detail.replace(/"/g, "'").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const stubComment = `${indent}<ui:Comment Text="[STUB_STRUCTURAL_LEAF] Original: ${escapeXml(stub.tag)}${stub.displayName ? ` (${escapeXml(stub.displayName)})` : ''}. Check: ${escapeXml(stub.check)} — ${reason}" DisplayName="Stub: ${escapeXml(stub.displayName || stub.tag)}" />`;
+
+    result = [
+      ...result.slice(0, stub.startLine),
+      stubComment,
+      ...result.slice(stub.endLine + 1),
+    ];
+
+    stubbedDetails.push({
+      tag: stub.tag,
+      displayName: stub.displayName,
+      reason: stub.detail,
+      check: stub.check,
+    });
+  }
+
+  const stubbedCount = deduped.length;
+  const preservedCount = Math.max(0, totalActivities - stubbedCount);
+
+  const finalContent = result.join("\n");
+
+  try {
+    const xmlHeader = '<?xml version="1.0" encoding="utf-8"?>';
+    const xmlToValidate = finalContent.startsWith("<?xml") ? finalContent : xmlHeader + "\n" + finalContent;
+    const postValidation = XMLValidator.validate(xmlToValidate, { allowBooleanAttributes: true });
+    if (postValidation !== true) {
+      return {
+        content: xamlContent,
+        preserved: false,
+        parseableXml: true,
+        totalActivities,
+        preservedActivities: totalActivities,
+        stubbedActivities: 0,
+        stubbedDetails: [],
+        preservedStructures: [...new Set(preservedStructures)],
+      };
+    }
+  } catch {
+    return {
+      content: xamlContent,
+      preserved: false,
+      parseableXml: true,
+      totalActivities,
+      preservedActivities: totalActivities,
+      stubbedActivities: 0,
+      stubbedDetails: [],
+      preservedStructures: [...new Set(preservedStructures)],
+    };
+  }
+
+  return {
+    content: finalContent,
+    preserved: true,
+    parseableXml: true,
+    totalActivities,
+    preservedActivities: preservedCount,
+    stubbedActivities: stubbedCount,
+    stubbedDetails,
+    preservedStructures: [...new Set(preservedStructures)],
+  };
+}
+
 export function generateDhgSummary(gaps: XamlGap[], deploymentResults?: DhgDeploymentResult[]): string {
   const selectorCount = gaps.filter((g) => g.category === "selector").length;
   const credentialCount = gaps.filter((g) => g.category === "credential").length;

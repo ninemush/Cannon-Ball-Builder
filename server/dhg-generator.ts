@@ -34,11 +34,12 @@ export function generateDhgFromOutcomeReport(
   const totalPropertyRemediations = report.propertyRemediations.length;
   const totalActivityRemediations = report.remediations.filter(r => r.level === "activity").length;
   const totalSequenceRemediations = report.remediations.filter(r => r.level === "sequence").length;
+  const totalStructuralLeafRemediations = report.remediations.filter(r => r.level === "structural-leaf").length;
   const totalWorkflowRemediations = report.remediations.filter(r => r.level === "workflow").length;
   const totalRemediations = totalPropertyRemediations + report.remediations.length;
 
   md += `**Total Estimated Effort: ~${report.totalEstimatedEffortMinutes} minutes (${(report.totalEstimatedEffortMinutes / 60).toFixed(1)} hours)**\n`;
-  md += `**Remediations:** ${totalRemediations} total (${totalPropertyRemediations} property, ${totalActivityRemediations} activity, ${totalSequenceRemediations} sequence, ${totalWorkflowRemediations} workflow)\n`;
+  md += `**Remediations:** ${totalRemediations} total (${totalPropertyRemediations} property, ${totalActivityRemediations} activity, ${totalSequenceRemediations} sequence, ${totalStructuralLeafRemediations} structural-leaf, ${totalWorkflowRemediations} workflow)\n`;
   md += `**Auto-Repairs:** ${report.autoRepairs.length}\n`;
   md += `**Quality Warnings:** ${report.qualityWarnings.length}\n`;
   md += `\n---\n\n`;
@@ -156,10 +157,41 @@ export function generateDhgFromOutcomeReport(
     md += `\n`;
   }
 
+  const structuralLeafRemediations = report.remediations.filter(r => r.level === "structural-leaf");
+  if (structuralLeafRemediations.length > 0) {
+    md += `### Structural-Leaf Stubs (${structuralLeafRemediations.length})\n\n`;
+    md += `Individual leaf activities were stubbed while preserving the workflow skeleton (sequences, branches, try/catch, loops, invocations).\n\n`;
+    md += `| # | File | Activity | Original Tag | Code | Developer Action | Est. Minutes |\n`;
+    md += `|---|------|----------|-------------|------|-----------------|-------------|\n`;
+    structuralLeafRemediations.forEach((r, i) => {
+      const actName = r.originalDisplayName || "—";
+      const tag = r.originalTag || "—";
+      const action = (r.developerAction || "").length > 80
+        ? (r.developerAction || "").slice(0, 77) + "..."
+        : (r.developerAction || "—");
+      md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${tag}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+    });
+    md += `\n`;
+
+    if (report.structuralPreservationMetrics && report.structuralPreservationMetrics.length > 0) {
+      md += `#### Structural Preservation Metrics\n\n`;
+      md += `| File | Total Activities | Preserved | Stubbed | Preservation Rate | Preserved Structures |\n`;
+      md += `|------|-----------------|-----------|---------|-------------------|---------------------|\n`;
+      for (const m of report.structuralPreservationMetrics) {
+        const rate = m.totalActivities > 0 ? Math.round((m.preservedActivities / m.totalActivities) * 100) : 0;
+        const structures = m.preservedStructures.length > 3
+          ? m.preservedStructures.slice(0, 3).join(", ") + `... (+${m.preservedStructures.length - 3})`
+          : m.preservedStructures.join(", ");
+        md += `| \`${m.file}\` | ${m.totalActivities} | ${m.preservedActivities} | ${m.stubbedActivities} | ${rate}% | ${structures} |\n`;
+      }
+      md += `\n`;
+    }
+  }
+
   const workflowRemediations = report.remediations.filter(r => r.level === "workflow");
   if (workflowRemediations.length > 0) {
     md += `### Workflow-Level Stubs (${workflowRemediations.length})\n\n`;
-    md += `Entire workflows were replaced with Studio-openable stubs.\n\n`;
+    md += `Entire workflows were replaced with Studio-openable stubs (XAML was not parseable for structural preservation).\n\n`;
     md += `| # | File | Code | Developer Action | Est. Minutes |\n`;
     md += `|---|------|------|-----------------|-------------|\n`;
     workflowRemediations.forEach((r, i) => {

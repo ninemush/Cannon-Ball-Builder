@@ -35,11 +35,13 @@ export {
   type ActivityStubResult,
   type SequenceStubResult,
   type StubWorkflowOptions,
+  type StructuralPreservationResult,
   extractSystemFromGap,
   validateXamlContent,
   replaceActivityWithStub,
   replaceSequenceChildrenWithStub,
   generateStubWorkflow,
+  preserveStructureAndStubLeaves,
   generateDhgSummary,
 } from "./xaml/gap-analyzer";
 
