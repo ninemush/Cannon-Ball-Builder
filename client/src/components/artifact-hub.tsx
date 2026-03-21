@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -263,8 +263,40 @@ interface ChatMessage {
   role: string;
 }
 
+const MAX_DESC_LENGTH = 300;
+function capDescription(text: string): string {
+  if (text.length <= MAX_DESC_LENGTH) return text;
+  const cut = text.lastIndexOf(" ", MAX_DESC_LENGTH);
+  return text.slice(0, cut > 0 ? cut : MAX_DESC_LENGTH) + "…";
+}
+
 function UiPathViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: () => void; ideaId: string }) {
   const [expandedWf, setExpandedWf] = useState(true);
+  const [expandedWfItems, setExpandedWfItems] = useState<Set<number>>(new Set());
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [descClamped, setDescClamped] = useState(false);
+  const descRef = useRef<HTMLParagraphElement>(null);
+  const checkDescClamped = useCallback(() => {
+    const el = descRef.current;
+    if (el) setDescClamped(el.scrollHeight > el.clientHeight);
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      setExpandedWfItems(new Set());
+      setDescExpanded(false);
+      setDescClamped(false);
+    }
+  }, [open, ideaId]);
+
+  const toggleWfItem = (index: number) => {
+    setExpandedWfItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
 
   const { data: packageData, isLoading, isError } = useQuery<UiPathPackageData>({
     queryKey: ["/api/ideas", ideaId, "artifacts-view", "uipath-meta"],
@@ -278,6 +310,12 @@ function UiPathViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: 
     },
     enabled: open,
   });
+
+  useEffect(() => {
+    if (packageData?.description) {
+      requestAnimationFrame(checkDescClamped);
+    }
+  }, [packageData?.description, checkDescClamped]);
 
   if (!open) return null;
 
@@ -305,7 +343,22 @@ function UiPathViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: 
             <div className="space-y-4">
               <div>
                 <h4 className="text-xs font-semibold text-foreground">{packageData.projectName}</h4>
-                <p className="text-[11px] text-muted-foreground/90 mt-1">{packageData.description}</p>
+                {packageData.description && (
+                  <div className="mt-1">
+                    <p ref={descRef} className={`text-[11px] text-muted-foreground/90 ${!descExpanded ? "line-clamp-2" : ""}`} data-testid="text-modal-package-description">
+                      {descExpanded ? capDescription(packageData.description) : packageData.description}
+                    </p>
+                    {(descClamped || descExpanded) && (
+                      <button
+                        className="text-[10px] text-primary hover:underline mt-0.5"
+                        onClick={() => setDescExpanded(!descExpanded)}
+                        data-testid="button-modal-toggle-description"
+                      >
+                        {descExpanded ? "show less" : "show more"}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {packageData.dependencies && packageData.dependencies.length > 0 && (
@@ -332,22 +385,43 @@ function UiPathViewerModal({ open, onClose, ideaId }: { open: boolean; onClose: 
                     Workflows ({packageData.workflows.length})
                   </button>
                   {expandedWf && (
-                    <div className="space-y-2">
-                      {packageData.workflows.map((wf, i) => (
-                        <div key={i} className="p-2.5 rounded bg-muted border border-border/20">
-                          <p className="text-[11px] font-medium text-foreground">{wf.name}</p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">{wf.description}</p>
-                          {wf.steps && wf.steps.length > 0 && (
-                            <div className="mt-1.5 space-y-0.5">
-                              {wf.steps.map((step, j) => (
-                                <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
-                                  {step.activity}{step.notes ? ` — ${step.notes}` : ""}
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                    <div className="space-y-1">
+                      {packageData.workflows.map((wf, i) => {
+                        const isOpen = expandedWfItems.has(i);
+                        const hasDetails = wf.description || (wf.steps && wf.steps.length > 0);
+                        return (
+                          <div key={i} className="rounded bg-muted border border-border/20" data-testid={`hub-workflow-item-${i}`}>
+                            <button
+                              className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-left"
+                              onClick={() => hasDetails && toggleWfItem(i)}
+                              data-testid={`button-hub-toggle-workflow-${i}`}
+                            >
+                              {hasDetails ? (
+                                isOpen ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" /> : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                              ) : (
+                                <span className="w-3 shrink-0" />
+                              )}
+                              <span className="text-[11px] font-medium text-foreground">{wf.name}</span>
+                            </button>
+                            {isOpen && hasDetails && (
+                              <div className="px-2.5 pb-2 pl-[30px]">
+                                {wf.description && (
+                                  <p className="text-[10px] text-muted-foreground">{wf.description}</p>
+                                )}
+                                {wf.steps && wf.steps.length > 0 && (
+                                  <div className="mt-1.5 space-y-0.5">
+                                    {wf.steps.map((step, j) => (
+                                      <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
+                                        {step.activity}{step.notes ? ` — ${step.notes}` : ""}
+                                      </p>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

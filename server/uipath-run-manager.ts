@@ -380,10 +380,28 @@ async function executeRun(
       throw new RunError("Package build produced no output", "build_failed", { packageJson });
     }
 
-    const actualWorkflowCount = (pipelineResult.xamlEntries || []).filter(
+    const xamlFiles = (pipelineResult.xamlEntries || []).filter(
       (e: { name: string }) => e.name.endsWith(".xaml")
-    ).length;
-    const updatedPackageJson = { ...packageJson, generatedWorkflowCount: actualWorkflowCount };
+    );
+    const specWorkflowNames = new Set(
+      (packageJson.workflows || []).map((wf: { name: string }) => {
+        const base = wf.name.replace(/\.xaml$/i, "");
+        return base.toLowerCase();
+      })
+    );
+
+    const extraWorkflows = xamlFiles
+      .filter((e: { name: string }) => {
+        const basename = (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "");
+        return !specWorkflowNames.has(basename.toLowerCase());
+      })
+      .map((e: { name: string }) => {
+        const basename = (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "");
+        return { name: basename, description: "Auto-generated workflow", steps: [] };
+      });
+
+    const allWorkflows = [...(packageJson.workflows || []), ...extraWorkflows];
+    const updatedPackageJson = { ...packageJson, workflows: allWorkflows, generatedWorkflowCount: allWorkflows.length };
 
     await chatStorage.createMessage(ideaId, "assistant", `[UIPATH:${JSON.stringify(updatedPackageJson)}]`);
 

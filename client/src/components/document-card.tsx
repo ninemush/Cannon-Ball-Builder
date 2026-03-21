@@ -475,6 +475,79 @@ interface UiPathPackageCardProps {
   outcomeSummary?: OutcomeSummary;
 }
 
+const MAX_DESC_LENGTH = 300;
+function capDescription(text: string): string {
+  if (text.length <= MAX_DESC_LENGTH) return text;
+  const cut = text.lastIndexOf(" ", MAX_DESC_LENGTH);
+  return text.slice(0, cut > 0 ? cut : MAX_DESC_LENGTH) + "…";
+}
+
+function WorkflowSection({ workflows, expanded, onToggle }: { workflows: any[]; expanded: boolean; onToggle: () => void }) {
+  const [expandedWfs, setExpandedWfs] = useState<Set<number>>(new Set());
+
+  const toggleWf = (index: number) => {
+    setExpandedWfs((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  return (
+    <div>
+      <button
+        className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1"
+        onClick={onToggle}
+        data-testid="button-toggle-workflows"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        Workflows ({workflows.length})
+      </button>
+      {expanded && (
+        <div className="space-y-1 mt-1">
+          {workflows.map((wf: any, i: number) => {
+            const isOpen = expandedWfs.has(i);
+            const hasDetails = wf.description || (wf.steps && wf.steps.length > 0);
+            return (
+              <div key={i} className="rounded bg-muted border border-border/20" data-testid={`workflow-item-${i}`}>
+                <button
+                  className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left"
+                  onClick={() => hasDetails && toggleWf(i)}
+                  data-testid={`button-toggle-workflow-${i}`}
+                >
+                  {hasDetails ? (
+                    isOpen ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" /> : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                  ) : (
+                    <span className="w-3 shrink-0" />
+                  )}
+                  <span className="text-[11px] font-medium text-foreground">{wf.name}</span>
+                </button>
+                {isOpen && hasDetails && (
+                  <div className="px-2 pb-2 pl-[26px]">
+                    {wf.description && (
+                      <p className="text-[10px] text-muted-foreground">{wf.description}</p>
+                    )}
+                    {wf.steps?.length > 0 && (
+                      <div className="mt-1.5 space-y-0.5">
+                        {wf.steps.map((step: any, j: number) => (
+                          <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
+                            {step.activity}{step.notes ? ` — ${step.notes}` : ""}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry, templateComplianceScore, outcomeSummary }: UiPathPackageCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [descExpanded, setDescExpanded] = useState(false);
@@ -693,7 +766,7 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
         {packageData.description && (
           <div>
             <p ref={descRef} className={`text-[11px] text-muted-foreground/90 ${!descExpanded ? "line-clamp-2" : ""}`} data-testid="text-package-description">
-              {packageData.description}
+              {descExpanded ? capDescription(packageData.description) : packageData.description}
             </p>
             {(descClamped || descExpanded) && (
               <button
@@ -721,34 +794,11 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
         )}
 
         {packageData.workflows?.length > 0 && (
-          <div>
-            <button
-              className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1"
-              onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Workflows ({packageData.generatedWorkflowCount ?? packageData.workflows.length})
-            </button>
-            {expanded && (
-              <div className="space-y-2 mt-1">
-                {packageData.workflows.map((wf: any, i: number) => (
-                  <div key={i} className="p-2 rounded bg-muted border border-border/20">
-                    <p className="text-[11px] font-medium text-foreground">{wf.name}</p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{wf.description}</p>
-                    {wf.steps?.length > 0 && (
-                      <div className="mt-1.5 space-y-0.5">
-                        {wf.steps.map((step: any, j: number) => (
-                          <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
-                            {step.activity}{step.notes ? ` — ${step.notes}` : ""}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <WorkflowSection
+            workflows={packageData.workflows}
+            expanded={expanded}
+            onToggle={() => setExpanded(!expanded)}
+          />
         )}
       </div>
 
