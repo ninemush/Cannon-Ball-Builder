@@ -2,7 +2,7 @@ import { users, ideas, auditLogs, uipathGenerationRuns, type User, type InsertUs
 import { appSettings } from "@shared/schema";
 import type { GenerationRunStatus } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, isNull } from "drizzle-orm";
 
 export interface IStorage {
   getAppSetting(key: string): Promise<string | undefined>;
@@ -29,6 +29,7 @@ export interface IStorage {
   updateGenerationRunSpecSnapshot(runId: string, specSnapshot: unknown): Promise<UipathGenerationRun | undefined>;
   completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string }): Promise<UipathGenerationRun | undefined>;
   failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined>;
+  failOrphanedRuns(): Promise<UipathGenerationRun[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -150,7 +151,12 @@ export class DatabaseStorage implements IStorage {
     if (currentPhase !== undefined) updates.currentPhase = currentPhase;
     const [updated] = await db.update(uipathGenerationRuns)
       .set(updates)
-      .where(eq(uipathGenerationRuns.runId, runId))
+      .where(
+        and(
+          eq(uipathGenerationRuns.runId, runId),
+          isNull(uipathGenerationRuns.completedAt),
+        )
+      )
       .returning();
     return updated;
   }
@@ -186,6 +192,24 @@ export class DatabaseStorage implements IStorage {
       .where(eq(uipathGenerationRuns.runId, runId))
       .returning();
     return updated;
+  }
+
+  async failOrphanedRuns(): Promise<UipathGenerationRun[]> {
+    const orphaned = await db.update(uipathGenerationRuns)
+      .set({
+        status: "failed",
+        errorMessage: "orphaned_after_restart",
+        updatedAt: new Date(),
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(uipathGenerationRuns.status, "running"),
+          isNull(uipathGenerationRuns.completedAt),
+        )
+      )
+      .returning();
+    return orphaned;
   }
 }
 

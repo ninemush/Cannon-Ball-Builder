@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { catalogService } from "./catalog/catalog-service";
+import { reconcileOrphanedRuns } from "./uipath-run-manager";
 
 const app = express();
 const httpServer = createServer(app);
@@ -67,6 +68,8 @@ process.on("uncaughtException", (err) => {
 (async () => {
   try {
     catalogService.load();
+
+    await reconcileOrphanedRuns();
 
     await registerRoutes(httpServer, app);
 

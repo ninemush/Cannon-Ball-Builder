@@ -70,15 +70,41 @@ export function subscribeToRun(runId: string, listener: (event: PipelineProgress
   };
 }
 
+export async function reconcileOrphanedRuns(): Promise<void> {
+  const orphaned = await storage.failOrphanedRuns();
+  if (orphaned.length > 0) {
+    for (const run of orphaned) {
+      console.log(`[RunManager] Reconciled orphaned run ${run.runId} for idea ${run.ideaId}`);
+    }
+    console.log(`[RunManager] Startup reconciliation complete: ${orphaned.length} orphaned run(s) cleaned up`);
+  } else {
+    console.log("[RunManager] Startup reconciliation complete: no orphaned runs found");
+  }
+}
+
+const STALE_THRESHOLD_MS = 2 * 60 * 1000;
+const HARD_TIMEOUT_MS = 10 * 60 * 1000;
+
 async function checkDbInProgress(ideaId: string): Promise<boolean> {
   const latest = await storage.getLatestGenerationRunForIdea(ideaId);
   if (latest && latest.status === "running" && !latest.completedAt) {
-    const ageMs = Date.now() - new Date(latest.createdAt).getTime();
-    if (ageMs < 10 * 60 * 1000) {
-      return true;
+    const now = Date.now();
+    const createdAgeMs = now - new Date(latest.createdAt).getTime();
+    const updatedAgeMs = now - new Date(latest.updatedAt).getTime();
+
+    if (createdAgeMs >= HARD_TIMEOUT_MS) {
+      await storage.failGenerationRun(latest.runId, "timed_out");
+      console.warn(`[RunManager] Cleaned up timed-out run ${latest.runId} for idea ${ideaId} (age: ${Math.round(createdAgeMs / 1000)}s)`);
+      return false;
     }
-    await storage.failGenerationRun(latest.runId, "Run timed out (stale after restart)");
-    console.warn(`[RunManager] Cleaned up stale run ${latest.runId} for idea ${ideaId} (age: ${Math.round(ageMs / 1000)}s)`);
+
+    if (updatedAgeMs >= STALE_THRESHOLD_MS) {
+      await storage.failGenerationRun(latest.runId, "stale_no_progress");
+      console.warn(`[RunManager] Cleaned up stale run ${latest.runId} for idea ${ideaId} (no heartbeat for ${Math.round(updatedAgeMs / 1000)}s)`);
+      return false;
+    }
+
+    return true;
   }
   return false;
 }
@@ -141,14 +167,33 @@ export async function startUiPathGenerationRun(
   return { runId, run: dbRun };
 }
 
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
 async function executeRun(
   runId: string,
   ideaId: string,
   options?: RunOptions,
 ): Promise<void> {
+  console.log(`[RunManager] executeRun started — runId=${runId}, ideaId=${ideaId}`);
   const activeRun = activeRuns.get(runId)!;
   const callbacks = options?.callbacks;
   const phaseEvents: PipelineProgressEvent[] = [];
+
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+  const startHeartbeat = () => {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    heartbeatInterval = setInterval(() => {
+      storage.updateGenerationRunStatus(runId, "running").catch(() => {});
+    }, HEARTBEAT_INTERVAL_MS);
+  };
+
+  const stopHeartbeat = () => {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+  };
 
   const pipelineProgressCallback: PipelineProgressCallback = (event) => {
     phaseEvents.push(event);
@@ -177,8 +222,11 @@ async function executeRun(
 
   let packageJson: any = null;
 
+  startHeartbeat();
+
   try {
     await storage.updateGenerationRunStatus(runId, "running", "sdd_validation");
+    console.log(`[RunManager] Run ${runId}: SDD validation phase started`);
     emitProgress("Loading idea and documents...");
 
     const sddApproval = await documentStorage.getApproval(ideaId, "SDD");
@@ -194,6 +242,8 @@ async function executeRun(
     if (!idea) {
       throw new RunError("Idea not found", "precondition");
     }
+
+    console.log(`[RunManager] Run ${runId}: SDD validation passed`);
 
     const existingMessages = await chatStorage.getMessagesByIdeaId(ideaId);
     const existingUiPath = [...existingMessages].reverse().find((m: any) => m.content.startsWith("[UIPATH:"));
@@ -227,6 +277,7 @@ async function executeRun(
 
     if (!packageJson) {
       await storage.updateGenerationRunStatus(runId, "running", "llm_generation");
+      console.log(`[RunManager] Run ${runId}: LLM generation phase started`);
       emitProgress("Calling LLM to generate package specification...");
 
       const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
@@ -263,6 +314,7 @@ async function executeRun(
         clearInterval(keepAliveInterval);
       }
 
+      console.log(`[RunManager] Run ${runId}: LLM generation phase completed`);
       emitProgress("LLM response received, parsing JSON...");
       const rawText = response.text || "{}";
 
@@ -296,6 +348,7 @@ async function executeRun(
     if (callbacks?.onPackageResolved) callbacks.onPackageResolved(packageJson);
 
     await storage.updateGenerationRunStatus(runId, "running", "build_pipeline");
+    console.log(`[RunManager] Run ${runId}: build pipeline phase started`);
     emitProgress("Pre-building .nupkg with AI enrichment...");
 
     const sddDoc = await documentStorage.getLatestDocument(ideaId, "SDD");
@@ -321,6 +374,8 @@ async function executeRun(
       preloadedContext,
     });
 
+    console.log(`[RunManager] Run ${runId}: build pipeline phase completed — status: ${pipelineResult.status}`);
+
     if (pipelineResult.status === "FAILED") {
       throw new RunError("Package build produced no output", "build_failed", { packageJson });
     }
@@ -340,6 +395,8 @@ async function executeRun(
     };
 
     if (callbacks?.onComplete) callbacks.onComplete(result);
+
+    stopHeartbeat();
 
     const outcomeReportJson = pipelineResult.outcomeReport ? JSON.stringify(pipelineResult.outcomeReport) : undefined;
     await finishRun(runId, activeRun, phaseEvents, {
@@ -368,13 +425,17 @@ async function executeRun(
       };
     }
 
-    console.error(`[RunManager] Run ${runId} failed:`, errorMessage);
+    console.error(`[RunManager] Run ${runId} caught error:`, errorMessage);
+
+    stopHeartbeat();
 
     if (callbacks?.onFail) {
       try { callbacks.onFail(errorMessage, errorContext); } catch {}
     }
 
     await failRunInternal(runId, activeRun, phaseEvents, errorMessage);
+  } finally {
+    stopHeartbeat();
   }
 }
 
