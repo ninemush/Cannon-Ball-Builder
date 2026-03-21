@@ -922,8 +922,77 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const earlyStubFallbacks: string[] = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
     const collectedQualityIssues: DhgQualityIssue[] = [];
+    function postComplianceCatalogConformance(content: string, fileName: string): string {
+      if (!catalogService.isLoaded()) return content;
+      let result = content;
+      const elementRegex = /<((?:[\w]+:)?[\w]+)(\s[^>]*?|\s*)(\/?>)/g;
+      let elMatch;
+      let reCorrections = 0;
+      while ((elMatch = elementRegex.exec(content)) !== null) {
+        const fullTag = elMatch[1];
+        if (fullTag.includes(".") || fullTag.startsWith("x:") || fullTag.startsWith("sap") || fullTag.startsWith("mc:")) continue;
+        const className = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
+        const schema = catalogService.getActivitySchema(className);
+        if (!schema) continue;
+
+        const attrString = elMatch[2];
+        const attrs: Record<string, string> = {};
+        const attrRegex2 = /([\w]+(?:\.[\w]+)?)="([^"]*)"/g;
+        let attrMatch;
+        while ((attrMatch = attrRegex2.exec(attrString)) !== null) {
+          if (attrMatch[1].startsWith("xmlns") || attrMatch[1].includes(":")) continue;
+          attrs[attrMatch[1]] = attrMatch[2];
+        }
+
+        const childPropRegex = new RegExp(`<${className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\w+)[\\s>]`, "g");
+        const afterStart = content.slice(elMatch.index);
+        const closeTagRegex = new RegExp(`</${fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`);
+        const closeMatch = closeTagRegex.exec(afterStart);
+        const elementBlock = closeMatch ? afterStart.slice(0, closeMatch.index + closeMatch[0].length) : afterStart.slice(0, 500);
+        const children: string[] = [];
+        let cm;
+        while ((cm = childPropRegex.exec(elementBlock)) !== null) {
+          children.push(cm[1]);
+          children.push(`${className}.${cm[1]}`);
+        }
+
+        const validation = catalogService.validateEmittedActivity(fullTag, attrs, children);
+        if (!validation.valid || validation.corrections.length > 0) {
+          for (const correction of validation.corrections) {
+            if (correction.type === "move-to-child-element") {
+              const propName = correction.property;
+              const propVal = attrs[propName];
+              if (propVal === undefined) continue;
+              const wrapper = correction.argumentWrapper || "InArgument";
+              const xType = correction.typeArguments || clrToXamlType("System.String");
+              const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const wrappedVal = ensureBracketWrapped(propVal);
+              const childElement = `<${className}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${className}.${propName}>`;
+
+              const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
+              const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?>)`);
+
+              if (selfClosingRegex.test(result)) {
+                result = result.replace(selfClosingRegex, `$1 $2>\n          ${childElement}\n        </${fullTag}>`);
+                reCorrections++;
+              } else if (openTagRegex.test(result)) {
+                result = result.replace(openTagRegex, `$1 $2\n          ${childElement}`);
+                reCorrections++;
+              }
+            }
+          }
+        }
+      }
+      if (reCorrections > 0) {
+        console.log(`[Post-Compliance Catalog] ${fileName}: re-corrected ${reCorrections} property(ies) that were corrupted by compliance pass`);
+      }
+      return result;
+    }
+
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
       let compliant = makeUiPathCompliant(rawXaml, tf);
+      compliant = postComplianceCatalogConformance(compliant, fileName);
       const { filtered, removed } = filterBlockedActivitiesFromXaml(compliant, automationPattern);
       compliant = filtered;
       if (removed.length > 0) {
@@ -1430,6 +1499,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     function mapCheckToRemediationCode(check: string): RemediationCode {
       const codeMap: Record<string, RemediationCode> = {
         "CATALOG_VIOLATION": "STUB_ACTIVITY_CATALOG_VIOLATION",
+        "CATALOG_STRUCTURAL_VIOLATION": "STUB_ACTIVITY_CATALOG_VIOLATION",
         "ENUM_VIOLATION": "STUB_ACTIVITY_CATALOG_VIOLATION",
         "catalog-violation": "STUB_ACTIVITY_CATALOG_VIOLATION",
         "policy-blocked-activity": "STUB_ACTIVITY_BLOCKED_PATTERN",
@@ -1448,6 +1518,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     function estimateEffortForCheck(check: string): number {
       const effortMap: Record<string, number> = {
         "CATALOG_VIOLATION": 10,
+        "CATALOG_STRUCTURAL_VIOLATION": 15,
         "ENUM_VIOLATION": 5,
         "catalog-violation": 10,
         "policy-blocked-activity": 15,
@@ -1465,6 +1536,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       const actions: Record<string, string> = {
         "catalog-violation": `Review ${actLabel} in ${file} — validate property values against UiPath catalog`,
         "CATALOG_VIOLATION": `Review ${actLabel} in ${file} — validate property values against UiPath catalog`,
+        "CATALOG_STRUCTURAL_VIOLATION": `Fix property syntax for ${actLabel} in ${file} — move attribute to child-element or vice versa per UiPath catalog`,
         "ENUM_VIOLATION": `Fix enum value for ${actLabel} in ${file} — use valid enum from UiPath documentation`,
         "policy-blocked-activity": `Replace blocked ${actLabel} in ${file} with an allowed alternative`,
         "object-object": `Fix serialization failure for ${actLabel} in ${file} — replace [object Object] with actual values`,
@@ -1744,7 +1816,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (catalogViolations.length > 0) {
         const existingKeys = new Set(
           result.violations
-            .filter(v => v.check === "CATALOG_VIOLATION" || v.check === "ENUM_VIOLATION")
+            .filter(v => v.check === "CATALOG_VIOLATION" || v.check === "ENUM_VIOLATION" || v.check === "CATALOG_STRUCTURAL_VIOLATION")
             .map(v => `${v.file}::${v.detail}`)
         );
         let addedWarnings = 0;
@@ -1753,15 +1825,22 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           const key = `${cv.file}::${cv.detail}`;
           if (!existingKeys.has(key)) {
             const isEnumViolation = cv.detail.includes("ENUM_VIOLATION");
+            const isStructuralViolation = cv.detail.includes("must be a child element") ||
+              cv.detail.includes("should be an attribute") ||
+              cv.detail.includes("move-to-child-element") ||
+              cv.detail.includes("move-to-attribute");
+            const severity = (isEnumViolation || isStructuralViolation) ? "error" as const : "warning" as const;
+            const check = isEnumViolation ? "ENUM_VIOLATION" :
+              isStructuralViolation ? "CATALOG_STRUCTURAL_VIOLATION" : "CATALOG_VIOLATION";
             result.violations.push({
               category: "accuracy",
-              severity: isEnumViolation ? "error" : "warning",
-              check: isEnumViolation ? "ENUM_VIOLATION" : "CATALOG_VIOLATION",
+              severity,
+              check,
               file: cv.file,
               detail: cv.detail,
             });
             existingKeys.add(key);
-            if (isEnumViolation) {
+            if (severity === "error") {
               addedErrors++;
             } else {
               addedWarnings++;

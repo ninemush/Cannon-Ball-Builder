@@ -774,12 +774,23 @@ export async function compilePackageFromSpecs(
 
     const qgResult = buildResult.qualityGateResult;
     const isIncomplete = qgResult ? qgResult.completenessLevel === "incomplete" : false;
+    const hasStructuralCatalogErrors = qgResult
+      ? qgResult.violations.some((v: any) => v.severity === "error" && (v.check === "CATALOG_STRUCTURAL_VIOLATION" || v.check === "ENUM_VIOLATION"))
+      : false;
     let qualityGateBlocking = mode === "baseline_openable"
-      ? isIncomplete
+      ? (isIncomplete || hasStructuralCatalogErrors)
       : (qgResult ? (!qgResult.passed || isIncomplete) : false);
     let qualityGateWarnings: string[] = qgResult
       ? qgResult.violations
-          .filter((v: any) => v.severity === "warning" || (mode === "baseline_openable" && v.severity === "error" && !isIncomplete))
+          .filter((v: any) => {
+            if (v.severity === "warning") return true;
+            if (mode === "baseline_openable" && v.severity === "error") {
+              if (isIncomplete) return false;
+              if (v.check === "CATALOG_STRUCTURAL_VIOLATION" || v.check === "ENUM_VIOLATION") return false;
+              return true;
+            }
+            return false;
+          })
           .map((v: any) => v.detail)
       : [];
     let postCorrectionQualityGate: QualityGateResult | null = null;
@@ -812,7 +823,7 @@ export async function compilePackageFromSpecs(
           const invokeCount = (mainContent.match(/InvokeWorkflowFile/g) || []).length;
           const mainActivityCount = (mainContent.match(/<ui:[A-Z]/g) || []).length + (mainContent.match(/<[A-Za-z]+\.[A-Za-z]+/g) || []).length;
           const mainHasReFramework = mainContent.includes("GetTransactionData") || mainContent.includes("SetTransactionStatus") || mainContent.includes("ReFramework");
-          const mainHasCatalogViolations = (qgResult?.violations.filter(v => v.check === "catalog-violation" && (v.file === "Main.xaml" || v.file.endsWith("/Main.xaml"))).length || 0) > 0;
+          const mainHasCatalogViolations = (qgResult?.violations.filter(v => (v.check === "catalog-violation" || v.check === "CATALOG_VIOLATION" || v.check === "CATALOG_STRUCTURAL_VIOLATION") && (v.file === "Main.xaml" || v.file.endsWith("/Main.xaml"))).length || 0) > 0;
           entryWorkflow = {
             isPreviouslyStubbed: buildResult.usedFallbackStubs,
             invokeWorkflowFileCount: invokeCount,
@@ -826,7 +837,7 @@ export async function compilePackageFromSpecs(
           workflowCount: buildResult.xamlEntries.length,
           activityCount: buildResult.xamlEntries.reduce((sum, e) => sum + (e.content.match(/<ui:[A-Z]/g)?.length || 0), 0),
           templateComplianceScore,
-          catalogViolationCount: qgResult?.violations.filter(v => v.check === "catalog-violation").length || 0,
+          catalogViolationCount: qgResult?.violations.filter(v => v.check === "catalog-violation" || v.check === "CATALOG_VIOLATION" || v.check === "CATALOG_STRUCTURAL_VIOLATION").length || 0,
           uncataloguedActivityCount: qgResult?.violations.filter(v => v.check === "uncatalogued-activity").length || 0,
           hasReFramework: buildResult.xamlEntries.some(e => e.name.includes("GetTransactionData") || e.name.includes("SetTransactionStatus")),
           hasDocumentUnderstanding: buildResult.xamlEntries.some(e => e.content.includes("DigitizeDocument") || e.content.includes("ClassifyDocument")),

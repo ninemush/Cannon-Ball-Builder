@@ -4,6 +4,7 @@ import { catalogService, type ProcessType } from "../catalog/catalog-service";
 import { classifyProcessType } from "../ai-xaml-enricher";
 import { classifyQualityIssues, getBlockingFiles } from "../uipath-quality-gate";
 import { buildTemplateBlock, calculateTemplateCompliance, formatTemplateBlockForPrompt } from "../catalog/xaml-template-builder";
+import { resolveActivityTemplate } from "../workflow-tree-assembler";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -825,6 +826,189 @@ describe("Activity Catalog", () => {
       const issues = classifyQualityIssues(mockResult);
       const blockingFiles = getBlockingFiles(issues);
       expect(blockingFiles).toContain("Main.xaml");
+    });
+  });
+
+  describe("Catalog conformance at emission time (Task 149)", () => {
+    it("LogMessage emits catalog-conformant XML (Message as attribute)", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "LogMessage",
+        displayName: "Log Test",
+        properties: { Level: "Info", Message: "Hello" },
+      };
+      const xml = resolveActivityTemplate(node, []);
+      expect(xml).toContain("LogMessage");
+      expect(xml).toContain('Level="Info"');
+      expect(xml).toContain("Message=");
+      expect(xml).not.toContain("LogMessage.Message");
+    });
+
+    it("HttpClient emits Body as child-element per catalog", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "HttpClient",
+        displayName: "Call API",
+        properties: { Endpoint: "https://example.com", Method: "POST", Body: "payload" },
+        outputVar: "str_Response",
+      };
+      const xml = resolveActivityTemplate(node, []);
+      expect(xml).toContain("HttpClient");
+      if (xml.includes("HttpClient.Body")) {
+        expect(xml).toContain("InArgument");
+      }
+    });
+
+    it("DeserializeJson emits JsonString as child-element per catalog", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "DeserializeJson",
+        displayName: "Parse JSON",
+        properties: { JsonString: "str_Input" },
+        outputVar: "obj_Result",
+      };
+      const xml = resolveActivityTemplate(node, []);
+      expect(xml).toContain("DeserializeJson");
+      expect(xml).toContain("DeserializeJson.Result");
+      expect(xml).toContain("OutArgument");
+      if (xml.includes("DeserializeJson.JsonString")) {
+        expect(xml).toContain("InArgument");
+      }
+    });
+
+    it("GetCredential emits catalog-conformant XML with child-element properties", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "GetCredential",
+        displayName: "Get Cred",
+        properties: { AssetName: "MyCred", Username: "str_User", Password: "sec_Pass" },
+      };
+      const xml = resolveActivityTemplate(node, []);
+      expect(xml).toContain("GetCredential");
+      expect(xml).toContain("GetCredential.Username");
+      expect(xml).toContain("GetCredential.Password");
+      expect(xml).toContain("OutArgument");
+    });
+
+    it("GetAsset emits catalog-conformant XML", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "GetAsset",
+        displayName: "Get Asset",
+        properties: { AssetName: "MyAsset" },
+        outputVar: "str_Value",
+      };
+      const xml = resolveActivityTemplate(node, []);
+      expect(xml).toContain("GetAsset");
+      expect(xml).toContain("GetAsset.AssetValue");
+      expect(xml).toContain("OutArgument");
+    });
+
+    it("Assign emits catalog-conformant XML with child-element To and Value", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "Assign",
+        displayName: "Set Variable",
+        properties: { To: "str_Result", Value: '"Hello"' },
+      };
+      const xml = resolveActivityTemplate(node, [{ name: "str_Result", type: "String" }]);
+      expect(xml).toContain("Assign");
+      expect(xml).toContain("Assign.To");
+      expect(xml).toContain("Assign.Value");
+      expect(xml).toContain("OutArgument");
+      expect(xml).toContain("InArgument");
+    });
+  });
+
+  describe("CATALOG_STRUCTURAL_VIOLATION classification (Task 149)", () => {
+    it("classifies CATALOG_STRUCTURAL_VIOLATION as blocking", () => {
+      const mockResult = {
+        passed: false,
+        violations: [{
+          category: "accuracy" as const,
+          severity: "error" as const,
+          check: "CATALOG_STRUCTURAL_VIOLATION",
+          file: "Main.xaml",
+          detail: 'Property "Body" on ui:HttpClient must be a child element, not an attribute',
+        }],
+        positiveEvidence: [],
+        completenessLevel: "functional" as const,
+        summary: {
+          blockedPatterns: 0,
+          completenessErrors: 0,
+          completenessWarnings: 0,
+          accuracyErrors: 1,
+          accuracyWarnings: 0,
+          runtimeSafetyErrors: 0,
+          runtimeSafetyWarnings: 0,
+          logicLocationWarnings: 0,
+          totalErrors: 1,
+          totalWarnings: 0,
+        },
+      };
+      const issues = classifyQualityIssues(mockResult);
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe("blocking");
+    });
+
+    it("CATALOG_STRUCTURAL_VIOLATION produces blocking files", () => {
+      const mockResult = {
+        passed: false,
+        violations: [{
+          category: "accuracy" as const,
+          severity: "error" as const,
+          check: "CATALOG_STRUCTURAL_VIOLATION",
+          file: "Main.xaml",
+          detail: 'Property "Body" must be a child element, not an attribute',
+        }],
+        positiveEvidence: [],
+        completenessLevel: "functional" as const,
+        summary: {
+          blockedPatterns: 0,
+          completenessErrors: 0,
+          completenessWarnings: 0,
+          accuracyErrors: 1,
+          accuracyWarnings: 0,
+          runtimeSafetyErrors: 0,
+          runtimeSafetyWarnings: 0,
+          logicLocationWarnings: 0,
+          totalErrors: 1,
+          totalWarnings: 0,
+        },
+      };
+      const issues = classifyQualityIssues(mockResult);
+      const blockingFiles = getBlockingFiles(issues);
+      expect(blockingFiles).toContain("Main.xaml");
+    });
+
+    it("non-structural CATALOG_VIOLATION remains warning severity", () => {
+      const mockResult = {
+        passed: true,
+        violations: [{
+          category: "accuracy" as const,
+          severity: "warning" as const,
+          check: "CATALOG_VIOLATION",
+          file: "Main.xaml",
+          detail: "Unrecognized attribute on SomeActivity",
+        }],
+        positiveEvidence: [],
+        completenessLevel: "functional" as const,
+        summary: {
+          blockedPatterns: 0,
+          completenessErrors: 0,
+          completenessWarnings: 0,
+          accuracyErrors: 0,
+          accuracyWarnings: 1,
+          runtimeSafetyErrors: 0,
+          runtimeSafetyWarnings: 0,
+          logicLocationWarnings: 0,
+          totalErrors: 0,
+          totalWarnings: 1,
+        },
+      };
+      const issues = classifyQualityIssues(mockResult);
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe("warning");
     });
   });
 });

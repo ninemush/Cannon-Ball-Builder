@@ -276,7 +276,6 @@ describe("Workflow Tree Architecture", () => {
       };
       const xml = assembleNode(node);
       expect(xml).toContain("<ui:SendSmtpMailMessage");
-      expect(xml).toContain("Body=");
       expect(xml).toContain("[str_RecipientEmail]");
       expect(xml).toContain("[str_EmailSubject]");
       expect(xml).toContain("[str_EmailBody]");
@@ -286,6 +285,11 @@ describe("Workflow Tree Architecture", () => {
       expect(xml).toContain("From=");
       expect(xml).toContain("Username=");
       expect(xml).toContain("Password=");
+      if (xml.includes("SendSmtpMailMessage.Body")) {
+        expect(xml).toContain("InArgument");
+      } else {
+        expect(xml).toContain("Body=");
+      }
     });
 
     it("wraps activity in TryCatch when errorHandling is catch", () => {

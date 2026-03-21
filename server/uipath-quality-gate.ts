@@ -1925,6 +1925,7 @@ const BLOCKING_CHECKS = new Set([
   "archive-manifest-parity",
   "archive-content-parity",
   "ENUM_VIOLATION",
+  "CATALOG_STRUCTURAL_VIOLATION",
 ]);
 
 const WARNING_CHECKS = new Set([

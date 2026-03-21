@@ -12,6 +12,7 @@ import type {
   PropertyValue,
 } from "./workflow-spec-types";
 import { catalogService } from "./catalog/catalog-service";
+import type { ActivityValidationResult, ValidationCorrection } from "./catalog/catalog-service";
 import { buildTemplateBlock } from "./catalog/xaml-template-builder";
 import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml } from "./lib/xml-utils";
@@ -214,6 +215,101 @@ export function resolvePropertyValueRaw(value: PropertyValue): string {
   return String(value);
 }
 
+function parseEmittedXmlForValidation(xml: string): {
+  tag: string;
+  className: string;
+  attributes: Record<string, string>;
+  childNames: string[];
+} | null {
+  const trimmed = xml.trim();
+  const openTagMatch = trimmed.match(/^<((?:[\w]+:)?[\w]+)([\s\S]*?)(?:\/>|>)/);
+  if (!openTagMatch) return null;
+  const tag = openTagMatch[1];
+  const className = tag.includes(":") ? tag.split(":").pop()! : tag;
+  const attrString = openTagMatch[2];
+
+  const attributes: Record<string, string> = {};
+  const attrRegex = /([\w]+(?:\.[\w]+)?)="([^"]*)"/g;
+  let m;
+  while ((m = attrRegex.exec(attrString)) !== null) {
+    if (m[1].startsWith("xmlns") || m[1].includes(":")) continue;
+    attributes[m[1]] = m[2];
+  }
+
+  const childNames: string[] = [];
+  const childPropRegex = new RegExp(`<${className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\w+)[\\s>]`, "g");
+  let cm;
+  while ((cm = childPropRegex.exec(trimmed)) !== null) {
+    childNames.push(cm[1]);
+    childNames.push(`${className}.${cm[1]}`);
+  }
+
+  return { tag, className, attributes, childNames };
+}
+
+function applyCatalogConformance(xml: string): string {
+  if (!catalogService.isLoaded()) {
+    try { catalogService.load(); } catch (e) { }
+  }
+  if (!catalogService.isLoaded()) return xml;
+
+  const parsed = parseEmittedXmlForValidation(xml);
+  if (!parsed) return xml;
+
+  const { tag, className } = parsed;
+  const templateName = className;
+  const schema = catalogService.getActivitySchema(templateName);
+  if (!schema) return xml;
+
+  const validation = catalogService.validateEmittedActivity(
+    tag,
+    parsed.attributes,
+    parsed.childNames,
+  );
+
+  if (validation.valid && validation.corrections.length === 0) return xml;
+
+  let corrected = xml;
+  for (const correction of validation.corrections) {
+    if (correction.type === "move-to-child-element") {
+      const propName = correction.property;
+      const propVal = parsed.attributes[propName];
+      if (propVal === undefined) continue;
+
+      const wrapper = correction.argumentWrapper || "InArgument";
+      const xType = correction.typeArguments || "x:String";
+      const wrappedVal = ensureBracketWrapped(propVal);
+      const childElement = `<${className}.${propName}>\n    <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n  </${className}.${propName}>`;
+
+      const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      const selfClosingRegex = new RegExp(`(<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?)${escapedPropName}="${escapedVal}"([^>]*?)\\s*\\/>`);
+      if (selfClosingRegex.test(corrected)) {
+        corrected = corrected.replace(selfClosingRegex, `$1$2>\n  ${childElement}\n</${tag}>`);
+      } else {
+        const openRegex = new RegExp(`(<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?)${escapedPropName}="${escapedVal}"([^>]*?>)`);
+        if (openRegex.test(corrected)) {
+          corrected = corrected.replace(openRegex, `$1$2\n  ${childElement}`);
+          const closingTag = `</${tag}>`;
+          if (!corrected.includes(closingTag)) {
+            corrected += `\n${closingTag}`;
+          }
+        }
+      }
+
+      console.log(`[Catalog Conformance] Moved ${tag}.${propName} from attribute to child-element at emission time`);
+    } else if (correction.type === "move-to-attribute") {
+      console.log(`[Catalog Conformance] Property ${tag}.${correction.property} should be attribute, not child-element (logged for review)`);
+    }
+  }
+
+  corrected = corrected.replace(/\s{2,}\/?>/g, (match) => match.includes('/') ? ' />' : '>');
+  corrected = corrected.replace(/<(\S+)\s+>/g, '<$1>');
+
+  return corrected;
+}
+
 function getPropString(props: Record<string, PropertyValue>, ...keys: string[]): string {
   for (const key of keys) {
     if (props[key] !== undefined) {
@@ -237,62 +333,69 @@ export function resolveActivityTemplate(
   const displayName = escapeXml(node.displayName);
 
   if (templateName === "Assign") {
-    return resolveAssignTemplate(node, allVariables);
+    return applyCatalogConformance(resolveAssignTemplate(node, allVariables));
   }
 
   if (templateName === "LogMessage") {
     const level = getPropString(props, "Level", "level") || "Info";
     const message = getPropString(props, "Message", "message") || `"${displayName}"`;
     const wrappedMessage = smartBracketWrap(message);
-    return `<ui:LogMessage Level="${escapeXml(level)}" Message="${escapeXml(wrappedMessage)}" DisplayName="${displayName}" />`;
+    return applyCatalogConformance(`<ui:LogMessage Level="${escapeXml(level)}" Message="${escapeXml(wrappedMessage)}" DisplayName="${displayName}" />`);
   }
 
   if (templateName === "Delay") {
     const duration = getPropString(props, "Duration", "duration") || "00:00:05";
-    return `<Delay Duration="${escapeXml(duration)}" DisplayName="${displayName}" />`;
+    return applyCatalogConformance(`<Delay Duration="${escapeXml(duration)}" DisplayName="${displayName}" />`);
   }
 
   if (templateName === "Rethrow") {
-    return `<ui:Rethrow DisplayName="${displayName}" />`;
+    return applyCatalogConformance(`<ui:Rethrow DisplayName="${displayName}" />`);
   }
 
   if (templateName === "InvokeWorkflowFile") {
     const fileName = getPropString(props, "WorkflowFileName", "workflowFileName") || "Workflow.xaml";
-    return `<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
+    return applyCatalogConformance(`<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
       `  <ui:InvokeWorkflowFile.Arguments>\n` +
       `  </ui:InvokeWorkflowFile.Arguments>\n` +
-      `</ui:InvokeWorkflowFile>`;
+      `</ui:InvokeWorkflowFile>`);
   }
 
   if (templateName === "GetAsset") {
-    return resolveGetAssetTemplate(node);
+    return applyCatalogConformance(resolveGetAssetTemplate(node));
   }
 
   if (templateName === "GetCredential") {
-    return resolveGetCredentialTemplate(node);
+    return applyCatalogConformance(resolveGetCredentialTemplate(node));
   }
 
   if (templateName === "SendSmtpMailMessage") {
-    return resolveSendSmtpMailMessageTemplate(node);
+    return applyCatalogConformance(resolveSendSmtpMailMessageTemplate(node));
   }
 
   if (templateName === "HttpClient") {
-    return resolveHttpClientTemplate(node);
+    return applyCatalogConformance(resolveHttpClientTemplate(node));
   }
 
   if (templateName === "DeserializeJson") {
     const input = getPropString(props, "JsonString", "jsonString", "Input") || "";
     const outputVar = node.outputVar || "obj_Result";
-    return `<ui:DeserializeJson DisplayName="${displayName}" JsonString="${escapeXml(input)}">\n` +
+    return applyCatalogConformance(`<ui:DeserializeJson DisplayName="${displayName}" JsonString="${escapeXml(input)}">\n` +
       `  <ui:DeserializeJson.Result>\n` +
       `    <OutArgument x:TypeArguments="x:Object">${ensureBracketWrapped(outputVar)}</OutArgument>\n` +
       `  </ui:DeserializeJson.Result>\n` +
-      `</ui:DeserializeJson>`;
+      `</ui:DeserializeJson>`);
   }
 
   if (templateName === "Comment") {
     const text = getPropString(props, "Text", "text") || "";
-    return `<ui:Comment Text="${escapeXml(text)}" DisplayName="${displayName}" />`;
+    return applyCatalogConformance(`<ui:Comment Text="${escapeXml(text)}" DisplayName="${displayName}" />`);
+  }
+
+  if (!catalogService.isLoaded()) {
+    try {
+      catalogService.load();
+    } catch (e) {
+    }
   }
 
   if (catalogService.isLoaded()) {
@@ -302,6 +405,24 @@ export function resolveActivityTemplate(
       return `<!-- UNKNOWN TEMPLATE: ${escapeXml(templateName)} — "${escapeXml(node.displayName)}" -->
 <ui:Comment Text="Unknown activity template: ${escapeXml(templateName)}. Manual implementation required." DisplayName="${escapeXml(node.displayName)} (stub)" />`;
     }
+  } else {
+    console.error(`[Tree Assembler] Catalog not loaded — cannot resolve template "${templateName}" safely. Emitting stub.`);
+    if (_activeRemediationContext) {
+      _activeRemediationContext.propertyRemediations.push({
+        level: "activity",
+        file: _activeRemediationContext.fileName,
+        remediationCode: "STUB_ACTIVITY_CATALOG_VIOLATION",
+        originalTag: templateName,
+        originalDisplayName: node.displayName,
+        propertyName: "(catalog-not-loaded)",
+        reason: `Catalog not loaded — cannot verify template "${templateName}" structure. Emitting stub to avoid schema-less degradation.`,
+        classifiedCheck: "CATALOG_VIOLATION",
+        developerAction: `Verify and re-implement "${node.displayName}" (${templateName}) — catalog was not available at emission time`,
+        estimatedEffortMinutes: 15,
+      });
+    }
+    return `<!-- CATALOG NOT LOADED: ${escapeXml(templateName)} — "${escapeXml(node.displayName)}" -->
+<ui:Comment Text="[TODO: Activity ${escapeXml(templateName)} requires catalog validation. Manual implementation required.]" DisplayName="${escapeXml(node.displayName)} (stub)" />`;
   }
 
   return resolveDynamicTemplate(node, processType);
@@ -433,6 +554,9 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType): s
   const childParts: string[] = [];
 
   let schema: any = null;
+  if (!catalogService.isLoaded()) {
+    try { catalogService.load(); } catch (e) { }
+  }
   if (catalogService.isLoaded()) {
     schema = catalogService.getActivitySchema(templateName);
   }
