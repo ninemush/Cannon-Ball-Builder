@@ -499,9 +499,9 @@ describe("Activity Catalog", () => {
   });
 
   describe("Catalog Service - package versions", () => {
-    it("returns version 1.20.1 for UiPath.Web.Activities", () => {
+    it("returns version 1.21.0 for UiPath.Web.Activities", () => {
       const version = catalogService.getConfirmedVersion("UiPath.Web.Activities");
-      expect(version).toBe("1.20.1");
+      expect(version).toBe("1.21.0");
     });
 
     it("returns version 2.24.3 for UiPath.Excel.Activities", () => {

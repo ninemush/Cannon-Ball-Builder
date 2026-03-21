@@ -773,12 +773,13 @@ export async function compilePackageFromSpecs(
     tracker.complete("validating", "Validation complete", { templateComplianceScore });
 
     const qgResult = buildResult.qualityGateResult;
+    const isIncomplete = qgResult ? qgResult.completenessLevel === "incomplete" : false;
     let qualityGateBlocking = mode === "baseline_openable"
-      ? false
-      : (qgResult ? !qgResult.passed : false);
+      ? isIncomplete
+      : (qgResult ? (!qgResult.passed || isIncomplete) : false);
     let qualityGateWarnings: string[] = qgResult
       ? qgResult.violations
-          .filter((v: any) => v.severity === "warning" || (mode === "baseline_openable" && v.severity === "error"))
+          .filter((v: any) => v.severity === "warning" || (mode === "baseline_openable" && v.severity === "error" && !isIncomplete))
           .map((v: any) => v.detail)
       : [];
     let postCorrectionQualityGate: QualityGateResult | null = null;
@@ -896,11 +897,12 @@ export async function compilePackageFromSpecs(
               });
 
               postCorrectionQualityGate = revalidationResult;
+              const revalIncomplete = revalidationResult.completenessLevel === "incomplete";
 
               if (!revalidationResult.passed) {
                 const postFixWarnings = revalidationResult.violations.filter(v => v.severity === "warning");
                 const postFixErrors = revalidationResult.violations.filter(v => v.severity === "error");
-                qualityGateBlocking = postFixErrors.length > 0;
+                qualityGateBlocking = postFixErrors.length > 0 || revalIncomplete;
                 qualityGateWarnings = postFixWarnings.map(v => v.detail);
                 if (postFixErrors.length > 0) {
                   console.warn(`[Pipeline] Post-correction quality gate found ${postFixErrors.length} error(s)`);
@@ -917,9 +919,9 @@ export async function compilePackageFromSpecs(
                   console.log(`[Pipeline] Post-correction quality gate: ${postFixWarnings.length} warning(s) remain`);
                 }
               } else {
-                qualityGateBlocking = false;
+                qualityGateBlocking = revalIncomplete;
                 qualityGateWarnings = [];
-                console.log(`[Pipeline] Post-correction quality gate: PASSED`);
+                console.log(`[Pipeline] Post-correction quality gate: ${revalIncomplete ? "PASSED but INCOMPLETE — blocking" : "PASSED"}`);
               }
             } catch (qgErr: unknown) {
               const errMsg = qgErr instanceof Error ? qgErr.message : String(qgErr);

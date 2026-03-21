@@ -456,7 +456,7 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
       const lineNum = content.substring(0, emMatch.index).split("\n").length;
       violations.push({
         category: "completeness",
-        severity: "warning",
+        severity: "error",
         check: "empty-http-endpoint",
         file: shortName,
         detail: `Line ${lineNum}: ui:HttpClient has an empty Endpoint/Url — HTTP request will fail at runtime`,
@@ -466,7 +466,7 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
       const lineNum = content.substring(0, emMatch.index).split("\n").length;
       violations.push({
         category: "completeness",
-        severity: "warning",
+        severity: "error",
         check: "empty-http-endpoint",
         file: shortName,
         detail: `Line ${lineNum}: ui:OpenBrowser has an empty Url — browser will not navigate`,
@@ -476,7 +476,7 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
       const lineNum = content.substring(0, emMatch.index).split("\n").length;
       violations.push({
         category: "completeness",
-        severity: "warning",
+        severity: "error",
         check: "empty-http-endpoint",
         file: shortName,
         detail: `Line ${lineNum}: ui:HttpClient has an empty Endpoint/Url property element — HTTP request will fail at runtime`,
@@ -486,7 +486,7 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
       const lineNum = content.substring(0, emMatch.index).split("\n").length;
       violations.push({
         category: "completeness",
-        severity: "warning",
+        severity: "error",
         check: "empty-http-endpoint",
         file: shortName,
         detail: `Line ${lineNum}: ui:OpenBrowser has an empty Url property element — browser will not navigate`,
@@ -1477,6 +1477,60 @@ function checkRuntimeSafety(input: QualityGateInput): QualityGateViolation[] {
             });
           }
         }
+      }
+    }
+  }
+
+  for (const entry of input.xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const content = entry.content;
+
+    const exprAttrPattern = /(Message|Default|Value)="([^"]*)"/g;
+    let exprMatch;
+    while ((exprMatch = exprAttrPattern.exec(content)) !== null) {
+      const attr = exprMatch[1];
+      const val = exprMatch[2];
+      if (!val || val.length === 0) continue;
+
+      const hasBracketOpen = val.includes("[");
+      const hasBracketClose = val.includes("]");
+
+      if (hasBracketOpen || hasBracketClose) {
+        const openCount = (val.match(/\[/g) || []).length;
+        const closeCount = (val.match(/\]/g) || []).length;
+        if (openCount !== closeCount) {
+          const lineNum = content.substring(0, exprMatch.index).split("\n").length;
+          violations.push({
+            category: "runtime-safety",
+            severity: "error",
+            check: "malformed-expression",
+            file: shortName,
+            detail: `Line ${lineNum}: ${attr} has unbalanced brackets (${openCount} open, ${closeCount} close) — expression will fail at runtime`,
+          });
+        }
+      }
+
+      const hasLiteralText = /^[^[&\d]/.test(val) && !val.startsWith("True") && !val.startsWith("False") && !val.startsWith("Nothing") && !val.startsWith("PLACEHOLDER");
+      if (hasLiteralText && hasBracketOpen) {
+        const lineNum = content.substring(0, exprMatch.index).split("\n").length;
+        violations.push({
+          category: "runtime-safety",
+          severity: "error",
+          check: "malformed-expression",
+          file: shortName,
+          detail: `Line ${lineNum}: ${attr} contains mixed literal/expression syntax — will produce a compile error in Studio`,
+        });
+      }
+
+      if (/'[^']*'/.test(val) && !val.startsWith("[")) {
+        const lineNum = content.substring(0, exprMatch.index).split("\n").length;
+        violations.push({
+          category: "runtime-safety",
+          severity: "error",
+          check: "malformed-expression",
+          file: shortName,
+          detail: `Line ${lineNum}: ${attr} contains single-quoted VB expression syntax that was not canonicalized — must use bracket-wrapped &quot; form`,
+        });
       }
     }
   }

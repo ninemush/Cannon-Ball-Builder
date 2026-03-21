@@ -241,7 +241,7 @@ const XML_PREFIXES = new Set([
 ]);
 
 const SPECIFIC_VARIABLE_TYPES: Record<string, string> = {
-  "gmailAppPassword": "s:SecureString",
+  "gmailAppPassword": "s:Security.SecureString",
   "primaryRouteDisrupted": "x:Boolean",
   "c2cAvailable": "x:Boolean",
   "smtpSendAttempt": "x:Int32",
@@ -512,8 +512,17 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   xml = xml.replace(/scg:DataTable/g, "scg2:DataTable");
   xml = xml.replace(/scg:DataRow/g, "scg2:DataRow");
 
-  xml = xml.replace(/Message="'([^']*)'"/g, 'Message="[&quot;$1&quot;]"');
-  xml = xml.replace(/Default="'([^']*)'"/g, 'Default="[&quot;$1&quot;]"');
+  xml = xml.replace(/(Message|Default|Value)="((?:[^"]*'[^']*'[^"]*(?:&amp;|\+)[^"]*)|(?:[^"]*(?:&amp;|\+)[^"]*'[^']*'[^"]*))"/g, (match, attr, content) => {
+    const canonical = content.replace(/'([^']*)'/g, "&quot;$1&quot;");
+    if (!canonical.startsWith("[")) {
+      return `${attr}="[${canonical}]"`;
+    }
+    return `${attr}="${canonical}"`;
+  });
+
+  xml = xml.replace(/(Message|Default)="'([^']*)'"/g, (match, attr, content) => {
+    return `${attr}="[&quot;${content}&quot;]"`;
+  });
 
   xml = xml.replace(/Message="'([^"]*)"/g, (match, content) => {
     if (content.endsWith("'")) return match;
@@ -538,6 +547,32 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
 
   xml = xml.replace(/(Message|Value)="("")([^"]*)""/g, (match, attr, _q1, inner) => {
     return `${attr}="[&quot;${inner}&quot;]"`;
+  });
+
+  xml = xml.replace(/(Message|Default|Value)="(\[[^"]*)"(?=\s|\/|>)/g, (match, attr, inner) => {
+    const withoutQuoted = inner.replace(/&quot;[^&]*&quot;/g, "");
+    const openBrackets = (withoutQuoted.match(/\[/g) || []).length;
+    const closeBrackets = (withoutQuoted.match(/\]/g) || []).length;
+    if (openBrackets > closeBrackets) {
+      const fixed = inner + "]".repeat(openBrackets - closeBrackets);
+      return `${attr}="${fixed}"`;
+    }
+    return match;
+  });
+
+  xml = xml.replace(/<Variable\s+x:TypeArguments="([^"]*?)"\s+Name="(sec_[^"]*?)"\s*\/>/g, (match, typeArg, varName) => {
+    if (typeArg !== "s:Security.SecureString") {
+      console.log(`[Compliance] Fixing sec_ variable ${varName} type from ${typeArg} to s:Security.SecureString`);
+      return `<Variable x:TypeArguments="s:Security.SecureString" Name="${varName}" />`;
+    }
+    return match;
+  });
+  xml = xml.replace(/<Variable\s+Name="(sec_[^"]*?)"\s+x:TypeArguments="([^"]*?)"\s*\/>/g, (match, varName, typeArg) => {
+    if (typeArg !== "s:Security.SecureString") {
+      console.log(`[Compliance] Fixing sec_ variable ${varName} type from ${typeArg} to s:Security.SecureString (reversed attrs)`);
+      return `<Variable x:TypeArguments="s:Security.SecureString" Name="${varName}" />`;
+    }
+    return match;
   });
 
   xml = xml.replace(/<sap:WorkflowViewState\.ViewStateManager>[\s\S]*?<\/sap:WorkflowViewState\.ViewStateManager>/g, "");

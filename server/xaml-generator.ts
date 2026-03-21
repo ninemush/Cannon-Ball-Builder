@@ -1086,7 +1086,7 @@ function isNonCriticalActivity(activityType: string): boolean {
   return nonCritical.some(t => activityType === t);
 }
 
-function sanitizePropertyValue(key: string, value: any): string {
+export function sanitizePropertyValue(key: string, value: any): string {
   if (value === null || value === undefined) {
     return "";
   }
@@ -1099,7 +1099,7 @@ function sanitizePropertyValue(key: string, value: any): string {
     }
     const isVbExpression = /^\[.*\]$/.test(value.trim());
     if (isVbExpression) {
-      return value.replace(/'/g, "");
+      return value;
     }
     return value.replace(/["']/g, "");
   }
@@ -2423,7 +2423,7 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
       <Variable x:TypeArguments="x:String" Name="str_ConfigPath" Default="Data\\Config.xlsx" />
       <Variable x:TypeArguments="x:String" Name="str_AssetValue" />
       <Variable x:TypeArguments="x:String" Name="str_TempUser" />
-      <Variable x:TypeArguments="x:String" Name="sec_TempPass" />
+      <Variable x:TypeArguments="s:Security.SecureString" Name="sec_TempPass" />
       <Variable x:TypeArguments="scg2:DataRow" Name="row_Current" />
     </Sequence.Variables>
     <ui:LogMessage Level="Info" Message="[${sq}Reading configuration from Config.xlsx...${sq}]" DisplayName="Log Config Start" />
