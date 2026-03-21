@@ -1,5 +1,6 @@
 import { getLLM } from "../lib/llm";
 import { sanitizeJsonString, stripCodeFences } from "../lib/json-utils";
+import { parseArtifactBlockAsObject } from "../lib/artifact-parser";
 
   export type AgentToolDef = { name: string; description: string; activityType?: string; processReference?: string; inputArguments?: Record<string, string>; outputArguments?: string[] };
 export type AgentEscalationRule = { condition: string; target: string; actionCenterCatalog?: string; priority?: string };
@@ -94,50 +95,7 @@ import type { DeploymentResult } from "@shared/models/deployment";
 
 
 export function parseArtifactsFromSDD(sddContent: string): OrchestratorArtifacts | null {
-  const exactMatch = sddContent.match(/```orchestrator_artifacts\s*\n([\s\S]*?)\n```/);
-  if (exactMatch) {
-    try {
-      return JSON.parse(sanitizeJsonString(exactMatch[1].trim()));
-    } catch (e) {
-      console.warn("[parseArtifacts] orchestrator_artifacts fence found but JSON parse failed:", (e as Error).message);
-    }
-  }
-
-  const jsonFenceMatch = sddContent.match(/```json\s*\n([\s\S]*?)\n```/g);
-  if (jsonFenceMatch) {
-    for (const fence of jsonFenceMatch) {
-      const inner = fence.replace(/```json\s*\n/, "").replace(/\n```$/, "").trim();
-      try {
-        const parsed = JSON.parse(sanitizeJsonString(inner));
-        if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents || parsed.communicationsMining || parsed.dataFabricEntities || parsed.apps || parsed.maestroProcesses) {
-          console.log("[parseArtifacts] Found artifacts in json fence block");
-          return parsed;
-        }
-      } catch { /* not the right block */ }
-    }
-  }
-
-  const rawMatch = sddContent.match(/\{\s*"(?:queues|assets|documentUnderstanding|communicationsMining)"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-  if (rawMatch) {
-    try {
-      const braceStart = rawMatch.index!;
-      let depth = 0;
-      let end = braceStart;
-      for (let i = braceStart; i < sddContent.length; i++) {
-        if (sddContent[i] === "{") depth++;
-        if (sddContent[i] === "}") depth--;
-        if (depth === 0) { end = i + 1; break; }
-      }
-      const jsonStr = sddContent.slice(braceStart, end);
-      const parsed = JSON.parse(sanitizeJsonString(jsonStr));
-      if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers || parsed.agents || parsed.communicationsMining || parsed.documentUnderstanding || parsed.dataFabricEntities || parsed.apps || parsed.maestroProcesses) {
-        console.log("[parseArtifacts] Found artifacts in raw JSON");
-        return parsed;
-      }
-    } catch { /* not valid JSON */ }
-  }
-
-  return null;
+  return parseArtifactBlockAsObject(sddContent) as OrchestratorArtifacts | null;
 }
 
 export async function extractArtifactsWithLLM(sddContent: string): Promise<OrchestratorArtifacts | null> {
