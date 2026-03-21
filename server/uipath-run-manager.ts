@@ -325,11 +325,16 @@ async function executeRun(
       throw new RunError("Package build produced no output", "build_failed", { packageJson });
     }
 
-    await chatStorage.createMessage(ideaId, "assistant", `[UIPATH:${JSON.stringify(packageJson)}]`);
+    const actualWorkflowCount = (pipelineResult.xamlEntries || []).filter(
+      (e: { name: string }) => e.name.endsWith(".xaml")
+    ).length;
+    const updatedPackageJson = { ...packageJson, generatedWorkflowCount: actualWorkflowCount };
+
+    await chatStorage.createMessage(ideaId, "assistant", `[UIPATH:${JSON.stringify(updatedPackageJson)}]`);
 
     const result: RunResult = {
       status: pipelineResult.status,
-      packageJson,
+      packageJson: updatedPackageJson,
       pipelineResult,
       cached: false,
     };

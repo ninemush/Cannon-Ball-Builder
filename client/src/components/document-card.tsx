@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -476,7 +476,15 @@ interface UiPathPackageCardProps {
 }
 
 export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry, templateComplianceScore, outcomeSummary }: UiPathPackageCardProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [descClamped, setDescClamped] = useState(false);
+  const descRef = useRef<HTMLParagraphElement>(null);
+  const checkDescClamped = useCallback(() => {
+    const el = descRef.current;
+    if (el) setDescClamped(el.scrollHeight > el.clientHeight);
+  }, []);
+  useEffect(() => { checkDescClamped(); }, [packageData.description, checkDescClamped]);
   const [pushResult, setPushResult] = useState<{ success: boolean; details?: any } | null>(null);
   const [jobState, setJobState] = useState<{ id?: number; state?: string; polling?: boolean } | null>(null);
   const [dhgOpen, setDhgOpen] = useState(false);
@@ -682,7 +690,22 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        <p className="text-[11px] text-muted-foreground/90">{packageData.description}</p>
+        {packageData.description && (
+          <div>
+            <p ref={descRef} className={`text-[11px] text-muted-foreground/90 ${!descExpanded ? "line-clamp-2" : ""}`} data-testid="text-package-description">
+              {packageData.description}
+            </p>
+            {(descClamped || descExpanded) && (
+              <button
+                className="text-[10px] text-primary hover:underline mt-0.5"
+                onClick={() => setDescExpanded(!descExpanded)}
+                data-testid="button-toggle-description"
+              >
+                {descExpanded ? "show less" : "show more"}
+              </button>
+            )}
+          </div>
+        )}
 
         {packageData.dependencies?.length > 0 && (
           <div>
@@ -704,7 +727,7 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
               onClick={() => setExpanded(!expanded)}
             >
               {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Workflows ({packageData.workflows.length})
+              Workflows ({packageData.generatedWorkflowCount ?? packageData.workflows.length})
             </button>
             {expanded && (
               <div className="space-y-2 mt-1">
