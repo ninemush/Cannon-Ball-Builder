@@ -9,6 +9,7 @@ import { PIPELINE_STAGES, type PipelineStage, type AutomationType } from "@share
 import { probeServiceAvailability, type ServiceAvailabilityMap } from "../../uipath-integration";
 import { generateDhg, findUiPathMessage, parseUiPathPackage } from "../../uipath-pipeline";
 import { getLLM, type LLMMessage, type LLMContentBlock } from "../../lib/llm";
+import { sanitizeChatForLLM, type SanitizedMessage } from "../../lib/sanitize-chat";
 
 function hasMapApprovalIntent(userMessage: string): boolean {
   const msg = userMessage.toLowerCase().trim();
@@ -847,10 +848,6 @@ export function registerChatRoutes(app: Express): void {
       }
 
       const history = await chatStorage.getRecentMessagesByIdeaId(ideaId, 80);
-      const filteredHistory = history.filter((m) => m.role === "user" || m.role === "assistant");
-
-      const lastSddIdx = filteredHistory.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:SDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
-      const lastPddIdx = filteredHistory.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:PDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
 
       const stripStaleServiceAvailability = (content: string): string => {
         return content
@@ -859,31 +856,30 @@ export function registerChatRoutes(app: Express): void {
           .replace(/Service\s+\|?\s*Status\s*\|?\s*Role[\s\S]*?(?=\n\n|\n##|\n\*\*[A-Z])/gi, "[Service availability table removed — see current probe data]\n\n");
       };
 
-      const cleanedHistory = filteredHistory.map((m, i) => {
-        if (m.role === "assistant" && m.content.startsWith("[DOC:SDD:") && i !== lastSddIdx) {
-          return { ...m, content: "[Previous SDD version — superseded. See current document status in system context.]" };
-        }
-        if (m.role === "assistant" && m.content.startsWith("[DOC:PDD:") && i !== lastPddIdx) {
-          return { ...m, content: "[Previous PDD version — superseded. See current document status in system context.]" };
-        }
-        if (m.role === "assistant" && (m.content.startsWith("[DOC:SDD:") || m.content.startsWith("[DOC:PDD:"))) {
-          return { ...m, content: stripStaleServiceAvailability(m.content) };
-        }
-        return m;
-      });
+      const merged = sanitizeChatForLLM(history, {
+        stripDocTags: false,
+        stripUiPathTags: true,
+        maxMessageLength: 0,
+        maxMessages: 0,
+        mergeSeparator: "\n\n",
+        preProcess: (msgs) => {
+          const lastSddIdx = msgs.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:SDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
+          const lastPddIdx = msgs.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:PDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
 
-      const merged: { role: "user" | "assistant"; content: string }[] = [];
-      for (const m of cleanedHistory) {
-        const role = m.role as "user" | "assistant";
-        if (merged.length > 0 && merged[merged.length - 1].role === role) {
-          merged[merged.length - 1].content += "\n\n" + m.content;
-        } else {
-          merged.push({ role, content: m.content });
-        }
-      }
-      if (merged.length > 0 && merged[0].role !== "user") {
-        merged.shift();
-      }
+          return msgs.map((m, i) => {
+            if (m.role === "assistant" && m.content.startsWith("[DOC:SDD:") && i !== lastSddIdx) {
+              return { ...m, content: "[Previous SDD version — superseded. See current document status in system context.]" };
+            }
+            if (m.role === "assistant" && m.content.startsWith("[DOC:PDD:") && i !== lastPddIdx) {
+              return { ...m, content: "[Previous PDD version — superseded. See current document status in system context.]" };
+            }
+            if (m.role === "assistant" && (m.content.startsWith("[DOC:SDD:") || m.content.startsWith("[DOC:PDD:"))) {
+              return { ...m, content: stripStaleServiceAvailability(m.content) };
+            }
+            return m;
+          });
+        },
+      });
 
       const MAX_RECENT = 30;
       let chatMessages = merged;
@@ -895,7 +891,7 @@ export function registerChatRoutes(app: Express): void {
           const truncated = m.content.length > 300 ? m.content.slice(0, 300) + "..." : m.content;
           summaryParts.push(`[${m.role}]: ${truncated}`);
         }
-        const summaryMsg: { role: "user" | "assistant"; content: string } = {
+        const summaryMsg: SanitizedMessage = {
           role: "user",
           content: `[Earlier conversation summary — ${older.length} messages condensed]\n${summaryParts.join("\n")}`,
         };

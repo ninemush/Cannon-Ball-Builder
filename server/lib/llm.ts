@@ -60,6 +60,13 @@ export interface LLMProvider {
 }
 
 function toAnthropicMessages(messages: LLMMessage[]): MessageParam[] {
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== "user" && messages[i].role !== "assistant") {
+      throw new Error(
+        `Invalid message role "${messages[i].role}" at index ${i}. Only "user" and "assistant" roles are allowed in Anthropic messages. This is an internal error — a system-role message was not filtered before reaching the LLM provider.`,
+      );
+    }
+  }
   return messages.map((m): MessageParam => {
     if (typeof m.content === "string") {
       return { role: m.role, content: m.content };
@@ -171,6 +178,13 @@ function toOpenAIMessages(
   system: string,
   messages: LLMMessage[]
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== "user" && messages[i].role !== "assistant") {
+      throw new Error(
+        `Invalid message role "${messages[i].role}" at index ${i}. Only "user" and "assistant" roles are allowed in OpenAI messages. This is an internal error — a system-role message was not filtered before reaching the LLM provider.`,
+      );
+    }
+  }
   const result: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: system },
   ];
@@ -290,12 +304,16 @@ class OpenAIProvider implements LLMProvider {
         input.push({ role: "developer", content: options.system });
       }
       for (const msg of options.messages) {
-        const role = msg.role as "user" | "assistant";
+        if (msg.role !== "user" && msg.role !== "assistant") {
+          throw new Error(
+            `Invalid message role "${msg.role}" in OpenAI Responses API call. Only "user" and "assistant" roles are allowed.`,
+          );
+        }
         if (typeof msg.content === "string") {
-          input.push({ role, content: msg.content });
+          input.push({ role: msg.role, content: msg.content });
         } else {
           const textParts = msg.content.filter((b): b is LLMTextContent => b.type === "text");
-          input.push({ role, content: textParts.map((t) => t.text).join("\n") });
+          input.push({ role: msg.role, content: textParts.map((t) => t.text).join("\n") });
         }
       }
 

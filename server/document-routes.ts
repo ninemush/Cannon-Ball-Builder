@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { getLLM } from "./lib/llm";
+import { sanitizeChatForLLM } from "./lib/sanitize-chat";
 import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
@@ -58,32 +59,6 @@ async function verifyIdeaAccess(req: Request, res: Response): Promise<string | n
   return ideaId;
 }
 
-function trimChatForDocGen(messages: { role: string; content: string }[]): { role: "user" | "assistant"; content: string }[] {
-  const filtered = messages
-    .filter((m) => !m.content.startsWith("[DOC:") && !m.content.startsWith("[UIPATH:"));
-
-  const deduped: { role: "user" | "assistant"; content: string }[] = [];
-  for (const m of filtered) {
-    let content = m.content;
-    if (content.length > 2000) {
-      content = content.slice(0, 2000) + "\n...[truncated]";
-    }
-    const role = m.role as "user" | "assistant";
-    if (deduped.length > 0 && deduped[deduped.length - 1].role === role) {
-      deduped[deduped.length - 1].content += "\n" + content;
-    } else {
-      deduped.push({ role, content });
-    }
-  }
-
-  const MAX_MSGS = 30;
-  let result = deduped.length > MAX_MSGS ? deduped.slice(deduped.length - MAX_MSGS) : deduped;
-
-  if (result.length > 0 && result[0].role !== "user") {
-    result = result.slice(1);
-  }
-  return result;
-}
 
 function buildSddProsePrompt(platformCapabilities?: string): string {
   const platformContext = platformCapabilities
@@ -288,10 +263,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
   if (!idea) throw new Error("Idea not found");
 
   const history = await chatStorage.getMessagesByIdeaId(ideaId);
-  const chatMessages = trimChatForDocGen(history.map((m) => ({
-    role: m.role as "user" | "assistant",
-    content: m.content,
-  })));
+  const chatMessages = sanitizeChatForLLM(history);
 
   let contextPrompt = "";
   if (docType === "PDD") {
@@ -680,10 +652,7 @@ export function registerDocumentRoutes(app: Express): void {
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 
       const history = await chatStorage.getMessagesByIdeaId(ideaId);
-      const chatMessages = history.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      }));
+      const chatMessages = sanitizeChatForLLM(history);
 
       const revisionPrompt = `The user has requested a revision to the ${type}. Here is the current document:\n\n${currentDoc.content}\n\nRevision request: ${revision}\n\nPlease regenerate the complete ${type} with this revision applied. Keep the same section structure (## headings). Output only the revised document.`;
 
