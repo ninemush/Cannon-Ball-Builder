@@ -1560,6 +1560,22 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const hasPddDoc = useMemo(() => displayMessages.some(m => m.docType === "PDD" && m.docId), [displayMessages]);
   const hasSddDoc = useMemo(() => displayMessages.some(m => m.docType === "SDD" && m.docId), [displayMessages]);
 
+  const packageCharacteristics = useMemo(() => {
+    const latestUiPathMsg = [...displayMessages].reverse().find(m => m.uipathData);
+    if (!latestUiPathMsg?.uipathData) return undefined;
+    const pkg = latestUiPathMsg.uipathData;
+    const workflows = pkg.workflows || [];
+    const totalActivities = workflows.reduce((sum: number, wf: any) => sum + (wf.steps?.length || 0), 0);
+    const uipathMessageCount = displayMessages.filter(m => m.uipathData).length;
+    return {
+      hasReFramework: pkg.internal?.useReFramework === true || workflows.some((wf: any) => wf.name?.includes("GetTransactionData") || wf.name?.includes("SetTransactionStatus")),
+      hasDocumentUnderstanding: workflows.some((wf: any) => (wf.steps || []).some((s: any) => s.activityType?.includes("DigitizeDocument") || s.activityType?.includes("ClassifyDocument"))),
+      workflowCount: workflows.length,
+      activityCount: totalActivities,
+      isFirstProductionDeploy: uipathMessageCount <= 1,
+    };
+  }, [displayMessages]);
+
   const { data: pddApprovalData } = useQuery<{ document: any; approval: any }>({
     queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"],
     enabled: hasPddDoc,
@@ -1770,6 +1786,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         isGenerating={isStreaming}
         metaValidationStatus={effectiveMetaValidationChipStatus}
         fixCount={effectiveMetaValidationFixCount}
+        packageCharacteristics={packageCharacteristics}
       />
 
       {guidance && (

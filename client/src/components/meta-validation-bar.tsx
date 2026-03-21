@@ -1,6 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Shield, ShieldOff, ShieldCheck, ShieldAlert, Info } from "lucide-react";
+import { Shield, ShieldOff, ShieldCheck, ShieldAlert, Info, AlertTriangle, Lightbulb } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -23,10 +23,19 @@ type StatusChipState =
   | "clean"
   | "warning";
 
+interface PackageCharacteristics {
+  hasReFramework?: boolean;
+  hasDocumentUnderstanding?: boolean;
+  workflowCount?: number;
+  activityCount?: number;
+  isFirstProductionDeploy?: boolean;
+}
+
 interface MetaValidationBarProps {
   isGenerating?: boolean;
   metaValidationStatus?: StatusChipState;
   fixCount?: number;
+  packageCharacteristics?: PackageCharacteristics;
 }
 
 const MODE_OPTIONS: MetaValidationMode[] = ["Auto", "Always", "Off"];
@@ -147,7 +156,17 @@ function getShimmerGradient(status: StatusChipState): string {
   return `linear-gradient(90deg, transparent 0%, rgba(${r},${g},${b},0.03) 30%, rgba(${r},${g},${b},0.06) 50%, rgba(${r},${g},${b},0.03) 70%, transparent 100%)`;
 }
 
-export function MetaValidationBar({ isGenerating, metaValidationStatus = "ready", fixCount }: MetaValidationBarProps) {
+function shouldRecommendAlways(chars?: PackageCharacteristics): boolean {
+  if (!chars) return false;
+  if (chars.hasReFramework) return true;
+  if (chars.hasDocumentUnderstanding) return true;
+  if ((chars.workflowCount ?? 0) > 8) return true;
+  if ((chars.activityCount ?? 0) > 100) return true;
+  if (chars.isFirstProductionDeploy) return true;
+  return false;
+}
+
+export function MetaValidationBar({ isGenerating, metaValidationStatus = "ready", fixCount, packageCharacteristics }: MetaValidationBarProps) {
   const { toast } = useToast();
   const [flash, setFlash] = useState(false);
   const prevStatusRef = useRef<StatusChipState>(metaValidationStatus);
@@ -158,6 +177,7 @@ export function MetaValidationBar({ isGenerating, metaValidationStatus = "ready"
 
   const currentMode = settings?.mode || "Auto";
   const isOff = currentMode === "Off";
+  const showAlwaysHint = currentMode !== "Always" && shouldRecommendAlways(packageCharacteristics);
 
   useEffect(() => {
     const prev = prevStatusRef.current;
@@ -280,6 +300,44 @@ export function MetaValidationBar({ isGenerating, metaValidationStatus = "ready"
               </Tooltip>
             ))}
           </div>
+
+          {isOff && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30" data-testid="meta-validation-off-warning">
+                  <AlertTriangle className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+                  <span className="text-[9px] text-amber-700 dark:text-amber-400 font-medium">Unverified</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="start" collisionPadding={8} className="max-w-[280px] text-xs leading-relaxed">
+                <p>Quality Check is off. Generated packages may contain structural errors, missing properties, or invalid expressions that will only be caught when opened in UiPath Studio.</p>
+                <p className="mt-1.5 text-[10px] text-muted-foreground">Switch to Auto or Always to have issues detected and fixed before download.</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+
+          {showAlwaysHint && !isOff && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/20" data-testid="meta-validation-always-hint">
+                  <Lightbulb className="h-3 w-3 text-blue-500 dark:text-blue-400" />
+                  <span className="text-[9px] text-blue-600 dark:text-blue-400 font-medium">Always recommended</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="start" collisionPadding={8} className="max-w-[280px] text-xs leading-relaxed">
+                <p>This package has characteristics that benefit from a full quality review on every generation: {
+                  [
+                    packageCharacteristics?.hasReFramework && "ReFramework",
+                    packageCharacteristics?.hasDocumentUnderstanding && "Document Understanding",
+                    (packageCharacteristics?.workflowCount ?? 0) > 8 && `${packageCharacteristics?.workflowCount} workflows`,
+                    (packageCharacteristics?.activityCount ?? 0) > 100 && `${packageCharacteristics?.activityCount} activities`,
+                    packageCharacteristics?.isFirstProductionDeploy && "first production deploy",
+                  ].filter(Boolean).join(", ")
+                }.</p>
+                <p className="mt-1.5 text-[10px] text-muted-foreground">Consider switching to Always mode for this package.</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
         </div>
 
         <div

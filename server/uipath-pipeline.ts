@@ -33,6 +33,7 @@ import {
   type MetaValidationResult,
   type ConfidenceScorerInput,
   type GenerationMetrics,
+  type EntryWorkflowMetadata,
 } from "./meta-validation";
 
 export type { GenerationMode };
@@ -787,6 +788,26 @@ export async function compilePackageFromSpecs(
 
     if (hasNupkg) {
       try {
+        const mainXamlEntry = buildResult.xamlEntries.find(e => {
+          const basename = e.name.split("/").pop() || e.name;
+          return basename === "Main.xaml";
+        });
+        let entryWorkflow: EntryWorkflowMetadata | undefined;
+        if (mainXamlEntry) {
+          const mainContent = mainXamlEntry.content;
+          const invokeCount = (mainContent.match(/InvokeWorkflowFile/g) || []).length;
+          const mainActivityCount = (mainContent.match(/<ui:[A-Z]/g) || []).length + (mainContent.match(/<[A-Za-z]+\.[A-Za-z]+/g) || []).length;
+          const mainHasReFramework = mainContent.includes("GetTransactionData") || mainContent.includes("SetTransactionStatus") || mainContent.includes("ReFramework");
+          const mainHasCatalogViolations = (qgResult?.violations.filter(v => v.check === "catalog-violation" && (v.file === "Main.xaml" || v.file.endsWith("/Main.xaml"))).length || 0) > 0;
+          entryWorkflow = {
+            isPreviouslyStubbed: buildResult.usedFallbackStubs,
+            invokeWorkflowFileCount: invokeCount,
+            hasReFramework: mainHasReFramework,
+            activityCount: mainActivityCount,
+            hasCatalogViolations: mainHasCatalogViolations,
+          };
+        }
+
         const scorerInput: ConfidenceScorerInput = {
           workflowCount: buildResult.xamlEntries.length,
           activityCount: buildResult.xamlEntries.reduce((sum, e) => sum + (e.content.match(/<ui:[A-Z]/g)?.length || 0), 0),
@@ -798,6 +819,7 @@ export async function compilePackageFromSpecs(
           hasAICenter: buildResult.xamlEntries.some(e => e.content.includes("MLSkill") || e.content.includes("Predict")),
           priorGenerationHadStubs: buildResult.usedFallbackStubs,
           qualityGateWarningCount: qgResult?.summary.totalWarnings || 0,
+          entryWorkflow,
         };
 
         const confidenceResult = calculateConfidenceScore(scorerInput);
@@ -919,7 +941,7 @@ export async function compilePackageFromSpecs(
             status: mvStatus,
           };
 
-          console.log(`[Pipeline] Meta-validation complete: ${applicationResult.applied} applied, ${applicationResult.skipped} skipped, ${applicationResult.failed} failed (${metaValidationResult.durationMs}ms)`);
+          console.log(`[Pipeline] Meta-validation complete: ${applicationResult.applied} applied, ${applicationResult.skipped} skipped, ${applicationResult.failed} failed (${metaValidationResult.durationMs}ms) | corrections_applied=${applicationResult.applied}, meta_validations_engaged=1`);
 
           const completionEvent: MetaValidationEvent = {
             status: mvStatus === "fixed" ? "completed" : mvStatus === "warnings" ? "warning" : "completed",

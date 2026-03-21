@@ -6,6 +6,9 @@ interface MetricsSummary {
   averageCostUsd: number;
   metaValidationEngagementRate: number;
   averageCorrectionsPerValidation: number;
+  correctionRate: number;
+  correctionsAppliedTotal: number;
+  metaValidationsEngagedTotal: number;
   templateComplianceTrend: number[];
   totalGenerations: number;
 }
@@ -43,6 +46,7 @@ export function MetaValidationDashboard() {
     ? `< $0.01`
     : `$${metrics.averageCostUsd.toFixed(3)}`;
   const avgCorrections = metrics.averageCorrectionsPerValidation.toFixed(1);
+  const correctionRateDisplay = metrics.correctionRate.toFixed(1);
   const latestCompliance = metrics.templateComplianceTrend.length > 0
     ? (metrics.templateComplianceTrend[metrics.templateComplianceTrend.length - 1] * 100).toFixed(0)
     : "N/A";
@@ -57,7 +61,7 @@ export function MetaValidationDashboard() {
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <Card className="bg-muted/30" data-testid="metric-avg-cost">
           <CardContent className="p-3">
             <div className="flex items-center gap-1.5 mb-1">
@@ -85,6 +89,19 @@ export function MetaValidationDashboard() {
               <span className="text-[10px] text-muted-foreground font-medium">Avg Corrections</span>
             </div>
             <p className="text-lg font-bold">{avgCorrections}</p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-muted/30" data-testid="metric-correction-rate">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-1.5 mb-1">
+              <TrendingUp className="h-3 w-3 text-purple-500" />
+              <span className="text-[10px] text-muted-foreground font-medium">Corrections/Run</span>
+            </div>
+            <p className="text-lg font-bold">{correctionRateDisplay}</p>
+            <p className="text-[9px] text-muted-foreground mt-0.5">
+              {metrics.correctionsAppliedTotal} applied / {metrics.metaValidationsEngagedTotal} engaged
+            </p>
           </CardContent>
         </Card>
 

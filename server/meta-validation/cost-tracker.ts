@@ -109,6 +109,9 @@ export async function getMetricsSummary(days: number = 30): Promise<{
   averageCostUsd: number;
   metaValidationEngagementRate: number;
   averageCorrectionsPerValidation: number;
+  correctionRate: number;
+  correctionsAppliedTotal: number;
+  metaValidationsEngagedTotal: number;
   templateComplianceTrend: number[];
   totalGenerations: number;
 }> {
@@ -122,6 +125,9 @@ export async function getMetricsSummary(days: number = 30): Promise<{
       averageCostUsd: 0,
       metaValidationEngagementRate: 0,
       averageCorrectionsPerValidation: 0,
+      correctionRate: 0,
+      correctionsAppliedTotal: 0,
+      metaValidationsEngagedTotal: 0,
       templateComplianceTrend: [],
       totalGenerations: 0,
     };
@@ -142,10 +148,16 @@ export async function getMetricsSummary(days: number = 30): Promise<{
     trend.push(bucket.reduce((s, v) => s + v, 0) / bucket.length);
   }
 
+  const correctionRate = engaged.length > 0 ? totalCorrections / engaged.length : 0;
+  console.log(`[Cost-Tracker] Correction rate: ${correctionRate.toFixed(3)} (corrections_applied=${totalCorrections}, meta_validations_engaged=${engaged.length}, total_generations=${recent.length})`);
+
   return {
     averageCostUsd: totalCost / recent.length,
     metaValidationEngagementRate: engaged.length / recent.length,
     averageCorrectionsPerValidation: engaged.length > 0 ? totalCorrections / engaged.length : 0,
+    correctionRate,
+    correctionsAppliedTotal: totalCorrections,
+    metaValidationsEngagedTotal: engaged.length,
     templateComplianceTrend: trend,
     totalGenerations: recent.length,
   };

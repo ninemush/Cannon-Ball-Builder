@@ -5,6 +5,7 @@ export {
   type ConfidenceScorerInput,
   type ConfidenceSignal,
   type ErrorCategory,
+  type EntryWorkflowMetadata,
 } from "./confidence-scorer";
 
 export {

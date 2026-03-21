@@ -21,6 +21,14 @@ export interface ConfidenceScore {
   reason: string;
 }
 
+export interface EntryWorkflowMetadata {
+  isPreviouslyStubbed?: boolean;
+  invokeWorkflowFileCount?: number;
+  hasReFramework?: boolean;
+  activityCount?: number;
+  hasCatalogViolations?: boolean;
+}
+
 export interface ConfidenceScorerInput {
   workflowCount: number;
   activityCount: number;
@@ -35,6 +43,7 @@ export interface ConfidenceScorerInput {
   priorGenerationHadStubs?: boolean;
   isFirstGeneration?: boolean;
   qualityGateWarningCount?: number;
+  entryWorkflow?: EntryWorkflowMetadata;
 }
 
 const SIGNAL_DEFINITIONS: Array<{
@@ -133,12 +142,44 @@ export function calculateConfidenceScore(input: ConfidenceScorerInput): Confiden
   }
 
   const score = triggeredWeight / TOTAL_POSSIBLE_WEIGHT;
-  const shouldEngage = score >= AUTO_ENGAGE_THRESHOLD;
+  let shouldEngage = score >= AUTO_ENGAGE_THRESHOLD;
 
   const triggeredNames = signals.filter(s => s.triggered).map(s => s.name);
-  const reason = shouldEngage
-    ? `Score ${score.toFixed(2)} >= ${AUTO_ENGAGE_THRESHOLD} threshold (triggered: ${triggeredNames.join(", ")})`
-    : `Score ${score.toFixed(2)} < ${AUTO_ENGAGE_THRESHOLD} threshold`;
+
+  let hardEngageReason = "";
+
+  const catalogTriggered = signals.find(s => s.name === "catalog_violations")?.triggered ?? false;
+  const lowComplianceTriggered = signals.find(s => s.name === "low_template_compliance")?.triggered ?? false;
+  if (catalogTriggered && lowComplianceTriggered) {
+    shouldEngage = true;
+    hardEngageReason = "Hard-engage: catalog_violations + low_template_compliance both triggered";
+  }
+
+  if (input.entryWorkflow) {
+    const ew = input.entryWorkflow;
+    const entryRiskConditions: string[] = [];
+    if (ew.isPreviouslyStubbed) entryRiskConditions.push("Main.xaml previously stubbed");
+    if ((ew.invokeWorkflowFileCount ?? 0) >= 3) entryRiskConditions.push(`${ew.invokeWorkflowFileCount} InvokeWorkflowFile activities in entry workflow`);
+    if (ew.hasReFramework) entryRiskConditions.push("ReFramework in entry workflow");
+    if ((ew.activityCount ?? 0) > 20) entryRiskConditions.push(`${ew.activityCount} activities in Main.xaml (>20)`);
+    if (ew.hasCatalogViolations) entryRiskConditions.push("Main.xaml has catalog violations");
+
+    if (entryRiskConditions.length > 0) {
+      shouldEngage = true;
+      hardEngageReason = hardEngageReason
+        ? `${hardEngageReason}; Entry-workflow risk: ${entryRiskConditions.join(", ")}`
+        : `Hard-engage entry-workflow risk: ${entryRiskConditions.join(", ")}`;
+    }
+  }
+
+  let reason: string;
+  if (hardEngageReason) {
+    reason = `${hardEngageReason} (score=${score.toFixed(2)}, triggered: ${triggeredNames.join(", ")})`;
+  } else {
+    reason = shouldEngage
+      ? `Score ${score.toFixed(2)} >= ${AUTO_ENGAGE_THRESHOLD} threshold (triggered: ${triggeredNames.join(", ")})`
+      : `Score ${score.toFixed(2)} < ${AUTO_ENGAGE_THRESHOLD} threshold`;
+  }
 
   return {
     score,
