@@ -902,13 +902,58 @@ class MetadataService {
     return this.getScopesForService(resourceType).join(" ");
   }
 
-  private findOidcScopesForService(resourceType: ServiceResourceType, snapshot: OidcScopeSnapshot): string[] {
-    for (const [, family] of Object.entries(snapshot.scopeFamilies)) {
-      if (family.mappedServiceResourceType === resourceType) {
-        return family.scopes;
+  getMinimalScopesForServiceString(resourceType: ServiceResourceType): string {
+    return this.getMinimalScopesForService(resourceType).join(" ");
+  }
+
+  getAlternateScopesForService(resourceType: ServiceResourceType, excludeScopes: string[]): string[] {
+    const allFamilies = this.findAllOidcFamiliesForService(resourceType);
+    if (allFamilies.length <= 1) return [];
+    for (const family of allFamilies) {
+      const hasOverlap = family.scopes.some(s => excludeScopes.includes(s));
+      if (!hasOverlap) {
+        const minimal = this.getMinimalTokenScopes(resourceType);
+        const validated = minimal.filter(s => family.scopes.includes(s));
+        if (validated.length > 0) return validated;
+        const defaultScope = family.scopes.find(s => s.endsWith(".Default"));
+        if (defaultScope) return [defaultScope];
+        const readScope = family.scopes.find(s => s.endsWith(".Read"));
+        if (readScope) return [readScope];
+        return [family.scopes[0]];
       }
     }
     return [];
+  }
+
+  private findOidcScopesForService(resourceType: ServiceResourceType, snapshot: OidcScopeSnapshot): string[] {
+    const taxonomy = this.getCapabilityTaxonomy();
+    const taxEntry = taxonomy.find(e => e.serviceResourceType === resourceType && e.scopeFamily);
+    const preferredPrefix = taxEntry?.scopeFamily;
+
+    let firstMatch: string[] | null = null;
+    for (const [, family] of Object.entries(snapshot.scopeFamilies)) {
+      if (family.mappedServiceResourceType === resourceType) {
+        if (preferredPrefix && family.prefix === preferredPrefix) {
+          return family.scopes;
+        }
+        if (!firstMatch) {
+          firstMatch = family.scopes;
+        }
+      }
+    }
+    return firstMatch || [];
+  }
+
+  findAllOidcFamiliesForService(resourceType: ServiceResourceType, snapshot?: OidcScopeSnapshot): Array<{ prefix: string; scopes: string[] }> {
+    const snap = snapshot || this.oidcLiveScopes || this.oidcSnapshot;
+    if (!snap) return [];
+    const families: Array<{ prefix: string; scopes: string[] }> = [];
+    for (const [, family] of Object.entries(snap.scopeFamilies)) {
+      if (family.mappedServiceResourceType === resourceType) {
+        families.push({ prefix: family.prefix, scopes: family.scopes });
+      }
+    }
+    return families;
   }
 
   getOidcStatus(): {

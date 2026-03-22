@@ -36,7 +36,7 @@ function getTokenEndpoint(): string {
 
 function getResourceScopesFromMetadata(resource: ResourceType): string {
   const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
-  return metadataService.getScopesForServiceString(serviceType);
+  return metadataService.getMinimalScopesForServiceString(serviceType);
 }
 
 export function getDefaultOrScopes(): string {
@@ -160,6 +160,48 @@ async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): 
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+
+    if (res.status === 400 && resource !== "OR") {
+      const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
+      const requestedScopeList = requestedScopes.split(" ");
+      const altScopes = metadataService.getAlternateScopesForService(serviceType, requestedScopeList);
+      if (altScopes.length > 0) {
+        console.log(`[UiPath Auth] ${resource} token failed with 400, retrying with alternate scope family: ${altScopes.join(" ")}`);
+        const altParams = new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          scope: altScopes.join(" "),
+        });
+        const altController = new AbortController();
+        const altTimeoutId = setTimeout(() => altController.abort(), 15000);
+        try {
+          const altRes = await fetch(getTokenEndpoint(), {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: altParams.toString(),
+            signal: altController.signal,
+          });
+          clearTimeout(altTimeoutId);
+          if (altRes.ok) {
+            const altData = await altRes.json();
+            if (altData.access_token) {
+              const expiresIn = altData.expires_in || 3600;
+              const expiresAt = Date.now() + expiresIn * 1000;
+              console.log(`[UiPath Auth] ${resource} token acquired (alternate family) for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
+              return { accessToken: altData.access_token, expiresAt };
+            }
+          } else {
+            const altText = await altRes.text().catch(() => "");
+            console.warn(`[UiPath Auth] ${resource} alternate family retry also failed (${altRes.status}): ${altText.slice(0, 200)}`);
+          }
+        } catch (altErr: any) {
+          clearTimeout(altTimeoutId);
+          console.warn(`[UiPath Auth] ${resource} alternate family retry error: ${altErr.message || "unknown"}`);
+        }
+      }
+    }
+
     console.error(`[UiPath Auth] ${resource} token request failed (${res.status}) for client ${maskClientId(config.clientId)}`);
     throw new UiPathAuthError(`${resource} authentication failed (${res.status}): ${text.slice(0, 200)}`, res.status);
   }
