@@ -66,7 +66,15 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   const activeRows = await db.select().from(uipathConnections).where(eq(uipathConnections.isActive, true));
   if (activeRows.length > 0) {
     const row = activeRows[0];
-    const scopes = getDefaultOrScopes();
+    let scopes = (row.scopes && row.scopes.trim()) ? row.scopes.trim() : "";
+    if (!scopes) {
+      const settingsRows = await db.select().from(appSettings).where(eq(appSettings.key, "uipath_scopes"));
+      if (settingsRows.length > 0 && settingsRows[0].value && settingsRows[0].value.trim()) {
+        scopes = settingsRows[0].value.trim();
+      } else {
+        scopes = getDefaultOrScopes();
+      }
+    }
     cachedConfig = {
       orgName: row.orgName,
       tenantName: row.tenantName,
@@ -87,7 +95,8 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   const tenantName = map.get("uipath_tenant_name");
   const clientId = map.get("uipath_client_id");
   const clientSecret = map.get("uipath_client_secret");
-  const scopes = getDefaultOrScopes();
+  const savedScopes = map.get("uipath_scopes");
+  const scopes = (savedScopes && savedScopes.trim()) ? savedScopes.trim() : getDefaultOrScopes();
   const folderId = map.get("uipath_folder_id") || undefined;
   const folderName = map.get("uipath_folder_name") || undefined;
 

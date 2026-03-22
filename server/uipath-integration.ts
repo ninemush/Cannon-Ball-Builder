@@ -2438,8 +2438,15 @@ export async function autoDetectUiPathScopes(): Promise<{
   await mdsSvc.refreshFromOIDC();
   const oidcStatus = mdsSvc.getOidcStatus();
 
-  const orScopes = mdsSvc.getScopesForService("OR");
-  if (orScopes.length === 0) {
+  const allServiceTypes: ServiceResourceType[] = ["OR", "TM", "DU", "DF", "PIMS", "IXP", "AI", "HUB", "IDENTITY", "INTEGRATIONSERVICE", "AUTOMATIONOPS", "AUTOMATIONSTORE", "APPS", "ASSISTANT", "AGENTS", "AUTOPILOT", "REINFER"];
+  const allRequestedScopes: string[] = [];
+  for (const svc of allServiceTypes) {
+    const fullScopes = mdsSvc.getFullOidcScopesForService(svc);
+    allRequestedScopes.push(...fullScopes);
+  }
+
+  const orScopes = mdsSvc.getFullOidcScopesForService("OR");
+  if (orScopes.length === 0 && allRequestedScopes.length === 0) {
     return {
       status: "no_scopes_found",
       detectedScopes: [],
@@ -2449,13 +2456,17 @@ export async function autoDetectUiPathScopes(): Promise<{
     };
   }
 
+  const dedupedRequestScopes = [...new Set(allRequestedScopes)];
+  const scopeString = dedupedRequestScopes.length > 0 ? dedupedRequestScopes.join(" ") : orScopes.join(" ");
+
   let token: string | null = null;
+  let usedBroadRequest = false;
   try {
     const params = new URLSearchParams({
       grant_type: "client_credentials",
       client_id: config.clientId,
       client_secret: config.clientSecret,
-      scope: orScopes.join(" "),
+      scope: scopeString,
     });
     const tokenUrl = mdsSvc.getTokenEndpoint();
     const res = await fetch(tokenUrl, {
@@ -2466,11 +2477,12 @@ export async function autoDetectUiPathScopes(): Promise<{
     if (res.ok) {
       const data = await res.json();
       token = data.access_token;
+      usedBroadRequest = true;
     }
   } catch (e: any) { console.warn(`[UiPath] Auto-detect scopes token request failed: ${e.message}`); }
 
   if (!token) {
-    const fallbackScopes = mdsSvc.getScopesForService("OR");
+    const fallbackScopes = mdsSvc.getMinimalScopesForService("OR");
     for (const tryScope of fallbackScopes) {
       try {
         const params = new URLSearchParams({
@@ -2516,8 +2528,20 @@ export async function autoDetectUiPathScopes(): Promise<{
   }
 
   const grantedOrScopes = detectedScopes.filter(s => s.startsWith("OR."));
-  const scopeString = grantedOrScopes.join(" ");
-  await upsertSetting("uipath_scopes", scopeString);
+  const dedupedScopes = [...new Set(detectedScopes)].sort();
+  const allScopesString = dedupedScopes.join(" ");
+
+  if (usedBroadRequest) {
+    await upsertSetting("uipath_scopes", allScopesString);
+
+    const { uipathConnections } = await import("@shared/schema");
+    const activeRows = await db.select().from(uipathConnections).where(eq(uipathConnections.isActive, true));
+    if (activeRows.length > 0) {
+      await db.update(uipathConnections).set({ scopes: allScopesString }).where(eq(uipathConnections.id, activeRows[0].id));
+    }
+    const { invalidateConfig } = await import("./uipath-auth");
+    invalidateConfig();
+  }
 
   const oidcValidScopes = mdsSvc.getOidcValidScopes();
   const nonOrFamilies = Object.entries(mdsSvc.getOidcStatus().scopeFamilies || {})
@@ -2525,11 +2549,15 @@ export async function autoDetectUiPathScopes(): Promise<{
     .map(([prefix, f]) => `${prefix}→${f.mappedService}(${f.scopeCount})`)
     .join(", ");
 
+  const persistNote = usedBroadRequest
+    ? "Scopes persisted to configuration."
+    : "Scopes detected via fallback; existing saved scopes preserved unchanged.";
+
   return {
     status: "synced",
     detectedScopes,
     previousScopes,
-    message: `Auto-detected ${grantedOrScopes.length} OR scopes from UiPath (OIDC-backed: ${oidcValidScopes.length} valid scopes across ${oidcStatus.familyCount} families). Non-OR families: ${nonOrFamilies || "none detected"}. Each resource type uses separate tokens.`,
+    message: `Auto-detected ${grantedOrScopes.length} OR scopes from UiPath (OIDC-backed: ${oidcValidScopes.length} valid scopes across ${oidcStatus.familyCount} families). Non-OR families: ${nonOrFamilies || "none detected"}. ${persistNote} Each resource type uses separate tokens.`,
     oidcStatus: { hasLiveScopes: oidcStatus.hasLiveScopes, familyCount: oidcStatus.familyCount, isStale: oidcStatus.isStale },
   };
 }

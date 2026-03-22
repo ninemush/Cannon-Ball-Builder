@@ -831,6 +831,18 @@ class MetadataService {
   }
 
   getScopesForService(resourceType: ServiceResourceType): string[] {
+    const fullScopes = this.getFullOidcScopesForService(resourceType);
+    if (fullScopes.length > 0) return fullScopes;
+
+    const baseline = this.getMinimalTokenScopes(resourceType);
+    if (baseline.length > 0) return baseline;
+
+    if (resourceType === "OR") return MINIMAL_OR_FALLBACK_SCOPES;
+
+    return [];
+  }
+
+  getMinimalScopesForService(resourceType: ServiceResourceType): string[] {
     if (this.oidcLiveScopes) {
       const oidcMinimal = this.pickMinimalFromOidc(resourceType, this.oidcLiveScopes);
       if (oidcMinimal.length > 0) return oidcMinimal;
@@ -850,8 +862,8 @@ class MetadataService {
   }
 
   getScopeSource(resourceType: ServiceResourceType): "oidc-live" | "oidc-snapshot" | "baseline" | "fallback" | "none" {
-    if (this.oidcLiveScopes && this.pickMinimalFromOidc(resourceType, this.oidcLiveScopes).length > 0) return "oidc-live";
-    if (this.oidcSnapshot && this.pickMinimalFromOidc(resourceType, this.oidcSnapshot).length > 0) return "oidc-snapshot";
+    if (this.oidcLiveScopes && this.findOidcScopesForService(resourceType, this.oidcLiveScopes).length > 0) return "oidc-live";
+    if (this.oidcSnapshot && this.findOidcScopesForService(resourceType, this.oidcSnapshot).length > 0) return "oidc-snapshot";
     if (this.getMinimalTokenScopes(resourceType).length > 0) return "baseline";
     if (resourceType === "OR") return "fallback";
     return "none";
