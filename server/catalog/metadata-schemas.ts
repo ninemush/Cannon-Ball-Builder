@@ -44,8 +44,30 @@ export const serviceEndpointEntrySchema = z.object({
 
 export type ServiceResourceType = "OR" | "TM" | "DU" | "DF" | "PIMS" | "IXP" | "AI" | "HUB" | "IDENTITY" | "INTEGRATIONSERVICE" | "AUTOMATIONOPS" | "AUTOMATIONSTORE" | "APPS" | "ASSISTANT" | "AGENTS" | "AUTOPILOT" | "REINFER";
 
+export const taxonomyEntrySchema = z.object({
+  flagKey: z.string(),
+  serviceResourceType: z.string(),
+  displayName: z.string(),
+  category: z.enum(["service", "capability", "observation", "infrastructure"]),
+  parentService: z.string().optional(),
+  uiSection: z.enum(["primary", "secondary", "infrastructure", "observation"]),
+  defaultRemediationTemplate: z.object({
+    reason: z.string(),
+    actionOwner: z.enum(["uipath-admin", "cannonball", "user-config", "not-actionable"]),
+    recommendedStep: z.string(),
+  }).optional(),
+  oauthScopeGroups: z.array(z.object({
+    groupLabel: z.string(),
+    scopes: z.array(z.object({
+      id: z.string(),
+      description: z.string(),
+    })),
+  })).optional(),
+});
+
 export const serviceEndpointsSchema = z.object({
   endpoints: z.record(z.string(), serviceEndpointEntrySchema),
+  taxonomy: z.array(taxonomyEntrySchema).optional(),
   tokenEndpoint: z.string().url(),
   lastRefreshedAt: z.string().datetime(),
   lastVerifiedAt: z.string().datetime(),
@@ -54,3 +76,55 @@ export const serviceEndpointsSchema = z.object({
 
 export type ServiceEndpointEntry = z.infer<typeof serviceEndpointEntrySchema>;
 export type ServiceEndpoints = z.infer<typeof serviceEndpointsSchema>;
+
+export type TaxonomyCategory = "service" | "capability" | "observation" | "infrastructure";
+
+export type TruthfulStatus =
+  | "available"
+  | "endpoint_failure"
+  | "not_provisioned"
+  | "auth_scope"
+  | "unsupported_external_api"
+  | "internal_probe_error"
+  | "unknown";
+
+export type ActionOwner = "uipath-admin" | "cannonball" | "user-config" | "not-actionable";
+
+export type RemediationGuidance = {
+  reason: string;
+  actionOwner: ActionOwner;
+  recommendedStep: string;
+  technicalEvidence?: string;
+};
+
+export type ScopeDefinition = {
+  id: string;
+  description: string;
+};
+
+export type ServiceTaxonomyEntry = {
+  flagKey: string;
+  serviceResourceType: ServiceResourceType;
+  displayName: string;
+  category: TaxonomyCategory;
+  parentService?: string;
+  uiSection: "primary" | "secondary" | "infrastructure" | "observation";
+  defaultRemediationTemplate?: Omit<RemediationGuidance, "technicalEvidence">;
+  oauthScopeGroups?: Array<{
+    groupLabel: string;
+    scopes: ScopeDefinition[];
+  }>;
+};
+
+export type TruthfulServiceStatus = {
+  status: TruthfulStatus;
+  displayLabel: string;
+  confidence: "official" | "inferred" | "deprecated" | "unknown";
+  evidence: string;
+  remediation?: RemediationGuidance;
+  httpStatus?: number;
+  category: TaxonomyCategory;
+  parentService?: string;
+  displayName: string;
+  flagKey: string;
+};

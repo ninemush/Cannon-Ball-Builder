@@ -81,6 +81,13 @@ function requireAdmin(req: Request, res: Response): boolean {
 }
 
 export function registerUiPathRoutes(app: Express): void {
+  app.get("/api/settings/uipath/taxonomy", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const taxonomy = metadataService.getServiceTaxonomy();
+    const hierarchy = metadataService.getTaxonomyHierarchy();
+    return res.json({ taxonomy, hierarchy });
+  });
+
   app.get("/api/settings/uipath", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const config = await getUiPathConfig();

@@ -730,46 +730,100 @@ function SystemTab() {
   );
 }
 
-const UIPATH_SCOPE_CATEGORIES = [
-  { category: "Core", scopes: [
+type ScopeCategory = {
+  category: string;
+  service: string;
+  scopes: Array<{ id: string; description: string }>;
+};
+
+type TaxonomyEntry = {
+  flagKey: string;
+  displayName: string;
+  oauthScopeGroups?: Array<{
+    groupLabel: string;
+    scopes: Array<{ id: string; description: string }>;
+  }>;
+};
+
+function deriveScopeCategoriesFromTaxonomy(taxonomy: TaxonomyEntry[]): ScopeCategory[] {
+  const categories: ScopeCategory[] = [];
+  for (const entry of taxonomy) {
+    if (entry.oauthScopeGroups) {
+      for (const group of entry.oauthScopeGroups) {
+        categories.push({
+          category: group.groupLabel,
+          service: entry.displayName,
+          scopes: group.scopes,
+        });
+      }
+    }
+  }
+  return categories;
+}
+
+function useScopeCategories(): ScopeCategory[] {
+  const { data } = useQuery<{ taxonomy: TaxonomyEntry[]; hierarchy: unknown }>({
+    queryKey: ["/api/settings/uipath/taxonomy"],
+    staleTime: 300000,
+    retry: 1,
+  });
+
+  const taxonomy = data?.taxonomy;
+  if (taxonomy && taxonomy.length > 0) {
+    const derived = deriveScopeCategoriesFromTaxonomy(taxonomy);
+    if (derived.length > 0) return derived;
+  }
+
+  return FALLBACK_SCOPE_CATEGORIES;
+}
+
+const FALLBACK_SCOPE_CATEGORIES: ScopeCategory[] = [
+  { category: "Orchestrator — Core", service: "Orchestrator", scopes: [
     { id: "OR.Default", description: "General Orchestrator access" },
     { id: "OR.Administration", description: "Administration" },
-    { id: "OR.Administration.Read", description: "Read administration data" },
-    { id: "OR.Administration.Write", description: "Write administration data" },
-  ]},
-  { category: "Folders & Execution", scopes: [
     { id: "OR.Folders", description: "Full folder access" },
     { id: "OR.Folders.Read", description: "Read folders" },
-    { id: "OR.Folders.Write", description: "Write folders" },
     { id: "OR.Execution", description: "Full execution access" },
-    { id: "OR.Execution.Read", description: "Read executions" },
-    { id: "OR.Execution.Write", description: "Write executions" },
   ]},
-  { category: "Assets & Queues", scopes: [
-    { id: "OR.Assets", description: "Full asset access" },
-    { id: "OR.Assets.Read", description: "Read assets" },
-    { id: "OR.Assets.Write", description: "Write assets" },
-    { id: "OR.Queues", description: "Full queue access" },
-    { id: "OR.Queues.Read", description: "Read queues" },
-    { id: "OR.Queues.Write", description: "Write queues" },
-  ]},
-  { category: "Jobs & Robots", scopes: [
+  { category: "Orchestrator — Jobs & Robots", service: "Orchestrator", scopes: [
     { id: "OR.Jobs", description: "Full job access" },
     { id: "OR.Jobs.Read", description: "Read jobs" },
     { id: "OR.Jobs.Write", description: "Write jobs" },
     { id: "OR.Robots", description: "Full robot access" },
     { id: "OR.Robots.Read", description: "Read robots" },
-    { id: "OR.Robots.Write", description: "Write robots" },
-  ]},
-  { category: "Machines & Hypervisor", scopes: [
     { id: "OR.Machines", description: "Full machine access" },
+  ]},
+  { category: "Orchestrator — Queues & Assets", service: "Orchestrator", scopes: [
+    { id: "OR.Queues", description: "Full queue access" },
+    { id: "OR.Queues.Read", description: "Read queues" },
+    { id: "OR.Queues.Write", description: "Write queues" },
+    { id: "OR.Assets", description: "Full asset access" },
+    { id: "OR.Assets.Read", description: "Read assets" },
+    { id: "OR.Assets.Write", description: "Write assets" },
+  ]},
+  { category: "Orchestrator — Action Center & Storage", service: "Orchestrator", scopes: [
+    { id: "OR.Tasks", description: "Full task access (Action Center)" },
+    { id: "OR.Tasks.Read", description: "Read tasks" },
+    { id: "OR.Tasks.Write", description: "Write tasks" },
+    { id: "OR.Buckets", description: "Full storage bucket access" },
+    { id: "OR.Buckets.Read", description: "Read storage buckets" },
+    { id: "OR.Buckets.Write", description: "Write storage buckets" },
+    { id: "OR.Triggers", description: "Full trigger access" },
+    { id: "OR.Triggers.Read", description: "Read triggers" },
+    { id: "OR.Triggers.Write", description: "Write triggers" },
+  ]},
+  { category: "Orchestrator — Advanced", service: "Orchestrator", scopes: [
+    { id: "OR.Administration.Read", description: "Read administration data" },
+    { id: "OR.Administration.Write", description: "Write administration data" },
+    { id: "OR.Folders.Write", description: "Write folders" },
+    { id: "OR.Execution.Read", description: "Read executions" },
+    { id: "OR.Execution.Write", description: "Write executions" },
+    { id: "OR.Robots.Write", description: "Write robots" },
     { id: "OR.Machines.Read", description: "Read machines" },
     { id: "OR.Machines.Write", description: "Write machines" },
     { id: "OR.Hypervisor", description: "Full hypervisor access" },
     { id: "OR.Hypervisor.Read", description: "Read hypervisor" },
     { id: "OR.Hypervisor.Write", description: "Write hypervisor" },
-  ]},
-  { category: "Settings & Users", scopes: [
     { id: "OR.Settings", description: "Full settings access" },
     { id: "OR.Settings.Read", description: "Read settings" },
     { id: "OR.Settings.Write", description: "Write settings" },
@@ -779,8 +833,6 @@ const UIPATH_SCOPE_CATEGORIES = [
     { id: "OR.License", description: "Full license access" },
     { id: "OR.License.Read", description: "Read licenses" },
     { id: "OR.License.Write", description: "Write licenses" },
-  ]},
-  { category: "Monitoring & Analytics", scopes: [
     { id: "OR.Monitoring", description: "Full monitoring access" },
     { id: "OR.Monitoring.Read", description: "Read monitoring" },
     { id: "OR.Monitoring.Write", description: "Write monitoring" },
@@ -790,19 +842,15 @@ const UIPATH_SCOPE_CATEGORIES = [
     { id: "OR.Audit", description: "Full audit access" },
     { id: "OR.Audit.Read", description: "Read audit logs" },
     { id: "OR.Audit.Write", description: "Write audit logs" },
-  ]},
-  { category: "Storage & Tasks", scopes: [
-    { id: "OR.Buckets", description: "Full storage bucket access" },
-    { id: "OR.Buckets.Read", description: "Read storage buckets" },
-    { id: "OR.Buckets.Write", description: "Write storage buckets" },
-    { id: "OR.Tasks", description: "Full task access (Action Center)" },
-    { id: "OR.Tasks.Read", description: "Read tasks" },
-    { id: "OR.Tasks.Write", description: "Write tasks" },
+    { id: "OR.Webhooks", description: "Full webhook access" },
+    { id: "OR.Webhooks.Read", description: "Read webhooks" },
+    { id: "OR.Webhooks.Write", description: "Write webhooks" },
+    { id: "OR.ML", description: "Full ML access" },
+    { id: "OR.ML.Read", description: "Read ML models" },
+    { id: "OR.ML.Write", description: "Write ML models" },
     { id: "OR.BackgroundTasks", description: "Full background task access" },
     { id: "OR.BackgroundTasks.Read", description: "Read background tasks" },
     { id: "OR.BackgroundTasks.Write", description: "Write background tasks" },
-  ]},
-  { category: "Testing", scopes: [
     { id: "OR.TestSets", description: "Full test set access" },
     { id: "OR.TestSets.Read", description: "Read test sets" },
     { id: "OR.TestSets.Write", description: "Write test sets" },
@@ -815,27 +863,63 @@ const UIPATH_SCOPE_CATEGORIES = [
     { id: "OR.TestDataQueues", description: "Full test data queue access" },
     { id: "OR.TestDataQueues.Read", description: "Read test data queues" },
     { id: "OR.TestDataQueues.Write", description: "Write test data queues" },
-  ]},
-  { category: "AI & ML", scopes: [
-    { id: "OR.ML", description: "Full ML access" },
-    { id: "OR.ML.Read", description: "Read ML models" },
-    { id: "OR.ML.Write", description: "Write ML models" },
     { id: "OR.AutomationSolutions.Access", description: "Automation Solutions access" },
+    { id: "OR.Processes", description: "Full process access" },
   ]},
-  { category: "Webhooks", scopes: [
-    { id: "OR.Webhooks", description: "Full webhook access" },
-    { id: "OR.Webhooks.Read", description: "Read webhooks" },
-    { id: "OR.Webhooks.Write", description: "Write webhooks" },
+  { category: "Test Manager", service: "Test Manager", scopes: [
+    { id: "TM.TestCases", description: "Full test case access" },
+    { id: "TM.TestCases.Read", description: "Read test cases" },
+    { id: "TM.TestCases.Write", description: "Write test cases" },
+    { id: "TM.TestSets", description: "Full test set access" },
+    { id: "TM.TestSets.Read", description: "Read test sets" },
+    { id: "TM.TestSets.Write", description: "Write test sets" },
+    { id: "TM.TestExecutions", description: "Full test execution access" },
+    { id: "TM.TestExecutions.Read", description: "Read test executions" },
+    { id: "TM.Requirements", description: "Full requirements access" },
+    { id: "TM.Projects", description: "Full project access" },
+    { id: "TM.Projects.Read", description: "Read projects" },
+    { id: "TM.Users.Read", description: "Read users" },
   ]},
-  { category: "IXP / Communications Mining", scopes: [
-    { id: "Ixp.ApiAccess", description: "IXP API access (Communications Mining)" },
+  { category: "Document Understanding", service: "Document Understanding", scopes: [
+    { id: "Du.Classification.Api", description: "Document classification" },
+    { id: "Du.Digitization.Api", description: "Document digitization (OCR)" },
+    { id: "Du.Extraction.Api", description: "Document data extraction" },
+    { id: "Du.Validation.Api", description: "Document validation" },
+    { id: "Du.DocumentManager.Document", description: "Document manager access" },
+    { id: "Du.DataDeletion.Api", description: "Data deletion" },
   ]},
-  { category: "AI Center", scopes: [
+  { category: "Data Service", service: "Data Service", scopes: [
+    { id: "DataFabric.Schema.Read", description: "Read data schemas" },
+    { id: "DataFabric.Data.Read", description: "Read data entities" },
+    { id: "DataFabric.Data.Write", description: "Write data entities" },
+  ]},
+  { category: "Maestro", service: "Maestro", scopes: [
+    { id: "PIMS.Default", description: "General Maestro access" },
+    { id: "PIMS.Read", description: "Read Maestro data" },
+    { id: "PIMS.Write", description: "Write Maestro data" },
+    { id: "PIMS.Process", description: "Full process access" },
+    { id: "PIMS.Process.Read", description: "Read processes" },
+    { id: "PIMS.Process.Write", description: "Write processes" },
+    { id: "PIMS.Execution", description: "Full execution access" },
+    { id: "PIMS.Execution.Read", description: "Read executions" },
+  ]},
+  { category: "AI Center", service: "AI Center", scopes: [
     { id: "AI.Deployer.Read", description: "Read AI deployments and skills" },
     { id: "AI.Deployer.Write", description: "Write AI deployments and skills" },
     { id: "AI.Trainer.Read", description: "Read AI training pipelines" },
     { id: "AI.Trainer.Write", description: "Write AI training pipelines" },
     { id: "AI.Helper.Read", description: "Read AI helper data" },
+  ]},
+  { category: "Platform Management", service: "Platform Management", scopes: [
+    { id: "PM.Security", description: "Security settings" },
+    { id: "PM.AuthSetting", description: "Auth settings" },
+    { id: "PM.OAuthApp", description: "OAuth application management" },
+    { id: "PM.RobotAccount", description: "Robot account access" },
+    { id: "PM.RobotAccount.Read", description: "Read robot accounts" },
+    { id: "PM.RobotAccount.Write", description: "Write robot accounts" },
+  ]},
+  { category: "IXP / Communications Mining", service: "IXP Platform", scopes: [
+    { id: "Ixp.ApiAccess", description: "IXP API access (Generative Extraction, Communications Mining)" },
   ]},
 ];
 
@@ -2015,6 +2099,7 @@ function AutomationHubPanel() {
 
 function IntegrationsTab() {
   const { toast } = useToast();
+  const scopeCategories = useScopeCategories();
   const [step, setStep] = useState(0);
   const [showSecret, setShowSecret] = useState(false);
   const [orgName, setOrgName] = useState("");
@@ -2570,7 +2655,7 @@ function IntegrationsTab() {
                 size="sm"
                 data-testid="button-select-all-scopes"
                 onClick={() => {
-                  const allIds = UIPATH_SCOPE_CATEGORIES.flatMap(c => c.scopes.map(s => s.id));
+                  const allIds = scopeCategories.flatMap(c => c.scopes.map(s => s.id));
                   setSelectedScopes(new Set(allIds));
                 }}
               >
@@ -2588,7 +2673,7 @@ function IntegrationsTab() {
             </div>
 
             <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1" data-testid="scope-list">
-              {UIPATH_SCOPE_CATEGORIES.map((cat) => {
+              {scopeCategories.map((cat) => {
                 const catScopeIds = cat.scopes.map(s => s.id);
                 const allChecked = catScopeIds.every(id => selectedScopes.has(id));
                 const someChecked = catScopeIds.some(id => selectedScopes.has(id));

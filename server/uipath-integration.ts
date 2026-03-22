@@ -644,7 +644,15 @@ export async function discoverGovernancePolicies(): Promise<AutomationOpsResult>
   if (!config) return { available: false, policies: [], message: "UiPath is not configured." };
 
   try {
-    const token = await getAccessToken(config);
+    const { tryAcquireResourceToken } = await import("./uipath-auth");
+    const pmResult = await tryAcquireResourceToken("PM").catch(() => ({ ok: false, scopes: [] as string[] }));
+    let token: string;
+    if (pmResult.ok) {
+      const { getPmToken } = await import("./uipath-auth");
+      token = await getPmToken();
+    } else {
+      token = await getAccessToken(config);
+    }
     const { metadataService } = await import("./catalog/metadata-service");
     const base = metadataService.getCloudBaseUrl(config);
     const headers: Record<string, string> = {
@@ -1329,6 +1337,8 @@ type UnifiedProbeResult = {
   attendedRobotInfo?: AttendedRobotInfo;
   studioProjectInfo?: StudioProcessesResult;
   serverlessDetected?: boolean;
+  probeHttpStatuses?: Record<string, number | null>;
+  tokenFailures?: Record<string, string>;
   cachedAt: number;
   probeFailed?: boolean;
   probeError?: string;
@@ -1407,9 +1417,10 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     const orchOk = orchRes.ok;
     if (!orchOk) {
       const result: UnifiedProbeResult = {
-        configured: true, flags: { ...empty.flags, environments: false, triggers: false, apps: false },
+        configured: true, flags: { ...empty.flags, orchestrator: false, environments: false, triggers: false, apps: false },
         grantedScopes, licenseInfo: null, aiCenterSkills: [], aiCenterPackages: [],
         governancePolicies: [],
+        probeHttpStatuses: { orchestrator: orchRes.status },
         cachedAt: Date.now(),
       };
       _probeCache = result;
@@ -1480,6 +1491,21 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       tryAcquireResourceToken("AI"),
     ]);
 
+    const tokenFailures: Record<string, string> = {};
+    const recordTokenFailure = (flagKey: string, result: PromiseSettledResult<{ ok: boolean; scopes: string[] }>) => {
+      if (result.status === "rejected") {
+        tokenFailures[flagKey] = `Token acquisition rejected: ${(result as PromiseRejectedResult).reason?.message || "unknown error"}`;
+      } else if (!result.value.ok) {
+        tokenFailures[flagKey] = "Token acquisition failed: resource not provisioned or missing scopes";
+      }
+    };
+    recordTokenFailure("testManager", tmResult);
+    recordTokenFailure("documentUnderstanding", duResult);
+    recordTokenFailure("platformManagement", pmResult);
+    recordTokenFailure("dataService", dfResult);
+    recordTokenFailure("ixp", ixpResult);
+    recordTokenFailure("aiCenter", aiResult);
+
     let tmAvailable = false;
     if (tmResult.status === "fulfilled" && tmResult.value.ok) {
       tmAvailable = true;
@@ -1513,6 +1539,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     let duAvailable = false;
     let genExtractionAvailable = false;
     let commsMiningAvailable = false;
+    let duProbeStatus: number | null = null;
     if (duResult.status === "fulfilled" && duResult.value.ok) {
       const duTok = await getDuToken();
       const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
@@ -1521,6 +1548,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       const duProbeUrl = `${duServiceUrl}/api/framework/projects?api-version=1`;
       try {
         const duRes = await fetch(duProbeUrl, { headers: duHdrs });
+        duProbeStatus = duRes.status;
         console.log(`[UiPath Probe] DU Discovery: ${duProbeUrl} -> ${duRes.status}`);
         if (duRes.ok) {
           duAvailable = true;
@@ -1587,7 +1615,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     let aiCenterSkills: AICenterSkill[] = [];
     let aiCenterPackages: AICenterPackage[] = [];
     const aiServiceUrl = metadataService.getServiceUrl("AI", config);
-    const aiProbe = await fetch(`${aiServiceUrl}/ai-deployer/v1/projects?$top=1`, { headers: aiProbeHdrs }).catch(() => null);
+    const aiProbe: Response | null = await fetch(`${aiServiceUrl}/ai-deployer/v1/projects?$top=1`, { headers: aiProbeHdrs }).catch(() => null);
     if (aiProbe && isServiceReachable(aiProbe)) {
       aiAvailable = true;
       metadataService.updateServiceReachability("AI", getServiceReachabilityStatus(aiProbe));
@@ -1633,6 +1661,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
 
     let agentsAvailable = false;
     let autopilotAvailable = false;
+    let agentsProbeStatus: number | null = null;
     let agentCapabilities: { autonomous: boolean; conversational: boolean; coded: boolean } = { autonomous: false, conversational: false, coded: false };
     const agentsServiceUrl = metadataService.getServiceUrl("AGENTS", config);
     const autopilotServiceUrl = metadataService.getServiceUrl("AUTOPILOT", config);
@@ -1646,8 +1675,12 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     );
     for (let i = 0; i < agentProbeResults.length; i++) {
       const pr = agentProbeResults[i];
+      if (pr.status === "fulfilled" && agentsProbeStatus === null) {
+        agentsProbeStatus = pr.value.status;
+      }
       if (pr.status === "fulfilled" && pr.value.ok) {
         agentsAvailable = true;
+        agentsProbeStatus = pr.value.status;
         if (agentEndpoints[i].label === "Autopilot") {
           autopilotAvailable = true;
           console.log(`[UiPath Probe] Autopilot/self-healing capability detected`);
@@ -1683,9 +1716,11 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (pmResult.status === "fulfilled" && pmResult.value.ok) pmAvailable = true;
 
     let dsAvailable = false;
+    let dsProbeStatus: number | null = null;
     if (dfResult.status === "fulfilled" && dfResult.value.ok) {
       const dfServiceUrl = metadataService.getServiceUrl("DF", config);
       const dfEntityProbe = await fetch(`${dfServiceUrl}/api/EntityService/Entity`, { headers: hdrs }).catch(() => null);
+      if (dfEntityProbe) dsProbeStatus = dfEntityProbe.status;
       if (dfEntityProbe && (dfEntityProbe.ok || dfEntityProbe.status === 401)) {
         dsAvailable = true;
         metadataService.updateServiceReachability("DF", getServiceReachabilityStatus(dfEntityProbe));
@@ -1798,6 +1833,25 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       } catch (e: any) { console.warn(`[UiPath Probe] Machine probe failed: ${e.message}`); }
     }
 
+    const probeHttpStatuses: Record<string, number | null> = {
+      actionCenter: acRes?.status ?? null,
+      environments: envRes?.status ?? null,
+      triggers: trigRes?.status ?? schedRes?.status ?? null,
+      storageBuckets: bucketRes?.status ?? null,
+      documentUnderstanding: duProbeStatus,
+      dataService: dsProbeStatus,
+      aiCenter: aiProbe?.status ?? null,
+      agents: agentsProbeStatus,
+      maestro: maestroProbe?.status ?? null,
+      integrationService: integrationServiceProbe?.status ?? null,
+      ixp: ixpProbe?.status ?? null,
+      automationHub: automationHubProbe?.status ?? null,
+      automationOps: automationOpsProbe?.status ?? null,
+      automationStore: automationStoreProbe?.status ?? null,
+      apps: appsProbe?.status ?? null,
+      assistant: assistantHttpProbe?.status ?? null,
+    };
+
     const result: UnifiedProbeResult = {
       configured: true,
       flags: {
@@ -1837,6 +1891,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       attendedRobotInfo: attendedData ?? undefined,
       studioProjectInfo: studioData ?? undefined,
       serverlessDetected,
+      probeHttpStatuses,
+      tokenFailures: Object.keys(tokenFailures).length > 0 ? tokenFailures : undefined,
       cachedAt: Date.now(),
     };
 
@@ -1861,19 +1917,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     if (pmAvailable) metadataService.updateServiceReachability("IDENTITY", "reachable");
     if (!tmAvailable) metadataService.updateServiceReachability("TM", "unreachable");
 
-    const flagToServiceType: Record<string, ServiceResourceType> = {
-      orchestrator: "OR", actionCenter: "OR", testManager: "TM",
-      documentUnderstanding: "DU", generativeExtraction: "IXP",
-      communicationsMining: "REINFER", dataService: "DF",
-      platformManagement: "IDENTITY", environments: "OR", triggers: "OR",
-      storageBuckets: "OR", aiCenter: "AI", agents: "AGENTS",
-      autopilot: "AUTOPILOT", maestro: "PIMS",
-      integrationService: "INTEGRATIONSERVICE", ixp: "IXP",
-      automationHub: "HUB", automationOps: "AUTOMATIONOPS",
-      automationStore: "AUTOMATIONSTORE", apps: "APPS",
-      assistant: "ASSISTANT", attendedRobots: "OR", studioProjects: "OR",
-      hasUnattendedSlots: "OR",
-    };
+    const flagToServiceType = metadataService.getFlagToServiceType();
 
     const serviceStatusSummary = Object.entries(result.flags)
       .map(([k, v]) => {
@@ -2121,13 +2165,7 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
 
   const mds = (await import("./catalog/metadata-service")).metadataService;
   const confidenceNotes: string[] = [];
-  const svcConfidenceMap: Record<string, ServiceResourceType> = {
-    actionCenter: "OR", testManager: "TM", documentUnderstanding: "DU",
-    communicationsMining: "REINFER", aiCenter: "AI", agents: "AGENTS",
-    maestro: "PIMS", integrationService: "INTEGRATIONSERVICE",
-    automationHub: "HUB", automationOps: "AUTOMATIONOPS",
-    automationStore: "AUTOMATIONSTORE", apps: "APPS", assistant: "ASSISTANT",
-  };
+  const svcConfidenceMap = mds.getFlagToServiceType();
   for (const [svcName, svcType] of Object.entries(svcConfidenceMap)) {
     if (avail[svcName as keyof typeof avail]) {
       const conf = mds.getServiceConfidence(svcType);
@@ -2524,6 +2562,12 @@ export type ServiceStatusDetail = {
   confidence: "official" | "inferred" | "deprecated" | "unknown";
   evidence: string;
   reachable: "reachable" | "limited" | "unreachable" | "unknown";
+  truthfulStatus?: import("./catalog/metadata-schemas").TruthfulStatus;
+  displayLabel?: string;
+  category?: import("./catalog/metadata-schemas").TaxonomyCategory;
+  parentService?: string;
+  displayName?: string;
+  remediation?: import("./catalog/metadata-schemas").RemediationGuidance;
 };
 
 export type ServiceAvailabilityMap = {
@@ -2570,42 +2614,104 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     console.warn(`[Integration Service] Discovery failed during service probe: ${err.message}`);
   }
 
-  const buildDetail = (flag: boolean, svcType: ServiceResourceType, evidence: string): ServiceStatusDetail => {
+  const httpStatuses = probe.probeHttpStatuses || {};
+  const tokenFailureMap = probe.tokenFailures || {};
+
+  const UNSUPPORTED_API_SERVICES = new Set(["integrationService", "automationStore", "apps", "assistant"]);
+
+  const buildDetail = (flagKey: string, flag: boolean, evidence: string, probeError?: string): ServiceStatusDetail => {
+    const entry = mds.getTaxonomyEntry(flagKey);
+    const svcType: ServiceResourceType = entry?.serviceResourceType || "OR";
     const confidence = mds.getServiceConfidence(svcType);
     const reachable = mds.getServiceReachability(svcType);
+    const rawHttpStatus: number | null = httpStatuses[flagKey] ?? null;
+    const tokenFailure = tokenFailureMap[flagKey];
+
+    const isUnsupportedService = UNSUPPORTED_API_SERVICES.has(flagKey);
+    const isAuthResponse = rawHttpStatus === 401 || rawHttpStatus === 403;
+
     let status: ServiceStatusDetail["status"];
-    if (flag) {
+    let effectiveAvailable: boolean;
+
+    if (isUnsupportedService) {
+      status = "unavailable";
+      effectiveAvailable = false;
+    } else if (isAuthResponse) {
+      status = "limited";
+      effectiveAvailable = false;
+    } else if (flag) {
       if (reachable === "limited") status = "limited";
       else status = "available";
+      effectiveAvailable = true;
     } else {
       if (reachable === "unreachable") status = "unavailable";
       else if (reachable === "limited") status = "limited";
       else if (reachable === "unknown") status = "unknown";
       else status = "unavailable";
+      effectiveAvailable = false;
     }
-    return { status, confidence, evidence, reachable };
+
+    const effectiveHttpStatus = rawHttpStatus ?? (
+      !flag && reachable === "limited" ? 403 :
+      !flag && reachable === "unreachable" ? 500 :
+      null
+    );
+
+    const effectiveProbeError = probeError || tokenFailure || undefined;
+
+    let truthfulStatus: import("./catalog/metadata-schemas").TruthfulStatus;
+    if (isUnsupportedService) {
+      truthfulStatus = "unsupported_external_api";
+    } else if (isAuthResponse) {
+      truthfulStatus = "auth_scope";
+    } else if (effectiveAvailable) {
+      truthfulStatus = "available";
+    } else if (tokenFailure && !effectiveHttpStatus) {
+      truthfulStatus = "not_provisioned";
+    } else {
+      truthfulStatus = mds.deriveTruthfulStatus(flagKey, effectiveAvailable, effectiveHttpStatus, effectiveProbeError);
+    }
+
+    const displayLabel = mds.getTruthfulStatusLabel(truthfulStatus);
+    const remediation = mds.buildRemediationGuidance(flagKey, truthfulStatus, effectiveHttpStatus, undefined, effectiveProbeError);
+
+    return {
+      status, confidence, evidence, reachable,
+      truthfulStatus,
+      displayLabel,
+      category: entry?.category,
+      parentService: entry?.parentService,
+      displayName: entry?.displayName || flagKey,
+      remediation,
+    };
   };
 
   const serviceDetails: Record<string, ServiceStatusDetail> = {
-    orchestrator: buildDetail(probe.flags.orchestrator, "OR", "Folders API probe"),
-    actionCenter: buildDetail(probe.flags.actionCenter, "OR", "TaskCatalogs API probe"),
-    testManager: buildDetail(probe.flags.testManager, "TM", "TM token acquisition"),
-    documentUnderstanding: buildDetail(probe.flags.documentUnderstanding, "DU", "DU Discovery API probe"),
-    generativeExtraction: buildDetail(probe.flags.generativeExtraction, "IXP", "IXP projects API probe"),
-    communicationsMining: buildDetail(probe.flags.communicationsMining, "REINFER", "reinfer datasets API probe"),
-    dataService: buildDetail(probe.flags.dataService, "DF", "Entity API probe"),
-    platformManagement: buildDetail(probe.flags.platformManagement, "IDENTITY", "PM token acquisition"),
-    agents: buildDetail(probe.flags.agents, "AGENTS", probe.agentConfidence === "inferred" ? "Asset name prefix match" : "Agent Studio/Autopilot API probe"),
-    maestro: buildDetail(probe.flags.maestro, "PIMS", "Maestro API probe or PIMS token"),
-    integrationService: buildDetail(probe.flags.integrationService, "INTEGRATIONSERVICE", "Connections API probe"),
-    ixp: buildDetail(probe.flags.ixp, "IXP", "IXP datasets API probe"),
-    automationHub: buildDetail(probe.flags.automationHub, "HUB", "Ideas API probe"),
-    automationOps: buildDetail(probe.flags.automationOps, "AUTOMATIONOPS", "Policies API probe"),
-    automationStore: buildDetail(probe.flags.automationStore, "AUTOMATIONSTORE", "API probe"),
-    apps: buildDetail(probe.flags.apps, "APPS", "Apps API probe"),
-    assistant: buildDetail(probe.flags.assistant, "ASSISTANT", "Assistant API probe"),
-    aiCenter: buildDetail(probe.flags.aiCenter ?? false, "AI", "AI Deployer projects probe"),
-    autopilot: buildDetail(probe.flags.autopilot ?? false, "AUTOPILOT", "Autopilot API probe"),
+    orchestrator: buildDetail("orchestrator", probe.flags.orchestrator, "Folders API probe"),
+    actionCenter: buildDetail("actionCenter", probe.flags.actionCenter, "TaskCatalogs API probe"),
+    testManager: buildDetail("testManager", probe.flags.testManager, "TM token acquisition"),
+    documentUnderstanding: buildDetail("documentUnderstanding", probe.flags.documentUnderstanding, "DU Discovery API probe"),
+    generativeExtraction: buildDetail("generativeExtraction", probe.flags.generativeExtraction, "IXP projects API probe"),
+    communicationsMining: buildDetail("communicationsMining", probe.flags.communicationsMining, "reinfer datasets API probe"),
+    dataService: buildDetail("dataService", probe.flags.dataService, "Entity API probe"),
+    platformManagement: buildDetail("platformManagement", probe.flags.platformManagement, "PM token acquisition"),
+    agents: buildDetail("agents", probe.flags.agents, probe.agentConfidence === "inferred" ? "Asset name prefix match" : "Agent Studio/Autopilot API probe"),
+    maestro: buildDetail("maestro", probe.flags.maestro, "Maestro API probe or PIMS token"),
+    integrationService: buildDetail("integrationService", probe.flags.integrationService, "Connections API probe"),
+    ixp: buildDetail("ixp", probe.flags.ixp, "IXP datasets API probe"),
+    automationHub: buildDetail("automationHub", probe.flags.automationHub, "Ideas API probe"),
+    automationOps: buildDetail("automationOps", probe.flags.automationOps, "Policies API probe"),
+    automationStore: buildDetail("automationStore", probe.flags.automationStore, "API probe"),
+    apps: buildDetail("apps", probe.flags.apps, "Apps API probe"),
+    assistant: buildDetail("assistant", probe.flags.assistant, "Assistant API probe"),
+    aiCenter: buildDetail("aiCenter", probe.flags.aiCenter ?? false, "AI Deployer projects probe"),
+    autopilot: buildDetail("autopilot", probe.flags.autopilot ?? false, "Autopilot API probe"),
+    storageBuckets: buildDetail("storageBuckets", probe.flags.storageBuckets, "Buckets API probe"),
+    environments: buildDetail("environments", probe.flags.environments, "Environments API probe"),
+    triggers: buildDetail("triggers", probe.flags.triggers, "Queue triggers/schedules API probe"),
+    attendedRobots: buildDetail("attendedRobots", probe.flags.attendedRobots, "Sessions/robots API probe"),
+    studioProjects: buildDetail("studioProjects", probe.flags.studioProjects, "Releases API probe"),
+    hasUnattendedSlots: buildDetail("hasUnattendedSlots", probe.flags.hasUnattendedSlots, "Machines API probe"),
   };
 
   if (probe.agentConfidence === "inferred" && serviceDetails.agents) {

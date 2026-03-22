@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ChevronUp,
   ChevronDown,
+  ChevronRight,
   Wifi,
   WifiOff,
   Bot,
@@ -11,6 +12,10 @@ import {
   AlertTriangle,
   XCircle,
   HelpCircle,
+  Lock,
+  ServerOff,
+  ShieldAlert,
+  Eye,
 } from "lucide-react";
 import {
   Tooltip,
@@ -29,11 +34,24 @@ type HealthData = {
   pendingTasks: number;
 };
 
+type RemediationGuidance = {
+  reason: string;
+  actionOwner: string;
+  recommendedStep: string;
+  technicalEvidence?: string;
+};
+
 type ServiceStatusDetail = {
   status: "available" | "limited" | "unavailable" | "unknown";
   confidence: "official" | "inferred" | "deprecated" | "unknown";
   evidence: string;
   reachable: "reachable" | "limited" | "unreachable" | "unknown";
+  truthfulStatus?: string;
+  displayLabel?: string;
+  category?: string;
+  parentService?: string;
+  displayName?: string;
+  remediation?: RemediationGuidance;
 };
 
 type DiagnosticsData = {
@@ -42,36 +60,9 @@ type DiagnosticsData = {
   serviceDetails?: Record<string, ServiceStatusDetail>;
 };
 
-const SERVICE_LABELS: Record<string, string> = {
-  orchestrator: "Orchestrator",
-  actionCenter: "Action Center",
-  testManager: "Test Manager",
-  documentUnderstanding: "Document Understanding",
-  generativeExtraction: "Generative Extraction",
-  communicationsMining: "Communications Mining",
-  dataService: "Data Service",
-  platformManagement: "Platform Mgmt",
-  agents: "Agents",
-  maestro: "Maestro",
-  integrationService: "Integration Service",
-  ixp: "IXP",
-  automationHub: "Automation Hub",
-  automationOps: "Automation Ops",
-  automationStore: "Automation Store",
-  apps: "Apps",
-  assistant: "Assistant",
-  aiCenter: "AI Center",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  available: "Available",
-  limited: "Limited",
-  unavailable: "Unavailable",
-  unknown: "Unknown",
-};
-
-const statusIcon = (status: string) => {
-  switch (status) {
+const truthfulStatusIcon = (detail: ServiceStatusDetail) => {
+  const ts = detail.truthfulStatus || detail.status;
+  switch (ts) {
     case "available":
       return (
         <span className="relative flex h-2 w-2 shrink-0">
@@ -79,6 +70,16 @@ const statusIcon = (status: string) => {
           <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
         </span>
       );
+    case "auth_scope":
+      return <Lock className="h-3 w-3 text-amber-400 shrink-0" />;
+    case "not_provisioned":
+      return <ServerOff className="h-3 w-3 text-gray-400 shrink-0" />;
+    case "endpoint_failure":
+      return <XCircle className="h-3 w-3 text-red-400 shrink-0" />;
+    case "unsupported_external_api":
+      return <ShieldAlert className="h-3 w-3 text-gray-500 shrink-0" />;
+    case "internal_probe_error":
+      return <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />;
     case "limited":
       return <AlertTriangle className="h-3 w-3 text-amber-400 shrink-0" />;
     case "unavailable":
@@ -88,18 +89,101 @@ const statusIcon = (status: string) => {
   }
 };
 
-const statusTextColor = (status: string) => {
-  switch (status) {
-    case "available":
-      return "text-green-400";
-    case "limited":
-      return "text-amber-400";
-    case "unavailable":
-      return "text-red-400";
-    default:
-      return "text-gray-400";
+const truthfulStatusColor = (detail: ServiceStatusDetail) => {
+  const ts = detail.truthfulStatus || detail.status;
+  switch (ts) {
+    case "available": return "text-green-400";
+    case "auth_scope": return "text-amber-400";
+    case "not_provisioned": return "text-gray-400";
+    case "endpoint_failure": return "text-red-400";
+    case "unsupported_external_api": return "text-gray-500";
+    case "internal_probe_error": return "text-red-400";
+    case "limited": return "text-amber-400";
+    case "unavailable": return "text-red-400";
+    default: return "text-gray-400";
   }
 };
+
+const ACTION_OWNER_LABELS: Record<string, string> = {
+  "uipath-admin": "UiPath Admin",
+  "cannonball": "CannonBall",
+  "user-config": "Your Configuration",
+  "not-actionable": "Not Actionable",
+};
+
+function RemediationDetail({ remediation }: { remediation: RemediationGuidance }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+        data-testid="button-remediation-toggle"
+      >
+        <ChevronRight className={`h-2.5 w-2.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
+        <span>How to enable</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 ml-3 text-[10px] space-y-0.5 text-muted-foreground border-l border-border/50 pl-2">
+          <p>{remediation.reason}</p>
+          <p className="text-foreground/80">{remediation.recommendedStep}</p>
+          <p className="text-[9px]">
+            Action: <span className="font-medium">{ACTION_OWNER_LABELS[remediation.actionOwner] || remediation.actionOwner}</span>
+          </p>
+          {remediation.technicalEvidence && (
+            <p className="text-[9px] font-mono opacity-60">{remediation.technicalEvidence}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServiceEntry({ flagKey, detail, indented, parentDetail }: { flagKey: string; detail: ServiceStatusDetail; indented?: boolean; parentDetail?: ServiceStatusDetail }) {
+  const name = detail.displayName || flagKey;
+  const label = detail.displayLabel || detail.status;
+  const showRemediation = detail.truthfulStatus && detail.truthfulStatus !== "available" && detail.remediation;
+  const parentAvailableChildNot = indented && parentDetail
+    && (parentDetail.truthfulStatus === "available" || parentDetail.status === "available")
+    && detail.truthfulStatus !== "available" && detail.status !== "available";
+
+  return (
+    <div className={`${indented ? "ml-4" : ""}`} data-testid={`service-status-${flagKey}`}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex items-center gap-1.5 text-[11px] cursor-default py-0.5">
+            {truthfulStatusIcon(detail)}
+            <span className={truthfulStatusColor(detail)}>
+              {name}
+            </span>
+            {detail.truthfulStatus && detail.truthfulStatus !== "available" && detail.truthfulStatus !== detail.status && (
+              <span className="text-[9px] text-muted-foreground ml-1">({label})</span>
+            )}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs text-xs">
+          <p>
+            <span className="font-medium">{label}</span>
+            {detail.evidence && <span> — {detail.evidence}</span>}
+          </p>
+          {parentAvailableChildNot && (
+            <p className="mt-1 text-amber-400/80">
+              Parent service ({parentDetail?.displayName}) is available but this capability requires additional configuration or scopes.
+            </p>
+          )}
+          {detail.remediation && (
+            <p className="mt-1 text-muted-foreground">{detail.remediation.reason}</p>
+          )}
+        </TooltipContent>
+      </Tooltip>
+      {showRemediation && detail.remediation && (
+        <RemediationDetail remediation={detail.remediation} />
+      )}
+    </div>
+  );
+}
 
 export function IntegrationStatusBar() {
   const [collapsed, setCollapsed] = useState(false);
@@ -149,19 +233,35 @@ export function IntegrationStatusBar() {
   const lastDecision = liveOps?.lastProvisioningDecision;
 
   const serviceDetails = diagnostics?.serviceDetails;
-  const availableCount = serviceDetails
-    ? Object.values(serviceDetails).filter((d) => d.status === "available").length
-    : 0;
-  const limitedCount = serviceDetails
-    ? Object.values(serviceDetails).filter((d) => d.status === "limited").length
-    : 0;
-  const unavailableCount = serviceDetails
-    ? Object.values(serviceDetails).filter((d) => d.status === "unavailable").length
-    : 0;
-  const unknownCount = serviceDetails
-    ? Object.values(serviceDetails).filter((d) => d.status === "unknown").length
-    : 0;
-  const totalServices = serviceDetails ? Object.keys(serviceDetails).length : 0;
+
+  const entries = serviceDetails ? Object.entries(serviceDetails) : [];
+  const services = entries.filter(([, d]) => d.category === "service");
+  const capabilities = entries.filter(([, d]) => d.category === "capability");
+  const observations = entries.filter(([, d]) => d.category === "observation");
+  const infrastructure = entries.filter(([, d]) => d.category === "infrastructure");
+  const uncategorized = entries.filter(([, d]) => !d.category);
+
+  const allCategorized = [...services, ...capabilities, ...observations, ...infrastructure, ...uncategorized];
+
+  const availableCount = allCategorized.filter(([, d]) =>
+    d.truthfulStatus === "available" || (!d.truthfulStatus && d.status === "available")
+  ).length;
+  const unavailableCount = allCategorized.filter(([, d]) => {
+    const ts = d.truthfulStatus || d.status;
+    return ts !== "available" && ts !== "unknown" && ts !== "limited";
+  }).length;
+  const unknownCount = allCategorized.filter(([, d]) =>
+    (d.truthfulStatus || d.status) === "unknown"
+  ).length;
+  const totalServices = entries.length;
+
+  const getChildCapabilities = (parentKey: string) =>
+    capabilities.filter(([, d]) => d.parentService === parentKey);
+
+  const parentedCapabilityKeys = new Set(
+    services.flatMap(([key]) => getChildCapabilities(key).map(([k]) => k))
+  );
+  const orphanCapabilities = capabilities.filter(([k]) => !parentedCapabilityKeys.has(k));
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -230,8 +330,6 @@ export function IntegrationStatusBar() {
                       <span className="text-muted-foreground">·</span>
                       <span className="text-red-400">{unavailableCount} unavailable</span>
                       <span className="text-muted-foreground">·</span>
-                      <span className="text-amber-400">{limitedCount} limited</span>
-                      <span className="text-muted-foreground">·</span>
                       <span className="text-gray-400">{unknownCount} unknown</span>
                     </span>
                   </>
@@ -252,31 +350,73 @@ export function IntegrationStatusBar() {
         <div id="status-bar-details">
           {!collapsed && isOk && serviceDetails && (
             <div className="px-4 pb-2 pt-1 border-t border-border/50">
-              <div className="grid grid-cols-3 gap-x-4 gap-y-0.5" data-testid="service-details-grid">
-                {Object.entries(serviceDetails).map(([key, detail]) => (
-                  <Tooltip key={key}>
-                    <TooltipTrigger asChild>
-                      <div
-                        className="flex items-center gap-1.5 text-[11px] cursor-default"
-                        data-testid={`service-status-${key}`}
-                      >
-                        {statusIcon(detail.status)}
-                        <span className={statusTextColor(detail.status)}>
-                          {SERVICE_LABELS[key] || key}
+              {services.length > 0 && (
+                <div className="mb-2" data-testid="service-section-services">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Services</div>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-0">
+                    {services.map(([key, detail]) => {
+                      const children = getChildCapabilities(key);
+                      return (
+                        <div key={key}>
+                          <ServiceEntry flagKey={key} detail={detail} />
+                          {children.map(([childKey, childDetail]) => (
+                            <ServiceEntry key={childKey} flagKey={childKey} detail={childDetail} indented parentDetail={detail} />
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {orphanCapabilities.length > 0 && (
+                <div className="mb-2" data-testid="service-section-capabilities">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Capabilities</div>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-0">
+                    {orphanCapabilities.map(([key, detail]) => (
+                      <ServiceEntry key={key} flagKey={key} detail={detail} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {infrastructure.length > 0 && (
+                <div className="mb-2" data-testid="service-section-infrastructure">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Infrastructure</div>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-0">
+                    {infrastructure.map(([key, detail]) => (
+                      <ServiceEntry key={key} flagKey={key} detail={detail} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {observations.length > 0 && (
+                <div className="mb-1" data-testid="service-section-observations">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Eye className="h-2.5 w-2.5" />
+                    Environment
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-0">
+                    {observations.map(([key, detail]) => (
+                      <div key={key} className="flex items-center gap-1.5 text-[11px] py-0.5" data-testid={`service-status-${key}`}>
+                        {truthfulStatusIcon(detail)}
+                        <span className={truthfulStatusColor(detail)}>
+                          {detail.displayName || key}
                         </span>
                       </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs text-xs">
-                      <p>
-                        <span className="font-medium">Status: {STATUS_LABELS[detail.status] || detail.status}</span>
-                        {detail.evidence && (
-                          <span> — {detail.evidence}</span>
-                        )}
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                ))}
-              </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {uncategorized.length > 0 && (
+                <div className="grid grid-cols-3 gap-x-4 gap-y-0" data-testid="service-details-grid">
+                  {uncategorized.map(([key, detail]) => (
+                    <ServiceEntry key={key} flagKey={key} detail={detail} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
