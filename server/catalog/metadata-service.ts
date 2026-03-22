@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
 import {
   generationMetadataSchema,
@@ -14,11 +14,20 @@ import {
   type TruthfulStatus,
   type RemediationGuidance,
   type TruthfulServiceStatus,
+  type CapabilityTaxonomyEntry,
+  type OidcScopeSnapshot,
+  type OidcScopeFamily,
+  SCOPE_PREFIX_TO_SERVICE,
 } from "./metadata-schemas";
 import { loadStudioProfile, type StudioProfile, type PackageVersionRange } from "./studio-profile";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const OIDC_DISCOVERY_URL = "https://cloud.uipath.com/identity_/.well-known/openid-configuration";
+const OIDC_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const OIDC_SNAPSHOT_FILE = "oidc-scopes-snapshot.json";
+const CAPABILITY_TAXONOMY_FILE = "capability-taxonomy.json";
+const MINIMAL_OR_FALLBACK_SCOPES = ["OR.Default", "OR.Administration", "OR.Execution"];
 
 const TRUTHFUL_STATUS_LABELS: Record<TruthfulStatus, string> = {
   available: "Available",
@@ -30,288 +39,48 @@ const TRUTHFUL_STATUS_LABELS: Record<TruthfulStatus, string> = {
   unknown: "Unknown (Not Verified)",
 };
 
-const FALLBACK_SERVICE_TAXONOMY: ServiceTaxonomyEntry[] = [
-  {
-    flagKey: "orchestrator", serviceResourceType: "OR", displayName: "Orchestrator",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Core Orchestrator service is not accessible.", actionOwner: "user-config", recommendedStep: "Verify connection credentials and ensure the External Application has OR.Default scope." },
-    oauthScopeGroups: [
-      { groupLabel: "Orchestrator — Core", scopes: [
-        { id: "OR.Default", description: "General Orchestrator access" },
-        { id: "OR.Administration", description: "Administration" },
-        { id: "OR.Folders", description: "Full folder access" },
-        { id: "OR.Folders.Read", description: "Read folders" },
-        { id: "OR.Execution", description: "Full execution access" },
-      ]},
-      { groupLabel: "Orchestrator — Jobs & Robots", scopes: [
-        { id: "OR.Jobs", description: "Full job access" },
-        { id: "OR.Jobs.Read", description: "Read jobs" },
-        { id: "OR.Jobs.Write", description: "Write jobs" },
-        { id: "OR.Robots", description: "Full robot access" },
-        { id: "OR.Robots.Read", description: "Read robots" },
-        { id: "OR.Machines", description: "Full machine access" },
-      ]},
-      { groupLabel: "Orchestrator — Queues & Assets", scopes: [
-        { id: "OR.Queues", description: "Full queue access" },
-        { id: "OR.Queues.Read", description: "Read queues" },
-        { id: "OR.Queues.Write", description: "Write queues" },
-        { id: "OR.Assets", description: "Full asset access" },
-        { id: "OR.Assets.Read", description: "Read assets" },
-        { id: "OR.Assets.Write", description: "Write assets" },
-      ]},
-      { groupLabel: "Orchestrator — Action Center & Storage", scopes: [
-        { id: "OR.Tasks", description: "Full task access (Action Center)" },
-        { id: "OR.Tasks.Read", description: "Read tasks" },
-        { id: "OR.Tasks.Write", description: "Write tasks" },
-        { id: "OR.Buckets", description: "Full storage bucket access" },
-        { id: "OR.Buckets.Read", description: "Read storage buckets" },
-        { id: "OR.Buckets.Write", description: "Write storage buckets" },
-        { id: "OR.Triggers", description: "Full trigger access" },
-        { id: "OR.Triggers.Read", description: "Read triggers" },
-        { id: "OR.Triggers.Write", description: "Write triggers" },
-      ]},
-      { groupLabel: "Orchestrator — Advanced", scopes: [
-        { id: "OR.Administration.Read", description: "Read administration data" },
-        { id: "OR.Administration.Write", description: "Write administration data" },
-        { id: "OR.Folders.Write", description: "Write folders" },
-        { id: "OR.Execution.Read", description: "Read executions" },
-        { id: "OR.Execution.Write", description: "Write executions" },
-        { id: "OR.Robots.Write", description: "Write robots" },
-        { id: "OR.Machines.Read", description: "Read machines" },
-        { id: "OR.Machines.Write", description: "Write machines" },
-        { id: "OR.Hypervisor", description: "Full hypervisor access" },
-        { id: "OR.Hypervisor.Read", description: "Read hypervisor" },
-        { id: "OR.Hypervisor.Write", description: "Write hypervisor" },
-        { id: "OR.Settings", description: "Full settings access" },
-        { id: "OR.Settings.Read", description: "Read settings" },
-        { id: "OR.Settings.Write", description: "Write settings" },
-        { id: "OR.Users", description: "Full user access" },
-        { id: "OR.Users.Read", description: "Read users" },
-        { id: "OR.Users.Write", description: "Write users" },
-        { id: "OR.License", description: "Full license access" },
-        { id: "OR.License.Read", description: "Read licenses" },
-        { id: "OR.License.Write", description: "Write licenses" },
-        { id: "OR.Monitoring", description: "Full monitoring access" },
-        { id: "OR.Monitoring.Read", description: "Read monitoring" },
-        { id: "OR.Monitoring.Write", description: "Write monitoring" },
-        { id: "OR.Analytics", description: "Full analytics access" },
-        { id: "OR.Analytics.Read", description: "Read analytics" },
-        { id: "OR.Analytics.Write", description: "Write analytics" },
-        { id: "OR.Audit", description: "Full audit access" },
-        { id: "OR.Audit.Read", description: "Read audit logs" },
-        { id: "OR.Audit.Write", description: "Write audit logs" },
-        { id: "OR.Webhooks", description: "Full webhook access" },
-        { id: "OR.Webhooks.Read", description: "Read webhooks" },
-        { id: "OR.Webhooks.Write", description: "Write webhooks" },
-        { id: "OR.ML", description: "Full ML access" },
-        { id: "OR.ML.Read", description: "Read ML models" },
-        { id: "OR.ML.Write", description: "Write ML models" },
-        { id: "OR.BackgroundTasks", description: "Full background task access" },
-        { id: "OR.BackgroundTasks.Read", description: "Read background tasks" },
-        { id: "OR.BackgroundTasks.Write", description: "Write background tasks" },
-        { id: "OR.TestSets", description: "Full test set access" },
-        { id: "OR.TestSets.Read", description: "Read test sets" },
-        { id: "OR.TestSets.Write", description: "Write test sets" },
-        { id: "OR.TestSetExecutions", description: "Full test execution access" },
-        { id: "OR.TestSetExecutions.Read", description: "Read test executions" },
-        { id: "OR.TestSetExecutions.Write", description: "Write test executions" },
-        { id: "OR.TestSetSchedules", description: "Full test schedule access" },
-        { id: "OR.TestSetSchedules.Read", description: "Read test schedules" },
-        { id: "OR.TestSetSchedules.Write", description: "Write test schedules" },
-        { id: "OR.TestDataQueues", description: "Full test data queue access" },
-        { id: "OR.TestDataQueues.Read", description: "Read test data queues" },
-        { id: "OR.TestDataQueues.Write", description: "Write test data queues" },
-        { id: "OR.AutomationSolutions.Access", description: "Automation Solutions access" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "actionCenter", serviceResourceType: "OR", displayName: "Action Center",
-    category: "capability", parentService: "orchestrator", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Action Center is not enabled on this tenant.", actionOwner: "uipath-admin", recommendedStep: "Enable Action Center in UiPath Automation Cloud admin settings." },
-  },
-  {
-    flagKey: "storageBuckets", serviceResourceType: "OR", displayName: "Storage Buckets",
-    category: "capability", parentService: "orchestrator", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Storage Buckets feature is not accessible.", actionOwner: "uipath-admin", recommendedStep: "Create at least one Storage Bucket in Orchestrator." },
-  },
-  {
-    flagKey: "environments", serviceResourceType: "OR", displayName: "Environments",
-    category: "capability", parentService: "orchestrator", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Environments feature is not accessible.", actionOwner: "uipath-admin", recommendedStep: "Configure runtime environments in Orchestrator." },
-  },
-  {
-    flagKey: "triggers", serviceResourceType: "OR", displayName: "Triggers",
-    category: "capability", parentService: "orchestrator", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Triggers feature is not accessible.", actionOwner: "uipath-admin", recommendedStep: "Ensure queue triggers or process schedules are configured in Orchestrator." },
-  },
-  {
-    flagKey: "testManager", serviceResourceType: "TM", displayName: "Test Manager",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Test Manager is not available.", actionOwner: "uipath-admin", recommendedStep: "Add the TestManager resource with TM.* scopes to your External Application in UiPath Admin." },
-    oauthScopeGroups: [
-      { groupLabel: "Test Manager", scopes: [
-        { id: "TM.TestCases", description: "Full test case access" },
-        { id: "TM.TestCases.Read", description: "Read test cases" },
-        { id: "TM.TestCases.Write", description: "Write test cases" },
-        { id: "TM.TestSets", description: "Full test set access" },
-        { id: "TM.TestSets.Read", description: "Read test sets" },
-        { id: "TM.TestSets.Write", description: "Write test sets" },
-        { id: "TM.TestExecutions", description: "Full test execution access" },
-        { id: "TM.TestExecutions.Read", description: "Read test executions" },
-        { id: "TM.Requirements", description: "Full requirements access" },
-        { id: "TM.Projects", description: "Full project access" },
-        { id: "TM.Projects.Read", description: "Read projects" },
-        { id: "TM.Users.Read", description: "Read users" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "documentUnderstanding", serviceResourceType: "DU", displayName: "Document Understanding",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Document Understanding is not available.", actionOwner: "uipath-admin", recommendedStep: "Add the UiPath.DocumentUnderstanding resource with Du.* scopes to your External Application." },
-    oauthScopeGroups: [
-      { groupLabel: "Document Understanding", scopes: [
-        { id: "Du.Classification.Api", description: "Document classification" },
-        { id: "Du.Digitization.Api", description: "Document digitization (OCR)" },
-        { id: "Du.Extraction.Api", description: "Document data extraction" },
-        { id: "Du.Validation.Api", description: "Document validation" },
-        { id: "Du.DocumentManager.Document", description: "Document manager access" },
-        { id: "Du.DataDeletion.Api", description: "Data deletion" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "generativeExtraction", serviceResourceType: "IXP", displayName: "Generative Extraction",
-    category: "capability", parentService: "documentUnderstanding", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Generative Extraction is not available.", actionOwner: "uipath-admin", recommendedStep: "Enable IXP on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope." },
-  },
-  {
-    flagKey: "communicationsMining", serviceResourceType: "REINFER", displayName: "Communications Mining",
-    category: "capability", parentService: "documentUnderstanding", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Communications Mining is not available.", actionOwner: "uipath-admin", recommendedStep: "Enable Communications Mining on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope." },
-  },
-  {
-    flagKey: "dataService", serviceResourceType: "DF", displayName: "Data Service",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Data Service is not available.", actionOwner: "uipath-admin", recommendedStep: "Add the DataFabricOpenApi resource with DataFabric.* scopes to your External Application." },
-    oauthScopeGroups: [
-      { groupLabel: "Data Service", scopes: [
-        { id: "DataFabric.Schema.Read", description: "Read data schemas" },
-        { id: "DataFabric.Data.Read", description: "Read data entities" },
-        { id: "DataFabric.Data.Write", description: "Write data entities" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "maestro", serviceResourceType: "PIMS", displayName: "Maestro",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Maestro is not available.", actionOwner: "uipath-admin", recommendedStep: "Enable Maestro on your tenant and add the PIMS resource with PIMS.* scopes." },
-    oauthScopeGroups: [
-      { groupLabel: "Maestro", scopes: [
-        { id: "PIMS.Default", description: "General Maestro access" },
-        { id: "PIMS.Read", description: "Read Maestro data" },
-        { id: "PIMS.Write", description: "Write Maestro data" },
-        { id: "PIMS.Process", description: "Full process access" },
-        { id: "PIMS.Process.Read", description: "Read processes" },
-        { id: "PIMS.Process.Write", description: "Write processes" },
-        { id: "PIMS.Execution", description: "Full execution access" },
-        { id: "PIMS.Execution.Read", description: "Read executions" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "aiCenter", serviceResourceType: "AI", displayName: "AI Center",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "AI Center is not available.", actionOwner: "uipath-admin", recommendedStep: "Add the UiPath.AICenter resource with AI.Deployer.Read scope to your External Application in UiPath Admin." },
-    oauthScopeGroups: [
-      { groupLabel: "AI Center", scopes: [
-        { id: "AI.Deployer.Read", description: "Read AI deployments and skills" },
-        { id: "AI.Deployer.Write", description: "Write AI deployments and skills" },
-        { id: "AI.Trainer.Read", description: "Read AI training pipelines" },
-        { id: "AI.Trainer.Write", description: "Write AI training pipelines" },
-        { id: "AI.Helper.Read", description: "Read AI helper data" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "agents", serviceResourceType: "AGENTS", displayName: "Agents",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Agents service is not available.", actionOwner: "uipath-admin", recommendedStep: "Enable Agent Builder in UiPath Automation Cloud and add the ConversationalAgents resource to your External Application." },
-  },
-  {
-    flagKey: "autopilot", serviceResourceType: "AUTOPILOT", displayName: "Autopilot",
-    category: "capability", parentService: "agents", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Autopilot capability is not available.", actionOwner: "uipath-admin", recommendedStep: "Enable Autopilot in Agent Builder settings." },
-  },
-  {
-    flagKey: "automationHub", serviceResourceType: "HUB", displayName: "Automation Hub",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Automation Hub is not available.", actionOwner: "uipath-admin", recommendedStep: "Enable Automation Hub on your tenant. Note: Automation Hub uses its own OAuth token, separate from the External Application." },
-  },
-  {
-    flagKey: "integrationService", serviceResourceType: "INTEGRATIONSERVICE", displayName: "Integration Service",
-    category: "service", uiSection: "primary",
-    defaultRemediationTemplate: { reason: "Integration Service does not support External Application OAuth access. The probe endpoint (/api/Connections) requires session-based authentication that External Applications cannot provide.", actionOwner: "not-actionable", recommendedStep: "Integration Service connectors are discovered opportunistically but cannot be managed via External Application OAuth. No user action is available." },
-  },
-  {
-    flagKey: "automationOps", serviceResourceType: "AUTOMATIONOPS", displayName: "Automation Ops",
-    category: "service", uiSection: "secondary",
-    defaultRemediationTemplate: { reason: "Automation Ops is not available. The probe endpoint (/api/v1/policies) returned a non-success response.", actionOwner: "uipath-admin", recommendedStep: "Enable Automation Ops on your tenant. Governance policies are accessed via Platform Management token (PM.* scopes). Ensure the External Application has PM.Security and PM.AuthSetting scopes." },
-  },
-  {
-    flagKey: "automationStore", serviceResourceType: "AUTOMATIONSTORE", displayName: "Automation Store",
-    category: "service", uiSection: "secondary",
-    defaultRemediationTemplate: { reason: "Automation Store does not have a documented External Application API. The probe endpoint (/api/v1/) is not accessible with External Application tokens.", actionOwner: "not-actionable", recommendedStep: "Automation Store does not support External Application API access. No user action is available." },
-  },
-  {
-    flagKey: "apps", serviceResourceType: "APPS", displayName: "Apps",
-    category: "service", uiSection: "secondary",
-    defaultRemediationTemplate: { reason: "UiPath Apps does not have a documented External Application API. The probe endpoint (/api/v1/apps) is not accessible with External Application tokens.", actionOwner: "not-actionable", recommendedStep: "UiPath Apps does not support External Application API access. No user action is available." },
-  },
-  {
-    flagKey: "assistant", serviceResourceType: "ASSISTANT", displayName: "Assistant",
-    category: "service", uiSection: "secondary",
-    defaultRemediationTemplate: { reason: "UiPath Assistant is a desktop client without a documented cloud API for External Applications.", actionOwner: "not-actionable", recommendedStep: "UiPath Assistant is primarily a desktop application. No External Application API is available." },
-  },
-  {
-    flagKey: "platformManagement", serviceResourceType: "IDENTITY", displayName: "Platform Management",
-    category: "infrastructure", uiSection: "infrastructure",
-    defaultRemediationTemplate: { reason: "Platform Management is not accessible.", actionOwner: "user-config", recommendedStep: "Add the PlatformManagement resource with PM.* scopes to your External Application." },
-    oauthScopeGroups: [
-      { groupLabel: "Platform Management", scopes: [
-        { id: "PM.Security", description: "Security settings" },
-        { id: "PM.AuthSetting", description: "Auth settings" },
-        { id: "PM.OAuthApp", description: "OAuth application management" },
-        { id: "PM.RobotAccount", description: "Robot account access" },
-        { id: "PM.RobotAccount.Read", description: "Read robot accounts" },
-        { id: "PM.RobotAccount.Write", description: "Write robot accounts" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "ixp", serviceResourceType: "IXP", displayName: "IXP Platform",
-    category: "infrastructure", uiSection: "infrastructure",
-    defaultRemediationTemplate: { reason: "IXP platform is not accessible.", actionOwner: "uipath-admin", recommendedStep: "Add the Ixp.ExternalService resource with Ixp.ApiAccess scope." },
-    oauthScopeGroups: [
-      { groupLabel: "IXP / Communications Mining", scopes: [
-        { id: "Ixp.ApiAccess", description: "IXP API access (Generative Extraction, Communications Mining)" },
-      ]},
-    ],
-  },
-  {
-    flagKey: "attendedRobots", serviceResourceType: "OR", displayName: "Attended Robots",
-    category: "observation", uiSection: "observation",
-  },
-  {
-    flagKey: "studioProjects", serviceResourceType: "OR", displayName: "Studio Projects",
-    category: "observation", uiSection: "observation",
-  },
-  {
-    flagKey: "hasUnattendedSlots", serviceResourceType: "OR", displayName: "Unattended Slots",
-    category: "observation", uiSection: "observation",
-  },
-];
+
+export const TOKEN_RESOURCE_TO_SERVICE: Record<string, ServiceResourceType> = {
+  OR: "OR", TM: "TM", DU: "DU", PM: "IDENTITY", DF: "DF", PIMS: "PIMS", IXP: "IXP", AI: "AI",
+};
+
+export const ORCHESTRATOR_ODATA_PATHS = {
+  Folders: "/odata/Folders",
+  Releases: "/odata/Releases",
+  Processes: "/odata/Processes",
+  Sessions: "/odata/Sessions",
+  Machines: "/odata/Machines",
+  QueueDefinitions: "/odata/QueueDefinitions",
+  Assets: "/odata/Assets",
+  Buckets: "/odata/Buckets",
+  Environments: "/odata/Environments",
+  Users: "/odata/Users",
+  TaskCatalogs: "/odata/TaskCatalogs",
+  TestDataQueues: "/odata/TestDataQueues",
+  ProcessSchedules: "/odata/ProcessSchedules",
+  GenericTasks: "/tasks/GenericTasks",
+  Jobs: "/odata/Jobs",
+  LicensesRuntime: "/odata/LicensesRuntime",
+  LicensesNamedUser: "/odata/LicensesNamedUser",
+  StartJobs: "/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs",
+  GetLicense: "/odata/Settings/UiPath.Server.Configuration.OData.GetLicense",
+  GetPackageVersions: (packageId: string) =>
+    `/odata/Processes/UiPath.Server.Configuration.OData.GetPackageVersions(packageId='${encodeURIComponent(packageId)}')`,
+  AssignUsers: "/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers",
+} as const;
+
+export const ORCHESTRATOR_DIAGNOSTIC_ENTITIES: Record<string, { listPath: string; createPath: string; assignPath?: string }> = {
+  QueueDefinitions: { listPath: "/odata/QueueDefinitions?$top=3", createPath: "/odata/QueueDefinitions" },
+  Assets: { listPath: "/odata/Assets?$top=3", createPath: "/odata/Assets" },
+  Machines: { listPath: "/odata/Machines?$top=3", createPath: "/odata/Machines" },
+  Buckets: { listPath: "/odata/Buckets?$top=3", createPath: "/odata/Buckets" },
+  Environments: { listPath: "/odata/Environments?$top=3", createPath: "/odata/Environments" },
+  Users: { listPath: "/odata/Users?$top=5", createPath: "/odata/Users" },
+  Folders: { listPath: "/odata/Folders?$top=1", createPath: "/odata/Folders", assignPath: "/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers" },
+  TaskCatalogs: { listPath: "/odata/TaskCatalogs?$top=1", createPath: "/odata/TaskCatalogs" },
+  TestDataQueues: { listPath: "/odata/TestDataQueues?$top=3", createPath: "/odata/TestDataQueues" },
+  GenericTasks: { listPath: "/tasks/GenericTasks", createPath: "/tasks/GenericTasks/CreateTask" },
+};
 
 class MetadataService {
   private generationMetadata: GenerationMetadata | null = null;
@@ -328,12 +97,23 @@ class MetadataService {
   private lastIntRefreshSuccess: string | null = null;
   private lastIntRefreshFailure: string | null = null;
 
+  private oidcLiveScopes: OidcScopeSnapshot | null = null;
+  private oidcSnapshot: OidcScopeSnapshot | null = null;
+  private oidcLastRefreshAt: number = 0;
+  private oidcRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  private capabilityTaxonomy: CapabilityTaxonomyEntry[] | null = null;
+  private activeEndpoints: Partial<Record<ServiceResourceType, string>> = {};
+
   load(): void {
     this.loadGeneration();
     this.loadIntegration();
     this.loadActivityCatalogMetadata();
+    this.loadCapabilityTaxonomy();
+    this.loadOidcSnapshot();
     this.checkFreshness();
+    this.warnDeprecatedEndpoints();
     this.logStatus();
+    this.scheduleOidcRefresh();
   }
 
   private loadGeneration(): void {
@@ -378,6 +158,7 @@ class MetadataService {
         if (result.success) {
           this.serviceEndpoints = result.data;
           this.integrationLoaded = true;
+          this.mergeRuntimeState();
           console.log(`[MetadataService] Loaded service-endpoints.json: ${Object.keys(result.data.endpoints).length} endpoints`);
           return;
         } else {
@@ -390,6 +171,32 @@ class MetadataService {
     }
 
     this.integrationLoaded = false;
+  }
+
+  private mergeRuntimeState(): void {
+    if (!this.serviceEndpoints) return;
+    const runtimePath = join(process.cwd(), "catalog", "service-endpoints-runtime.json");
+    if (!existsSync(runtimePath)) return;
+    try {
+      const raw = readFileSync(runtimePath, "utf-8");
+      const runtime = JSON.parse(raw);
+      if (runtime.endpoints) {
+        for (const [key, state] of Object.entries(runtime.endpoints) as Array<[string, any]>) {
+          if (this.serviceEndpoints.endpoints[key]) {
+            this.serviceEndpoints.endpoints[key] = {
+              ...this.serviceEndpoints.endpoints[key],
+              reachabilityStatus: state.reachabilityStatus,
+              lastVerifiedAt: state.lastVerifiedAt,
+            };
+          }
+        }
+      }
+      if (runtime.lastRefreshedAt) {
+        this.serviceEndpoints.lastRefreshedAt = runtime.lastRefreshedAt;
+      }
+    } catch (err: any) {
+      console.warn(`[MetadataService] Failed to load runtime endpoint state: ${err.message}`);
+    }
   }
 
   private loadActivityCatalogMetadata(): void {
@@ -467,6 +274,16 @@ class MetadataService {
     }
   }
 
+  private warnDeprecatedEndpoints(): void {
+    if (!this.serviceEndpoints) return;
+    for (const [key, entry] of Object.entries(this.serviceEndpoints.endpoints)) {
+      if (entry.confidence === "deprecated") {
+        const alt = entry.alternateUrlTemplates?.length ? ` Alternates: ${entry.alternateUrlTemplates.join(", ")}` : "";
+        console.warn(`[MetadataService] DEPRECATED endpoint: ${key} (${entry.urlTemplate}).${alt}`);
+      }
+    }
+  }
+
   private logStatus(): void {
     const target = this.getStudioTarget();
     if (target) {
@@ -540,6 +357,12 @@ class MetadataService {
   private inMemoryReachability: Partial<Record<ServiceResourceType, "reachable" | "limited" | "unreachable" | "unknown">> = {};
 
   getServiceUrl(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string {
+    const active = this.activeEndpoints[resourceType];
+    if (active) {
+      return active
+        .replace("{orgName}", config.orgName)
+        .replace("{tenantName}", config.tenantName);
+    }
     const resolved = this.resolvedServiceUrls[resourceType];
     if (resolved) {
       return resolved
@@ -552,7 +375,9 @@ class MetadataService {
         .replace("{orgName}", config.orgName)
         .replace("{tenantName}", config.tenantName);
     }
-    return this.getHardcodedServiceUrl(resourceType, config);
+    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
+    console.warn(`[MetadataService] No curated endpoint for ${resourceType} — using generic base URL`);
+    return base;
   }
 
   getServiceUrlAlternates(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string[] {
@@ -580,41 +405,49 @@ class MetadataService {
 
   updateServiceReachability(resourceType: ServiceResourceType, status: "reachable" | "limited" | "unreachable" | "unknown"): void {
     this.inMemoryReachability[resourceType] = status;
+    this.persistRuntimeReachability(resourceType, status);
   }
 
-  private getHardcodedServiceUrl(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string {
-    const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}`;
-    const map: Record<string, string> = {
-      OR: `${base}/orchestrator_`,
-      TM: `${base}/testmanager_`,
-      DU: `${base}/du_`,
-      DF: `${base}/dataservice_`,
-      PIMS: `${base}/maestro_`,
-      IXP: `${base}/ixp_`,
-      AI: `${base}/aifabric_`,
-      HUB: `${base}/automationhub_`,
-      IDENTITY: `https://cloud.uipath.com/identity_`,
-      INTEGRATIONSERVICE: `${base}/integrationservice_`,
-      AUTOMATIONOPS: `${base}/automationops_`,
-      AUTOMATIONSTORE: `${base}/automationstore_`,
-      APPS: `${base}/apps_`,
-      ASSISTANT: `${base}/assistant_`,
-      AGENTS: `${base}/agentstudio_`,
-      AUTOPILOT: `${base}/autopilot_`,
-      REINFER: `${base}/reinfer_`,
-    };
-    return map[resourceType] || `${base}/${resourceType.toLowerCase()}_`;
+  private persistRuntimeReachability(resourceType: string, status: string): void {
+    const runtimePath = join(process.cwd(), "catalog", "service-endpoints-runtime.json");
+    try {
+      let runtime: any = {};
+      if (existsSync(runtimePath)) {
+        runtime = JSON.parse(readFileSync(runtimePath, "utf-8"));
+      }
+      if (!runtime.endpoints) runtime.endpoints = {};
+      const now = new Date().toISOString();
+      const key = resourceType;
+      runtime.endpoints[key] = {
+        ...(runtime.endpoints[key] || {}),
+        reachabilityStatus: status,
+        lastVerifiedAt: now,
+      };
+      runtime.lastRefreshedAt = now;
+      writeFileSync(runtimePath, JSON.stringify(runtime, null, 2));
+    } catch { }
+  }
+
+  private markOidcStale(reason: string): void {
+    const now = new Date().toISOString();
+    if (this.oidcLiveScopes && !this.oidcLiveScopes.isStale) {
+      this.oidcLiveScopes.isStale = true;
+      this.oidcLiveScopes.staleSince = now;
+      console.warn(`[MetadataService] Marked live OIDC scopes as stale (${reason})`);
+    }
+    if (this.oidcSnapshot && !this.oidcSnapshot.isStale) {
+      this.oidcSnapshot.isStale = true;
+      this.oidcSnapshot.staleSince = now;
+      console.warn(`[MetadataService] Marked OIDC snapshot as stale — using last-known-good (${reason})`);
+    }
   }
 
   getServiceScopes(resourceType: ServiceResourceType): string[] {
-    if (this.serviceEndpoints?.endpoints[resourceType]) {
-      return this.serviceEndpoints.endpoints[resourceType].scopes;
-    }
-    return [];
+    return this.getScopesForService(resourceType);
   }
 
   getServiceScopesString(resourceType: ServiceResourceType): string {
-    return this.getServiceScopes(resourceType).join(" ");
+    return this.getScopesForServiceString(resourceType);
   }
 
   getServiceConfidence(resourceType: ServiceResourceType): "official" | "inferred" | "deprecated" | "unknown" {
@@ -636,50 +469,85 @@ class MetadataService {
   clearReachability(): void {
     this.inMemoryReachability = {};
     this.resolvedServiceUrls = {};
-  }
-
-  private resolvedTaxonomy(): ServiceTaxonomyEntry[] {
-    if (this.serviceEndpoints?.taxonomy && this.serviceEndpoints.taxonomy.length > 0) {
-      return this.serviceEndpoints.taxonomy as ServiceTaxonomyEntry[];
-    }
-    return FALLBACK_SERVICE_TAXONOMY;
+    this.activeEndpoints = {};
   }
 
   getServiceTaxonomy(): ServiceTaxonomyEntry[] {
-    return this.resolvedTaxonomy();
+    const taxonomy = this.getCapabilityTaxonomy();
+    return taxonomy.map(e => ({
+      flagKey: e.flagKey,
+      serviceResourceType: e.serviceResourceType,
+      displayName: e.displayName,
+      category: e.category as TaxonomyCategory,
+      parentService: e.parentService,
+      uiSection: e.uiSection,
+      defaultRemediationTemplate: e.defaultRemediationTemplate,
+    }));
   }
 
   getTaxonomyEntry(flagKey: string): ServiceTaxonomyEntry | null {
-    return this.resolvedTaxonomy().find(e => e.flagKey === flagKey) || null;
+    const entry = this.getCapabilityTaxonomyEntry(flagKey);
+    if (!entry) return null;
+    return {
+      flagKey: entry.flagKey,
+      serviceResourceType: entry.serviceResourceType,
+      displayName: entry.displayName,
+      category: entry.category as TaxonomyCategory,
+      parentService: entry.parentService,
+      uiSection: entry.uiSection,
+      defaultRemediationTemplate: entry.defaultRemediationTemplate,
+    };
   }
 
   getTaxonomyByCategory(category: TaxonomyCategory): ServiceTaxonomyEntry[] {
-    return this.resolvedTaxonomy().filter(e => e.category === category);
+    return this.getServiceTaxonomy().filter(e => e.category === category);
   }
 
   getTaxonomyHierarchy(): {
     services: ServiceTaxonomyEntry[];
+    products: ServiceTaxonomyEntry[];
     capabilities: (ServiceTaxonomyEntry & { parentEntry?: ServiceTaxonomyEntry })[];
     observations: ServiceTaxonomyEntry[];
     infrastructure: ServiceTaxonomyEntry[];
   } {
-    const taxonomy = this.resolvedTaxonomy();
+    const taxonomy = this.getServiceTaxonomy();
     const services = taxonomy.filter(e => e.category === "service");
+    const products = taxonomy.filter(e => e.category === "product");
     const capabilities = taxonomy.filter(e => e.category === "capability").map(cap => ({
       ...cap,
       parentEntry: taxonomy.find(s => s.flagKey === cap.parentService),
     }));
     const observations = taxonomy.filter(e => e.category === "observation");
     const infrastructure = taxonomy.filter(e => e.category === "infrastructure");
-    return { services, capabilities, observations, infrastructure };
+    return { services, products, capabilities, observations, infrastructure };
   }
 
   getFlagToServiceType(): Record<string, ServiceResourceType> {
     const map: Record<string, ServiceResourceType> = {};
-    for (const entry of this.resolvedTaxonomy()) {
+    for (const entry of this.getCapabilityTaxonomy()) {
       map[entry.flagKey] = entry.serviceResourceType;
     }
     return map;
+  }
+
+  detectResourceTypeFromUrl(url: string): string {
+    const TOKEN_RESOURCE_BY_SERVICE: Record<string, string> = {
+      TM: "TM", DU: "DU", DF: "DF", IDENTITY: "PM",
+      IXP: "IXP", AI: "AI", PIMS: "PIMS",
+    };
+    for (const entry of this.getCapabilityTaxonomy()) {
+      if (entry.urlPathPatterns) {
+        for (const pattern of entry.urlPathPatterns) {
+          if (url.includes(pattern)) {
+            if (entry.serviceResourceType === "IDENTITY" && url.includes("/connect/")) continue;
+            return entry.probeConfig?.tokenResource
+              || TOKEN_RESOURCE_BY_SERVICE[entry.serviceResourceType]
+              || "OR";
+          }
+        }
+      }
+    }
+    return "OR";
   }
 
   getDisplayName(flagKey: string): string {
@@ -774,6 +642,358 @@ class MetadataService {
       recommendedStep: "Run a connection test to check availability.",
       technicalEvidence: evidence.length > 0 ? evidence.join(" | ") : undefined,
     };
+  }
+
+  private static readonly VALID_PROBE_STRATEGIES = new Set(["own-endpoint", "parent-api", "observation", "none"]);
+  private static readonly VALID_API_SUPPORT = new Set(["documented", "undocumented", "none"]);
+  private static readonly VALID_CATEGORIES = new Set(["service", "capability", "product", "observation", "infrastructure"]);
+
+  private validateTaxonomyEntry(entry: CapabilityTaxonomyEntry, index: number): string[] {
+    const errors: string[] = [];
+    if (!entry.flagKey) errors.push(`[${index}] missing flagKey`);
+    if (!MetadataService.VALID_PROBE_STRATEGIES.has(entry.probeStrategy)) {
+      errors.push(`[${index}] "${entry.flagKey}": invalid probeStrategy "${entry.probeStrategy}" (valid: ${Array.from(MetadataService.VALID_PROBE_STRATEGIES).join(", ")})`);
+    }
+    if (!MetadataService.VALID_API_SUPPORT.has(entry.apiSupport)) {
+      errors.push(`[${index}] "${entry.flagKey}": invalid apiSupport "${entry.apiSupport}"`);
+    }
+    if (!MetadataService.VALID_CATEGORIES.has(entry.category)) {
+      errors.push(`[${index}] "${entry.flagKey}": invalid category "${entry.category}"`);
+    }
+    if (entry.probeStrategy === "own-endpoint" && !entry.probeConfig && !entry.customProbeHandler) {
+      errors.push(`[${index}] "${entry.flagKey}": probeStrategy=own-endpoint requires probeConfig or customProbeHandler`);
+    }
+    if ((entry.apiSupport === "none") && entry.probeStrategy === "own-endpoint") {
+      errors.push(`[${index}] "${entry.flagKey}": apiSupport=none is incompatible with probeStrategy=own-endpoint`);
+    }
+    return errors;
+  }
+
+  private loadCapabilityTaxonomy(): void {
+    const taxonomyPath = join(process.cwd(), "catalog", CAPABILITY_TAXONOMY_FILE);
+    if (existsSync(taxonomyPath)) {
+      try {
+        const raw = readFileSync(taxonomyPath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const allErrors: string[] = [];
+          for (let i = 0; i < parsed.length; i++) {
+            allErrors.push(...this.validateTaxonomyEntry(parsed[i], i));
+          }
+          if (allErrors.length > 0) {
+            console.error(`[MetadataService] Taxonomy validation errors:\n  ${allErrors.join("\n  ")}`);
+          }
+          this.capabilityTaxonomy = parsed as CapabilityTaxonomyEntry[];
+          console.log(`[MetadataService] Loaded ${CAPABILITY_TAXONOMY_FILE}: ${this.capabilityTaxonomy.length} entries (${allErrors.length} validation warnings)`);
+          return;
+        }
+      } catch (err: any) {
+        console.warn(`[MetadataService] Failed to load ${CAPABILITY_TAXONOMY_FILE}: ${err.message}`);
+      }
+    }
+    console.log(`[MetadataService] ${CAPABILITY_TAXONOMY_FILE} not found — using embedded taxonomy`);
+  }
+
+  private loadOidcSnapshot(): void {
+    const snapshotPath = join(process.cwd(), "catalog", OIDC_SNAPSHOT_FILE);
+    if (existsSync(snapshotPath)) {
+      try {
+        const raw = readFileSync(snapshotPath, "utf-8");
+        const parsed = JSON.parse(raw) as OidcScopeSnapshot;
+        if (parsed.scopeFamilies && parsed.fetchedAt) {
+          this.oidcSnapshot = parsed;
+          const age = Date.now() - new Date(parsed.fetchedAt).getTime();
+          if (age > SEVEN_DAYS_MS) {
+            this.oidcSnapshot.isStale = true;
+            this.oidcSnapshot.staleSince = this.oidcSnapshot.staleSince || new Date().toISOString();
+            console.warn(`[MetadataService] OIDC snapshot is stale (age: ${Math.round(age / 3600000)}h)`);
+          }
+          console.log(`[MetadataService] Loaded OIDC scope snapshot: ${Object.keys(parsed.scopeFamilies).length} families`);
+        }
+      } catch (err: any) {
+        console.warn(`[MetadataService] Failed to load OIDC snapshot: ${err.message}`);
+      }
+    }
+  }
+
+  private persistOidcSnapshot(snapshot: OidcScopeSnapshot): void {
+    try {
+      const snapshotPath = join(process.cwd(), "catalog", OIDC_SNAPSHOT_FILE);
+      const stagingPath = `${snapshotPath}.tmp`;
+      writeFileSync(stagingPath, JSON.stringify(snapshot, null, 2), "utf-8");
+      renameSync(stagingPath, snapshotPath);
+    } catch (err: any) {
+      console.warn(`[MetadataService] Failed to persist OIDC snapshot: ${err.message}`);
+    }
+  }
+
+  async refreshFromOIDC(): Promise<{ success: boolean; familyCount: number; message: string }> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(OIDC_DISCOVERY_URL, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const msg = `OIDC discovery returned ${res.status}`;
+        console.warn(`[MetadataService] ${msg}`);
+        this.markOidcStale("OIDC refresh failed: " + msg);
+        return { success: false, familyCount: 0, message: msg };
+      }
+
+      const data = await res.json() as { scopes_supported?: string[] };
+      const rawScopes = data.scopes_supported;
+      if (!rawScopes || !Array.isArray(rawScopes)) {
+        const msg = "OIDC discovery response missing scopes_supported";
+        console.warn(`[MetadataService] ${msg}`);
+        this.markOidcStale("OIDC refresh failed: " + msg);
+        return { success: false, familyCount: 0, message: msg };
+      }
+
+      const families: Record<string, OidcScopeFamily> = {};
+      for (const scope of rawScopes) {
+        if (scope === "openid" || scope === "profile" || scope === "email" || scope === "offline_access") continue;
+        const dotIdx = scope.indexOf(".");
+        if (dotIdx === -1) continue;
+        const prefix = scope.substring(0, dotIdx);
+        if (!families[prefix]) {
+          families[prefix] = {
+            prefix,
+            scopes: [],
+            mappedServiceResourceType: SCOPE_PREFIX_TO_SERVICE[prefix],
+          };
+        }
+        families[prefix].scopes.push(scope);
+      }
+
+      const snapshot: OidcScopeSnapshot = {
+        fetchedAt: new Date().toISOString(),
+        source: OIDC_DISCOVERY_URL,
+        scopeFamilies: families,
+        rawScopesSupported: rawScopes,
+        isStale: false,
+      };
+
+      this.oidcLiveScopes = snapshot;
+      this.oidcSnapshot = snapshot;
+      this.oidcLastRefreshAt = Date.now();
+      this.persistOidcSnapshot(snapshot);
+
+      const familyCount = Object.keys(families).length;
+      console.log(`[MetadataService] OIDC discovery: ${familyCount} scope families, ${rawScopes.length} total scopes`);
+
+      const mappedFamilies = Object.entries(families)
+        .filter(([, f]) => f.mappedServiceResourceType)
+        .map(([prefix, f]) => `${prefix}→${f.mappedServiceResourceType}(${f.scopes.length})`)
+        .join(", ");
+      console.log(`[MetadataService] OIDC mapped families: ${mappedFamilies}`);
+
+      return { success: true, familyCount, message: `Discovered ${familyCount} scope families from OIDC` };
+    } catch (err: any) {
+      const msg = err.name === "AbortError"
+        ? "OIDC discovery timed out"
+        : `OIDC discovery failed: ${err.message}`;
+      console.warn(`[MetadataService] ${msg}`);
+      this.markOidcStale(msg);
+      return { success: false, familyCount: 0, message: msg };
+    }
+  }
+
+  private scheduleOidcRefresh(): void {
+    if (this.oidcRefreshInterval) {
+      clearInterval(this.oidcRefreshInterval);
+    }
+    this.oidcRefreshInterval = setInterval(async () => {
+      console.log("[MetadataService] Scheduled OIDC refresh...");
+      await this.refreshFromOIDC();
+    }, OIDC_REFRESH_INTERVAL_MS);
+
+    this.refreshFromOIDC().catch(err => {
+      console.warn(`[MetadataService] Initial OIDC refresh failed: ${err?.message || "unknown"}`);
+    });
+  }
+
+  stopOidcRefresh(): void {
+    if (this.oidcRefreshInterval) {
+      clearInterval(this.oidcRefreshInterval);
+      this.oidcRefreshInterval = null;
+    }
+  }
+
+  private getMinimalTokenScopes(resourceType: ServiceResourceType): string[] {
+    const taxonomy = this.getCapabilityTaxonomy();
+    for (const entry of taxonomy) {
+      if (entry.serviceResourceType === resourceType && entry.minimalScopes && entry.minimalScopes.length > 0) {
+        return entry.minimalScopes;
+      }
+    }
+    return [];
+  }
+
+  getScopesForService(resourceType: ServiceResourceType): string[] {
+    if (this.oidcLiveScopes) {
+      const oidcMinimal = this.pickMinimalFromOidc(resourceType, this.oidcLiveScopes);
+      if (oidcMinimal.length > 0) return oidcMinimal;
+    }
+
+    if (this.oidcSnapshot) {
+      const oidcMinimal = this.pickMinimalFromOidc(resourceType, this.oidcSnapshot);
+      if (oidcMinimal.length > 0) return oidcMinimal;
+    }
+
+    const baseline = this.getMinimalTokenScopes(resourceType);
+    if (baseline.length > 0) return baseline;
+
+    if (resourceType === "OR") return MINIMAL_OR_FALLBACK_SCOPES;
+
+    return [];
+  }
+
+  getScopeSource(resourceType: ServiceResourceType): "oidc-live" | "oidc-snapshot" | "baseline" | "fallback" | "none" {
+    if (this.oidcLiveScopes && this.pickMinimalFromOidc(resourceType, this.oidcLiveScopes).length > 0) return "oidc-live";
+    if (this.oidcSnapshot && this.pickMinimalFromOidc(resourceType, this.oidcSnapshot).length > 0) return "oidc-snapshot";
+    if (this.getMinimalTokenScopes(resourceType).length > 0) return "baseline";
+    if (resourceType === "OR") return "fallback";
+    return "none";
+  }
+
+  private pickMinimalFromOidc(resourceType: ServiceResourceType, snapshot: OidcScopeSnapshot): string[] {
+    const fullFamily = this.findOidcScopesForService(resourceType, snapshot);
+    if (fullFamily.length === 0) return [];
+    const minimal = this.getMinimalTokenScopes(resourceType);
+    if (minimal.length > 0) {
+      const validated = minimal.filter(s => fullFamily.includes(s));
+      if (validated.length > 0) return validated;
+    }
+    const defaultScope = fullFamily.find(s => s.endsWith(".Default"));
+    if (defaultScope) return [defaultScope];
+    const readScope = fullFamily.find(s => s.endsWith(".Read"));
+    if (readScope) return [readScope];
+    return [fullFamily[0]];
+  }
+
+  getFullOidcScopesForService(resourceType: ServiceResourceType): string[] {
+    if (this.oidcLiveScopes) {
+      const scopes = this.findOidcScopesForService(resourceType, this.oidcLiveScopes);
+      if (scopes.length > 0) return scopes;
+    }
+
+    if (this.oidcSnapshot) {
+      const scopes = this.findOidcScopesForService(resourceType, this.oidcSnapshot);
+      if (scopes.length > 0) return scopes;
+    }
+
+    return [];
+  }
+
+  getScopesForServiceString(resourceType: ServiceResourceType): string {
+    return this.getScopesForService(resourceType).join(" ");
+  }
+
+  private findOidcScopesForService(resourceType: ServiceResourceType, snapshot: OidcScopeSnapshot): string[] {
+    for (const [, family] of Object.entries(snapshot.scopeFamilies)) {
+      if (family.mappedServiceResourceType === resourceType) {
+        return family.scopes;
+      }
+    }
+    return [];
+  }
+
+  getOidcStatus(): {
+    hasLiveScopes: boolean;
+    hasSnapshot: boolean;
+    isStale: boolean;
+    lastRefreshedAt: number;
+    familyCount: number;
+    staleSince?: string;
+    scopeFamilies?: Record<string, { prefix: string; scopeCount: number; mappedService?: ServiceResourceType }>;
+  } {
+    const activeSource = this.oidcLiveScopes || this.oidcSnapshot;
+    const families: Record<string, { prefix: string; scopeCount: number; mappedService?: ServiceResourceType }> = {};
+    if (activeSource) {
+      for (const [key, fam] of Object.entries(activeSource.scopeFamilies)) {
+        families[key] = {
+          prefix: fam.prefix,
+          scopeCount: fam.scopes.length,
+          mappedService: fam.mappedServiceResourceType,
+        };
+      }
+    }
+    return {
+      hasLiveScopes: !!this.oidcLiveScopes,
+      hasSnapshot: !!this.oidcSnapshot,
+      isStale: activeSource?.isStale ?? true,
+      lastRefreshedAt: this.oidcLastRefreshAt,
+      familyCount: activeSource ? Object.keys(activeSource.scopeFamilies).length : 0,
+      staleSince: activeSource?.staleSince,
+      scopeFamilies: Object.keys(families).length > 0 ? families : undefined,
+    };
+  }
+
+  getOidcValidScopes(): string[] {
+    const activeSource = this.oidcLiveScopes || this.oidcSnapshot;
+    return activeSource?.rawScopesSupported || [];
+  }
+
+  hasOidcScopeFamily(resourceType: ServiceResourceType): boolean {
+    if (this.oidcLiveScopes) {
+      if (this.findOidcScopesForService(resourceType, this.oidcLiveScopes).length > 0) return true;
+    }
+    if (this.oidcSnapshot) {
+      if (this.findOidcScopesForService(resourceType, this.oidcSnapshot).length > 0) return true;
+    }
+    return false;
+  }
+
+  getCapabilityTaxonomy(): CapabilityTaxonomyEntry[] {
+    return this.capabilityTaxonomy || [];
+  }
+
+  getCapabilityTaxonomyEntry(flagKey: string): CapabilityTaxonomyEntry | undefined {
+    return this.getCapabilityTaxonomy().find(e => e.flagKey === flagKey);
+  }
+
+  getScopeGuidance(flagKey: string): string {
+    const entry = this.getCapabilityTaxonomyEntry(flagKey);
+    if (!entry) return "";
+    const scopes = entry.minimalScopes;
+    if (scopes && scopes.length > 0) return scopes.join(", ");
+    const rem = entry.defaultRemediationTemplate;
+    if (rem?.recommendedStep) return rem.recommendedStep;
+    return "";
+  }
+
+  getRemediationStep(flagKey: string): string {
+    const entry = this.getCapabilityTaxonomyEntry(flagKey);
+    return entry?.defaultRemediationTemplate?.recommendedStep || "";
+  }
+
+  tryAlternateEndpoints(resourceType: ServiceResourceType, config: { orgName: string; tenantName: string }): string[] {
+    const alternates = this.getServiceUrlAlternates(resourceType, config);
+    const activeUrl = this.activeEndpoints[resourceType];
+    if (activeUrl) {
+      const resolved = activeUrl.replace("{orgName}", config.orgName).replace("{tenantName}", config.tenantName);
+      return [resolved, ...alternates.filter(u => u !== resolved)];
+    }
+    return alternates;
+  }
+
+  setActiveEndpoint(resourceType: ServiceResourceType, url: string): void {
+    this.activeEndpoints[resourceType] = url;
+    console.log(`[MetadataService] Active endpoint for ${resourceType} switched to: ${url}`);
+  }
+
+  getActiveEndpoint(resourceType: ServiceResourceType): string | undefined {
+    return this.activeEndpoints[resourceType];
+  }
+
+  checkEndpointDeprecation(resourceType: ServiceResourceType): { deprecated: boolean; notes?: string } {
+    const entry = this.serviceEndpoints?.endpoints[resourceType];
+    if (!entry) return { deprecated: false };
+    if (entry.confidence === "deprecated") {
+      return { deprecated: true, notes: entry.deprecationNotes || "This endpoint is deprecated." };
+    }
+    return { deprecated: false };
   }
 
   getTokenEndpoint(): string {

@@ -3,40 +3,6 @@
     "OR": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/orchestrator_",
       "apiBasePath": "/odata",
-      "scopes": [
-        "OR.Default",
-        "OR.Administration",
-        "OR.Execution",
-        "OR.Queues",
-        "OR.Queues.Read",
-        "OR.Queues.Write",
-        "OR.Processes",
-        "OR.Folders",
-        "OR.Folders.Read",
-        "OR.Jobs",
-        "OR.Jobs.Read",
-        "OR.Jobs.Write",
-        "OR.Triggers",
-        "OR.Triggers.Read",
-        "OR.Triggers.Write",
-        "OR.Robots",
-        "OR.Robots.Read",
-        "OR.Machines",
-        "OR.Assets",
-        "OR.Assets.Read",
-        "OR.Assets.Write",
-        "OR.TestSets",
-        "OR.TestSets.Read",
-        "OR.TestSets.Write",
-        "OR.TestSetExecutions",
-        "OR.TestSetExecutions.Read",
-        "OR.TestSetExecutions.Write",
-        "OR.TestDataQueues",
-        "OR.TestDataQueues.Read",
-        "OR.Tasks",
-        "OR.Tasks.Read",
-        "OR.Tasks.Write"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -49,24 +15,6 @@
         "https://cloud.uipath.com/{orgName}/{tenantName}/testmanager"
       ],
       "apiBasePath": "/api",
-      "scopes": [
-        "TM.TestCases",
-        "TM.TestCases.Read",
-        "TM.TestCases.Write",
-        "TM.TestSets",
-        "TM.TestSets.Read",
-        "TM.TestSets.Write",
-        "TM.TestExecutions",
-        "TM.TestExecutions.Read",
-        "TM.TestExecutions.Write",
-        "TM.Requirements",
-        "TM.Requirements.Read",
-        "TM.Requirements.Write",
-        "TM.Projects",
-        "TM.Projects.Read",
-        "TM.Projects.Write",
-        "TM.Users.Read"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -78,14 +26,6 @@
         "https://cloud.uipath.com/{orgName}/{tenantName}/documentunderstanding_"
       ],
       "apiBasePath": "/api",
-      "scopes": [
-        "Du.Classification.Api",
-        "Du.DataDeletion.Api",
-        "Du.Digitization.Api",
-        "Du.DocumentManager.Document",
-        "Du.Extraction.Api",
-        "Du.Validation.Api"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -94,11 +34,6 @@
     "DF": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/dataservice_",
       "apiBasePath": "/api",
-      "scopes": [
-        "DataFabric.Schema.Read",
-        "DataFabric.Data.Read",
-        "DataFabric.Data.Write"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -107,16 +42,6 @@
     "PIMS": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/maestro_",
       "apiBasePath": "/api",
-      "scopes": [
-        "PIMS.Default",
-        "PIMS.Read",
-        "PIMS.Write",
-        "PIMS.Process",
-        "PIMS.Process.Read",
-        "PIMS.Process.Write",
-        "PIMS.Execution",
-        "PIMS.Execution.Read"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -125,9 +50,6 @@
     "IXP": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/ixp_",
       "apiBasePath": "/api",
-      "scopes": [
-        "Ixp.ApiAccess"
-      ],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -136,9 +58,6 @@
     "REINFER": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/reinfer_",
       "apiBasePath": "/api/v1",
-      "scopes": [
-        "Ixp.ApiAccess"
-      ],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -147,13 +66,6 @@
     "AI": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/aifabric_",
       "apiBasePath": "/api",
-      "scopes": [
-        "AI.Deployer.Read",
-        "AI.Deployer.Write",
-        "AI.Trainer.Read",
-        "AI.Trainer.Write",
-        "AI.Helper.Read"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-22T04:50:00.000Z",
@@ -162,7 +74,6 @@
     "HUB": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/automationhub_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -171,14 +82,6 @@
     "IDENTITY": {
       "urlTemplate": "https://cloud.uipath.com/identity_",
       "apiBasePath": "/connect",
-      "scopes": [
-        "PM.Security",
-        "PM.AuthSetting",
-        "PM.OAuthApp",
-        "PM.RobotAccount",
-        "PM.RobotAccount.Read",
-        "PM.RobotAccount.Write"
-      ],
       "confidence": "official",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -187,7 +90,6 @@
     "INTEGRATIONSERVICE": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/integrationservice_",
       "apiBasePath": "/api",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -196,7 +98,6 @@
     "AUTOMATIONOPS": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/automationops_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -205,7 +106,6 @@
     "AUTOMATIONSTORE": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/automationstore_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -214,7 +114,6 @@
     "APPS": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/apps_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -223,7 +122,6 @@
     "ASSISTANT": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/assistant_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -232,7 +130,6 @@
     "AGENTS": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/agentstudio_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
@@ -241,296 +138,12 @@
     "AUTOPILOT": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/autopilot_",
       "apiBasePath": "/api/v1",
-      "scopes": [],
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
       "verificationSource": "manual-seed"
     }
   },
-  "taxonomy": [
-    {
-      "flagKey": "orchestrator", "serviceResourceType": "OR", "displayName": "Orchestrator",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Core Orchestrator service is not accessible.", "actionOwner": "user-config", "recommendedStep": "Verify connection credentials and ensure the External Application has OR.Default scope." },
-      "oauthScopeGroups": [
-        { "groupLabel": "Orchestrator — Core", "scopes": [
-          { "id": "OR.Default", "description": "General Orchestrator access" },
-          { "id": "OR.Administration", "description": "Administration" },
-          { "id": "OR.Folders", "description": "Full folder access" },
-          { "id": "OR.Folders.Read", "description": "Read folders" },
-          { "id": "OR.Execution", "description": "Full execution access" }
-        ]},
-        { "groupLabel": "Orchestrator — Jobs & Robots", "scopes": [
-          { "id": "OR.Jobs", "description": "Full job access" },
-          { "id": "OR.Jobs.Read", "description": "Read jobs" },
-          { "id": "OR.Jobs.Write", "description": "Write jobs" },
-          { "id": "OR.Robots", "description": "Full robot access" },
-          { "id": "OR.Robots.Read", "description": "Read robots" },
-          { "id": "OR.Machines", "description": "Full machine access" }
-        ]},
-        { "groupLabel": "Orchestrator — Queues & Assets", "scopes": [
-          { "id": "OR.Queues", "description": "Full queue access" },
-          { "id": "OR.Queues.Read", "description": "Read queues" },
-          { "id": "OR.Queues.Write", "description": "Write queues" },
-          { "id": "OR.Assets", "description": "Full asset access" },
-          { "id": "OR.Assets.Read", "description": "Read assets" },
-          { "id": "OR.Assets.Write", "description": "Write assets" }
-        ]},
-        { "groupLabel": "Orchestrator — Action Center & Storage", "scopes": [
-          { "id": "OR.Tasks", "description": "Full task access (Action Center)" },
-          { "id": "OR.Tasks.Read", "description": "Read tasks" },
-          { "id": "OR.Tasks.Write", "description": "Write tasks" },
-          { "id": "OR.Buckets", "description": "Full storage bucket access" },
-          { "id": "OR.Buckets.Read", "description": "Read storage buckets" },
-          { "id": "OR.Buckets.Write", "description": "Write storage buckets" },
-          { "id": "OR.Triggers", "description": "Full trigger access" },
-          { "id": "OR.Triggers.Read", "description": "Read triggers" },
-          { "id": "OR.Triggers.Write", "description": "Write triggers" }
-        ]},
-        { "groupLabel": "Orchestrator — Advanced", "scopes": [
-          { "id": "OR.Administration.Read", "description": "Read administration data" },
-          { "id": "OR.Administration.Write", "description": "Write administration data" },
-          { "id": "OR.Folders.Write", "description": "Write folders" },
-          { "id": "OR.Execution.Read", "description": "Read executions" },
-          { "id": "OR.Execution.Write", "description": "Write executions" },
-          { "id": "OR.Robots.Write", "description": "Write robots" },
-          { "id": "OR.Machines.Read", "description": "Read machines" },
-          { "id": "OR.Machines.Write", "description": "Write machines" },
-          { "id": "OR.Hypervisor", "description": "Full hypervisor access" },
-          { "id": "OR.Hypervisor.Read", "description": "Read hypervisor" },
-          { "id": "OR.Hypervisor.Write", "description": "Write hypervisor" },
-          { "id": "OR.Settings", "description": "Full settings access" },
-          { "id": "OR.Settings.Read", "description": "Read settings" },
-          { "id": "OR.Settings.Write", "description": "Write settings" },
-          { "id": "OR.Users", "description": "Full user access" },
-          { "id": "OR.Users.Read", "description": "Read users" },
-          { "id": "OR.Users.Write", "description": "Write users" },
-          { "id": "OR.License", "description": "Full license access" },
-          { "id": "OR.License.Read", "description": "Read licenses" },
-          { "id": "OR.License.Write", "description": "Write licenses" },
-          { "id": "OR.Monitoring", "description": "Full monitoring access" },
-          { "id": "OR.Monitoring.Read", "description": "Read monitoring" },
-          { "id": "OR.Monitoring.Write", "description": "Write monitoring" },
-          { "id": "OR.Analytics", "description": "Full analytics access" },
-          { "id": "OR.Analytics.Read", "description": "Read analytics" },
-          { "id": "OR.Analytics.Write", "description": "Write analytics" },
-          { "id": "OR.Audit", "description": "Full audit access" },
-          { "id": "OR.Audit.Read", "description": "Read audit logs" },
-          { "id": "OR.Audit.Write", "description": "Write audit logs" },
-          { "id": "OR.Webhooks", "description": "Full webhook access" },
-          { "id": "OR.Webhooks.Read", "description": "Read webhooks" },
-          { "id": "OR.Webhooks.Write", "description": "Write webhooks" },
-          { "id": "OR.ML", "description": "Full ML access" },
-          { "id": "OR.ML.Read", "description": "Read ML models" },
-          { "id": "OR.ML.Write", "description": "Write ML models" },
-          { "id": "OR.BackgroundTasks", "description": "Full background task access" },
-          { "id": "OR.BackgroundTasks.Read", "description": "Read background tasks" },
-          { "id": "OR.BackgroundTasks.Write", "description": "Write background tasks" },
-          { "id": "OR.TestSets", "description": "Full test set access" },
-          { "id": "OR.TestSets.Read", "description": "Read test sets" },
-          { "id": "OR.TestSets.Write", "description": "Write test sets" },
-          { "id": "OR.TestSetExecutions", "description": "Full test execution access" },
-          { "id": "OR.TestSetExecutions.Read", "description": "Read test executions" },
-          { "id": "OR.TestSetExecutions.Write", "description": "Write test executions" },
-          { "id": "OR.TestSetSchedules", "description": "Full test schedule access" },
-          { "id": "OR.TestSetSchedules.Read", "description": "Read test schedules" },
-          { "id": "OR.TestSetSchedules.Write", "description": "Write test schedules" },
-          { "id": "OR.TestDataQueues", "description": "Full test data queue access" },
-          { "id": "OR.TestDataQueues.Read", "description": "Read test data queues" },
-          { "id": "OR.TestDataQueues.Write", "description": "Write test data queues" },
-          { "id": "OR.AutomationSolutions.Access", "description": "Automation Solutions access" },
-          { "id": "OR.Processes", "description": "Full process access" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "actionCenter", "serviceResourceType": "OR", "displayName": "Action Center",
-      "category": "capability", "parentService": "orchestrator", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Action Center is not enabled on this tenant.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Action Center in UiPath Automation Cloud admin settings." }
-    },
-    {
-      "flagKey": "storageBuckets", "serviceResourceType": "OR", "displayName": "Storage Buckets",
-      "category": "capability", "parentService": "orchestrator", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Storage Buckets feature is not accessible.", "actionOwner": "uipath-admin", "recommendedStep": "Create at least one Storage Bucket in Orchestrator." }
-    },
-    {
-      "flagKey": "environments", "serviceResourceType": "OR", "displayName": "Environments",
-      "category": "capability", "parentService": "orchestrator", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Environments feature is not accessible.", "actionOwner": "uipath-admin", "recommendedStep": "Configure runtime environments in Orchestrator." }
-    },
-    {
-      "flagKey": "triggers", "serviceResourceType": "OR", "displayName": "Triggers",
-      "category": "capability", "parentService": "orchestrator", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Triggers feature is not accessible.", "actionOwner": "uipath-admin", "recommendedStep": "Ensure queue triggers or process schedules are configured in Orchestrator." }
-    },
-    {
-      "flagKey": "testManager", "serviceResourceType": "TM", "displayName": "Test Manager",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Test Manager is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Add the TestManager resource with TM.* scopes to your External Application in UiPath Admin." },
-      "oauthScopeGroups": [
-        { "groupLabel": "Test Manager", "scopes": [
-          { "id": "TM.TestCases", "description": "Full test case access" },
-          { "id": "TM.TestCases.Read", "description": "Read test cases" },
-          { "id": "TM.TestCases.Write", "description": "Write test cases" },
-          { "id": "TM.TestSets", "description": "Full test set access" },
-          { "id": "TM.TestSets.Read", "description": "Read test sets" },
-          { "id": "TM.TestSets.Write", "description": "Write test sets" },
-          { "id": "TM.TestExecutions", "description": "Full test execution access" },
-          { "id": "TM.TestExecutions.Read", "description": "Read test executions" },
-          { "id": "TM.Requirements", "description": "Full requirements access" },
-          { "id": "TM.Projects", "description": "Full project access" },
-          { "id": "TM.Projects.Read", "description": "Read projects" },
-          { "id": "TM.Users.Read", "description": "Read users" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "documentUnderstanding", "serviceResourceType": "DU", "displayName": "Document Understanding",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Document Understanding is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Add the UiPath.DocumentUnderstanding resource with Du.* scopes to your External Application." },
-      "oauthScopeGroups": [
-        { "groupLabel": "Document Understanding", "scopes": [
-          { "id": "Du.Classification.Api", "description": "Document classification" },
-          { "id": "Du.Digitization.Api", "description": "Document digitization (OCR)" },
-          { "id": "Du.Extraction.Api", "description": "Document data extraction" },
-          { "id": "Du.Validation.Api", "description": "Document validation" },
-          { "id": "Du.DocumentManager.Document", "description": "Document manager access" },
-          { "id": "Du.DataDeletion.Api", "description": "Data deletion" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "generativeExtraction", "serviceResourceType": "IXP", "displayName": "Generative Extraction",
-      "category": "capability", "parentService": "documentUnderstanding", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Generative Extraction is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Enable IXP on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope." }
-    },
-    {
-      "flagKey": "communicationsMining", "serviceResourceType": "REINFER", "displayName": "Communications Mining",
-      "category": "capability", "parentService": "documentUnderstanding", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Communications Mining is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Communications Mining on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope." }
-    },
-    {
-      "flagKey": "dataService", "serviceResourceType": "DF", "displayName": "Data Service",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Data Service is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Add the DataFabricOpenApi resource with DataFabric.* scopes to your External Application." },
-      "oauthScopeGroups": [
-        { "groupLabel": "Data Service", "scopes": [
-          { "id": "DataFabric.Schema.Read", "description": "Read data schemas" },
-          { "id": "DataFabric.Data.Read", "description": "Read data entities" },
-          { "id": "DataFabric.Data.Write", "description": "Write data entities" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "maestro", "serviceResourceType": "PIMS", "displayName": "Maestro",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Maestro is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Maestro on your tenant and add the PIMS resource with PIMS.* scopes." },
-      "oauthScopeGroups": [
-        { "groupLabel": "Maestro", "scopes": [
-          { "id": "PIMS.Default", "description": "General Maestro access" },
-          { "id": "PIMS.Read", "description": "Read Maestro data" },
-          { "id": "PIMS.Write", "description": "Write Maestro data" },
-          { "id": "PIMS.Process", "description": "Full process access" },
-          { "id": "PIMS.Process.Read", "description": "Read processes" },
-          { "id": "PIMS.Process.Write", "description": "Write processes" },
-          { "id": "PIMS.Execution", "description": "Full execution access" },
-          { "id": "PIMS.Execution.Read", "description": "Read executions" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "aiCenter", "serviceResourceType": "AI", "displayName": "AI Center",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "AI Center is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Add the UiPath.AICenter resource with AI.Deployer.Read scope to your External Application in UiPath Admin." },
-      "oauthScopeGroups": [
-        { "groupLabel": "AI Center", "scopes": [
-          { "id": "AI.Deployer.Read", "description": "Read AI deployments and skills" },
-          { "id": "AI.Deployer.Write", "description": "Write AI deployments and skills" },
-          { "id": "AI.Trainer.Read", "description": "Read AI training pipelines" },
-          { "id": "AI.Trainer.Write", "description": "Write AI training pipelines" },
-          { "id": "AI.Helper.Read", "description": "Read AI helper data" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "agents", "serviceResourceType": "AGENTS", "displayName": "Agents",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Agents service is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Agent Builder in UiPath Automation Cloud and add the ConversationalAgents resource to your External Application." }
-    },
-    {
-      "flagKey": "autopilot", "serviceResourceType": "AUTOPILOT", "displayName": "Autopilot",
-      "category": "capability", "parentService": "agents", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Autopilot capability is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Autopilot in Agent Builder settings." }
-    },
-    {
-      "flagKey": "automationHub", "serviceResourceType": "HUB", "displayName": "Automation Hub",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Automation Hub is not available.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Automation Hub on your tenant. Note: Automation Hub uses its own OAuth token, separate from the External Application." }
-    },
-    {
-      "flagKey": "integrationService", "serviceResourceType": "INTEGRATIONSERVICE", "displayName": "Integration Service",
-      "category": "service", "uiSection": "primary",
-      "defaultRemediationTemplate": { "reason": "Integration Service does not support External Application OAuth access. The probe endpoint (/api/Connections) requires session-based authentication that External Applications cannot provide.", "actionOwner": "not-actionable", "recommendedStep": "Integration Service connectors are discovered opportunistically but cannot be managed via External Application OAuth. No user action is available." }
-    },
-    {
-      "flagKey": "automationOps", "serviceResourceType": "AUTOMATIONOPS", "displayName": "Automation Ops",
-      "category": "service", "uiSection": "secondary",
-      "defaultRemediationTemplate": { "reason": "Automation Ops is not available. The probe endpoint (/api/v1/policies) returned a non-success response.", "actionOwner": "uipath-admin", "recommendedStep": "Enable Automation Ops on your tenant. Governance policies are accessed via Platform Management token (PM.* scopes). Ensure the External Application has PM.Security and PM.AuthSetting scopes." }
-    },
-    {
-      "flagKey": "automationStore", "serviceResourceType": "AUTOMATIONSTORE", "displayName": "Automation Store",
-      "category": "service", "uiSection": "secondary",
-      "defaultRemediationTemplate": { "reason": "Automation Store does not have a documented External Application API. The probe endpoint (/api/v1/) is not accessible with External Application tokens.", "actionOwner": "not-actionable", "recommendedStep": "Automation Store does not support External Application API access. No user action is available." }
-    },
-    {
-      "flagKey": "apps", "serviceResourceType": "APPS", "displayName": "Apps",
-      "category": "service", "uiSection": "secondary",
-      "defaultRemediationTemplate": { "reason": "UiPath Apps does not have a documented External Application API. The probe endpoint (/api/v1/apps) is not accessible with External Application tokens.", "actionOwner": "not-actionable", "recommendedStep": "UiPath Apps does not support External Application API access. No user action is available." }
-    },
-    {
-      "flagKey": "assistant", "serviceResourceType": "ASSISTANT", "displayName": "Assistant",
-      "category": "service", "uiSection": "secondary",
-      "defaultRemediationTemplate": { "reason": "UiPath Assistant is a desktop client without a documented cloud API for External Applications.", "actionOwner": "not-actionable", "recommendedStep": "UiPath Assistant is primarily a desktop application. No External Application API is available." }
-    },
-    {
-      "flagKey": "platformManagement", "serviceResourceType": "IDENTITY", "displayName": "Platform Management",
-      "category": "infrastructure", "uiSection": "infrastructure",
-      "defaultRemediationTemplate": { "reason": "Platform Management is not accessible.", "actionOwner": "user-config", "recommendedStep": "Add the PlatformManagement resource with PM.* scopes to your External Application." },
-      "oauthScopeGroups": [
-        { "groupLabel": "Platform Management", "scopes": [
-          { "id": "PM.Security", "description": "Security settings" },
-          { "id": "PM.AuthSetting", "description": "Auth settings" },
-          { "id": "PM.OAuthApp", "description": "OAuth application management" },
-          { "id": "PM.RobotAccount", "description": "Robot account access" },
-          { "id": "PM.RobotAccount.Read", "description": "Read robot accounts" },
-          { "id": "PM.RobotAccount.Write", "description": "Write robot accounts" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "ixp", "serviceResourceType": "IXP", "displayName": "IXP Platform",
-      "category": "infrastructure", "uiSection": "infrastructure",
-      "defaultRemediationTemplate": { "reason": "IXP platform is not accessible.", "actionOwner": "uipath-admin", "recommendedStep": "Add the Ixp.ExternalService resource with Ixp.ApiAccess scope." },
-      "oauthScopeGroups": [
-        { "groupLabel": "IXP / Communications Mining", "scopes": [
-          { "id": "Ixp.ApiAccess", "description": "IXP API access (Generative Extraction, Communications Mining)" }
-        ]}
-      ]
-    },
-    {
-      "flagKey": "attendedRobots", "serviceResourceType": "OR", "displayName": "Attended Robots",
-      "category": "observation", "uiSection": "observation"
-    },
-    {
-      "flagKey": "studioProjects", "serviceResourceType": "OR", "displayName": "Studio Projects",
-      "category": "observation", "uiSection": "observation"
-    },
-    {
-      "flagKey": "hasUnattendedSlots", "serviceResourceType": "OR", "displayName": "Unattended Slots",
-      "category": "observation", "uiSection": "observation"
-    }
-  ],
   "tokenEndpoint": "https://cloud.uipath.com/identity_/connect/token",
   "lastRefreshedAt": "2026-03-22T04:50:00.000Z",
   "lastVerifiedAt": "2026-03-22T04:50:00.000Z",

@@ -2,7 +2,7 @@ import { db } from "./db";
 import { appSettings } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import archiver from "archiver";
-import { metadataService as _mdsStatic } from "./catalog/metadata-service";
+import { metadataService as _mdsStatic, ORCHESTRATOR_ODATA_PATHS as ODP } from "./catalog/metadata-service";
 import type { ServiceResourceType } from "./catalog/metadata-schemas";
 import AdmZip from "adm-zip";
 import { createHash } from "crypto";
@@ -167,7 +167,7 @@ export async function fetchUiPathFolders(): Promise<{ success: boolean; folders?
     const token = await getAccessToken(config);
     const { metadataService } = await import("./catalog/metadata-service");
     const orchUrl = metadataService.getServiceUrl("OR", config);
-    const url = `${orchUrl}/odata/Folders?$orderby=DisplayName&$top=100`;
+    const url = `${orchUrl}${ODP.Folders}?$orderby=DisplayName&$top=100`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -239,7 +239,8 @@ export async function pushToUiPath(pkg: UiPathPackage, ideaId?: string, prebuilt
       } else if (result.status === 400) {
         friendlyMsg = `UiPath rejected the package (invalid format). Response: ${result.responseText.slice(0, 300)}`;
       } else if (result.status === 403) {
-        friendlyMsg = `Access denied. Your External Application may not have the "OR.Execution" or "OR.Default" scope. Check Admin > External Applications in UiPath Cloud.`;
+        const orchScopes = _mdsStatic.getScopeGuidance("orchestrator");
+        friendlyMsg = `Access denied. Your External Application may not have the required scope (${orchScopes}). Check Admin > External Applications in UiPath Cloud.`;
       } else {
         friendlyMsg += ` ${result.responseText.slice(0, 300)}`;
       }
@@ -329,7 +330,8 @@ export async function pushToUiPath(pkg: UiPathPackage, ideaId?: string, prebuilt
 
     let friendlyMsg = `Push failed: ${msg}`;
     if (msg.includes("invalid_scope")) {
-      friendlyMsg = `Authentication failed — invalid scopes. Make sure your External Application in UiPath Cloud has the required scopes (OR.Default, OR.Execution).`;
+      const orchScopeHint = _mdsStatic.getScopeGuidance("orchestrator");
+      friendlyMsg = `Authentication failed — invalid scopes. Make sure your External Application in UiPath Cloud has the required scopes (${orchScopeHint}).`;
     } else if (msg.includes("invalid_client")) {
       friendlyMsg = `Authentication failed — invalid App ID or App Secret. Verify your credentials in Admin > Integrations.`;
     }
@@ -362,7 +364,7 @@ async function resolvePackageVersionFromFeed(packageId: string, knownVersion: st
     const token = await getAccessToken(config);
     const base = orchBaseUrl(config);
     const hdrs = folderHeaders(config, token);
-    const feedUrl = `${base}/odata/Processes/UiPath.Server.Configuration.OData.GetPackageVersions(packageId='${encodeURIComponent(packageId)}')`;
+    const feedUrl = `${base}${ODP.GetPackageVersions(packageId)}`;
     const res = await fetch(feedUrl, { headers: hdrs, signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       const data = await res.json();
@@ -395,7 +397,7 @@ async function tryCreateRelease(
   folderLabel: string
 ): Promise<{ ok: boolean; status: number; data?: any; text?: string }> {
   console.log(`[UiPath] Creating process in ${folderLabel}: ${JSON.stringify(body)}`);
-  const res = await fetch(`${base}/odata/Releases`, {
+  const res = await fetch(`${base}${ODP.Releases}`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -423,7 +425,7 @@ export async function createProcess(
     const base = orchBaseUrl(config);
 
     const existingRes = await fetch(
-      `${base}/odata/Releases?$filter=ProcessKey eq '${encodeURIComponent(packageId)}'&$top=1`,
+      `${base}${ODP.Releases}?$filter=ProcessKey eq '${encodeURIComponent(packageId)}'&$top=1`,
       { headers }
     );
     if (existingRes.ok) {
@@ -431,7 +433,7 @@ export async function createProcess(
       if (existingData.value?.length > 0) {
         const existing = existingData.value[0];
         if (existing.ProcessVersion !== packageVersion) {
-          const updateRes = await fetch(`${base}/odata/Releases(${existing.Id})`, {
+          const updateRes = await fetch(`${base}${ODP.Releases}(${existing.Id})`, {
             method: "PATCH",
             headers,
             body: JSON.stringify({ ProcessVersion: packageVersion }),
@@ -455,7 +457,7 @@ export async function createProcess(
     }
 
     const pkgCheck = await fetch(
-      `${base}/odata/Processes?$filter=Id eq '${encodeURIComponent(packageId)}'&$top=1`,
+      `${base}${ODP.Processes}?$filter=Id eq '${encodeURIComponent(packageId)}'&$top=1`,
       { headers }
     );
     let packageInFeed = false;
@@ -497,7 +499,7 @@ export async function createProcess(
 
       let suggestedFolders: string[] = [];
       try {
-        const foldersRes = await fetch(`${base}/odata/Folders?$top=50&$orderby=DisplayName`, {
+        const foldersRes = await fetch(`${base}${ODP.Folders}?$top=50&$orderby=DisplayName`, {
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         });
         if (foldersRes.ok) {
@@ -520,7 +522,7 @@ export async function createProcess(
     }
 
     if (result.status === 403) {
-      return { success: false, message: "Access denied creating process. Ensure your app has OR.Execution scope with Create permission." };
+      return { success: false, message: `Access denied creating process. ${_mdsStatic.getRemediationStep("orchestrator")}` };
     }
     return { success: false, message: `Failed to create process (${result.status}): ${(result.text || "").slice(0, 200)}` };
   } catch (err: any) {
@@ -538,11 +540,11 @@ export async function listMachines(): Promise<{ success: boolean; machines?: any
     const headers = folderHeaders(config, token);
     const base = orchBaseUrl(config);
 
-    const res = await fetch(`${base}/odata/Machines?$top=50&$orderby=Name`, { headers });
+    const res = await fetch(`${base}${ODP.Machines}?$top=50&$orderby=Name`, { headers });
     if (!res.ok) {
       const errText = await res.text();
       if (res.status === 403) {
-        return { success: false, message: "Access denied. Ensure your app has OR.Machines.Read scope." };
+        return { success: false, message: `Access denied. ${_mdsStatic.getRemediationStep("orchestrator")}` };
       }
       return { success: false, message: `Failed to fetch machines (${res.status}): ${errText.slice(0, 200)}` };
     }
@@ -569,11 +571,11 @@ export async function listRobots(): Promise<{ success: boolean; robots?: any[]; 
     const headers = folderHeaders(config, token);
     const base = orchBaseUrl(config);
 
-    const res = await fetch(`${base}/odata/Sessions?$top=50&$orderby=Robot/Name`, { headers });
+    const res = await fetch(`${base}${ODP.Sessions}?$top=50&$orderby=Robot/Name`, { headers });
     if (!res.ok) {
       const errText = await res.text();
       if (res.status === 403) {
-        return { success: false, message: "Access denied. Ensure your app has OR.Robots.Read scope." };
+        return { success: false, message: `Access denied. ${_mdsStatic.getRemediationStep("orchestrator")}` };
       }
       return { success: false, message: `Failed to fetch robots (${res.status}): ${errText.slice(0, 200)}` };
     }
@@ -602,7 +604,7 @@ export async function listProcesses(): Promise<{ success: boolean; processes?: a
     const headers = folderHeaders(config, token);
     const base = orchBaseUrl(config);
 
-    const res = await fetch(`${base}/odata/Releases?$top=50&$orderby=Name`, { headers });
+    const res = await fetch(`${base}${ODP.Releases}?$top=50&$orderby=Name`, { headers });
     if (!res.ok) {
       const errText = await res.text();
       return { success: false, message: `Failed to fetch processes (${res.status}): ${errText.slice(0, 200)}` };
@@ -660,16 +662,29 @@ export async function discoverGovernancePolicies(): Promise<AutomationOpsResult>
       "Content-Type": "application/json",
     };
 
-    const policiesRes = await fetch(`${base}/automationops_/api/v1/policies?$top=100`, { headers }).catch(() => null);
+    const aopsTaxEntry = metadataService.getCapabilityTaxonomyEntry("automationOps");
+    const aopsServiceUrl = metadataService.getServiceUrl("AUTOMATIONOPS", config);
+    const aopsSecondaryPaths = aopsTaxEntry?.secondaryProbePaths || [];
+    const aopsPoliciesPath = aopsSecondaryPaths[0];
+    const aopsRulesPath = aopsSecondaryPaths[1];
+    const aopsLabel = aopsTaxEntry?.displayName || "Automation Ops";
+
+    if (!aopsPoliciesPath) {
+      return { available: false, policies: [], message: `${aopsLabel} probe paths not configured in taxonomy.` };
+    }
+
+    const policiesRes = await fetch(`${aopsServiceUrl}${aopsPoliciesPath}`, { headers }).catch(() => null);
     if (!policiesRes || !policiesRes.ok) {
       if (policiesRes && policiesRes.status === 404) {
-        return { available: false, policies: [], message: "Automation Ops is not enabled on this tenant." };
+        return { available: false, policies: [], message: `${aopsLabel} is not enabled on this tenant.` };
       }
       if (policiesRes && policiesRes.status === 403) {
-        return { available: false, policies: [], message: "Access denied to Automation Ops. Check app scopes." };
+        return { available: false, policies: [], message: `Access denied to ${aopsLabel}. Check app scopes.` };
       }
 
-      const rulesRes = await fetch(`${base}/automationops_/api/rules?$top=50`, { headers }).catch(() => null);
+      const rulesRes = aopsRulesPath
+        ? await fetch(`${aopsServiceUrl}${aopsRulesPath}`, { headers }).catch(() => null)
+        : null;
       if (rulesRes && rulesRes.ok) {
         const rulesData = await rulesRes.json();
         const rules = (rulesData.value || rulesData.items || []);
@@ -745,7 +760,7 @@ export async function discoverAttendedRobots(): Promise<AttendedRobotInfo> {
     const headers = folderHeaders(config, token);
     const base = orchBaseUrl(config);
 
-    const res = await fetch(`${base}/odata/Sessions?$top=100&$expand=Robot`, { headers });
+    const res = await fetch(`${base}${ODP.Sessions}?$top=100&$expand=Robot`, { headers });
     if (!res.ok) {
       return { available: false, attendedRobots: [], unattendedRobots: [], hasAttended: false, hasUnattended: false, message: `Sessions API returned ${res.status}` };
     }
@@ -811,8 +826,8 @@ export async function discoverStudioProjects(): Promise<StudioProcessesResult> {
     const base = orchBaseUrl(config);
 
     const [releasesRes, packagesRes] = await Promise.all([
-      fetch(`${base}/odata/Releases?$top=200&$orderby=Name&$select=Id,Name,ProcessKey,ProcessVersion,Description`, { headers }).catch(() => null),
-      fetch(`${base}/odata/Processes?$top=200&$orderby=Title&$select=Id,Title,Version,Description,IsActive`, { headers }).catch(() => null),
+      fetch(`${base}${ODP.Releases}?$top=200&$orderby=Name&$select=Id,Name,ProcessKey,ProcessVersion,Description`, { headers }).catch(() => null),
+      fetch(`${base}${ODP.Processes}?$top=200&$orderby=Title&$select=Id,Title,Version,Description,IsActive`, { headers }).catch(() => null),
     ]);
 
     const projects: StudioProject[] = [];
@@ -891,7 +906,7 @@ export async function startJob(
     console.log(`[UiPath] Starting job: ${JSON.stringify(body)}`);
 
     const res = await fetch(
-      `${base}/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs`,
+      `${base}${ODP.StartJobs}`,
       { method: "POST", headers, body: JSON.stringify(body) }
     );
 
@@ -900,7 +915,7 @@ export async function startJob(
 
     if (!res.ok) {
       if (res.status === 403) {
-        return { success: false, message: "Access denied. Ensure your app has OR.Jobs scope with Create permission." };
+        return { success: false, message: `Access denied. ${_mdsStatic.getRemediationStep("orchestrator")}` };
       }
       let errorDetail = text.slice(0, 300);
       try {
@@ -939,7 +954,7 @@ export async function getJobStatus(jobId: number): Promise<{ success: boolean; m
     const headers = folderHeaders(config, token);
     const base = orchBaseUrl(config);
 
-    const res = await fetch(`${base}/odata/Jobs(${jobId})`, { headers });
+    const res = await fetch(`${base}${ODP.Jobs}(${jobId})`, { headers });
     if (!res.ok) {
       return { success: false, message: `Failed to fetch job status (${res.status})` };
     }
@@ -989,7 +1004,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
   const base = orchBaseUrl(config);
 
   try {
-    const res = await fetch(`${base}/odata/Folders?$top=1`, { headers });
+    const res = await fetch(`${base}${ODP.Folders}?$top=1`, { headers });
     if (res.ok) {
       checks.push({ name: "API Access", status: "pass", message: "Connected to Orchestrator API." });
     } else {
@@ -1003,7 +1018,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
 
   if (config.folderId) {
     try {
-      const res = await fetch(`${base}/odata/Folders?$filter=Id eq ${config.folderId}`, { headers });
+      const res = await fetch(`${base}${ODP.Folders}?$filter=Id eq ${config.folderId}`, { headers });
       if (res.ok) {
         const data = await res.json();
         if (data.value?.length > 0) {
@@ -1022,7 +1037,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
   if (packageId) {
     try {
       const res = await fetch(
-        `${base}/odata/Processes?$filter=Id eq '${encodeURIComponent(packageId)}'&$top=1`,
+        `${base}${ODP.Processes}?$filter=Id eq '${encodeURIComponent(packageId)}'&$top=1`,
         { headers }
       );
       if (res.ok) {
@@ -1040,7 +1055,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
 
     try {
       const res = await fetch(
-        `${base}/odata/Releases?$filter=ProcessKey eq '${encodeURIComponent(packageId)}'&$top=1`,
+        `${base}${ODP.Releases}?$filter=ProcessKey eq '${encodeURIComponent(packageId)}'&$top=1`,
         { headers }
       );
       if (res.ok) {
@@ -1063,7 +1078,7 @@ export async function runHealthCheck(packageId?: string): Promise<{
   }
 
   try {
-    const res = await fetch(`${base}/odata/Sessions?$top=10`, { headers });
+    const res = await fetch(`${base}${ODP.Sessions}?$top=10`, { headers });
     if (res.ok) {
       const data = await res.json();
       const sessions = data.value || [];
@@ -1091,14 +1106,14 @@ export async function runHealthCheck(packageId?: string): Promise<{
         });
       }
     } else {
-      checks.push({ name: "Robots", status: "warn", message: "Could not check robot sessions. You may need OR.Robots.Read scope." });
+      checks.push({ name: "Robots", status: "warn", message: `Could not check robot sessions. ${_mdsStatic.getRemediationStep("orchestrator")}` });
     }
   } catch (e: any) {
     checks.push({ name: "Robots", status: "warn", message: "Could not check robot sessions." });
   }
 
   try {
-    const res = await fetch(`${base}/odata/Machines?$top=10`, { headers });
+    const res = await fetch(`${base}${ODP.Machines}?$top=10`, { headers });
     if (res.ok) {
       const data = await res.json();
       const machines = data.value || [];
@@ -1148,8 +1163,8 @@ export type LicenseInfo = {
 async function fetchLicenseInfo(orchBase: string, hdrs: Record<string, string>): Promise<LicenseInfo | null> {
   try {
     const [runtimeRes, namedUserRes] = await Promise.all([
-      fetch(`${orchBase}/odata/LicensesRuntime`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/LicensesNamedUser`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}${ODP.LicensesRuntime}`, { headers: hdrs }).catch(() => null),
+      fetch(`${orchBase}${ODP.LicensesNamedUser}`, { headers: hdrs }).catch(() => null),
     ]);
 
     const runtime: LicenseInfo["runtime"] = [];
@@ -1172,7 +1187,7 @@ async function fetchLicenseInfo(orchBase: string, hdrs: Record<string, string>):
 
     if (!runtimeRes?.ok) {
       try {
-        const settingsRes = await fetch(`${orchBase}/odata/Settings/UiPath.Server.Configuration.OData.GetLicense`, { headers: hdrs });
+        const settingsRes = await fetch(`${orchBase}${ODP.GetLicense}`, { headers: hdrs });
         if (settingsRes.ok) {
           const data = await settingsRes.json();
           if (data.Attended !== undefined) runtime.push({ type: "Attended", allowed: data.Attended || 0, used: 0, available: data.Attended || 0 });
@@ -1358,6 +1373,116 @@ export function getProbeCache(): UnifiedProbeResult | null {
   return _probeCache;
 }
 
+async function fetchWithAlternates(
+  primaryUrl: string,
+  alternateUrls: string[],
+  headers: Record<string, string>,
+  resourceType: string,
+  probePath?: string,
+): Promise<{ res: Response | null; usedUrl: string; triedAlternate: boolean }> {
+  try {
+    const res = await fetch(primaryUrl, { headers });
+    if (res.ok || res.status === 401 || res.status === 403) {
+      return { res, usedUrl: primaryUrl, triedAlternate: false };
+    }
+  } catch { /* primary failed, try alternates */ }
+
+  for (const alt of alternateUrls) {
+    if (alt === primaryUrl) continue;
+    try {
+      const res = await fetch(alt, { headers });
+      if (res.ok || res.status === 401 || res.status === 403) {
+        const baseUrl = probePath ? alt.replace(probePath, "") : alt;
+        console.log(`[UiPath Probe] ${resourceType}: primary URL failed, alternate succeeded: ${baseUrl}`);
+        const { metadataService: mds } = await import("./catalog/metadata-service");
+        mds.setActiveEndpoint(resourceType as import("./catalog/metadata-schemas").ServiceResourceType, baseUrl);
+        return { res, usedUrl: alt, triedAlternate: true };
+      }
+    } catch { /* alternate also failed */ }
+  }
+
+  try {
+    const res = await fetch(primaryUrl, { headers });
+    return { res, usedUrl: primaryUrl, triedAlternate: false };
+  } catch {
+    return { res: null, usedUrl: primaryUrl, triedAlternate: false };
+  }
+}
+
+type ProbeResultEntry = {
+  available: boolean;
+  httpStatus: number | null;
+  reachability: "reachable" | "limited" | "unreachable" | "unknown";
+  response?: Response | null;
+  authLimited?: boolean;
+};
+
+function isServiceReachable(res: Response | null): boolean {
+  if (!res) return false;
+  if (res.ok) return true;
+  if (res.status === 403 || res.status === 401) return true;
+  if (res.status >= 300 && res.status < 400) return true;
+  return false;
+}
+
+function getServiceReachabilityStatus(res: Response | null): "reachable" | "limited" | "unreachable" | "unknown" {
+  if (!res) return "unknown";
+  if (res.ok) return "reachable";
+  if (res.status === 401 || res.status === 403) return "limited";
+  if (res.status >= 300 && res.status < 400) return "limited";
+  return "unreachable";
+}
+
+async function probeEndpointByTaxonomy(
+  entry: import("./catalog/metadata-schemas").CapabilityTaxonomyEntry,
+  config: UiPathConfig,
+  headersByToken: Record<string, Record<string, string>>,
+  metadataSvc: typeof import("./catalog/metadata-service").metadataService,
+): Promise<ProbeResultEntry> {
+  const pc = entry.probeConfig;
+  if (!pc) return { available: false, httpStatus: null, reachability: "unknown" };
+
+  const svcType = entry.serviceResourceType as import("./catalog/metadata-schemas").ServiceResourceType;
+  const serviceUrl = metadataSvc.getServiceUrl(svcType, config);
+  const probePath = pc.probePath;
+  const hdrs = headersByToken[pc.tokenResource || "OR"] || headersByToken["OR"];
+  const primaryUrl = `${serviceUrl}${probePath}`;
+
+  try {
+    let res: Response | null = null;
+    if (pc.useAlternates) {
+      const alternates = metadataSvc.getServiceUrlAlternates(svcType, config);
+      const result = await fetchWithAlternates(
+        primaryUrl,
+        alternates.map(u => `${u}${probePath}`),
+        hdrs,
+        svcType,
+        probePath,
+      );
+      res = result.res;
+      if (result.triedAlternate) {
+        console.log(`[UiPath Probe] ${entry.displayName}: alternate URL succeeded: ${result.usedUrl}`);
+      }
+    } else {
+      res = await fetch(primaryUrl, { headers: hdrs, redirect: "manual" }).catch(() => null);
+    }
+
+    const reachability = getServiceReachabilityStatus(res);
+    const isOk = res?.ok ?? false;
+    const isAuthLimited = !isOk && (res?.status === 401 || res?.status === 403);
+    const available = isOk || (!!pc.acceptLimitedAuth && isAuthLimited);
+    if (available) {
+      const status = isAuthLimited ? "limited" as const : reachability;
+      console.log(`[UiPath Probe] ${entry.displayName} ${isAuthLimited ? "reachable (auth-limited)" : "available"} (${res?.status})`);
+      metadataSvc.updateServiceReachability(svcType, status);
+    }
+    return { available, httpStatus: res?.status ?? null, reachability, response: res, authLimited: isAuthLimited };
+  } catch (e: any) {
+    console.warn(`[UiPath Probe] ${entry.displayName} probe failed: ${e.message}`);
+    return { available: false, httpStatus: null, reachability: "unknown" };
+  }
+}
+
 async function probeAllServices(): Promise<UnifiedProbeResult> {
   const { getConfigLoadedAt } = await import("./uipath-auth");
   const currentConfigAt = getConfigLoadedAt();
@@ -1365,19 +1490,21 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     return _probeCache;
   }
 
+  const { metadataService } = await import("./catalog/metadata-service");
+  const taxonomy = metadataService.getCapabilityTaxonomy();
+  const taxonomyByFlag = new Map<string, import("./catalog/metadata-schemas").CapabilityTaxonomyEntry>();
+  for (const entry of taxonomy) {
+    taxonomyByFlag.set(entry.flagKey, entry);
+  }
+
+  const emptyFlags: UnifiedProbeResult["flags"] = {} as UnifiedProbeResult["flags"];
+  for (const entry of taxonomy) {
+    (emptyFlags as Record<string, boolean>)[entry.flagKey] = false;
+  }
+
   const empty: UnifiedProbeResult = {
     configured: false,
-    flags: {
-      orchestrator: false, actionCenter: false, testManager: false,
-      documentUnderstanding: false, generativeExtraction: false, communicationsMining: false,
-      dataService: false, platformManagement: false,
-      environments: true, triggers: true, storageBuckets: false, aiCenter: false, agents: false,
-      autopilot: false,
-      maestro: false, integrationService: false, ixp: false,
-      automationHub: false, automationOps: false, automationStore: false,
-      apps: false, assistant: false,
-      attendedRobots: false, studioProjects: false, hasUnattendedSlots: false,
-    },
+    flags: { ...emptyFlags },
     grantedScopes: [],
     licenseInfo: null,
     aiCenterSkills: [],
@@ -1396,8 +1523,6 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     const { getHeaders: getOrHeaders, tryAcquireResourceToken, getDuToken } = await import("./uipath-auth");
     const token = await getAccessToken(config);
     const hdrs = await getOrHeaders();
-    const { metadataService } = await import("./catalog/metadata-service");
-    const base = metadataService.getCloudBaseUrl(config);
     const orchBase = metadataService.getServiceUrl("OR", config);
 
     let grantedScopes: string[] = [];
@@ -1413,11 +1538,12 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       grantedScopes = config.scopes.split(/\s+/);
     }
 
-    const orchRes = await fetch(`${orchBase}/odata/Folders?$top=1`, { headers: hdrs });
-    const orchOk = orchRes.ok;
-    if (!orchOk) {
+    const orchEntry = taxonomyByFlag.get("orchestrator");
+    const orchProbePath = orchEntry!.probeConfig!.probePath;
+    const orchRes = await fetch(`${orchBase}${orchProbePath}`, { headers: hdrs });
+    if (!orchRes.ok) {
       const result: UnifiedProbeResult = {
-        configured: true, flags: { ...empty.flags, orchestrator: false, environments: false, triggers: false, apps: false },
+        configured: true, flags: { ...emptyFlags, orchestrator: false, environments: false, triggers: false, apps: false },
         grantedScopes, licenseInfo: null, aiCenterSkills: [], aiCenterPackages: [],
         governancePolicies: [],
         probeHttpStatuses: { orchestrator: orchRes.status },
@@ -1428,45 +1554,125 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       return result;
     }
 
-    const [acRes, envRes, trigRes, schedRes, bucketRes, licenseInfo] = await Promise.all([
-      fetch(`${orchBase}/odata/TaskCatalogs?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/Environments?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/QueueTriggers?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/ProcessSchedules?$top=1`, { headers: hdrs }).catch(() => null),
-      fetch(`${orchBase}/odata/Buckets?$top=1`, { headers: hdrs }).catch(() => null),
-      fetchLicenseInfo(orchBase, hdrs),
-    ]);
+    type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "AI";
+    const { TOKEN_RESOURCE_TO_SERVICE: resToSvc } = await import("./catalog/metadata-service");
+    const guardedTokenAcquire = (rt: ResourceType) => {
+      const svcType = (resToSvc[rt] || rt) as import("./catalog/metadata-schemas").ServiceResourceType;
+      if (!metadataService.hasOidcScopeFamily(svcType)) {
+        console.log(`[UiPath Probe] ${rt}: no OIDC scope family — skipping token acquisition`);
+        return Promise.resolve({ ok: false, scopes: [] as string[] });
+      }
+      return tryAcquireResourceToken(rt);
+    };
+
+    type TokenResult = PromiseSettledResult<{ ok: boolean; scopes: string[] }>;
+    const tokenResults: Record<string, TokenResult> = {};
+    const tokenResourceSet = new Set<string>();
+    const tokenFlagMap: Record<string, string> = {};
+    for (const entry of taxonomy) {
+      const tokenRes = entry.probeConfig?.tokenResource;
+      if (tokenRes && tokenRes !== "OR") {
+        tokenResourceSet.add(tokenRes);
+        tokenFlagMap[tokenRes] = entry.flagKey;
+      }
+    }
+    const tokenResources = Array.from(tokenResourceSet) as ResourceType[];
+    const settled = await Promise.allSettled(tokenResources.map(rt => guardedTokenAcquire(rt)));
+    for (let i = 0; i < tokenResources.length; i++) {
+      tokenResults[tokenResources[i]] = settled[i];
+    }
+
+    const isTokenOk = (rt: string): boolean => {
+      const r = tokenResults[rt];
+      return r?.status === "fulfilled" && r.value.ok;
+    };
+
+    const tokenFailures: Record<string, string> = {};
+    for (const [rt, flagKey] of Object.entries(tokenFlagMap)) {
+      const result = tokenResults[rt];
+      if (!result) continue;
+      if (result.status === "rejected") {
+        tokenFailures[flagKey] = `Token acquisition rejected: ${(result as PromiseRejectedResult).reason?.message || "unknown error"}`;
+      } else if (!result.value.ok) {
+        tokenFailures[flagKey] = "Token acquisition failed: resource not provisioned or missing scopes";
+      }
+    }
+
+    const headersByToken: Record<string, Record<string, string>> = { OR: hdrs };
+    const authModule = await import("./uipath-auth");
+    const tokenGetterMap: Record<string, () => Promise<string>> = {
+      DU: authModule.getDuToken, AI: authModule.getAiToken,
+      IXP: authModule.getIxpToken, PM: authModule.getPmToken,
+      TM: authModule.getTmToken, DF: authModule.getDfToken,
+    };
+    const tokenGetters: Record<string, () => Promise<string>> = {};
+    for (const rt of tokenResources) {
+      if (tokenGetterMap[rt]) tokenGetters[rt] = tokenGetterMap[rt];
+    }
+    for (const [rt, getter] of Object.entries(tokenGetters)) {
+      if (isTokenOk(rt)) {
+        try {
+          const tok = await getter();
+          headersByToken[rt] = { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" };
+        } catch { headersByToken[rt] = hdrs; }
+      } else {
+        headersByToken[rt] = hdrs;
+      }
+    }
+    if (config.folderId && headersByToken["DU"]) {
+      headersByToken["DU"]["X-UIPATH-OrganizationUnitId"] = config.folderId;
+    }
+
+    const parentApiEntries = taxonomy.filter(e => e.probeStrategy === "parent-api" && e.probeConfig);
+    const resolveParentApiProbe = (e: import("./catalog/metadata-schemas").CapabilityTaxonomyEntry) => {
+      const tokenRes = e.probeConfig?.tokenResource || "OR";
+      const probeHdrs = headersByToken[tokenRes] || hdrs;
+      const parentFlag = e.parentService;
+      let baseUrl = orchBase;
+      if (parentFlag) {
+        const parentEntry = taxonomyByFlag.get(parentFlag);
+        if (parentEntry?.serviceResourceType) {
+          try { baseUrl = metadataService.getServiceUrl(parentEntry.serviceResourceType, config); } catch { /* fallback */ }
+        }
+      }
+      if (tokenRes !== "OR" && tokenRes !== "PM") {
+        try { baseUrl = metadataService.getServiceUrl(tokenRes as import("./catalog/metadata-schemas").ServiceResourceType, config); } catch { /* fallback */ }
+      }
+      if (tokenRes === "PM") {
+        try { baseUrl = metadataService.getServiceUrl("AUTOMATIONOPS" as import("./catalog/metadata-schemas").ServiceResourceType, config); } catch { /* fallback */ }
+      }
+      return fetch(`${baseUrl}${e.probeConfig!.probePath}`, { headers: probeHdrs }).catch(() => null);
+    };
+    const parentApiProbes = await Promise.all(parentApiEntries.map(resolveParentApiProbe));
+    const parentApiResults: Record<string, Response | null> = {};
+    for (let i = 0; i < parentApiEntries.length; i++) {
+      parentApiResults[parentApiEntries[i].flagKey] = parentApiProbes[i];
+    }
+    const acRes = parentApiResults["actionCenter"] ?? null;
+    const envRes = parentApiResults["environments"] ?? null;
+    const trigRes = parentApiResults["triggers"] ?? null;
+    const bucketRes = parentApiResults["storageBuckets"] ?? null;
+    const trigTaxEntry = taxonomyByFlag.get("triggers");
+    const trigSecondaryPaths = trigTaxEntry?.secondaryProbePaths || [];
+    const schedRes = trigSecondaryPaths.length > 0
+      ? await fetch(`${orchBase}${trigSecondaryPaths[0]}`, { headers: hdrs }).catch(() => null)
+      : null;
+    const licenseInfo = await fetchLicenseInfo(orchBase, hdrs);
 
     let acAvailable = false;
     if (acRes) {
       if (acRes.ok) {
         const acText = await acRes.text();
         const isHTML = acText.trim().startsWith("<");
-        if (isHTML) {
-          acAvailable = false;
-          console.warn("[UiPath Probe] Action Center returned HTML (not a genuine API response) — marking as unavailable");
-        } else {
+        if (!isHTML) {
           try {
             const data = JSON.parse(acText);
             const hasError = data.errorCode || data["odata.error"] || (data.message && typeof data.message === "string" && data.message.includes("not onboarded"));
-            if (hasError) {
-              acAvailable = false;
-              console.warn("[UiPath Probe] Action Center endpoint returned error (not onboarded or errored) — marking as unavailable");
-            } else {
-              acAvailable = true;
-              console.log("[UiPath Probe] Action Center API responded with valid data — marking as available");
-            }
-          } catch (e: any) {
-            console.warn(`[UiPath Probe] Action Center response not valid JSON: ${e.message}`);
-            acAvailable = false;
-          }
+            acAvailable = !hasError;
+          } catch { acAvailable = false; }
         }
       } else if (acRes.status === 401 || acRes.status === 403) {
         acAvailable = true;
-        console.log(`[UiPath Probe] Action Center returned ${acRes.status} — reachable but unauthorized, marking as available (limited)`);
-      } else {
-        acAvailable = false;
-        console.warn(`[UiPath Probe] Action Center returned ${acRes.status} — marking as unavailable`);
       }
     }
 
@@ -1479,197 +1685,163 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     const queueTriggersOk = trigRes ? (trigRes.ok || trigRes.status === 400) && trigRes.status !== 404 && trigRes.status !== 405 : false;
     const processSchedulesOk = schedRes ? (schedRes.ok || schedRes.status === 400) && schedRes.status !== 404 && schedRes.status !== 405 : false;
     const triggersAvailable = queueTriggersOk || processSchedulesOk;
-
     const bucketsAvailable = bucketRes ? bucketRes.ok : false;
 
-    const [tmResult, duResult, pmResult, dfResult, ixpResult, aiResult] = await Promise.allSettled([
-      tryAcquireResourceToken("TM"),
-      tryAcquireResourceToken("DU"),
-      tryAcquireResourceToken("PM"),
-      tryAcquireResourceToken("DF"),
-      tryAcquireResourceToken("IXP"),
-      tryAcquireResourceToken("AI"),
-    ]);
+    const taxonomyProbeEntries = taxonomy.filter(e =>
+      e.probeStrategy === "own-endpoint" && e.probeConfig && !e.customProbeHandler
+    );
 
-    const tokenFailures: Record<string, string> = {};
-    const recordTokenFailure = (flagKey: string, result: PromiseSettledResult<{ ok: boolean; scopes: string[] }>) => {
-      if (result.status === "rejected") {
-        tokenFailures[flagKey] = `Token acquisition rejected: ${(result as PromiseRejectedResult).reason?.message || "unknown error"}`;
-      } else if (!result.value.ok) {
-        tokenFailures[flagKey] = "Token acquisition failed: resource not provisioned or missing scopes";
-      }
-    };
-    recordTokenFailure("testManager", tmResult);
-    recordTokenFailure("documentUnderstanding", duResult);
-    recordTokenFailure("platformManagement", pmResult);
-    recordTokenFailure("dataService", dfResult);
-    recordTokenFailure("ixp", ixpResult);
-    recordTokenFailure("aiCenter", aiResult);
-
-    let tmAvailable = false;
-    if (tmResult.status === "fulfilled" && tmResult.value.ok) {
-      tmAvailable = true;
-      console.log("[UiPath Probe] TM token acquired — Test Manager available");
+    const taxonomyProbeResults = await Promise.all(
+      taxonomyProbeEntries.map(entry => probeEndpointByTaxonomy(entry, config, headersByToken, metadataService))
+    );
+    const probeFlags: Record<string, boolean> = {};
+    const probeHttpStatuses: Record<string, number | null> = {};
+    for (let i = 0; i < taxonomyProbeEntries.length; i++) {
+      const entry = taxonomyProbeEntries[i];
+      const result = taxonomyProbeResults[i];
+      probeFlags[entry.flagKey] = result.available;
+      probeHttpStatuses[entry.flagKey] = result.httpStatus;
     }
 
-    const isServiceReachable = (res: Response | null): boolean => {
-      if (!res) return false;
-      if (res.ok) return true;
-      if (res.status === 403 || res.status === 401) return true;
-      if (res.status >= 300 && res.status < 400) return true;
-      return false;
-    };
-
-    const getServiceReachabilityStatus = (res: Response | null): "reachable" | "limited" | "unreachable" | "unknown" => {
-      if (!res) return "unknown";
-      if (res.ok) return "reachable";
-      if (res.status === 401 || res.status === 403) return "limited";
-      if (res.status >= 300 && res.status < 400) return "limited";
-      return "unreachable";
-    };
-
-    let aiProbeHdrs = hdrs;
-    if (aiResult.status === "fulfilled" && aiResult.value.ok) {
-      try {
-        const aiTok = await (await import("./uipath-auth")).getAiToken();
-        aiProbeHdrs = { Authorization: `Bearer ${aiTok}`, "Content-Type": "application/json" };
-      } catch (e: any) { console.warn(`[UiPath Probe] AI token acquisition failed: ${e.message}`); aiProbeHdrs = hdrs; }
+    let tmAvailable = probeFlags["testManager"] ?? false;
+    if (!tmAvailable && isTokenOk("TM")) {
+      tmAvailable = true;
     }
 
     let duAvailable = false;
     let genExtractionAvailable = false;
     let commsMiningAvailable = false;
     let duProbeStatus: number | null = null;
-    if (duResult.status === "fulfilled" && duResult.value.ok) {
-      const duTok = await getDuToken();
-      const duHdrs: Record<string, string> = { Authorization: `Bearer ${duTok}`, "Content-Type": "application/json" };
-      if (config.folderId) duHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
-      const duServiceUrl = metadataService.getServiceUrl("DU", config);
-      const duProbeUrl = `${duServiceUrl}/api/framework/projects?api-version=1`;
-      try {
-        const duRes = await fetch(duProbeUrl, { headers: duHdrs });
-        duProbeStatus = duRes.status;
-        console.log(`[UiPath Probe] DU Discovery: ${duProbeUrl} -> ${duRes.status}`);
-        if (duRes.ok) {
-          duAvailable = true;
-          metadataService.updateServiceReachability("DU", "reachable");
-        } else if (duRes.status === 403) {
-          console.warn(`[UiPath Probe] DU token got 403 — scopes may be insufficient for Discovery API`);
-          metadataService.updateServiceReachability("DU", "limited");
-        }
-      } catch (e: any) { console.warn(`[UiPath Probe] DU probe failed: ${e.message}`); }
+    if (isTokenOk("DU")) {
+      const duEntry = taxonomyByFlag.get("documentUnderstanding");
+      if (duEntry?.probeConfig) {
+        const duResult = await probeEndpointByTaxonomy(duEntry, config, headersByToken, metadataService);
+        duAvailable = duResult.available;
+        duProbeStatus = duResult.httpStatus;
+      }
 
-      const ixpServiceUrl = metadataService.getServiceUrl("IXP", config);
-      const ixpProbeUrl = `${ixpServiceUrl}/api/v1/projects`;
+      const genEntry = taxonomyByFlag.get("generativeExtraction");
+      if (genEntry?.probeConfig) {
+        const genResult = await probeEndpointByTaxonomy(genEntry, config, headersByToken, metadataService);
+        if (genResult.available && genResult.response?.ok) {
+          try {
+            const text = await genResult.response.text();
+            const trimmed = text.trim();
+            if (trimmed.length > 0 && !trimmed.startsWith("<")) {
+              const parsed = JSON.parse(trimmed);
+              genExtractionAvailable = !parsed.errorCode && !parsed.ErrorCode && !parsed["odata.error"];
+            }
+          } catch { genExtractionAvailable = false; }
+        }
+      }
+    }
+
+    const cmEntry = taxonomyByFlag.get("communicationsMining");
+    if (cmEntry?.probeConfig) {
+      const reinferUrl = metadataService.getServiceUrl("REINFER", config);
+      const cmProbeUrl = `${reinferUrl}${cmEntry.probeConfig.probePath}`;
+      const ixpHdrs = headersByToken["IXP"] || hdrs;
       try {
-        const ixpRes = await fetch(ixpProbeUrl, { headers: duHdrs });
-        console.log(`[UiPath Probe] IXP Generative Extraction: ${ixpProbeUrl} -> ${ixpRes.status}`);
-        if (ixpRes.ok) {
-          const ixpText = await ixpRes.text();
-          const trimmedIxp = ixpText.trim();
-          if (trimmedIxp.length > 0 && !trimmedIxp.startsWith("<") && !trimmedIxp.startsWith("<!")) {
+        const cmRes = await fetch(cmProbeUrl, { headers: ixpHdrs });
+        if (cmRes.ok) {
+          const cmText = await cmRes.text();
+          const trimmedCm = cmText.trim();
+          if (trimmedCm.length > 0 && !trimmedCm.startsWith("<")) {
             try {
-              const ixpData = JSON.parse(trimmedIxp);
-              if (!ixpData.errorCode && !ixpData.ErrorCode && !ixpData["odata.error"]) {
-                genExtractionAvailable = true;
-                console.log("[UiPath Probe] IXP Generative Extraction available");
+              const cmData = JSON.parse(trimmedCm);
+              if (!cmData.errorCode && !cmData.ErrorCode && !cmData["odata.error"]) {
+                commsMiningAvailable = true;
+                metadataService.updateServiceReachability("REINFER", "reachable");
+                console.log("[UiPath Probe] Communications Mining available");
               }
-            } catch (e: any) { console.warn(`[UiPath Probe] IXP response not valid JSON: ${e.message}`); }
+            } catch { /* invalid json */ }
           }
         }
-      } catch (e: any) { console.warn(`[UiPath Probe] IXP Generative Extraction probe failed: ${e.message}`); }
+      } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining probe failed: ${e.message}`); }
     }
-
-    const reinferUrl = metadataService.getServiceUrl("REINFER", config);
-    const cmProbeUrl = `${reinferUrl}/api/v1/datasets`;
-    let ixpHdrs = hdrs;
-    if (ixpResult.status === "fulfilled" && ixpResult.value.ok) {
-      try {
-        const ixpTok = await (await import("./uipath-auth")).getIxpToken();
-        ixpHdrs = { Authorization: `Bearer ${ixpTok}`, "Content-Type": "application/json" };
-      } catch (e: any) {
-        console.warn(`[UiPath Probe] IXP token acquisition failed: ${e.message}`);
-        ixpHdrs = hdrs;
-      }
-    }
-    try {
-      const cmRes = await fetch(cmProbeUrl, { headers: ixpHdrs });
-      console.log(`[UiPath Probe] Communications Mining: ${cmProbeUrl} -> ${cmRes.status}`);
-      if (cmRes.ok) {
-        const cmText = await cmRes.text();
-        const trimmedCm = cmText.trim();
-        if (trimmedCm.length > 0 && !trimmedCm.startsWith("<") && !trimmedCm.startsWith("<!")) {
-          try {
-            const cmData = JSON.parse(trimmedCm);
-            if (!cmData.errorCode && !cmData.ErrorCode && !cmData["odata.error"]) {
-              commsMiningAvailable = true;
-              metadataService.updateServiceReachability("REINFER", "reachable");
-              console.log("[UiPath Probe] Communications Mining available");
-            }
-          } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining response not valid JSON: ${e.message}`); }
-        }
-      }
-    } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining probe failed: ${e.message}`); }
 
     let aiAvailable = false;
     let aiCenterSkills: AICenterSkill[] = [];
     let aiCenterPackages: AICenterPackage[] = [];
-    const aiServiceUrl = metadataService.getServiceUrl("AI", config);
-    const aiProbe: Response | null = await fetch(`${aiServiceUrl}/ai-deployer/v1/projects?$top=1`, { headers: aiProbeHdrs }).catch(() => null);
-    if (aiProbe && isServiceReachable(aiProbe)) {
-      aiAvailable = true;
-      metadataService.updateServiceReachability("AI", getServiceReachabilityStatus(aiProbe));
-      try {
-        const [skillsRes, pkgsRes] = await Promise.all([
-          fetch(`${aiServiceUrl}/ai-deployer/v1/mlskills?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
-          fetch(`${aiServiceUrl}/ai-deployer/v1/mlpackages?$top=50`, { headers: aiProbeHdrs }).catch(() => null),
-        ]);
-        if (skillsRes && skillsRes.ok) {
-          const skillsData = await skillsRes.json();
-          const items = skillsData.dataList || skillsData.value || skillsData.items || [];
-          aiCenterSkills = items.filter((s: any) => s.name).map((s: any) => ({
-            id: s.id || s.mlSkillId || "",
-            name: s.name,
-            mlPackageName: s.mlPackageName || s.packageName || "",
-            mlPackageVersionId: s.mlPackageVersionId || "",
-            status: s.deploymentStatus || s.status || "unknown",
-            inputType: s.inputType || s.inputDescription || "",
-            outputType: s.outputType || s.outputDescription || "",
-            gpu: s.requiresGpu || false,
-            projectName: s.projectName || "",
-          }));
-          console.log(`[UiPath Probe] AI Center: ${aiCenterSkills.length} ML skill(s) discovered`);
+    const aiEntry = taxonomyByFlag.get("aiCenter");
+    if (aiEntry?.probeConfig) {
+      const aiProbeHdrs = headersByToken["AI"] || hdrs;
+      const aiServiceUrl = metadataService.getServiceUrl("AI", config);
+      const aiAlternates = metadataService.getServiceUrlAlternates("AI", config);
+      const aiProbePath = aiEntry.probeConfig.probePath;
+      const aiProbeResult = await fetchWithAlternates(
+        `${aiServiceUrl}${aiProbePath}`,
+        aiAlternates.map(u => `${u}${aiProbePath}`),
+        aiProbeHdrs,
+        "AI",
+        aiProbePath,
+      );
+      const aiProbe = aiProbeResult.res;
+      const aiActiveUrl = aiProbeResult.triedAlternate ? aiProbeResult.usedUrl.replace(aiProbePath, "") : aiServiceUrl;
+      if (aiProbe && isServiceReachable(aiProbe)) {
+        aiAvailable = true;
+        metadataService.updateServiceReachability("AI", getServiceReachabilityStatus(aiProbe));
+        const aiSecondaryPaths = aiEntry.secondaryProbePaths || [];
+        try {
+          const aiEnrichProbes = await Promise.all(
+            aiSecondaryPaths.map(sp => fetch(`${aiActiveUrl}${sp}`, { headers: aiProbeHdrs }).catch(() => null))
+          );
+          const skillsRes = aiEnrichProbes[0] ?? null;
+          const pkgsRes = aiEnrichProbes[1] ?? null;
+          if (skillsRes && skillsRes.ok) {
+            const skillsData = await skillsRes.json();
+            const items = skillsData.dataList || skillsData.value || skillsData.items || [];
+            aiCenterSkills = items.filter((s: any) => s.name).map((s: any) => ({
+              id: s.id || s.mlSkillId || "",
+              name: s.name,
+              mlPackageName: s.mlPackageName || s.packageName || "",
+              mlPackageVersionId: s.mlPackageVersionId || "",
+              status: s.deploymentStatus || s.status || "unknown",
+              inputType: s.inputType || s.inputDescription || "",
+              outputType: s.outputType || s.outputDescription || "",
+              gpu: s.requiresGpu || false,
+              projectName: s.projectName || "",
+            }));
+          }
+          if (pkgsRes && pkgsRes.ok) {
+            const pkgsData = await pkgsRes.json();
+            const items = pkgsData.dataList || pkgsData.value || pkgsData.items || [];
+            aiCenterPackages = items.filter((p: any) => p.name).map((p: any) => ({
+              id: p.id || p.mlPackageId || "",
+              name: p.name,
+              description: p.description || "",
+              inputType: p.inputType || "",
+              outputType: p.outputType || "",
+              trainingStatus: p.trainingStatus || "",
+              projectName: p.projectName || "",
+            }));
+          }
+        } catch (aiErr: any) {
+          console.warn(`[UiPath Probe] AI Center skills/packages fetch failed: ${aiErr.message}`);
         }
-        if (pkgsRes && pkgsRes.ok) {
-          const pkgsData = await pkgsRes.json();
-          const items = pkgsData.dataList || pkgsData.value || pkgsData.items || [];
-          aiCenterPackages = items.filter((p: any) => p.name).map((p: any) => ({
-            id: p.id || p.mlPackageId || "",
-            name: p.name,
-            description: p.description || "",
-            inputType: p.inputType || "",
-            outputType: p.outputType || "",
-            trainingStatus: p.trainingStatus || "",
-            projectName: p.projectName || "",
-          }));
-          console.log(`[UiPath Probe] AI Center: ${aiCenterPackages.length} ML package(s) discovered`);
-        }
-      } catch (aiErr: any) {
-        console.warn(`[UiPath Probe] AI Center skills/packages fetch failed: ${aiErr.message}`);
       }
+      probeHttpStatuses["aiCenter"] = aiProbe?.status ?? null;
     }
 
     let agentsAvailable = false;
     let autopilotAvailable = false;
     let agentsProbeStatus: number | null = null;
     let agentCapabilities: { autonomous: boolean; conversational: boolean; coded: boolean } = { autonomous: false, conversational: false, coded: false };
+    const agentsTaxEntry = taxonomyByFlag.get("agents");
+    const autopilotTaxEntry = taxonomyByFlag.get("autopilot");
     const agentsServiceUrl = metadataService.getServiceUrl("AGENTS", config);
     const autopilotServiceUrl = metadataService.getServiceUrl("AUTOPILOT", config);
-    const agentEndpoints = [
-      { url: `${agentsServiceUrl}/api/v1/agents?$top=1`, label: "Agent Studio" },
-      { url: `${autopilotServiceUrl}/api/v1/agents?$top=1`, label: "Autopilot" },
-      { url: `${orchBase}/odata/AgentDefinitions?$top=1`, label: "Orchestrator AgentDefinitions" },
-    ];
+    const agentEndpoints: Array<{ url: string; label: string }> = [];
+    if (agentsTaxEntry?.probeConfig) {
+      agentEndpoints.push({ url: `${agentsServiceUrl}${agentsTaxEntry.probeConfig.probePath}`, label: agentsTaxEntry.displayName });
+    }
+    if (autopilotTaxEntry?.probeConfig) {
+      agentEndpoints.push({ url: `${autopilotServiceUrl}${autopilotTaxEntry.probeConfig.probePath}`, label: autopilotTaxEntry.displayName });
+    }
+    const agentSecondaryPaths = agentsTaxEntry?.secondaryProbePaths || [];
+    for (const sp of agentSecondaryPaths) {
+      agentEndpoints.push({ url: `${orchBase}${sp}`, label: `${agentsTaxEntry?.displayName || "Agents"} (OR)` });
+    }
     const agentProbeResults = await Promise.allSettled(
       agentEndpoints.map(ep => fetch(ep.url, { headers: hdrs }))
     );
@@ -1681,9 +1853,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       if (pr.status === "fulfilled" && pr.value.ok) {
         agentsAvailable = true;
         agentsProbeStatus = pr.value.status;
-        if (agentEndpoints[i].label === "Autopilot") {
+        if (agentEndpoints[i].label === autopilotTaxEntry?.displayName) {
           autopilotAvailable = true;
-          console.log(`[UiPath Probe] Autopilot/self-healing capability detected`);
         }
         console.log(`[UiPath Probe] Agent capability discovered via ${agentEndpoints[i].label} API`);
         try {
@@ -1695,117 +1866,84 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
             else if (aType.includes("conversational") || aType.includes("chat")) agentCapabilities.conversational = true;
             else if (aType.includes("coded")) agentCapabilities.coded = true;
           }
-        } catch (e: any) { console.warn(`[UiPath Probe] Failed to parse agent definitions: ${e.message}`); }
+        } catch { /* parse error */ }
         break;
       }
     }
     let agentConfidence: "official" | "inferred" = "official";
-    if (!agentsAvailable) {
-      const assetFallback = await fetch(`${orchBase}/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1`, { headers: hdrs }).catch(() => null);
+    if (!agentsAvailable && agentsTaxEntry?.inferredProbePath) {
+      const assetFallback = await fetch(`${orchBase}${agentsTaxEntry.inferredProbePath}`, { headers: hdrs }).catch(() => null);
       if (assetFallback && assetFallback.ok) {
         agentsAvailable = true;
         agentConfidence = "inferred";
-        console.log("[UiPath Probe] Agent provisioning inferred via Assets API fallback (no dedicated Agents API found) — confidence: inferred, evidence: Asset name prefix match");
       }
     }
     if (agentsAvailable && !agentCapabilities.autonomous && !agentCapabilities.conversational && !agentCapabilities.coded) {
       agentCapabilities = { autonomous: true, conversational: true, coded: true };
     }
+    probeHttpStatuses["agents"] = agentsProbeStatus;
 
-    let pmAvailable = false;
-    if (pmResult.status === "fulfilled" && pmResult.value.ok) pmAvailable = true;
-
-    let dsAvailable = false;
-    let dsProbeStatus: number | null = null;
-    if (dfResult.status === "fulfilled" && dfResult.value.ok) {
+    let pmAvailable = isTokenOk("PM");
+    let dsAvailable = probeFlags["dataService"] ?? false;
+    if (!dsAvailable && isTokenOk("DF")) {
       const dfServiceUrl = metadataService.getServiceUrl("DF", config);
-      const dfEntityProbe = await fetch(`${dfServiceUrl}/api/EntityService/Entity`, { headers: hdrs }).catch(() => null);
-      if (dfEntityProbe) dsProbeStatus = dfEntityProbe.status;
+      const dfTaxEntry = taxonomyByFlag.get("dataService");
+      const dfProbePath = dfTaxEntry!.probeConfig!.probePath;
+      const dfEntityProbe = await fetch(`${dfServiceUrl}${dfProbePath}`, { headers: hdrs }).catch(() => null);
+      if (dfEntityProbe) probeHttpStatuses["dataService"] = dfEntityProbe.status;
       if (dfEntityProbe && (dfEntityProbe.ok || dfEntityProbe.status === 401)) {
         dsAvailable = true;
         metadataService.updateServiceReachability("DF", getServiceReachabilityStatus(dfEntityProbe));
-        console.log("[UiPath Probe] Data Fabric Entity API reachable");
       }
-      if (!dsAvailable) {
-        const dfSwagger = await fetch(`${dfServiceUrl}/swagger/index.html`, { redirect: "manual" }).catch(() => null);
-        if (dfSwagger && dfSwagger.status === 200) {
-          dsAvailable = true;
-          console.log("[UiPath Probe] Data Fabric Swagger endpoint reachable (fallback)");
-        }
+      const dfSecondaryPaths = dfTaxEntry?.secondaryProbePaths || [];
+      if (!dsAvailable && dfSecondaryPaths.length > 0) {
+        const dfSwagger = await fetch(`${dfServiceUrl}${dfSecondaryPaths[0]}`, { redirect: "manual" }).catch(() => null);
+        if (dfSwagger && dfSwagger.status === 200) dsAvailable = true;
       }
     }
 
-    let ixpProbeHdrs = hdrs;
-    if (ixpResult.status === "fulfilled" && ixpResult.value.ok) {
-      try {
-        const ixpTok2 = await (await import("./uipath-auth")).getIxpToken();
-        ixpProbeHdrs = { Authorization: `Bearer ${ixpTok2}`, "Content-Type": "application/json" };
-      } catch (e: any) { console.warn(`[UiPath Probe] IXP token re-acquisition failed: ${e.message}`); ixpProbeHdrs = hdrs; }
+    const pimsHasScopes = metadataService.hasOidcScopeFamily("PIMS" as import("./catalog/metadata-schemas").ServiceResourceType);
+    const pimsResult = pimsHasScopes
+      ? await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[] }))
+      : { ok: false, scopes: [] as string[] };
+    if (!pimsHasScopes) {
+      console.log("[UiPath Probe] PIMS: no OIDC scope family — skipping token acquisition");
     }
+    const maestroAvailable = (probeFlags["maestro"] ?? false) || pimsResult.ok;
+    const isResAvail = parentApiResults["integrationService"];
+    const integrationServiceAvailable = isResAvail ? (isResAvail.ok || isResAvail.status === 401 || isResAvail.status === 403) : false;
+    if (isResAvail) probeHttpStatuses["integrationService"] = isResAvail.status;
 
-    let pmProbeHdrs = hdrs;
-    if (pmResult.status === "fulfilled" && pmResult.value.ok) {
-      try {
-        const pmTok = await (await import("./uipath-auth")).getPmToken();
-        pmProbeHdrs = { Authorization: `Bearer ${pmTok}`, "Content-Type": "application/json" };
-      } catch (e: any) { console.warn(`[UiPath Probe] PM token acquisition failed: ${e.message}`); pmProbeHdrs = hdrs; }
-    }
+    const opsRes = parentApiResults["automationOps"];
+    const automationOpsFromParent = opsRes ? (opsRes.ok || opsRes.status === 401 || opsRes.status === 403) : false;
+    if (opsRes) probeHttpStatuses["automationOps"] = opsRes.status;
+    const automationOpsAvailable = (probeFlags["automationOps"] ?? false) || automationOpsFromParent;
 
-    const pimsUrl = metadataService.getServiceUrl("PIMS", config);
-    const isUrl = metadataService.getServiceUrl("INTEGRATIONSERVICE", config);
-    const reinferProbeUrl = metadataService.getServiceUrl("REINFER", config);
-    const hubUrl = metadataService.getServiceUrl("HUB", config);
-    const aopsUrl = metadataService.getServiceUrl("AUTOMATIONOPS", config);
-    const astoreUrl = metadataService.getServiceUrl("AUTOMATIONSTORE", config);
-    const appsUrl = metadataService.getServiceUrl("APPS", config);
-    const assistantUrl = metadataService.getServiceUrl("ASSISTANT", config);
-
-    const [maestroProbe, integrationServiceProbe, ixpProbe, automationHubProbe, automationOpsProbe, automationStoreProbe, appsProbe, assistantHttpProbe] = await Promise.all([
-      fetch(`${pimsUrl}/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${isUrl}/api/Connections?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${reinferProbeUrl}/api/v1/datasets`, { headers: ixpProbeHdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${hubUrl}/api/v1/ideas?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${aopsUrl}/api/v1/policies?$top=1`, { headers: pmProbeHdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${astoreUrl}/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${appsUrl}/api/v1/apps?$top=1`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-      fetch(`${assistantUrl}/api/v1/`, { headers: hdrs, redirect: "manual" }).catch(() => null),
-    ]);
-
-    const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[] }));
-
-    const maestroAvailable = isServiceReachable(maestroProbe) || pimsResult.ok;
-    const integrationServiceAvailable = isServiceReachable(integrationServiceProbe);
-    const ixpAvailable = isServiceReachable(ixpProbe);
-    const automationHubAvailable = isServiceReachable(automationHubProbe);
-    const automationOpsAvailable = isServiceReachable(automationOpsProbe);
-    const appsAvailable = isServiceReachable(appsProbe);
-    const assistantAvailable = isServiceReachable(assistantHttpProbe);
-    const automationStoreAvailable = isServiceReachable(automationStoreProbe);
-
-    if (maestroAvailable) console.log("[UiPath Probe] Maestro available");
-    if (integrationServiceAvailable) console.log("[UiPath Probe] Integration Service available");
-    if (ixpAvailable) console.log("[UiPath Probe] IXP available");
-    if (automationHubAvailable) console.log("[UiPath Probe] Automation Hub available");
-    if (automationOpsAvailable) console.log("[UiPath Probe] Automation Ops available");
-    if (automationStoreAvailable) console.log("[UiPath Probe] Automation Store available");
-    if (appsAvailable) console.log("[UiPath Probe] Apps available");
-    if (assistantAvailable) console.log("[UiPath Probe] Assistant available");
+    probeHttpStatuses["actionCenter"] = acRes?.status ?? null;
+    probeHttpStatuses["environments"] = envRes?.status ?? null;
+    probeHttpStatuses["triggers"] = trigRes?.status ?? schedRes?.status ?? null;
+    probeHttpStatuses["storageBuckets"] = bucketRes?.status ?? null;
+    probeHttpStatuses["documentUnderstanding"] = duProbeStatus;
 
     const [govResult, attendedResult, studioResult] = await Promise.allSettled([
       discoverGovernancePolicies(),
       discoverAttendedRobots(),
       discoverStudioProjects(),
     ]);
-
     const govData = govResult.status === "fulfilled" ? govResult.value : null;
     const attendedData = attendedResult.status === "fulfilled" ? attendedResult.value : null;
     const studioData = studioResult.status === "fulfilled" ? studioResult.value : null;
 
     let serverlessDetected = false;
     let hasUnattendedSlots = false;
+    const observationEntry = taxonomyByFlag.get("attendedRobots");
+    const sessionProbePath = observationEntry?.probeConfig?.probePath;
+    const machineSecondaryPaths = observationEntry?.secondaryProbePaths || [];
     try {
-      const sessRes = await fetch(`${orchBase}/odata/Sessions?$top=20`, { headers: hdrs });
-      if (sessRes.ok) {
+      const sessRes = sessionProbePath
+        ? await fetch(`${orchBase}${sessionProbePath}`, { headers: hdrs })
+        : null;
+      if (sessRes && sessRes.ok) {
         const sessData = await sessRes.json();
         const sessions = sessData.value || [];
         serverlessDetected = sessions.some((s: any) =>
@@ -1815,72 +1953,55 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         hasUnattendedSlots = sessions.some((s: any) =>
           s.RuntimeType === "Unattended" || s.RobotType === "Unattended"
         );
-        if (serverlessDetected) {
-          console.log("[UiPath Probe] Serverless runtime detected from robot sessions");
-        }
       }
     } catch (e: any) {
       console.warn(`[UiPath Probe] Session probe failed: ${e.message}`);
     }
-    if (!hasUnattendedSlots) {
+    if (!hasUnattendedSlots && machineSecondaryPaths.length > 0) {
       try {
-        const machRes = await fetch(`${orchBase}/odata/Machines?$top=10&$select=UnattendedSlots`, { headers: hdrs, signal: AbortSignal.timeout(5000) });
+        const machRes = await fetch(`${orchBase}${machineSecondaryPaths[0]}`, { headers: hdrs, signal: AbortSignal.timeout(5000) });
         if (machRes.ok) {
           const machData = await machRes.json();
           const machines = machData.value || [];
           hasUnattendedSlots = machines.some((m: any) => (m.UnattendedSlots || 0) > 0);
         }
-      } catch (e: any) { console.warn(`[UiPath Probe] Machine probe failed: ${e.message}`); }
+      } catch { /* machine probe failed */ }
     }
 
-    const probeHttpStatuses: Record<string, number | null> = {
-      actionCenter: acRes?.status ?? null,
-      environments: envRes?.status ?? null,
-      triggers: trigRes?.status ?? schedRes?.status ?? null,
-      storageBuckets: bucketRes?.status ?? null,
-      documentUnderstanding: duProbeStatus,
-      dataService: dsProbeStatus,
-      aiCenter: aiProbe?.status ?? null,
-      agents: agentsProbeStatus,
-      maestro: maestroProbe?.status ?? null,
-      integrationService: integrationServiceProbe?.status ?? null,
-      ixp: ixpProbe?.status ?? null,
-      automationHub: automationHubProbe?.status ?? null,
-      automationOps: automationOpsProbe?.status ?? null,
-      automationStore: automationStoreProbe?.status ?? null,
-      apps: appsProbe?.status ?? null,
-      assistant: assistantHttpProbe?.status ?? null,
+    const resolvedFlags: Record<string, boolean> = {
+      ...probeFlags,
+      orchestrator: true,
+      actionCenter: acAvailable,
+      testManager: tmAvailable,
+      documentUnderstanding: duAvailable,
+      generativeExtraction: genExtractionAvailable,
+      communicationsMining: commsMiningAvailable,
+      dataService: dsAvailable,
+      platformManagement: pmAvailable,
+      integrationService: integrationServiceAvailable,
+      environments: envAvailable,
+      triggers: triggersAvailable,
+      storageBuckets: bucketsAvailable,
+      aiCenter: aiAvailable,
+      agents: agentsAvailable,
+      autopilot: autopilotAvailable,
+      maestro: maestroAvailable,
+      automationOps: (probeFlags["automationOps"] ?? false) || (govData?.available ?? false),
+      attendedRobots: attendedData?.available ?? false,
+      studioProjects: studioData?.available ?? false,
+      hasUnattendedSlots,
     };
+    const flags = { ...emptyFlags } as Record<string, boolean>;
+    for (const entry of taxonomy) {
+      flags[entry.flagKey] = resolvedFlags[entry.flagKey] ?? false;
+    }
+    flags["attendedRobots"] = resolvedFlags["attendedRobots"] ?? false;
+    flags["studioProjects"] = resolvedFlags["studioProjects"] ?? false;
+    flags["hasUnattendedSlots"] = resolvedFlags["hasUnattendedSlots"] ?? false;
 
     const result: UnifiedProbeResult = {
       configured: true,
-      flags: {
-        orchestrator: true,
-        actionCenter: acAvailable,
-        testManager: tmAvailable,
-        documentUnderstanding: duAvailable,
-        generativeExtraction: genExtractionAvailable,
-        communicationsMining: commsMiningAvailable,
-        dataService: dsAvailable,
-        platformManagement: pmAvailable,
-        environments: envAvailable,
-        triggers: triggersAvailable,
-        storageBuckets: bucketsAvailable,
-        aiCenter: aiAvailable,
-        agents: agentsAvailable,
-        autopilot: autopilotAvailable,
-        maestro: maestroAvailable,
-        integrationService: integrationServiceAvailable,
-        ixp: ixpAvailable,
-        automationHub: automationHubAvailable,
-        automationOps: automationOpsAvailable || (govData?.available ?? false),
-        automationStore: automationStoreAvailable,
-        apps: appsAvailable,
-        assistant: assistantAvailable,
-        attendedRobots: attendedData?.available ?? false,
-        studioProjects: studioData?.available ?? false,
-        hasUnattendedSlots,
-      },
+      flags: flags as UnifiedProbeResult["flags"],
       agentCapabilities: agentsAvailable ? agentCapabilities : undefined,
       agentConfidence,
       grantedScopes,
@@ -1897,25 +2018,15 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     };
 
     setGovernancePolicies(result.governancePolicies ?? []);
-    if (result.governancePolicies && result.governancePolicies.length > 0) {
-      console.log(`[UiPath Probe] Synced ${result.governancePolicies.length} governance policies to Workflow Analyzer`);
-    }
 
     metadataService.updateServiceReachability("OR", "reachable");
     if (maestroAvailable) metadataService.updateServiceReachability("PIMS", "reachable");
     else metadataService.updateServiceReachability("PIMS", acAvailable ? "limited" : "unknown");
     if (tmAvailable) metadataService.updateServiceReachability("TM", "reachable");
-    if (integrationServiceAvailable) metadataService.updateServiceReachability("INTEGRATIONSERVICE", getServiceReachabilityStatus(integrationServiceProbe));
-    if (ixpAvailable) metadataService.updateServiceReachability("IXP", getServiceReachabilityStatus(ixpProbe));
-    if (automationHubAvailable) metadataService.updateServiceReachability("HUB", getServiceReachabilityStatus(automationHubProbe));
-    if (automationOpsAvailable) metadataService.updateServiceReachability("AUTOMATIONOPS", getServiceReachabilityStatus(automationOpsProbe));
-    if (automationStoreAvailable) metadataService.updateServiceReachability("AUTOMATIONSTORE", getServiceReachabilityStatus(automationStoreProbe));
-    if (appsAvailable) metadataService.updateServiceReachability("APPS", getServiceReachabilityStatus(appsProbe));
-    if (assistantAvailable) metadataService.updateServiceReachability("ASSISTANT", getServiceReachabilityStatus(assistantHttpProbe));
+    if (!tmAvailable) metadataService.updateServiceReachability("TM", "unreachable");
     if (agentsAvailable) metadataService.updateServiceReachability("AGENTS", agentConfidence === "inferred" ? "limited" : "reachable");
     if (autopilotAvailable) metadataService.updateServiceReachability("AUTOPILOT", "reachable");
     if (pmAvailable) metadataService.updateServiceReachability("IDENTITY", "reachable");
-    if (!tmAvailable) metadataService.updateServiceReachability("TM", "unreachable");
 
     const flagToServiceType = metadataService.getFlagToServiceType();
 
@@ -1936,6 +2047,19 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     });
     if (deprecatedServices.length > 0) {
       console.warn(`[UiPath Probe] Services with deprecated/unknown confidence: ${deprecatedServices.join(", ")}`);
+    }
+
+    const endpointDeprecations: string[] = [];
+    for (const [flagKey, svcType] of Object.entries(flagToServiceType)) {
+      if (result.flags[flagKey as keyof typeof result.flags]) {
+        const dep = metadataService.checkEndpointDeprecation(svcType);
+        if (dep.deprecated) {
+          endpointDeprecations.push(`${svcType}: ${dep.notes}`);
+        }
+      }
+    }
+    if (endpointDeprecations.length > 0) {
+      console.warn(`[UiPath Probe] Deprecated endpoints in use: ${endpointDeprecations.join("; ")}`);
     }
 
     _probeCache = result;
@@ -1968,16 +2092,26 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
 }
 
 export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfile> {
+  const { metadataService: capMds } = await import("./catalog/metadata-service");
+  const taxonomy = capMds.getCapabilityTaxonomy();
+
+  const emptyAvail: PlatformCapabilityProfile["available"] = {
+    orchestrator: false, actionCenter: false, documentUnderstanding: false,
+    generativeExtraction: false, communicationsMining: false,
+    testManager: false, storageBuckets: false, aiCenter: false,
+    maestro: false, integrationService: false, ixp: false,
+    automationHub: false, automationOps: false, automationStore: false,
+    apps: false, assistant: false,
+  };
+  for (const entry of taxonomy) {
+    if (entry.uiSection === "primary" || entry.uiSection === "secondary") {
+      (emptyAvail as Record<string, boolean>)[entry.flagKey] = false;
+    }
+  }
+
   const empty: PlatformCapabilityProfile = {
     configured: false,
-    available: {
-      orchestrator: false, actionCenter: false, documentUnderstanding: false,
-      generativeExtraction: false, communicationsMining: false,
-      testManager: false, storageBuckets: false, aiCenter: false,
-      maestro: false, integrationService: false, ixp: false,
-      automationHub: false, automationOps: false, automationStore: false,
-      apps: false, assistant: false,
-    },
+    available: emptyAvail,
     grantedScopes: [],
     summary: "UiPath is not configured. The SDD will be generated with general best practices.",
     availableDescription: "",
@@ -1990,69 +2124,74 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     return { ...empty, configured: true, summary: `Could not probe UiPath platform: ${probe.probeError || "unknown error"}. SDD will use general best practices.` };
   }
 
-  const avail = {
-    orchestrator: probe.flags.orchestrator,
-    actionCenter: probe.flags.actionCenter,
-    documentUnderstanding: probe.flags.documentUnderstanding,
-    generativeExtraction: probe.flags.generativeExtraction,
-    communicationsMining: probe.flags.communicationsMining,
-    testManager: probe.flags.testManager,
-    storageBuckets: probe.flags.storageBuckets,
-    aiCenter: probe.flags.aiCenter,
-    maestro: probe.flags.maestro,
-    integrationService: probe.flags.integrationService,
-    ixp: probe.flags.ixp,
-    automationHub: probe.flags.automationHub,
-    automationOps: probe.flags.automationOps,
-    automationStore: probe.flags.automationStore,
-    apps: probe.flags.apps,
-    assistant: probe.flags.assistant,
-  };
+  const avail: Record<string, boolean> = {};
+  for (const entry of taxonomy) {
+    if (entry.uiSection === "primary" || entry.uiSection === "secondary") {
+      avail[entry.flagKey] = (probe.flags as Record<string, boolean>)[entry.flagKey] ?? false;
+    }
+  }
 
   const availNames: string[] = [];
   const unavailRecs: string[] = [];
 
-  if (avail.orchestrator) availNames.push("UiPath Orchestrator (queues, assets, triggers, machines, environments, processes, jobs)");
-  else unavailRecs.push("- **Orchestrator**: Core service not accessible. Verify connection credentials.");
+  const specialHandled = new Set<string>();
 
-  if (avail.actionCenter) availNames.push("Action Center (human-in-the-loop tasks, approvals, escalations, SLA management)");
-  else unavailRecs.push("- **Action Center**: Not available. If enabled, it would allow human-in-the-loop steps — approvals, validations, exception handling escalations — directly within the automation workflow instead of external email/chat processes.");
+  for (const entry of taxonomy) {
+    const flagKey = entry.flagKey;
+    if (!(flagKey in avail)) continue;
 
-  if (avail.documentUnderstanding) {
-    const duDesc = avail.generativeExtraction
-      ? "IXP Document Understanding (classic DU for structured forms — OCR, ML classification, template-based extraction) + Generative Extraction (LLM-powered extraction for unstructured documents — contracts, reports, correspondence without pre-trained models)"
-      : "Document Understanding (intelligent document processing, OCR, ML classification, data extraction for structured/semi-structured forms)";
-    availNames.push(duDesc);
-  } else {
-    unavailRecs.push("- **Document Understanding / IXP**: Not available. If enabled, it could automate document classification and data extraction from invoices/forms/contracts using ML models (classic DU) or LLM-powered generative extraction for unstructured documents (contracts, reports) without pre-trained models.");
-  }
+    const isAvail = avail[flagKey];
+    const name = entry.displayName;
+    const desc = entry.description;
 
-  if (avail.generativeExtraction && !avail.documentUnderstanding) {
-    availNames.push("IXP Generative Extraction (LLM-powered extraction for unstructured documents — contracts, reports, correspondence — without requiring pre-trained models or taxonomies)");
-  }
-
-  if (avail.communicationsMining) availNames.push("Communications Mining (email/message stream analysis, intent detection, sentiment analysis, intelligent routing, conversation intelligence for customer communications)");
-  else unavailRecs.push("- **Communications Mining**: Not available. If enabled, it could analyze email and message streams to detect intent, extract data, route communications intelligently, and identify automation opportunities from customer/employee conversations.");
-
-  if (avail.testManager) availNames.push("Test Manager (automated test projects, test cases, test execution, regression suites)");
-  else unavailRecs.push("- **Test Manager**: Not available. If enabled, it would allow automated test case management and regression testing for the automation, ensuring quality across updates.");
-
-  if (avail.storageBuckets) availNames.push("Storage Buckets (file storage for input/output documents, templates, logs)");
-  else unavailRecs.push("- **Storage Buckets**: Not available. If enabled, it could provide centralized cloud storage for automation input files, output documents, templates, and audit logs.");
-
-  if (avail.aiCenter) {
-    const deployedSkills = probe.aiCenterSkills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
-    if (deployedSkills.length > 0) {
-      const skillsList = deployedSkills.map(s => `${s.name} (package: ${s.mlPackageName || "N/A"}, input: ${s.inputType || "N/A"}, output: ${s.outputType || "N/A"})`).join("; ");
-      availNames.push(`AI Center (${deployedSkills.length} deployed ML skill(s): ${skillsList})`);
-    } else if (probe.aiCenterSkills.length > 0) {
-      const allSkills = probe.aiCenterSkills.map(s => `${s.name} [${s.status}]`).join("; ");
-      availNames.push(`AI Center (${probe.aiCenterSkills.length} ML skill(s) found but none deployed: ${allSkills}). ${probe.aiCenterPackages.length} ML package(s) available.`);
-    } else {
-      availNames.push(`AI Center (available, ${probe.aiCenterPackages.length} ML package(s) found, no ML skills deployed yet)`);
+    if (flagKey === "documentUnderstanding") {
+      specialHandled.add(flagKey);
+      if (isAvail) {
+        const duDesc = avail.generativeExtraction
+          ? `${name} (${desc}) + Generative Extraction (LLM-powered extraction for unstructured documents)`
+          : `${name} (${desc})`;
+        availNames.push(duDesc);
+      } else {
+        unavailRecs.push(`- **${name}**: ${entry.defaultRemediationTemplate?.reason || "Not available."} ${entry.defaultRemediationTemplate?.recommendedStep || ""}`);
+      }
+      continue;
     }
-  } else {
-    unavailRecs.push("- **AI Center**: Not available. If enabled, it could power custom ML models for classification, prediction, NLP, or anomaly detection within the automation. Deploy ML Skills in AI Center and reference them by name in the workflow.");
+
+    if (flagKey === "generativeExtraction") {
+      specialHandled.add(flagKey);
+      if (isAvail && !avail.documentUnderstanding) {
+        availNames.push(`${name} (${desc})`);
+      } else if (!isAvail && !avail.documentUnderstanding) {
+        unavailRecs.push(`- **${name}**: ${entry.defaultRemediationTemplate?.reason || "Not available."} ${entry.defaultRemediationTemplate?.recommendedStep || ""}`);
+      }
+      continue;
+    }
+
+    if (flagKey === "aiCenter") {
+      specialHandled.add(flagKey);
+      if (isAvail) {
+        const deployedSkills = probe.aiCenterSkills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
+        if (deployedSkills.length > 0) {
+          const skillsList = deployedSkills.map(s => `${s.name} (package: ${s.mlPackageName || "N/A"}, input: ${s.inputType || "N/A"}, output: ${s.outputType || "N/A"})`).join("; ");
+          availNames.push(`${name} (${deployedSkills.length} deployed ML skill(s): ${skillsList})`);
+        } else if (probe.aiCenterSkills.length > 0) {
+          const allSkills = probe.aiCenterSkills.map(s => `${s.name} [${s.status}]`).join("; ");
+          availNames.push(`${name} (${probe.aiCenterSkills.length} ML skill(s) found but none deployed: ${allSkills}). ${probe.aiCenterPackages.length} ML package(s) available.`);
+        } else {
+          availNames.push(`${name} (available, ${probe.aiCenterPackages.length} ML package(s) found, no ML skills deployed yet)`);
+        }
+      } else {
+        unavailRecs.push(`- **${name}**: ${entry.defaultRemediationTemplate?.reason || "Not available."} ${entry.defaultRemediationTemplate?.recommendedStep || ""}`);
+      }
+      continue;
+    }
+
+    specialHandled.add(flagKey);
+    if (isAvail) {
+      availNames.push(`${name} (${desc})`);
+    } else {
+      unavailRecs.push(`- **${name}**: ${entry.defaultRemediationTemplate?.reason || "Not available."} ${entry.defaultRemediationTemplate?.recommendedStep || ""}`);
+    }
   }
 
   if (probe.flags.agents) {
@@ -2061,58 +2200,46 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
     if (caps?.autonomous) agentTypes.push("autonomous");
     if (caps?.conversational) agentTypes.push("conversational");
     if (caps?.coded) agentTypes.push("coded");
+    const agentEntry = taxonomy.find(e => e.flagKey === "agents");
+    const agentName = agentEntry?.displayName || "UiPath Agents";
+    const agentDesc = agentEntry?.description || "AI agent definitions, tool bindings to Orchestrator processes";
     const typesStr = agentTypes.length > 0 ? ` — supported types: ${agentTypes.join(", ")}` : "";
     const confidenceNote = probe.agentConfidence === "inferred" ? " [detected via asset naming convention — confirm Agent capability in Orchestrator]" : "";
-    availNames.push(`UiPath Agents (AI agent definitions, tool bindings to Orchestrator processes, context grounding via storage buckets, escalation to Action Center${typesStr})${confidenceNote}`);
+    availNames.push(`${agentName} (${agentDesc}${typesStr})${confidenceNote}`);
   } else {
-    unavailRecs.push("- **UiPath Agents**: Not available. If enabled, it would allow deploying autonomous, conversational, and coded AI agents that can invoke Orchestrator processes as tools, use storage buckets for context grounding, and escalate to Action Center for human oversight.");
+    const agentEntry = taxonomy.find(e => e.flagKey === "agents");
+    if (agentEntry) {
+      unavailRecs.push(`- **${agentEntry.displayName}**: ${agentEntry.defaultRemediationTemplate?.reason || "Not available."} ${agentEntry.defaultRemediationTemplate?.recommendedStep || ""}`);
+    }
   }
 
-  if (probe.flags.maestro) availNames.push("Maestro (BPMN process orchestration, process apps, case management, service tasks linked to Orchestrator processes, user tasks via Action Center)");
-  else unavailRecs.push("- **Maestro**: Not available. If enabled, it would provide next-generation BPMN-based process orchestration — coordinating service tasks (linked to Orchestrator processes), user tasks (Action Center), gateways with conditional routing, event triggers, process apps, and case management in a single visual process model.");
-
-  if (avail.ixp) availNames.push("IXP / Communications Mining (email and message analysis, intent detection, sentiment analysis)");
-  else unavailRecs.push("- **IXP / Communications Mining**: Not available. If enabled, it could analyze emails, tickets, and messages for intent detection, sentiment analysis, and automated triage.");
-
-  if (avail.automationHub) availNames.push("Automation Hub (idea management, ROI estimation, automation pipeline, CoE collaboration)");
-  else unavailRecs.push("- **Automation Hub**: Not available. If enabled, it would centralize automation idea management, ROI estimation, and CoE collaboration for pipeline governance.");
-
-  if (avail.automationOps) availNames.push("Automation Ops (governance policies, deployment rules, environment management)");
-  else unavailRecs.push("- **Automation Ops**: Not available. If enabled, it would provide governance policies, deployment rules, and environment management for automation lifecycle control.");
-
-  if (avail.automationStore) availNames.push("Automation Store (reusable components, workflow templates, marketplace)");
-  else unavailRecs.push("- **Automation Store**: Not available. If enabled, it would offer a marketplace of reusable components and workflow templates to accelerate development.");
-
-  if (avail.apps) availNames.push("Apps (low-code app builder, custom UIs for automations, forms and dashboards)");
-  else unavailRecs.push("- **Apps**: Not available. If enabled, it would allow building custom UIs, forms, and dashboards to trigger and monitor automations without Studio.");
-
-  if (avail.assistant) availNames.push("Assistant (robot tray, attended automation triggers, process launcher for end users)");
-  else unavailRecs.push("- **Assistant**: Not available. If enabled, it would provide an end-user interface for launching attended automations and interacting with robot processes.");
-
-  if (probe.flags.dataService) {
-    const dsIdx = availNames.findIndex(n => n.startsWith("Data Service"));
-    if (dsIdx === -1) availNames.push("Data Service / Data Fabric (structured data entities, schema-driven storage, cross-process data persistence)");
-  }
-
+  const opsEntry = taxonomy.find(e => e.flagKey === "automationOps");
+  const opsDisplayName = opsEntry?.displayName || "Automation Ops";
   if (probe.flags.automationOps && probe.governancePolicies && probe.governancePolicies.length > 0) {
     const policyNames = probe.governancePolicies.map(p => p.name).slice(0, 10).join(", ");
-    const opsIdx = availNames.findIndex(n => n.startsWith("Automation Ops"));
-    if (opsIdx !== -1) availNames[opsIdx] = `Automation Ops (governance policies: ${policyNames}, deployment rules, environment management)`;
-    else availNames.push(`Automation Ops (${probe.governancePolicies.length} active governance policies: ${policyNames})`);
+    const opsIdx = availNames.findIndex(n => n.startsWith(opsDisplayName));
+    if (opsIdx !== -1) availNames[opsIdx] = `${opsDisplayName} (governance policies: ${policyNames}, deployment rules, environment management)`;
+    else availNames.push(`${opsDisplayName} (${probe.governancePolicies.length} active governance policies: ${policyNames})`);
   }
 
+  const attendedEntry = taxonomy.find(e => e.flagKey === "attendedRobots");
+  const attendedName = attendedEntry?.displayName || "Attended Robots";
   if (probe.attendedRobotInfo) {
     if (probe.attendedRobotInfo.hasAttended) {
-      availNames.push(`Attended Robots / Assistant (${probe.attendedRobotInfo.attendedRobots.length} attended robots available for human-assisted desktop automation)`);
+      availNames.push(`${attendedName} (${probe.attendedRobotInfo.attendedRobots.length} attended robots available for human-assisted desktop automation)`);
     }
     if (probe.attendedRobotInfo.hasUnattended) {
-      availNames.push(`Unattended Robots (${probe.attendedRobotInfo.unattendedRobots.length} unattended robots for background processing)`);
+      const unattendedEntry = taxonomy.find(e => e.flagKey === "hasUnattendedSlots");
+      const unattendedName = unattendedEntry?.displayName || "Unattended Slots";
+      availNames.push(`${unattendedName} (${probe.attendedRobotInfo.unattendedRobots.length} unattended robots for background processing)`);
     }
   }
 
+  const studioEntry = taxonomy.find(e => e.flagKey === "studioProjects");
+  const studioName = studioEntry?.displayName || "Existing Processes";
   if (probe.studioProjectInfo && probe.studioProjectInfo.projects.length > 0) {
     const projectNames = probe.studioProjectInfo.existingNames.slice(0, 10).join(", ");
-    availNames.push(`Existing Processes (${probe.studioProjectInfo.projects.length} deployed: ${projectNames})`);
+    availNames.push(`${studioName} (${probe.studioProjectInfo.projects.length} deployed: ${projectNames})`);
   }
 
   let governanceContext = "";
@@ -2145,6 +2272,10 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
   const config = await getUiPathConfig();
   const orgTenant = config ? `${config.orgName}/${config.tenantName}` : "unknown";
 
+  const isEntry = taxonomy.find(e => e.flagKey === "integrationService");
+  const isDisplayName = isEntry?.displayName || "Integration Service";
+  const isReason = isEntry?.defaultRemediationTemplate?.reason || "Not available.";
+  const isStep = isEntry?.defaultRemediationTemplate?.recommendedStep || "";
   let isDiscovery: IntegrationServiceDiscovery | undefined;
   try {
     isDiscovery = await discoverIntegrationService();
@@ -2152,36 +2283,42 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
       const activeConns = isDiscovery.connections.filter(c => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
       if (activeConns.length > 0) {
         const connectorNames = [...new Set(activeConns.map(c => c.connectorName).filter(Boolean))];
-        availNames.push(`Integration Service (${activeConns.length} active connection(s): ${connectorNames.join(", ")})`);
+        availNames.push(`${isDisplayName} (${activeConns.length} active connection(s): ${connectorNames.join(", ")})`);
       } else if (isDiscovery.connectors.length > 0) {
-        availNames.push(`Integration Service (${isDiscovery.connectors.length} connector(s) available, no active connections)`);
+        availNames.push(`${isDisplayName} (${isDiscovery.connectors.length} connector(s) available, no active connections)`);
       }
     } else {
-      unavailRecs.push("- **Integration Service**: Not available. If enabled, it provides 500+ pre-built connectors to enterprise systems (SAP, Salesforce, ServiceNow, Microsoft 365, etc.) — eliminating the need for custom HTTP activities and credential management.");
+      unavailRecs.push(`- **${isDisplayName}**: ${isReason} ${isStep}`);
     }
   } catch (err: any) {
-    console.warn(`[Integration Service] Discovery failed during capabilities check: ${err.message}`);
+    console.warn(`[${isDisplayName}] Discovery failed during capabilities check: ${err.message}`);
   }
 
-  const mds = (await import("./catalog/metadata-service")).metadataService;
   const confidenceNotes: string[] = [];
-  const svcConfidenceMap = mds.getFlagToServiceType();
+  const svcConfidenceMap = capMds.getFlagToServiceType();
   for (const [svcName, svcType] of Object.entries(svcConfidenceMap)) {
-    if (avail[svcName as keyof typeof avail]) {
-      const conf = mds.getServiceConfidence(svcType);
-      const reach = mds.getServiceReachability(svcType);
+    if (avail[svcName]) {
+      const conf = capMds.getServiceConfidence(svcType);
+      const reach = capMds.getServiceReachability(svcType);
       if (conf === "inferred" || reach === "limited") {
-        confidenceNotes.push(`- **${svcName}**: detected with ${conf} confidence / ${reach} reachability — verify availability before relying on this service in critical solution paths`);
+        const displayName = capMds.getDisplayName(svcName);
+        confidenceNotes.push(`- **${displayName}**: detected with ${conf} confidence / ${reach} reachability — verify availability before relying on this service in critical solution paths`);
       }
     }
   }
-  const confidenceContext = confidenceNotes.length > 0
-    ? `\n\nSERVICE CONFIDENCE NOTES (some services detected with limited certainty):\n${confidenceNotes.join("\n")}`
+
+  const oidcInfo = capMds.getOidcStatus();
+  const oidcContext = oidcInfo.familyCount > 0
+    ? `\n\nSCOPE SOURCE: OIDC discovery (${oidcInfo.familyCount} scope families${oidcInfo.isStale ? ", stale" : ""}).`
     : "";
+
+  const confidenceContext = confidenceNotes.length > 0
+    ? `\n\nSERVICE CONFIDENCE NOTES (some services detected with limited certainty):\n${confidenceNotes.join("\n")}${oidcContext}`
+    : oidcContext;
 
   return {
     configured: true,
-    available: avail,
+    available: { ...emptyAvail, ...avail } as PlatformCapabilityProfile["available"],
     grantedScopes: probe.grantedScopes,
     summary: `Connected to ${orgTenant}. ${availNames.length} services available.`,
     availableDescription: (availNames.length > 0
@@ -2204,6 +2341,7 @@ export async function probeUiPathScopes(): Promise<{
   missingInApp: string[];
   extraInApp: string[];
   message: string;
+  oidcValidation?: { validScopes: string[]; invalidRequested: string[]; familyCount: number };
 }> {
   const config = await getUiPathConfig();
   if (!config) {
@@ -2212,30 +2350,43 @@ export async function probeUiPathScopes(): Promise<{
 
   const requestedScopes = config.scopes.split(/\s+/).filter(Boolean);
 
+  const { metadataService: mdsSvc } = await import("./catalog/metadata-service");
+  const oidcValid = mdsSvc.getOidcValidScopes();
+  const oidcStatus = mdsSvc.getOidcStatus();
+  let oidcValidation: { validScopes: string[]; invalidRequested: string[]; familyCount: number } | undefined;
+  if (oidcValid.length > 0) {
+    const oidcSet = new Set(oidcValid);
+    const invalidRequested = requestedScopes.filter(s => !oidcSet.has(s));
+    oidcValidation = { validScopes: oidcValid, invalidRequested, familyCount: oidcStatus.familyCount };
+  }
+
   try {
     const token = await getAccessToken(config);
     const comparison = decodeAndCompareScopes(token, requestedScopes);
 
     if (!comparison.decodedOk) {
-      return { status: "ok", requestedScopes, grantedScopes: requestedScopes, missingInApp: [], extraInApp: [], message: "Token obtained. Could not decode granted scopes from JWT — assuming scopes are correct." };
+      return { status: "ok", requestedScopes, grantedScopes: requestedScopes, missingInApp: [], extraInApp: [], message: "Token obtained. Could not decode granted scopes from JWT — assuming scopes are correct.", oidcValidation };
     }
 
     const { grantedScopes, missingInApp, extraInApp } = comparison;
 
     if (missingInApp.length === 0 && extraInApp.length === 0) {
-      return { status: "ok", requestedScopes, grantedScopes, missingInApp: [], extraInApp: [], message: "Scopes are in sync." };
+      return { status: "ok", requestedScopes, grantedScopes, missingInApp: [], extraInApp: [], message: "Scopes are in sync.", oidcValidation };
     }
 
     const parts: string[] = [];
     if (missingInApp.length > 0) parts.push(`${missingInApp.length} scope(s) granted in UiPath but not selected in the app: ${missingInApp.join(", ")}`);
     if (extraInApp.length > 0) parts.push(`${extraInApp.length} scope(s) selected in the app but not granted in UiPath: ${extraInApp.join(", ")}`);
-    return { status: "mismatch", requestedScopes, grantedScopes, missingInApp, extraInApp, message: parts.join(". ") };
+    if (oidcValidation && oidcValidation.invalidRequested.length > 0) {
+      parts.push(`${oidcValidation.invalidRequested.length} requested scope(s) not recognized by OIDC: ${oidcValidation.invalidRequested.join(", ")}`);
+    }
+    return { status: "mismatch", requestedScopes, grantedScopes, missingInApp, extraInApp, message: parts.join(". "), oidcValidation };
   } catch (err: any) {
     const msg = err.message || String(err);
     if (msg.includes("invalid_scope")) {
-      return { status: "auth_failed", requestedScopes, grantedScopes: [], missingInApp: [], extraInApp: requestedScopes, message: "Authentication failed due to invalid scopes. Update your selected scopes to match what's granted in UiPath Cloud." };
+      return { status: "auth_failed", requestedScopes, grantedScopes: [], missingInApp: [], extraInApp: requestedScopes, message: "Authentication failed due to invalid scopes. Update your selected scopes to match what's granted in UiPath Cloud.", oidcValidation };
     }
-    return { status: "auth_failed", requestedScopes, grantedScopes: [], missingInApp: [], extraInApp: [], message: `Authentication failed: ${msg}` };
+    return { status: "auth_failed", requestedScopes, grantedScopes: [], missingInApp: [], extraInApp: [], message: `Authentication failed: ${msg}`, oidcValidation };
   }
 }
 
@@ -2274,6 +2425,7 @@ export async function autoDetectUiPathScopes(): Promise<{
   detectedScopes: string[];
   previousScopes: string[];
   message: string;
+  oidcStatus?: { hasLiveScopes: boolean; familyCount: number; isStale: boolean };
 }> {
   const config = await getUiPathConfig();
   if (!config) {
@@ -2281,46 +2433,30 @@ export async function autoDetectUiPathScopes(): Promise<{
   }
 
   const previousScopes = config.scopes.split(/\s+/).filter(Boolean);
+  const { metadataService: mdsSvc } = await import("./catalog/metadata-service");
 
-  const ALL_KNOWN_SCOPES = [
-    "OR.Default",
-    "OR.Administration", "OR.Administration.Read", "OR.Administration.Write",
-    "OR.Analytics", "OR.Analytics.Read", "OR.Analytics.Write",
-    "OR.Assets", "OR.Assets.Read", "OR.Assets.Write",
-    "OR.Audit", "OR.Audit.Read", "OR.Audit.Write",
-    "OR.AutomationSolutions.Access",
-    "OR.BackgroundTasks", "OR.BackgroundTasks.Read", "OR.BackgroundTasks.Write",
-    "OR.Buckets", "OR.Buckets.Read", "OR.Buckets.Write",
-    "OR.Execution", "OR.Execution.Read", "OR.Execution.Write",
-    "OR.Folders", "OR.Folders.Read", "OR.Folders.Write",
-    "OR.Hypervisor", "OR.Hypervisor.Read", "OR.Hypervisor.Write",
-    "OR.Jobs", "OR.Jobs.Read", "OR.Jobs.Write",
-    "OR.License", "OR.License.Read", "OR.License.Write",
-    "OR.Machines", "OR.Machines.Read", "OR.Machines.Write",
-    "OR.ML", "OR.ML.Read", "OR.ML.Write",
-    "OR.Monitoring", "OR.Monitoring.Read", "OR.Monitoring.Write",
-    "OR.Queues", "OR.Queues.Read", "OR.Queues.Write",
-    "OR.Robots", "OR.Robots.Read", "OR.Robots.Write",
-    "OR.Settings", "OR.Settings.Read", "OR.Settings.Write",
-    "OR.Tasks", "OR.Tasks.Read", "OR.Tasks.Write",
-    "OR.TestDataQueues", "OR.TestDataQueues.Read", "OR.TestDataQueues.Write",
-    "OR.TestSetExecutions", "OR.TestSetExecutions.Read", "OR.TestSetExecutions.Write",
-    "OR.TestSets", "OR.TestSets.Read", "OR.TestSets.Write",
-    "OR.TestSetSchedules", "OR.TestSetSchedules.Read", "OR.TestSetSchedules.Write",
-    "OR.Users", "OR.Users.Read", "OR.Users.Write",
-    "OR.Webhooks", "OR.Webhooks.Read", "OR.Webhooks.Write",
-  ];
+  await mdsSvc.refreshFromOIDC();
+  const oidcStatus = mdsSvc.getOidcStatus();
+
+  const orScopes = mdsSvc.getScopesForService("OR");
+  if (orScopes.length === 0) {
+    return {
+      status: "no_scopes_found",
+      detectedScopes: [],
+      previousScopes,
+      message: "OIDC discovery did not find OR scope family. Using baseline scopes.",
+      oidcStatus: { hasLiveScopes: oidcStatus.hasLiveScopes, familyCount: oidcStatus.familyCount, isStale: oidcStatus.isStale },
+    };
+  }
 
   let token: string | null = null;
-
   try {
     const params = new URLSearchParams({
       grant_type: "client_credentials",
       client_id: config.clientId,
       client_secret: config.clientSecret,
-      scope: ALL_KNOWN_SCOPES.join(" "),
+      scope: orScopes.join(" "),
     });
-    const { metadataService: mdsSvc } = await import("./catalog/metadata-service");
     const tokenUrl = mdsSvc.getTokenEndpoint();
     const res = await fetch(tokenUrl, {
       method: "POST",
@@ -2331,10 +2467,11 @@ export async function autoDetectUiPathScopes(): Promise<{
       const data = await res.json();
       token = data.access_token;
     }
-  } catch (e: any) { console.warn(`[UiPath] Auto-detect scopes initial token request failed: ${e.message}`); }
+  } catch (e: any) { console.warn(`[UiPath] Auto-detect scopes token request failed: ${e.message}`); }
 
   if (!token) {
-    for (const tryScope of ["OR.Administration", "OR.Default"]) {
+    const fallbackScopes = mdsSvc.getScopesForService("OR");
+    for (const tryScope of fallbackScopes) {
       try {
         const params = new URLSearchParams({
           grant_type: "client_credentials",
@@ -2342,9 +2479,8 @@ export async function autoDetectUiPathScopes(): Promise<{
           client_secret: config.clientSecret,
           scope: tryScope,
         });
-        const { metadataService: mdsSvc2 } = await import("./catalog/metadata-service");
-        const tokenUrl2 = mdsSvc2.getTokenEndpoint();
-        const res = await fetch(tokenUrl2, {
+        const tokenUrl = mdsSvc.getTokenEndpoint();
+        const res = await fetch(tokenUrl, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: params.toString(),
@@ -2364,6 +2500,7 @@ export async function autoDetectUiPathScopes(): Promise<{
       detectedScopes: [],
       previousScopes,
       message: "Could not authenticate with UiPath. Verify your App ID and Secret are correct.",
+      oidcStatus: { hasLiveScopes: oidcStatus.hasLiveScopes, familyCount: oidcStatus.familyCount, isStale: oidcStatus.isStale },
     };
   }
 
@@ -2374,22 +2511,30 @@ export async function autoDetectUiPathScopes(): Promise<{
       detectedScopes: [],
       previousScopes,
       message: "Authenticated successfully but could not extract scopes from the JWT token.",
+      oidcStatus: { hasLiveScopes: oidcStatus.hasLiveScopes, familyCount: oidcStatus.familyCount, isStale: oidcStatus.isStale },
     };
   }
 
-  const orScopes = detectedScopes.filter(s => s.startsWith("OR."));
-  const scopeString = orScopes.join(" ");
+  const grantedOrScopes = detectedScopes.filter(s => s.startsWith("OR."));
+  const scopeString = grantedOrScopes.join(" ");
   await upsertSetting("uipath_scopes", scopeString);
+
+  const oidcValidScopes = mdsSvc.getOidcValidScopes();
+  const nonOrFamilies = Object.entries(mdsSvc.getOidcStatus().scopeFamilies || {})
+    .filter(([, f]) => f.mappedService && f.mappedService !== "OR")
+    .map(([prefix, f]) => `${prefix}→${f.mappedService}(${f.scopeCount})`)
+    .join(", ");
 
   return {
     status: "synced",
     detectedScopes,
     previousScopes,
-    message: `Auto-detected and saved ${orScopes.length} OR scopes from UiPath. TM scopes are requested separately (UiPath requires separate tokens per resource).`,
+    message: `Auto-detected ${grantedOrScopes.length} OR scopes from UiPath (OIDC-backed: ${oidcValidScopes.length} valid scopes across ${oidcStatus.familyCount} families). Non-OR families: ${nonOrFamilies || "none detected"}. Each resource type uses separate tokens.`,
+    oidcStatus: { hasLiveScopes: oidcStatus.hasLiveScopes, familyCount: oidcStatus.familyCount, isStale: oidcStatus.isStale },
   };
 }
 
-export async function verifyUiPathScopes(): Promise<{ success: boolean; internalError?: boolean; requestedScopes: string[]; grantedScopes: string[]; message: string; services?: Record<string, { available: boolean; message: string }> }> {
+export async function verifyUiPathScopes(): Promise<{ success: boolean; internalError?: boolean; requestedScopes: string[]; grantedScopes: string[]; message: string; services?: Record<string, { available: boolean; message: string }>; oidcDiagnostics?: { validScopes: string[]; familyCount: number; isStale: boolean; scopeFamilies?: Record<string, { prefix: string; scopeCount: number; mappedService?: string }> } }> {
   const config = await getUiPathConfig();
   if (!config) {
     return { success: false, requestedScopes: [], grantedScopes: [], message: "UiPath is not configured." };
@@ -2397,20 +2542,22 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; internal
 
   try {
     const { tryAcquireResourceToken } = await import("./uipath-auth");
+    const { metadataService: mdsSvc } = await import("./catalog/metadata-service");
 
-    const resourceResults = await Promise.allSettled([
-      tryAcquireResourceToken("OR"),
-      tryAcquireResourceToken("TM"),
-      tryAcquireResourceToken("DU"),
-      tryAcquireResourceToken("PM"),
-      tryAcquireResourceToken("DF"),
-      tryAcquireResourceToken("PIMS"),
-      tryAcquireResourceToken("IXP"),
-      tryAcquireResourceToken("AI"),
-    ]);
+    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "AI"> = ["OR", "TM", "DU", "PM", "DF", "PIMS", "IXP", "AI"];
+    const rtToSvc: Record<string, import("./catalog/metadata-schemas").ServiceResourceType> = {
+      OR: "OR", TM: "TM", DU: "DU", PM: "IDENTITY", DF: "DF", PIMS: "PIMS", IXP: "IXP", AI: "AI",
+    };
+    const resourcePromises = resourceNames.map(name => {
+      const svcType = rtToSvc[name] || name as import("./catalog/metadata-schemas").ServiceResourceType;
+      if (!mdsSvc.hasOidcScopeFamily(svcType) && name !== "OR") {
+        return Promise.resolve({ ok: false, scopes: [] as string[], error: `No OIDC scope family for ${name}` });
+      }
+      return tryAcquireResourceToken(name).catch(() => ({ ok: false, scopes: [] as string[], error: "Token request failed" }));
+    });
+    const resourceResults = await Promise.allSettled(resourcePromises);
 
     const resources: Record<string, { ok: boolean; scopes: string[]; error?: string }> = {};
-    const resourceNames: Array<"OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "AI"> = ["OR", "TM", "DU", "PM", "DF", "PIMS", "IXP", "AI"];
     for (let i = 0; i < resourceNames.length; i++) {
       const r = resourceResults[i];
       resources[resourceNames[i]] = r.status === "fulfilled" ? r.value : { ok: false, scopes: [], error: "Token request failed" };
@@ -2447,104 +2594,66 @@ export async function verifyUiPathScopes(): Promise<{ success: boolean; internal
     }
 
     const serviceChecks: Record<string, { available: boolean; message: string }> = {};
-
-    serviceChecks["Orchestrator"] = probe.flags.orchestrator
-      ? { available: true, message: "Connected" }
-      : { available: false, message: "Not accessible" };
-
-    serviceChecks["Storage Buckets"] = probe.flags.storageBuckets
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible — may need OR.Blobs scope" };
-
-    serviceChecks["Action Center (Maestro)"] = probe.flags.actionCenter
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible" };
-
-    serviceChecks["Test Manager"] = probe.flags.testManager
-      ? { available: true, message: `TM available (token: ${resources.TM.ok ? "acquired" : "unavailable"})` }
-      : { available: false, message: `TM token unavailable: ${resources.TM.error || "scopes not configured"}` };
-
-    serviceChecks["Document Understanding"] = probe.flags.documentUnderstanding
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: `DU unavailable: ${resources.DU.error || "scopes not configured"}` };
-
-    serviceChecks["Platform Management"] = probe.flags.platformManagement
-      ? { available: true, message: `Token acquired` }
-      : { available: false, message: `PM token unavailable: ${resources.PM.error || "scopes not configured"}` };
-
-    serviceChecks["Data Service"] = probe.flags.dataService
-      ? { available: true, message: "Data Service provisioned" }
-      : { available: false, message: `DF unavailable: ${resources.DF.error || "scopes not configured"}` };
-
-    serviceChecks["Maestro"] = probe.flags.maestro
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible — PIMS scope may be needed" };
-
-    try {
-      const isDiscovery = await discoverIntegrationService();
-      const activeConns = isDiscovery.connections.filter(c => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
-      serviceChecks["Integration Service"] = isDiscovery.available
-        ? { available: true, message: `${isDiscovery.connectors.length} connector(s), ${activeConns.length} active connection(s)` }
-        : { available: false, message: "Integration Service not accessible" };
-    } catch (e: any) {
-      serviceChecks["Integration Service"] = probe.flags.integrationService
-        ? { available: true, message: "Accessible" }
-        : { available: false, message: "Could not probe Integration Service" };
+    const taxonomy = mdsSvc.getCapabilityTaxonomy();
+    for (const entry of taxonomy) {
+      const flagVal = (probe.flags as Record<string, boolean>)[entry.flagKey];
+      const isAvailable = !!flagVal;
+      const remediation = entry.defaultRemediationTemplate;
+      if (isAvailable) {
+        serviceChecks[entry.displayName] = { available: true, message: "Accessible" };
+      } else {
+        const msg = remediation?.reason || "Not accessible or not provisioned";
+        serviceChecks[entry.displayName] = { available: false, message: msg };
+      }
     }
 
-    serviceChecks["IXP / Communications Mining"] = probe.flags.ixp
-      ? { available: true, message: resources.IXP?.ok ? "Accessible (IXP scope granted)" : "Reachable — grant Ixp.ApiAccess scope for full access" }
-      : { available: false, message: `Not accessible — ${resources.IXP?.ok ? "provisioning issue" : "Ixp.ApiAccess scope may be needed"}` };
-
-    serviceChecks["Automation Hub"] = probe.flags.automationHub
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible or not provisioned" };
-
-    serviceChecks["Automation Ops"] = probe.flags.automationOps
-      ? { available: true, message: `Accessible — ${probe.governancePolicies?.length ?? 0} governance policies active` }
-      : { available: false, message: "Not accessible or not provisioned" };
-
-    serviceChecks["Automation Store"] = probe.flags.automationStore
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible or not provisioned" };
-
-    serviceChecks["Apps"] = probe.flags.apps
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "No external API access — Apps API is not publicly exposed" };
-
-    serviceChecks["Assistant"] = probe.flags.assistant
-      ? { available: true, message: "Accessible" }
-      : { available: false, message: "Not accessible or not provisioned" };
-
-    if (probe.flags.aiCenter) {
+    const aiLabel = mdsSvc.getCapabilityTaxonomyEntry("aiCenter")?.displayName || "AI Center";
+    if (probe.flags.aiCenter && probe.aiCenterSkills.length > 0) {
       const deployed = probe.aiCenterSkills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
-      serviceChecks["AI Center"] = {
-        available: true,
-        message: deployed.length > 0
-          ? `${deployed.length} ML skill(s) deployed: ${deployed.map(s => s.name).join(", ")}`
-          : `Available (${probe.aiCenterPackages.length} packages, no skills deployed)`,
-      };
-    } else {
-      serviceChecks["AI Center"] = { available: false, message: `Not accessible — ${resources.AI?.ok ? "provisioning issue" : "AI Center scopes may be needed"}` };
+      if (deployed.length > 0) {
+        serviceChecks[aiLabel] = { available: true, message: `${deployed.length} ML skill(s) deployed` };
+      }
     }
 
-    serviceChecks["Attended Robots"] = probe.flags.attendedRobots
-      ? { available: true, message: `${probe.attendedRobotInfo?.attendedRobots.length ?? 0} attended robots discovered` }
-      : { available: false, message: "No attended robots found" };
-
-    serviceChecks["Studio Projects"] = probe.flags.studioProjects
-      ? { available: true, message: `${probe.studioProjectInfo?.projects.length ?? 0} existing processes` }
-      : { available: false, message: "No existing processes found" };
+    const arLabel = mdsSvc.getCapabilityTaxonomyEntry("attendedRobots")?.displayName || "Attended Robots";
+    if (probe.flags.attendedRobots) {
+      serviceChecks[arLabel] = { available: true, message: `${probe.attendedRobotInfo?.attendedRobots.length ?? 0} attended robots discovered` };
+    }
+    const spLabel = mdsSvc.getCapabilityTaxonomyEntry("studioProjects")?.displayName || "Studio Projects";
+    if (probe.flags.studioProjects) {
+      serviceChecks[spLabel] = { available: true, message: `${probe.studioProjectInfo?.projects.length ?? 0} existing processes` };
+    }
 
     const availableCount = Object.values(serviceChecks).filter(s => s.available).length;
     const totalCount = Object.keys(serviceChecks).length;
+
+    const oidcInfo = mdsSvc.getOidcStatus();
+    const oidcDiagnostics = {
+      validScopes: mdsSvc.getOidcValidScopes(),
+      familyCount: oidcInfo.familyCount,
+      isStale: oidcInfo.isStale,
+      scopeFamilies: oidcInfo.scopeFamilies as Record<string, { prefix: string; scopeCount: number; mappedService?: string }> | undefined,
+    };
+
+    for (const [name, res] of Object.entries(resources)) {
+      if (!res.ok && res.error) {
+        const hasScopeFamily = mdsSvc.hasOidcScopeFamily(name as ServiceResourceType);
+        if (!hasScopeFamily) {
+          const checkName = Object.keys(serviceChecks).find(k => k.includes(name));
+          if (checkName && serviceChecks[checkName]) {
+            serviceChecks[checkName].message += " (no dedicated scope family in OIDC)";
+          }
+        }
+      }
+    }
 
     return {
       success: true,
       requestedScopes,
       grantedScopes: allGrantedScopes,
-      message: `${availableCount}/${totalCount} services accessible. Scopes: ${scopeSummary.join(", ")} (separate tokens per UiPath resource).`,
+      message: `${availableCount}/${totalCount} services accessible. Scopes: ${scopeSummary.join(", ")} (separate tokens per UiPath resource). OIDC: ${oidcInfo.familyCount} scope families${oidcInfo.isStale ? " (stale)" : ""}.`,
       services: serviceChecks,
+      oidcDiagnostics,
     };
   } catch (err: any) {
     const msg = err.message || String(err);
@@ -2931,7 +3040,7 @@ export async function testUiPathConnection(): Promise<{ success: boolean; messag
     const token = await getAccessToken(config);
     const { metadataService: mdsSvc4 } = await import("./catalog/metadata-service");
     const orchUrl2 = mdsSvc4.getServiceUrl("OR", config);
-    const foldersUrl = `${orchUrl2}/odata/Folders?$top=1`;
+    const foldersUrl = `${orchUrl2}${ODP.Folders}?$top=1`;
     const res = await fetch(foldersUrl, {
       headers: { Authorization: `Bearer ${token}` },
     });

@@ -7,7 +7,7 @@ import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 import { findUiPathMessage, parseUiPathPackage, generateUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline, type PipelineProgressEvent } from "./uipath-pipeline";
 import * as auth from "./uipath-auth";
-import { metadataService } from "./catalog/metadata-service";
+import { metadataService, ORCHESTRATOR_DIAGNOSTIC_ENTITIES } from "./catalog/metadata-service";
 import * as orch from "./orchestrator-client";
 import * as prereqs from "./prerequisite-checker";
 import { db } from "./db";
@@ -55,7 +55,7 @@ async function migrateExistingConfigToConnection(): Promise<void> {
     tenantName,
     clientId,
     clientSecret,
-    scopes: map.get("uipath_scopes") || "OR.Default OR.Administration",
+    scopes: map.get("uipath_scopes") || metadataService.getScopesForServiceString("OR"),
     folderId: map.get("uipath_folder_id") || null,
     folderName: map.get("uipath_folder_name") || null,
     isActive: true,
@@ -154,7 +154,7 @@ export function registerUiPathRoutes(app: Express): void {
           tenantName: tenantName.trim(),
           clientId: clientId.trim(),
           clientSecret: secret,
-          scopes: scopes?.trim() || "OR.Default OR.Administration",
+          scopes: scopes?.trim() || metadataService.getScopesForServiceString("OR"),
           isActive: true,
         });
       }
@@ -208,7 +208,7 @@ export function registerUiPathRoutes(app: Express): void {
         tenantName: tenantName.trim(),
         clientId: clientId.trim(),
         clientSecret: clientSecret.trim(),
-        scopes: scopes?.trim() || "OR.Default OR.Administration",
+        scopes: scopes?.trim() || metadataService.getScopesForServiceString("OR"),
         folderId: folderId || null,
         folderName: folderName || null,
         isActive: isFirst,
@@ -297,7 +297,9 @@ export function registerUiPathRoutes(app: Express): void {
       if (rows.length === 0) return res.status(404).json({ message: "Connection not found" });
       const conn = rows[0];
 
-      const orScopes = conn.scopes.split(/\s+/).filter(s => s.startsWith("OR."));
+      const orchEntry = metadataService.getCapabilityTaxonomyEntry("orchestrator");
+      const orchScopePrefix = orchEntry?.scopeFamily ? `${orchEntry.scopeFamily}.` : "OR.";
+      const orScopes = conn.scopes.split(/\s+/).filter(s => s.startsWith(orchScopePrefix));
       const tokenParams = new URLSearchParams({
         grant_type: "client_credentials",
         client_id: conn.clientId,
@@ -319,7 +321,9 @@ export function registerUiPathRoutes(app: Express): void {
 
       const tokenData = await tokenRes.json();
       const baseUrl = metadataService.getServiceUrl("OR", { orgName: conn.orgName, tenantName: conn.tenantName });
-      const orchRes = await fetch(`${baseUrl}/odata/Folders?$top=1`, {
+      const orchTaxEntry = metadataService.getCapabilityTaxonomyEntry("orchestrator");
+      const orchProbePath = orchTaxEntry?.probeConfig?.probePath ?? "";
+      const orchRes = await fetch(`${baseUrl}${orchProbePath}`, {
         headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
       });
 
@@ -351,6 +355,28 @@ export function registerUiPathRoutes(app: Express): void {
   app.post("/api/settings/uipath/auto-detect-scopes", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const result = await autoDetectUiPathScopes();
+    return res.json(result);
+  });
+
+  app.get("/api/settings/uipath/oidc-diagnostics", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const oidcStatus = metadataService.getOidcStatus();
+    const validScopes = metadataService.getOidcValidScopes();
+    const resourceTypes: Array<import("./catalog/metadata-schemas").ServiceResourceType> = ["OR", "TM", "DU", "DF", "PIMS", "IXP", "AI", "IDENTITY"];
+    const scopesByService: Record<string, string[]> = {};
+    for (const rt of resourceTypes) {
+      scopesByService[rt] = metadataService.getScopesForService(rt);
+    }
+    return res.json({
+      ...oidcStatus,
+      totalValidScopes: validScopes.length,
+      scopesByService,
+    });
+  });
+
+  app.post("/api/settings/uipath/oidc-refresh", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await metadataService.refreshFromOIDC();
     return res.json(result);
   });
 
@@ -853,15 +879,16 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── QUEUES ──
       {
+        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["QueueDefinitions"];
         const sec: any = { artifact: "Queue", steps: [] };
-        const list = await safeCall("list", `${base}/odata/QueueDefinitions?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/QueueDefinitions?$top=3`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Queue_${ts}`, Description: "CannonBall diagnostic test", MaxNumberOfRetries: 1, EnforceUniqueReference: false };
-        const create = await safeCall("create", `${base}/odata/QueueDefinitions`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}/odata/QueueDefinitions`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
         sec.overallStatus = create.ok ? "working" : `failed (${create.status})`;
         if (create.ok && create.data?.Id) {
-          const del = await safeCall("cleanup", `${base}/odata/QueueDefinitions(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+          const del = await safeCall("cleanup", `${base}${ent.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
           sec.steps.push({ step: "cleanup", method: "DELETE", ...del });
         }
         results.queues = sec;
@@ -869,15 +896,16 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── ASSETS ──
       {
+        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Assets"];
         const sec: any = { artifact: "Asset", steps: [] };
-        const list = await safeCall("list", `${base}/odata/Assets?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/Assets?$top=3`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Asset_${ts}`, ValueType: "Text", StringValue: "diag_value", Description: "CannonBall diagnostic" };
-        const create = await safeCall("create", `${base}/odata/Assets`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}/odata/Assets`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
         sec.overallStatus = create.ok ? "working" : `failed (${create.status})`;
         if (create.ok && create.data?.Id) {
-          const del = await safeCall("cleanup", `${base}/odata/Assets(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+          const del = await safeCall("cleanup", `${base}${ent.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
           sec.steps.push({ step: "cleanup", method: "DELETE", ...del });
         }
         results.assets = sec;
@@ -885,15 +913,16 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── MACHINES ──
       {
+        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Machines"];
         const sec: any = { artifact: "Machine", steps: [] };
-        const list = await safeCall("list", `${base}/odata/Machines?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/Machines?$top=3`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Machine_${ts}`, Type: "Standard", Description: "CannonBall diagnostic" };
-        const create = await safeCall("create", `${base}/odata/Machines`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}/odata/Machines`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
         if (!create.ok) {
           const bodyTpl = { Name: `CB_Diag_MachineTpl_${ts}`, Description: "CannonBall diagnostic", NonProductionSlots: 0, UnattendedSlots: 1 };
-          const createTpl = await safeCall("create_template", `${base}/odata/Machines`, { method: "POST", headers: hdrs, body: JSON.stringify(bodyTpl) });
+          const createTpl = await safeCall("create_template", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(bodyTpl) });
           sec.steps.push({ step: "create_template", requestBody: bodyTpl, ...createTpl });
           sec.overallStatus = createTpl.ok ? "working (template)" : `failed (${create.status}, template ${createTpl.status})`;
         } else {
@@ -904,9 +933,10 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── STORAGE BUCKETS ──
       {
+        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Buckets"];
         const sec: any = { artifact: "StorageBucket", steps: [] };
-        const list = await safeCall("list", `${base}/odata/Buckets?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/Buckets?$top=3`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
 
         const diagUuid = () => {
           const h = "0123456789abcdef";
@@ -925,13 +955,13 @@ export function registerUiPathRoutes(app: Express): void {
         let bucketCreated = false;
         for (const body of bucketVariants) {
           const provLabel = (body as any).StorageProvider || "none";
-          const create = await safeCall(`create_${provLabel}`, `${base}/odata/Buckets`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-          sec.steps.push({ step: `create_${provLabel}`, url: `${base}/odata/Buckets`, method: "POST", requestBody: body, ...create });
+          const create = await safeCall(`create_${provLabel}`, `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+          sec.steps.push({ step: `create_${provLabel}`, url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
           if (create.ok) {
             sec.overallStatus = `working (StorageProvider=${provLabel})`;
             bucketCreated = true;
             if (create.data?.Id) {
-              await safeCall("cleanup", `${base}/odata/Buckets(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+              await safeCall("cleanup", `${base}${ent.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
             }
             break;
           }
@@ -943,11 +973,12 @@ export function registerUiPathRoutes(app: Express): void {
       // ── ENVIRONMENTS ──
       {
         const sec: any = { artifact: "Environment", steps: [] };
-        const list = await safeCall("list", `${base}/odata/Environments?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/Environments?$top=3`, method: "GET", ...list });
+        const envEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Environments"];
+        const list = await safeCall("list", `${base}${envEnt.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${envEnt.listPath}`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Env_${ts}`, Description: "CannonBall diagnostic", Type: "Dev" };
-        const create = await safeCall("create", `${base}/odata/Environments`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}/odata/Environments`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}${envEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}${envEnt.createPath}`, method: "POST", requestBody: body, ...create });
         sec.overallStatus = create.ok ? "working" : `failed (${create.status})`;
         results.environments = sec;
       }
@@ -955,8 +986,11 @@ export function registerUiPathRoutes(app: Express): void {
       // ── TRIGGERS (probe only, needs process) ──
       {
         const sec: any = { artifact: "Trigger", steps: [] };
-        const list = await safeCall("list", `${base}/odata/ProcessSchedules?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/ProcessSchedules?$top=3`, method: "GET", ...list });
+        const trigTaxEntry = metadataService.getCapabilityTaxonomyEntry("triggers");
+        const trigDiagPath = trigTaxEntry?.secondaryProbePaths?.[0] ?? "";
+        const trigListPath = trigDiagPath.includes("$top") ? trigDiagPath : `${trigDiagPath}?$top=3`;
+        const list = await safeCall("list", `${base}${trigListPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${trigListPath}`, method: "GET", ...list });
         sec.overallStatus = list.ok ? "endpoint available (creation needs process)" : `endpoint unavailable (${list.status})`;
         results.triggers = sec;
       }
@@ -964,8 +998,9 @@ export function registerUiPathRoutes(app: Express): void {
       // ── USERS / ROBOT ACCOUNTS ──
       {
         const sec: any = { artifact: "RobotAccount", steps: [] };
-        const listUsers = await safeCall("list_users", `${base}/odata/Users?$top=5`, { headers: hdrs });
-        sec.steps.push({ step: "list_users", url: `${base}/odata/Users?$top=5`, method: "GET", ...listUsers });
+        const userEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Users"];
+        const listUsers = await safeCall("list_users", `${base}${userEnt.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list_users", url: `${base}${userEnt.listPath}`, method: "GET", ...listUsers });
 
         let pmToken: string | null = null;
         try {
@@ -1000,7 +1035,8 @@ export function registerUiPathRoutes(app: Express): void {
               robotId = create.data?.id || create.data?.Id;
               if (robotId && config.folderId) {
                 const assignBody = { assignments: { UserIds: [robotId], RolesPerFolder: [{ FolderId: parseInt(config.folderId, 10), Roles: [{ Name: "Executor" }] }] } };
-                const assign = await safeCall("assign_folder", `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers`, { method: "POST", headers: hdrs, body: JSON.stringify(assignBody) });
+                const folderEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Folders"];
+                const assign = await safeCall("assign_folder", `${base}${folderEnt.assignPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(assignBody) });
                 sec.steps.push({ step: "assign_folder", requestBody: assignBody, ...assign });
               }
               break;
@@ -1008,8 +1044,8 @@ export function registerUiPathRoutes(app: Express): void {
           }
           if (!robotCreated) {
             const odataBody = { UserName: `CB_Diag_Robot_OData_${ts}`, Name: "CB_Diag", Surname: "Robot", RolesList: ["Robot"], Type: "Robot" };
-            const odataCreate = await safeCall("create_via_odata", `${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
-            sec.steps.push({ step: "create_via_odata_with_pm", url: `${base}/odata/Users`, requestBody: odataBody, ...odataCreate });
+            const odataCreate = await safeCall("create_via_odata", `${base}${userEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
+            sec.steps.push({ step: "create_via_odata_with_pm", url: `${base}${userEnt.createPath}`, requestBody: odataBody, ...odataCreate });
             if (odataCreate.ok) {
               robotCreated = true;
               robotId = odataCreate.data?.Id || odataCreate.data?.id;
@@ -1018,8 +1054,8 @@ export function registerUiPathRoutes(app: Express): void {
           sec.overallStatus = robotCreated ? "working" : "pm_token_ok_but_all_approaches_failed";
         } else {
           const odataBody = { UserName: `CB_Diag_Robot_${ts}`, Name: "CB_Diag", Surname: "Robot", RolesList: ["Robot"], Type: "Robot" };
-          const odataCreate = await safeCall("create_via_odata", `${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
-          sec.steps.push({ step: "create_via_odata", url: `${base}/odata/Users`, requestBody: odataBody, ...odataCreate });
+          const odataCreate = await safeCall("create_via_odata", `${base}${userEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
+          sec.steps.push({ step: "create_via_odata", url: `${base}${userEnt.createPath}`, requestBody: odataBody, ...odataCreate });
           sec.overallStatus = odataCreate.ok ? "working (odata fallback)" : `no_pm_token_and_odata_failed (${odataCreate.status})`;
         }
         results.robotAccounts = sec;
@@ -1027,33 +1063,34 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── ACTION CENTER ──
       {
+        const tcEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["TaskCatalogs"];
+        const gtEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["GenericTasks"];
         const sec: any = { artifact: "ActionCenter", steps: [] };
-        const catalogsUrl = `${base}/odata/TaskCatalogs`;
-        const probeCatalogs = await safeCall("probe_catalogs", `${catalogsUrl}?$top=1`, { headers: hdrs });
-        sec.steps.push({ step: "probe_catalogs", url: `${catalogsUrl}?$top=1`, ...probeCatalogs });
+        const probeCatalogs = await safeCall("probe_catalogs", `${base}${tcEnt.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "probe_catalogs", url: `${base}${tcEnt.listPath}`, ...probeCatalogs });
 
         const catalogBody = { Name: `CB_Diag_Catalog_${ts}`, Description: "CannonBall diagnostic" };
 
         let acCreated = false;
 
         if (probeCatalogs.ok) {
-          const create = await safeCall("create_catalog", catalogsUrl, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
-          sec.steps.push({ step: "create_catalog", url: catalogsUrl, requestBody: catalogBody, ...create });
+          const create = await safeCall("create_catalog", `${base}${tcEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
+          sec.steps.push({ step: "create_catalog", url: `${base}${tcEnt.createPath}`, requestBody: catalogBody, ...create });
           if (create.ok || create.status === 201) {
             acCreated = true;
             sec.overallStatus = "working";
             if (create.data?.Id) {
-              await safeCall("cleanup", `${base}/odata/TaskCatalogs(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+              await safeCall("cleanup", `${base}${tcEnt.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
             }
           }
         }
 
         if (!acCreated) {
           const genericEndpoints = [
-            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog_${ts}`, Type: "ExternalTask" }, label: "create_generic_external" },
-            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task2_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog2_${ts}`, Type: "ExternalAction" }, label: "create_generic_externalaction" },
-            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task3_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog3_${ts}`, TaskType: "ExternalAction" }, label: "create_generic_tasktype" },
-            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task4_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog4_${ts}` }, label: "create_generic_notype" },
+            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog_${ts}`, Type: "ExternalTask" }, label: "create_generic_external" },
+            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task2_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog2_${ts}`, Type: "ExternalAction" }, label: "create_generic_externalaction" },
+            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task3_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog3_${ts}`, TaskType: "ExternalAction" }, label: "create_generic_tasktype" },
+            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task4_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog4_${ts}` }, label: "create_generic_notype" },
           ];
           for (const ep of genericEndpoints) {
             const result = await safeCall(ep.label, ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(ep.body) });
@@ -1061,7 +1098,7 @@ export function registerUiPathRoutes(app: Express): void {
             if (result.ok || result.status === 201) {
               acCreated = true;
               sec.overallStatus = `working (${ep.label})`;
-              const checkResult = await safeCall("verify_catalog", `${base}/odata/TaskCatalogs?$top=5`, { headers: hdrs });
+              const checkResult = await safeCall("verify_catalog", `${base}${tcEnt.listPath.replace("$top=1", "$top=5")}`, { headers: hdrs });
               sec.steps.push({ step: "verify_catalog_after_task", ...checkResult });
               break;
             }
@@ -1077,8 +1114,9 @@ export function registerUiPathRoutes(app: Express): void {
       // ── TEST DATA QUEUES ──
       {
         const sec: any = { artifact: "TestDataQueue", steps: [] };
-        const list = await safeCall("list", `${base}/odata/TestDataQueues?$top=3`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}/odata/TestDataQueues?$top=3`, method: "GET", ...list });
+        const tdqEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["TestDataQueues"];
+        const list = await safeCall("list", `${base}${tdqEnt.listPath}`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}${tdqEnt.listPath}`, method: "GET", ...list });
 
         const defaultSchema = JSON.stringify({ type: "object", properties: { TestInput: { type: "string" }, ExpectedOutput: { type: "string" } } });
         const tdqVariants = [
@@ -1088,7 +1126,7 @@ export function registerUiPathRoutes(app: Express): void {
         let tdqCreated = false;
         for (const body of tdqVariants) {
           const label = (body as any).ContentJsonSchema ? "with_schema" : "no_schema";
-          const create = await safeCall(`create_${label}`, `${base}/odata/TestDataQueues`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+          const create = await safeCall(`create_${label}`, `${base}${tdqEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
           sec.steps.push({ step: `create_${label}`, requestBody: body, ...create });
           if (create.ok) {
             sec.overallStatus = `working (${label})`;
@@ -1123,7 +1161,7 @@ export function registerUiPathRoutes(app: Express): void {
       {
         const sec: any = { artifact: "TestManager", steps: [] };
         let tmToken: string | null = null;
-        const tmScopes = metadataService.getServiceScopesString("TM") || "TM.Projects TM.Projects.Read TM.Projects.Write TM.TestCases TM.TestCases.Read TM.TestCases.Write TM.TestSets TM.TestSets.Read TM.TestSets.Write";
+        const tmScopes = metadataService.getScopesForServiceString("TM");
         try {
           const tmParams = new URLSearchParams({ grant_type: "client_credentials", client_id: config.clientId, client_secret: config.clientSecret, scope: tmScopes });
           const tmRes = await safeCall("tm_token", metadataService.getTokenEndpoint(), { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tmParams.toString() });

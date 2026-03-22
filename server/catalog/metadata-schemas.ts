@@ -34,7 +34,6 @@ export const serviceEndpointEntrySchema = z.object({
   urlTemplate: z.string(),
   alternateUrlTemplates: z.array(z.string()).optional(),
   apiBasePath: z.string(),
-  scopes: z.array(z.string()),
   confidence: z.enum(["official", "inferred", "deprecated"]),
   reachabilityStatus: z.enum(["reachable", "limited", "unreachable", "unknown"]),
   lastVerifiedAt: z.string().datetime(),
@@ -44,30 +43,8 @@ export const serviceEndpointEntrySchema = z.object({
 
 export type ServiceResourceType = "OR" | "TM" | "DU" | "DF" | "PIMS" | "IXP" | "AI" | "HUB" | "IDENTITY" | "INTEGRATIONSERVICE" | "AUTOMATIONOPS" | "AUTOMATIONSTORE" | "APPS" | "ASSISTANT" | "AGENTS" | "AUTOPILOT" | "REINFER";
 
-export const taxonomyEntrySchema = z.object({
-  flagKey: z.string(),
-  serviceResourceType: z.string(),
-  displayName: z.string(),
-  category: z.enum(["service", "capability", "observation", "infrastructure"]),
-  parentService: z.string().optional(),
-  uiSection: z.enum(["primary", "secondary", "infrastructure", "observation"]),
-  defaultRemediationTemplate: z.object({
-    reason: z.string(),
-    actionOwner: z.enum(["uipath-admin", "cannonball", "user-config", "not-actionable"]),
-    recommendedStep: z.string(),
-  }).optional(),
-  oauthScopeGroups: z.array(z.object({
-    groupLabel: z.string(),
-    scopes: z.array(z.object({
-      id: z.string(),
-      description: z.string(),
-    })),
-  })).optional(),
-});
-
 export const serviceEndpointsSchema = z.object({
   endpoints: z.record(z.string(), serviceEndpointEntrySchema),
-  taxonomy: z.array(taxonomyEntrySchema).optional(),
   tokenEndpoint: z.string().url(),
   lastRefreshedAt: z.string().datetime(),
   lastVerifiedAt: z.string().datetime(),
@@ -77,7 +54,7 @@ export const serviceEndpointsSchema = z.object({
 export type ServiceEndpointEntry = z.infer<typeof serviceEndpointEntrySchema>;
 export type ServiceEndpoints = z.infer<typeof serviceEndpointsSchema>;
 
-export type TaxonomyCategory = "service" | "capability" | "observation" | "infrastructure";
+export type TaxonomyCategory = "service" | "capability" | "product" | "observation" | "infrastructure";
 
 export type TruthfulStatus =
   | "available"
@@ -127,4 +104,68 @@ export type TruthfulServiceStatus = {
   parentService?: string;
   displayName: string;
   flagKey: string;
+};
+
+export type ApiSupportLevel = "documented" | "undocumented" | "none";
+
+export type ProbeStrategy = "own-endpoint" | "parent-api" | "observation" | "none";
+
+export type ProbeConfig = {
+  probePath: string;
+  tokenResource?: "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "AI";
+  useAlternates?: boolean;
+  acceptLimitedAuth?: boolean;
+};
+
+export type CapabilityTaxonomyEntry = {
+  flagKey: string;
+  serviceResourceType: ServiceResourceType;
+  displayName: string;
+  description: string;
+  category: "service" | "capability" | "product" | "observation";
+  parentService?: string;
+  apiSupport: ApiSupportLevel;
+  probeStrategy: ProbeStrategy;
+  probeConfig?: ProbeConfig;
+  customProbeHandler?: string;
+  secondaryProbePaths?: string[];
+  inferredProbePath?: string;
+  urlPathPatterns?: string[];
+  scopeFamily?: string;
+  minimalScopes?: string[];
+  uiSection: "primary" | "secondary" | "infrastructure" | "observation";
+  defaultRemediationTemplate?: Omit<RemediationGuidance, "technicalEvidence">;
+  oauthScopeGroups?: Array<{
+    groupLabel: string;
+    scopes: ScopeDefinition[];
+  }>;
+};
+
+export type OidcScopeFamily = {
+  prefix: string;
+  scopes: string[];
+  mappedServiceResourceType?: ServiceResourceType;
+};
+
+export type OidcScopeSnapshot = {
+  fetchedAt: string;
+  source: string;
+  scopeFamilies: Record<string, OidcScopeFamily>;
+  rawScopesSupported: string[];
+  isStale: boolean;
+  staleSince?: string;
+};
+
+export const SCOPE_PREFIX_TO_SERVICE: Record<string, ServiceResourceType> = {
+  OR: "OR",
+  TM: "TM",
+  AIC: "AI",
+  Du: "DU",
+  PM: "IDENTITY",
+  DataFabric: "DF",
+  DataService: "DF",
+  Ixp: "IXP",
+  IS: "INTEGRATIONSERVICE",
+  PIMS: "PIMS",
+  AI: "AI",
 };

@@ -1,0 +1,534 @@
+[
+  {
+    "flagKey": "orchestrator",
+    "serviceResourceType": "OR",
+    "displayName": "Orchestrator",
+    "description": "Core automation orchestration — queues, assets, triggers, machines, environments, processes, jobs",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "OR",
+    "minimalScopes": [
+      "OR.Default",
+      "OR.Administration",
+      "OR.Execution"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Core Orchestrator service is not accessible.",
+      "actionOwner": "user-config",
+      "recommendedStep": "Verify connection credentials and ensure the External Application has OR.Default scope."
+    },
+    "customProbeHandler": "orchestrator",
+    "probeConfig": {
+      "probePath": "/odata/Folders?$top=1",
+      "tokenResource": "OR"
+    }
+  },
+  {
+    "flagKey": "actionCenter",
+    "serviceResourceType": "OR",
+    "displayName": "Action Center",
+    "description": "Human-in-the-loop tasks, approvals, escalations, SLA management",
+    "category": "capability",
+    "parentService": "orchestrator",
+    "apiSupport": "documented",
+    "probeStrategy": "parent-api",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Action Center is not enabled on this tenant.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Action Center in UiPath Automation Cloud admin settings."
+    },
+    "probeConfig": {
+      "probePath": "/odata/TaskCatalogs?$top=1",
+      "tokenResource": "OR"
+    }
+  },
+  {
+    "flagKey": "storageBuckets",
+    "serviceResourceType": "OR",
+    "displayName": "Storage Buckets",
+    "description": "File storage for input/output documents, templates, logs",
+    "category": "capability",
+    "parentService": "orchestrator",
+    "apiSupport": "documented",
+    "probeStrategy": "parent-api",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Storage Buckets feature is not accessible.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Create at least one Storage Bucket in Orchestrator."
+    },
+    "probeConfig": {
+      "probePath": "/odata/Buckets?$top=1",
+      "tokenResource": "OR"
+    }
+  },
+  {
+    "flagKey": "environments",
+    "serviceResourceType": "OR",
+    "displayName": "Environments",
+    "description": "Runtime environments for process execution",
+    "category": "capability",
+    "parentService": "orchestrator",
+    "apiSupport": "documented",
+    "probeStrategy": "parent-api",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Environments feature is not accessible.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Configure runtime environments in Orchestrator."
+    },
+    "probeConfig": {
+      "probePath": "/odata/Environments?$top=1",
+      "tokenResource": "OR"
+    }
+  },
+  {
+    "flagKey": "triggers",
+    "serviceResourceType": "OR",
+    "displayName": "Triggers",
+    "description": "Queue triggers and process schedules",
+    "category": "capability",
+    "parentService": "orchestrator",
+    "apiSupport": "documented",
+    "probeStrategy": "parent-api",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Triggers feature is not accessible.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Ensure queue triggers or process schedules are configured in Orchestrator."
+    },
+    "probeConfig": {
+      "probePath": "/odata/QueueTriggers?$top=1",
+      "tokenResource": "OR"
+    },
+    "secondaryProbePaths": [
+      "/odata/ProcessSchedules?$top=1"
+    ]
+  },
+  {
+    "flagKey": "testManager",
+    "serviceResourceType": "TM",
+    "displayName": "Test Manager",
+    "description": "Automated test projects, test cases, test execution, regression suites",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "TM",
+    "minimalScopes": [
+      "TM.Projects.Read",
+      "TM.TestCases.Read"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Test Manager is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Add the TestManager resource with TM.* scopes to your External Application in UiPath Admin."
+    },
+    "probeConfig": {
+      "probePath": "/api/v1/testcases?$top=1",
+      "tokenResource": "TM",
+      "useAlternates": true
+    },
+    "urlPathPatterns": [
+      "/testmanager_/",
+      "/tmapi_/"
+    ]
+  },
+  {
+    "flagKey": "documentUnderstanding",
+    "serviceResourceType": "DU",
+    "displayName": "Document Understanding",
+    "description": "Intelligent document processing, OCR, ML classification, data extraction",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "Du",
+    "minimalScopes": [
+      "Du.Default"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Document Understanding is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Add the UiPath.DocumentUnderstanding resource with Du.* scopes to your External Application."
+    },
+    "customProbeHandler": "documentUnderstanding",
+    "probeConfig": {
+      "probePath": "/api/framework/projects?api-version=1",
+      "tokenResource": "DU",
+      "useAlternates": true
+    },
+    "urlPathPatterns": [
+      "/du_/",
+      "/documentunderstanding_/"
+    ]
+  },
+  {
+    "flagKey": "generativeExtraction",
+    "serviceResourceType": "IXP",
+    "displayName": "Generative Extraction",
+    "description": "LLM-powered extraction for unstructured documents — contracts, reports, correspondence",
+    "category": "capability",
+    "parentService": "documentUnderstanding",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "Ixp",
+    "minimalScopes": [
+      "Ixp.ApiAccess"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Generative Extraction is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable IXP on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope."
+    },
+    "customProbeHandler": "generativeExtraction",
+    "probeConfig": {
+      "probePath": "/api/v1/projects",
+      "tokenResource": "DU",
+      "useAlternates": true
+    }
+  },
+  {
+    "flagKey": "communicationsMining",
+    "serviceResourceType": "REINFER",
+    "displayName": "Communications Mining",
+    "description": "Email/message stream analysis, intent detection, sentiment analysis, intelligent routing",
+    "category": "capability",
+    "parentService": "ixp",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "Ixp",
+    "minimalScopes": [
+      "Ixp.ApiAccess"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Communications Mining is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Communications Mining on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope."
+    },
+    "customProbeHandler": "communicationsMining",
+    "probeConfig": {
+      "probePath": "/api/v1/datasets",
+      "tokenResource": "IXP"
+    }
+  },
+  {
+    "flagKey": "dataService",
+    "serviceResourceType": "DF",
+    "displayName": "Data Service",
+    "description": "Structured data entities, schema-driven storage, cross-process data persistence",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "DataFabric",
+    "minimalScopes": [
+      "DataService.Default"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Data Service is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Add the DataFabricOpenApi resource with DataFabric.* scopes to your External Application."
+    },
+    "probeConfig": {
+      "probePath": "/api/EntityService/Entity",
+      "tokenResource": "DF"
+    },
+    "secondaryProbePaths": ["/swagger/index.html"],
+    "urlPathPatterns": [
+      "/dataservice_/",
+      "/datafabric_/"
+    ]
+  },
+  {
+    "flagKey": "maestro",
+    "serviceResourceType": "PIMS",
+    "displayName": "Maestro",
+    "description": "BPMN process orchestration, process apps, case management, service tasks",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "PIMS",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Maestro is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Maestro on your tenant and add the PIMS resource with PIMS.* scopes."
+    },
+    "probeConfig": {
+      "probePath": "/api/v1/",
+      "tokenResource": "OR",
+      "acceptLimitedAuth": true
+    }
+  },
+  {
+    "flagKey": "aiCenter",
+    "serviceResourceType": "AI",
+    "displayName": "AI Center",
+    "description": "Custom ML models for classification, prediction, NLP, anomaly detection",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "AIC",
+    "minimalScopes": [
+      "AIC.Project.View"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "AI Center is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Add the UiPath.AICenter resource with AIC.* scopes to your External Application in UiPath Admin."
+    },
+    "customProbeHandler": "aiCenter",
+    "secondaryProbePaths": ["/ai-deployer/v1/mlskills?$top=50", "/ai-deployer/v1/mlpackages?$top=50"],
+    "probeConfig": {
+      "probePath": "/ai-deployer/v1/projects?$top=1",
+      "tokenResource": "AI",
+      "useAlternates": true,
+      "acceptLimitedAuth": true
+    }
+  },
+  {
+    "flagKey": "agents",
+    "serviceResourceType": "AGENTS",
+    "displayName": "Agents",
+    "description": "AI agent definitions, tool bindings to Orchestrator processes, context grounding",
+    "category": "capability",
+    "parentService": "orchestrator",
+    "apiSupport": "undocumented",
+    "probeStrategy": "parent-api",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Agents service is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Agent Builder in UiPath Automation Cloud and add the ConversationalAgents resource to your External Application."
+    },
+    "customProbeHandler": "agents",
+    "secondaryProbePaths": [
+      "/odata/AgentDefinitions?$top=1"
+    ],
+    "inferredProbePath": "/odata/Assets?$filter=startswith(Name,'Agent_')&$top=1",
+    "probeConfig": {
+      "probePath": "/api/v1/agents?$top=1",
+      "tokenResource": "OR"
+    }
+  },
+  {
+    "flagKey": "autopilot",
+    "serviceResourceType": "AUTOPILOT",
+    "displayName": "Autopilot",
+    "description": "AI-powered automation assistance",
+    "category": "capability",
+    "parentService": "agents",
+    "apiSupport": "undocumented",
+    "probeStrategy": "observation",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Autopilot capability is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Autopilot in Agent Builder settings."
+    },
+    "customProbeHandler": "agents",
+    "probeConfig": {
+      "probePath": "/api/v1/agents?$top=1",
+      "tokenResource": "OR"
+    }
+  },
+  {
+    "flagKey": "automationHub",
+    "serviceResourceType": "HUB",
+    "displayName": "Automation Hub",
+    "description": "Idea management, ROI estimation, automation pipeline, CoE collaboration",
+    "category": "product",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Automation Hub is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Automation Hub on your tenant. Note: Automation Hub uses its own OAuth token, separate from the External Application."
+    },
+    "probeConfig": {
+      "probePath": "/api/v1/ideas?$top=1",
+      "tokenResource": "OR",
+      "acceptLimitedAuth": true
+    }
+  },
+  {
+    "flagKey": "integrationService",
+    "serviceResourceType": "INTEGRATIONSERVICE",
+    "displayName": "Integration Service",
+    "description": "500+ pre-built connectors to enterprise systems (SAP, Salesforce, ServiceNow, Microsoft 365, etc.)",
+    "category": "product",
+    "apiSupport": "undocumented",
+    "probeStrategy": "parent-api",
+    "scopeFamily": "IS",
+    "minimalScopes": [
+      "IS.Triggers.Read"
+    ],
+    "uiSection": "primary",
+    "defaultRemediationTemplate": {
+      "reason": "Integration Service does not support External Application OAuth access.",
+      "actionOwner": "not-actionable",
+      "recommendedStep": "Integration Service connectors are discovered opportunistically but cannot be managed via External Application OAuth. No user action is available."
+    },
+    "probeConfig": {
+      "probePath": "/api/Connections?$top=1",
+      "tokenResource": "OR",
+      "acceptLimitedAuth": true
+    }
+  },
+  {
+    "flagKey": "automationOps",
+    "serviceResourceType": "AUTOMATIONOPS",
+    "displayName": "Automation Ops",
+    "description": "Governance policies, deployment rules, environment management",
+    "category": "product",
+    "apiSupport": "undocumented",
+    "probeStrategy": "parent-api",
+    "uiSection": "secondary",
+    "defaultRemediationTemplate": {
+      "reason": "Automation Ops is not available.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Enable Automation Ops on your tenant. Governance policies are accessed via Platform Management token (PM.* scopes)."
+    },
+    "probeConfig": {
+      "probePath": "/api/v1/policies?$top=1",
+      "tokenResource": "PM",
+      "acceptLimitedAuth": true
+    },
+    "secondaryProbePaths": ["/api/v1/policies?$top=100", "/api/rules?$top=50"]
+  },
+  {
+    "flagKey": "automationStore",
+    "serviceResourceType": "AUTOMATIONSTORE",
+    "displayName": "Automation Store",
+    "description": "Reusable components, workflow templates, marketplace",
+    "category": "product",
+    "apiSupport": "undocumented",
+    "probeStrategy": "none",
+    "uiSection": "secondary",
+    "defaultRemediationTemplate": {
+      "reason": "Automation Store does not have a documented External Application API.",
+      "actionOwner": "not-actionable",
+      "recommendedStep": "Automation Store does not support External Application API access. No user action is available."
+    }
+  },
+  {
+    "flagKey": "apps",
+    "serviceResourceType": "APPS",
+    "displayName": "Apps",
+    "description": "Low-code app builder, custom UIs for automations, forms and dashboards",
+    "category": "product",
+    "apiSupport": "none",
+    "probeStrategy": "none",
+    "uiSection": "secondary",
+    "defaultRemediationTemplate": {
+      "reason": "UiPath Apps does not have a documented External Application API.",
+      "actionOwner": "not-actionable",
+      "recommendedStep": "UiPath Apps does not support External Application API access. No user action is available."
+    }
+  },
+  {
+    "flagKey": "assistant",
+    "serviceResourceType": "ASSISTANT",
+    "displayName": "Assistant",
+    "description": "Robot tray, attended automation triggers, process launcher for end users",
+    "category": "product",
+    "apiSupport": "none",
+    "probeStrategy": "none",
+    "uiSection": "secondary",
+    "defaultRemediationTemplate": {
+      "reason": "UiPath Assistant is a desktop client without a documented cloud API for External Applications.",
+      "actionOwner": "not-actionable",
+      "recommendedStep": "UiPath Assistant is primarily a desktop application. No External Application API is available."
+    }
+  },
+  {
+    "flagKey": "platformManagement",
+    "serviceResourceType": "IDENTITY",
+    "displayName": "Platform Management",
+    "description": "Security settings, auth settings, OAuth app management, robot accounts",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "PM",
+    "minimalScopes": [
+      "PM.Audit.Read",
+      "PM.Group.Read"
+    ],
+    "uiSection": "infrastructure",
+    "defaultRemediationTemplate": {
+      "reason": "Platform Management is not accessible.",
+      "actionOwner": "user-config",
+      "recommendedStep": "Add the PlatformManagement resource with PM.* scopes to your External Application."
+    },
+    "urlPathPatterns": [
+      "/identity_/api/"
+    ]
+  },
+  {
+    "flagKey": "ixp",
+    "serviceResourceType": "IXP",
+    "displayName": "IXP Platform",
+    "description": "Intelligent document processing and communications mining platform",
+    "category": "service",
+    "apiSupport": "documented",
+    "probeStrategy": "own-endpoint",
+    "scopeFamily": "Ixp",
+    "minimalScopes": [
+      "Ixp.ApiAccess"
+    ],
+    "uiSection": "infrastructure",
+    "defaultRemediationTemplate": {
+      "reason": "IXP platform is not accessible.",
+      "actionOwner": "uipath-admin",
+      "recommendedStep": "Add the Ixp.ExternalService resource with Ixp.ApiAccess scope."
+    },
+    "probeConfig": {
+      "probePath": "/api/v1/datasets",
+      "tokenResource": "IXP",
+      "acceptLimitedAuth": true
+    }
+  },
+  {
+    "flagKey": "attendedRobots",
+    "serviceResourceType": "OR",
+    "displayName": "Attended Robots",
+    "description": "Human-assisted desktop automation robots detected from Orchestrator Robots API",
+    "category": "observation",
+    "apiSupport": "documented",
+    "probeStrategy": "observation",
+    "uiSection": "observation",
+    "probeConfig": {
+      "probePath": "/odata/Sessions?$top=20",
+      "tokenResource": "OR"
+    },
+    "secondaryProbePaths": ["/odata/Machines?$top=10&$select=UnattendedSlots"]
+  },
+  {
+    "flagKey": "studioProjects",
+    "serviceResourceType": "OR",
+    "displayName": "Existing Processes",
+    "description": "Existing deployed processes detected from Orchestrator Processes API",
+    "category": "observation",
+    "apiSupport": "documented",
+    "probeStrategy": "observation",
+    "uiSection": "observation"
+  },
+  {
+    "flagKey": "hasUnattendedSlots",
+    "serviceResourceType": "OR",
+    "displayName": "Unattended Slots",
+    "description": "Unattended robot slots detected from Orchestrator Machines API",
+    "category": "observation",
+    "apiSupport": "documented",
+    "probeStrategy": "observation",
+    "uiSection": "observation"
+  }
+]

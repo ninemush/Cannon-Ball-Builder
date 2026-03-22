@@ -188,11 +188,11 @@ export async function refreshIntegration(): Promise<RefreshResult> {
       return { family: "integration", success: false, message: "No existing service-endpoints.json to update" };
     }
 
-    const updatedEndpoints = { ...existing.endpoints };
+    const runtimeState: Record<string, { reachabilityStatus: string; lastVerifiedAt: string }> = {};
     let probeSuccessCount = 0;
     let probeAttemptCount = 0;
 
-    for (const [key, endpoint] of Object.entries(updatedEndpoints)) {
+    for (const [key, endpoint] of Object.entries(existing.endpoints)) {
       probeAttemptCount++;
       try {
         const probeUrl = endpoint.urlTemplate
@@ -216,11 +216,7 @@ export async function refreshIntegration(): Promise<RefreshResult> {
             reachability = "unreachable";
           }
 
-          updatedEndpoints[key] = {
-            ...endpoint,
-            reachabilityStatus: reachability,
-            lastVerifiedAt: now,
-          };
+          runtimeState[key] = { reachabilityStatus: reachability, lastVerifiedAt: now };
           probeSuccessCount++;
         }
       } catch {
@@ -232,32 +228,26 @@ export async function refreshIntegration(): Promise<RefreshResult> {
       return {
         family: "integration",
         success: false,
-        message: `No endpoints could be probed (0/${probeAttemptCount} succeeded). Timestamps and reachability preserved from last successful verification.`,
+        message: `No endpoints could be probed (0/${probeAttemptCount} succeeded). Runtime state preserved from last successful verification.`,
       };
     }
 
     const allSucceeded = probeSuccessCount === probeAttemptCount;
-    const updated: ServiceEndpoints = {
-      ...existing,
-      endpoints: updatedEndpoints,
+    const runtimeSnapshot = {
       lastRefreshedAt: now,
-      lastVerifiedAt: allSucceeded ? now : existing.lastVerifiedAt,
+      lastVerifiedAt: allSucceeded ? now : undefined,
+      endpoints: runtimeState,
     };
 
-    const validation = serviceEndpointsSchema.safeParse(updated);
-    if (!validation.success) {
-      metadataService.recordRefreshResult("integration", false);
-      return { family: "integration", success: false, message: `Validation failed after refresh: ${validation.error.message}` };
-    }
-
-    atomicWrite(existingPath, JSON.stringify(updated, null, 2));
+    const runtimePath = join(CATALOG_DIR, "service-endpoints-runtime.json");
+    atomicWrite(runtimePath, JSON.stringify(runtimeSnapshot, null, 2));
     metadataService.reload("integration");
     metadataService.recordRefreshResult("integration", true);
 
     return {
       family: "integration",
       success: true,
-      message: `Probed ${probeSuccessCount}/${probeAttemptCount} endpoints${!allSucceeded ? " (partial — snapshot-level verification timestamp preserved)" : ""}`,
+      message: `Probed ${probeSuccessCount}/${probeAttemptCount} endpoints${!allSucceeded ? " (partial)" : ""}. Runtime state saved separately from curated baseline.`,
       updatedAt: now,
     };
   } catch (err: any) {
@@ -386,10 +376,25 @@ export async function discoverNewerLines(): Promise<NewerLineResult> {
   return result;
 }
 
-export async function refreshAll(): Promise<{ generation: RefreshResult; integration: RefreshResult; newerLines?: NewerLineResult }> {
-  const [generation, integration] = await Promise.allSettled([
+export async function refreshOidc(): Promise<RefreshResult> {
+  try {
+    const result = await metadataService.refreshFromOIDC();
+    return {
+      family: "integration",
+      success: result.success,
+      message: result.message,
+      updatedAt: result.success ? new Date().toISOString() : undefined,
+    };
+  } catch (err: any) {
+    return { family: "integration", success: false, message: `OIDC refresh failed: ${err.message}` };
+  }
+}
+
+export async function refreshAll(): Promise<{ generation: RefreshResult; integration: RefreshResult; oidc?: RefreshResult; newerLines?: NewerLineResult }> {
+  const [generation, integration, oidc] = await Promise.allSettled([
     refreshGeneration(),
     refreshIntegration(),
+    refreshOidc(),
   ]);
 
   let newerLines: NewerLineResult | undefined;
@@ -406,6 +411,9 @@ export async function refreshAll(): Promise<{ generation: RefreshResult; integra
     integration: integration.status === "fulfilled"
       ? integration.value
       : { family: "integration", success: false, message: `Unexpected error: ${(integration as PromiseRejectedResult).reason}` },
+    oidc: oidc.status === "fulfilled"
+      ? oidc.value
+      : { family: "integration", success: false, message: `OIDC unexpected error: ${(oidc as PromiseRejectedResult).reason}` },
     newerLines,
   };
 }
@@ -428,6 +436,13 @@ export function startRefreshScheduler(intervalMs: number = 24 * 60 * 60 * 1000):
       console.log(`[MetadataRefresher] Integration refresh: ${results.integration.message}`);
     } else {
       console.warn(`[MetadataRefresher] Integration refresh failed: ${results.integration.message}`);
+    }
+    if (results.oidc) {
+      if (results.oidc.success) {
+        console.log(`[MetadataRefresher] OIDC refresh: ${results.oidc.message}`);
+      } else {
+        console.warn(`[MetadataRefresher] OIDC refresh failed: ${results.oidc.message}`);
+      }
     }
   }, intervalMs);
   console.log(`[MetadataRefresher] Scheduler started (interval: ${Math.round(intervalMs / 3600000)}h)`);

@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { appSettings, uipathConnections } from "@shared/schema";
 import { eq } from "drizzle-orm";
-import { metadataService } from "./catalog/metadata-service";
+import { metadataService, TOKEN_RESOURCE_TO_SERVICE } from "./catalog/metadata-service";
 import type { ServiceResourceType } from "./catalog/metadata-schemas";
 
 export class UiPathAuthError extends Error {
@@ -30,38 +30,17 @@ export type ResourceType = "OR" | "TM" | "DU" | "PM" | "DF" | "PIMS" | "IXP" | "
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
-const MINIMAL_OR_FALLBACK_SCOPES = "OR.Default OR.Administration OR.Execution";
-
 function getTokenEndpoint(): string {
   return metadataService.getTokenEndpoint();
 }
 
-const RESOURCE_TO_SERVICE_MAP: Record<ResourceType, ServiceResourceType> = {
-  OR: "OR",
-  TM: "TM",
-  DU: "DU",
-  PM: "IDENTITY",
-  DF: "DF",
-  PIMS: "PIMS",
-  IXP: "IXP",
-  AI: "AI",
-};
-
 function getResourceScopesFromMetadata(resource: ResourceType): string {
-  const serviceType = RESOURCE_TO_SERVICE_MAP[resource];
-  const scopes = metadataService.getServiceScopesString(serviceType);
-  if (scopes) return scopes;
-  if (resource === "OR") return MINIMAL_OR_FALLBACK_SCOPES;
-  console.warn(`[UiPath Auth] No scopes found in MetadataService for resource ${resource}`);
-  return "";
+  const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
+  return metadataService.getScopesForServiceString(serviceType);
 }
 
-export const DEFAULT_SCOPES = getResourceScopesFromMetadata("OR") || MINIMAL_OR_FALLBACK_SCOPES;
-
-function resolveOrScopes(stored: string | undefined, defaults: string): string {
-  if (!stored) return defaults;
-  const orOnly = stored.split(/\s+/).filter(s => s.startsWith("OR."));
-  return orOnly.length > 0 ? orOnly.join(" ") : defaults;
+export function getDefaultOrScopes(): string {
+  return getResourceScopesFromMetadata("OR");
 }
 
 let cachedConfig: UiPathAuthConfig | null = null;
@@ -87,7 +66,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   const activeRows = await db.select().from(uipathConnections).where(eq(uipathConnections.isActive, true));
   if (activeRows.length > 0) {
     const row = activeRows[0];
-    const scopes = resolveOrScopes(row.scopes, getResourceScopesFromMetadata("OR"));
+    const scopes = getDefaultOrScopes();
     cachedConfig = {
       orgName: row.orgName,
       tenantName: row.tenantName,
@@ -108,8 +87,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   const tenantName = map.get("uipath_tenant_name");
   const clientId = map.get("uipath_client_id");
   const clientSecret = map.get("uipath_client_secret");
-  const storedScopes = map.get("uipath_scopes");
-  const scopes = resolveOrScopes(storedScopes, getResourceScopesFromMetadata("OR"));
+  const scopes = getDefaultOrScopes();
   const folderId = map.get("uipath_folder_id") || undefined;
   const folderName = map.get("uipath_folder_name") || undefined;
 
@@ -126,7 +104,7 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
         tenantName: envTenantName,
         clientId: envClientId,
         clientSecret: envClientSecret,
-        scopes: resolveOrScopes(process.env.UIPATH_SCOPES, getResourceScopesFromMetadata("OR")),
+        scopes: getDefaultOrScopes(),
         folderId: envFolderId,
       };
       configLoadedAt = now;
@@ -218,6 +196,13 @@ async function getResourceToken(resource: ResourceType): Promise<string> {
   const config = await loadConfig();
   if (!config) {
     throw new UiPathAuthError("UiPath is not configured. Set credentials in Admin > Integrations.");
+  }
+
+  if (resource !== "OR") {
+    const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
+    if (!metadataService.hasOidcScopeFamily(serviceType)) {
+      throw new UiPathAuthError(`No OIDC scope family for ${resource} — dedicated token acquisition is not available`);
+    }
   }
 
   const cached = tokenCache[resource];
@@ -418,11 +403,13 @@ export async function tryAcquireResourceToken(resource: ResourceType): Promise<{
 }
 
 function detectResourceType(url: string): ResourceType {
-  if (url.includes("/testmanager_/") || url.includes("/tmapi_/")) return "TM";
-  if (url.includes("/du_/") || url.includes("/documentunderstanding_/")) return "DU";
-  if (url.includes("/dataservice_/") || url.includes("/datafabric_/")) return "DF";
-  if (url.includes("/identity_/api/") && !url.includes("/connect/")) return "PM";
-  return "OR";
+  const { metadataService } = require("./catalog/metadata-service");
+  const detected = metadataService.detectResourceTypeFromUrl(url);
+  const resourceTypeMap: Record<string, ResourceType> = {
+    TM: "TM", DU: "DU", DF: "DF", PM: "PM",
+    IXP: "IXP", AI: "AI", PIMS: "PIMS",
+  };
+  return resourceTypeMap[detected] || "OR";
 }
 
 export async function healthCheck(): Promise<{ ok: boolean; message: string; latencyMs: number; tenantName?: string; folderName?: string }> {
