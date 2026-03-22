@@ -1475,6 +1475,15 @@ async function probeEndpointByTaxonomy(
       const status = isAuthLimited ? "limited" as const : reachability;
       console.log(`[UiPath Probe] ${entry.displayName} ${isAuthLimited ? "reachable (auth-limited)" : "available"} (${res?.status})`);
       metadataSvc.updateServiceReachability(svcType, status);
+    } else {
+      let bodySnippet = "";
+      try {
+        if (res) {
+          const text = await res.clone().text();
+          bodySnippet = text.substring(0, 200);
+        }
+      } catch { /* ignore */ }
+      console.warn(`[UiPath Probe] ${entry.displayName} probe returned ${res?.status ?? "no response"}: ${bodySnippet}`);
     }
     return { available, httpStatus: res?.status ?? null, reachability, response: res, authLimited: isAuthLimited };
   } catch (e: any) {
@@ -1691,6 +1700,12 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       e.probeStrategy === "own-endpoint" && e.probeConfig && !e.customProbeHandler
     );
 
+    for (const entry of taxonomyProbeEntries) {
+      if (entry.serviceResourceType === "IXP") {
+        console.log(`[UiPath Probe] IXP scope source: ${metadataService.getScopeSource("IXP")}, scopes: ${metadataService.getMinimalScopesForServiceString("IXP")}`);
+      }
+    }
+
     const taxonomyProbeResults = await Promise.all(
       taxonomyProbeEntries.map(entry => probeEndpointByTaxonomy(entry, config, headersByToken, metadataService))
     );
@@ -1730,9 +1745,11 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       if (isTokenOk("IXP")) {
         const genResult = await probeEndpointByTaxonomy(genEntry, config, headersByToken, metadataService);
         genExProbeStatus = genResult.httpStatus;
+        let genIxpBodySnippet = "";
         if (genResult.available && genResult.response?.ok) {
           try {
             const text = await genResult.response.text();
+            genIxpBodySnippet = text.substring(0, 200);
             const trimmed = text.trim();
             if (trimmed.length > 0 && !trimmed.startsWith("<")) {
               const parsed = JSON.parse(trimmed);
@@ -1742,6 +1759,8 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
         }
         if (genExtractionAvailable) {
           console.log("[UiPath Probe] Generative Extraction available via IXP token");
+        } else {
+          console.warn(`[UiPath Probe] Generative Extraction probe returned ${genExProbeStatus}: ${genIxpBodySnippet}`);
         }
       }
 
@@ -1761,11 +1780,22 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
                 console.log("[UiPath Probe] Generative Extraction available via DU token fallback");
               }
             }
+            if (!genExtractionAvailable) {
+              console.warn(`[UiPath Probe] Generative Extraction DU fallback probe returned ${duFallbackRes.status}: ${fbText.substring(0, 200)}`);
+            }
+          } else if (duFallbackRes) {
+            let bodySnippet = "";
+            try { const t = await duFallbackRes.text(); bodySnippet = t.substring(0, 200); } catch { /* ignore */ }
+            console.warn(`[UiPath Probe] Generative Extraction DU fallback probe returned ${duFallbackRes.status}: ${bodySnippet}`);
           }
         } catch { /* DU fallback failed */ }
       }
+      if (!genExtractionAvailable) {
+        console.warn(`[UiPath Probe] Generative Extraction probe returned ${genExProbeStatus}: not available after all attempts`);
+      }
     }
 
+    let cmProbeStatus: number | null = null;
     const cmEntry = taxonomyByFlag.get("communicationsMining");
     if (cmEntry?.probeConfig) {
       const reinferUrl = metadataService.getServiceUrl("REINFER", config);
@@ -1773,6 +1803,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       const ixpHdrs = headersByToken["IXP"] || hdrs;
       try {
         const cmRes = await fetch(cmProbeUrl, { headers: ixpHdrs });
+        cmProbeStatus = cmRes.status;
         if (cmRes.ok) {
           const cmText = await cmRes.text();
           const trimmedCm = cmText.trim();
@@ -1786,6 +1817,13 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
               }
             } catch { /* invalid json */ }
           }
+          if (!commsMiningAvailable) {
+            console.warn(`[UiPath Probe] Communications Mining probe returned ${cmRes.status}: ${cmText.substring(0, 200)}`);
+          }
+        } else {
+          let bodySnippet = "";
+          try { const t = await cmRes.text(); bodySnippet = t.substring(0, 200); } catch { /* ignore */ }
+          console.warn(`[UiPath Probe] Communications Mining probe returned ${cmRes.status}: ${bodySnippet}`);
         }
       } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining probe failed: ${e.message}`); }
     }
@@ -1795,6 +1833,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     let aiCenterPackages: AICenterPackage[] = [];
     const aiEntry = taxonomyByFlag.get("aiCenter");
     if (aiEntry?.probeConfig) {
+      console.log(`[UiPath Probe] AI Center scope source: ${metadataService.getScopeSource("AI")}, scopes: ${metadataService.getMinimalScopesForServiceString("AI")}`);
       const aiProbeHdrs = headersByToken["AI"] || hdrs;
       const aiServiceUrl = metadataService.getServiceUrl("AI", config);
       const aiAlternates = metadataService.getServiceUrlAlternates("AI", config);
@@ -1808,6 +1847,11 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       );
       const aiProbe = aiProbeResult.res;
       const aiActiveUrl = aiProbeResult.triedAlternate ? aiProbeResult.usedUrl.replace(aiProbePath, "") : aiServiceUrl;
+      if (aiProbe && !isServiceReachable(aiProbe)) {
+        let bodySnippet = "";
+        try { const t = await aiProbe.clone().text(); bodySnippet = t.substring(0, 200); } catch { /* ignore */ }
+        console.warn(`[UiPath Probe] AI Center probe returned ${aiProbe.status}: ${bodySnippet}`);
+      }
       if (aiProbe && isServiceReachable(aiProbe)) {
         aiAvailable = true;
         metadataService.updateServiceReachability("AI", getServiceReachabilityStatus(aiProbe));
@@ -1852,6 +1896,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       }
       probeHttpStatuses["aiCenter"] = aiProbe?.status ?? null;
     }
+    probeHttpStatuses["communicationsMining"] = cmProbeStatus;
 
     let agentsAvailable = false;
     let autopilotAvailable = false;

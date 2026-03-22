@@ -493,6 +493,7 @@
     "probeConfig": {
       "probePath": "/api/v1/datasets",
       "tokenResource": "IXP",
+      "useAlternates": true,
       "acceptLimitedAuth": true
     }
   },

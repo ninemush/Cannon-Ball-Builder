@@ -49,6 +49,9 @@
     },
     "IXP": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/ixp_",
+      "alternateUrlTemplates": [
+        "https://cloud.uipath.com/{orgName}/{tenantName}/intelligentprocessing_"
+      ],
       "apiBasePath": "/api",
       "confidence": "inferred",
       "reachabilityStatus": "unknown",
@@ -65,6 +68,10 @@
     },
     "AI": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/aifabric_",
+      "alternateUrlTemplates": [
+        "https://cloud.uipath.com/{orgName}/{tenantName}/ai_",
+        "https://cloud.uipath.com/{orgName}/{tenantName}/aicenter_"
+      ],
       "apiBasePath": "/api",
       "confidence": "official",
       "reachabilityStatus": "unknown",
