@@ -2853,13 +2853,13 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     if (isUnsupportedService) {
       status = "unavailable";
       effectiveAvailable = false;
-    } else if (isAuthResponse) {
-      status = "limited";
-      effectiveAvailable = false;
     } else if (flag) {
       if (reachable === "limited") status = "limited";
       else status = "available";
       effectiveAvailable = true;
+    } else if (isAuthResponse) {
+      status = "limited";
+      effectiveAvailable = false;
     } else {
       if (reachable === "unreachable") status = "unavailable";
       else if (reachable === "limited") status = "limited";
@@ -2879,10 +2879,10 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
     let truthfulStatus: import("./catalog/metadata-schemas").TruthfulStatus;
     if (isUnsupportedService) {
       truthfulStatus = "unsupported_external_api";
-    } else if (isAuthResponse) {
-      truthfulStatus = "auth_scope";
     } else if (effectiveAvailable) {
       truthfulStatus = "available";
+    } else if (isAuthResponse) {
+      truthfulStatus = "auth_scope";
     } else if (tokenFailure && !effectiveHttpStatus) {
       truthfulStatus = "not_provisioned";
     } else {
