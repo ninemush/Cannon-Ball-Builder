@@ -1286,6 +1286,36 @@ class MetadataService {
   getServiceEndpointsRaw(): ServiceEndpoints | null {
     return this.serviceEndpoints;
   }
+
+  getPackageRegistryContext(): string {
+    const entries: { name: string; preferred: string; verifiedAt: string }[] = [];
+
+    if (this.generationMetadata) {
+      for (const [pkg, entry] of Object.entries(this.generationMetadata.packageVersionRanges)) {
+        entries.push({
+          name: pkg,
+          preferred: entry.preferred,
+          verifiedAt: entry.lastVerifiedAt,
+        });
+      }
+    } else if (this.legacyProfile) {
+      for (const [pkg, range] of Object.entries(this.legacyProfile.allowedPackageVersionRanges)) {
+        entries.push({
+          name: pkg,
+          preferred: range.preferred,
+          verifiedAt: "unknown",
+        });
+      }
+    }
+
+    if (entries.length === 0) {
+      return "";
+    }
+
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    const lines = entries.map(e => `- ${e.name} ${e.preferred} (verified ${e.verifiedAt})`);
+    return `VALIDATED PACKAGE REGISTRY (${entries.length} packages):\n${lines.join("\n")}`;
+  }
 }
 
 export const metadataService = new MetadataService();
