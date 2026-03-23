@@ -4,6 +4,7 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { getCodeLLM } from "./lib/llm";
+import { RunLogger } from "./lib/run-logger";
 import { runBuildPipeline, getCachedPipelineResult, findUiPathMessage, type IdeaContext, type PipelineResult } from "./uipath-pipeline";
 import type { PipelineProgressEvent, PipelineProgressCallback } from "./uipath-pipeline";
 import type { UipathGenerationRun } from "@shared/schema";
@@ -178,6 +179,7 @@ async function executeRun(
   const activeRun = activeRuns.get(runId)!;
   const callbacks = options?.callbacks;
   const phaseEvents: PipelineProgressEvent[] = [];
+  const runLogger = new RunLogger(runId, "uipath_package");
 
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -207,6 +209,16 @@ async function executeRun(
       try { callbacks.onPipelineEvent(event); } catch {}
     }
 
+    if (event.type === "started" && event.stage) {
+      runLogger.stageStart(`pipeline_${event.stage}`, event.context ? { ...event.context } : undefined);
+    } else if (event.type === "completed" && event.stage) {
+      runLogger.stageEnd(`pipeline_${event.stage}`, "succeeded", event.context ? { ...event.context } : undefined);
+    } else if (event.type === "failed" && event.stage) {
+      runLogger.stageEnd(`pipeline_${event.stage}`, "failed", event.context ? { ...event.context } : undefined, event.message);
+    } else if (event.type === "warning" && event.stage) {
+      runLogger.recordFallback(`pipeline_${event.stage}`, event.message || "warning");
+    }
+
     storage.updateGenerationRunStatus(runId, "running", event.stage).catch(() => {});
 
     if (phaseEvents.length % 5 === 0 || event.type === "completed" || event.type === "failed") {
@@ -225,6 +237,7 @@ async function executeRun(
   startHeartbeat();
 
   try {
+    runLogger.stageStart("sdd_validation");
     await storage.updateGenerationRunStatus(runId, "running", "sdd_validation");
     console.log(`[RunManager] Run ${runId}: SDD validation phase started`);
     emitProgress("Loading idea and documents...");
@@ -256,6 +269,7 @@ async function executeRun(
     }
 
     console.log(`[RunManager] Run ${runId}: SDD validation passed`);
+    runLogger.stageEnd("sdd_validation", "succeeded");
 
     const existingMessages = await chatStorage.getMessagesByIdeaId(ideaId);
     const existingUiPath = [...existingMessages].reverse().find((m: any) => m.content.startsWith("[UIPATH:"));
@@ -277,8 +291,13 @@ async function executeRun(
                 cached: true,
               });
             }
+            runLogger.stageStart("cache_hit");
+            runLogger.stageEnd("cache_hit", "succeeded", { cached: true });
+            const cachedOutcome = runLogger.buildOutcomeSummary();
+            await runLogger.flush();
             await finishRun(runId, activeRun, phaseEvents, {
               status: "completed",
+              outcomeReport: JSON.stringify({ ...cachedOutcome, cached: true }),
               generationMode: cachedResult.generationMode,
             });
             return;
@@ -288,6 +307,7 @@ async function executeRun(
     }
 
     if (!packageJson) {
+      runLogger.stageStart("llm_generation");
       await storage.updateGenerationRunStatus(runId, "running", "llm_generation");
       console.log(`[RunManager] Run ${runId}: LLM generation phase started`);
 
@@ -351,8 +371,10 @@ async function executeRun(
       }
 
       console.log(`[RunManager] Run ${runId}: LLM generation phase completed`);
+      runLogger.stageEnd("llm_generation", "succeeded");
       pipelineProgressCallback({ type: "completed", stage: "llm_generation", message: "AI response received" });
 
+      runLogger.stageStart("llm_parsing");
       pipelineProgressCallback({ type: "started", stage: "llm_parsing", message: "Parsing AI-generated specification" });
       emitProgress("Parsing AI-generated specification...");
       const rawText = response.text || "{}";
@@ -364,17 +386,21 @@ async function executeRun(
       try {
         const parsed = sanitizeAndParseJson(rawText);
         packageJson = uipathPackageSchema.parse(parsed);
+        runLogger.stageEnd("llm_parsing", "succeeded", { workflowCount: (packageJson.workflows || []).length });
         pipelineProgressCallback({ type: "completed", stage: "llm_parsing", message: "Package specification validated", context: { workflowCount: (packageJson.workflows || []).length } });
       } catch (parseErr: any) {
         emitProgress("Initial parse failed, attempting repair...");
+        runLogger.recordRetry("llm_parsing", 1, "Initial parse failed, attempting repair");
         const repaired = repairTruncatedPackageJson(rawText);
         if (repaired) {
           try {
             packageJson = uipathPackageSchema.parse(repaired);
+            runLogger.stageEnd("llm_parsing", "succeeded", { repaired: true, workflowCount: (repaired.workflows || []).length });
             pipelineProgressCallback({ type: "completed", stage: "llm_parsing", message: `Repaired: ${(repaired.workflows || []).length} workflows recovered`, context: { repaired: true } });
           } catch {}
         }
         if (!packageJson) {
+          runLogger.stageEnd("llm_parsing", "failed", undefined, "Failed to parse AI-generated package");
           pipelineProgressCallback({ type: "failed", stage: "llm_parsing", message: "Failed to parse AI-generated package" });
           throw new RunError("Failed to parse AI-generated package. Please try again.", "llm_parse");
         }
@@ -388,6 +414,7 @@ async function executeRun(
 
     if (callbacks?.onPackageResolved) callbacks.onPackageResolved(packageJson);
 
+    runLogger.stageStart("build_pipeline");
     await storage.updateGenerationRunStatus(runId, "running", "build_pipeline");
     console.log(`[RunManager] Run ${runId}: build pipeline phase started`);
     emitProgress("Pre-building .nupkg with AI enrichment...");
@@ -416,6 +443,10 @@ async function executeRun(
     });
 
     console.log(`[RunManager] Run ${runId}: build pipeline phase completed — status: ${pipelineResult.status}`);
+    runLogger.stageEnd("build_pipeline", pipelineResult.status === "FAILED" ? "failed" : "succeeded", {
+      pipelineStatus: pipelineResult.status,
+      warningCount: pipelineResult.warnings?.length || 0,
+    });
 
     if (pipelineResult.status === "FAILED") {
       throw new RunError("Package build produced no output", "build_failed", { packageJson });
@@ -457,9 +488,21 @@ async function executeRun(
 
     stopHeartbeat();
 
-    const outcomeReportJson = pipelineResult.outcomeReport ? JSON.stringify(pipelineResult.outcomeReport) : undefined;
+    const isDegraded = pipelineResult.warnings?.length > 0 || pipelineResult.status === "FALLBACK_READY";
+    const outcomeSummary = runLogger.buildOutcomeSummary({
+      status: isDegraded ? "succeeded_degraded" : "succeeded",
+      degradations: isDegraded
+        ? (pipelineResult.warnings || []).map((w: any) => typeof w === "string" ? w : w.message || JSON.stringify(w))
+        : undefined,
+    });
+    await runLogger.flush();
+
+    const outcomeReportJson = JSON.stringify({
+      ...outcomeSummary,
+      pipelineOutcome: pipelineResult.outcomeReport || undefined,
+    });
     await finishRun(runId, activeRun, phaseEvents, {
-      status: pipelineResult.warnings?.length > 0 || pipelineResult.status === "FALLBACK_READY" ? "completed_with_warnings" : "completed",
+      status: isDegraded ? "completed_with_warnings" : "completed",
       outcomeReport: outcomeReportJson,
       dhgContent: pipelineResult.dhgContent || undefined,
       generationMode: pipelineResult.generationMode,
@@ -488,11 +531,24 @@ async function executeRun(
 
     stopHeartbeat();
 
+    const runningStages = runLogger.getStages().filter(s => s.outcome === "running");
+    for (const rs of runningStages) {
+      runLogger.stageEnd(rs.stage, "failed", undefined, errorMessage);
+    }
+
     if (callbacks?.onFail) {
       try { callbacks.onFail(errorMessage, errorContext); } catch {}
     }
 
-    await failRunInternal(runId, activeRun, phaseEvents, errorMessage);
+    const isBlocked = err instanceof RunError && err.stage === "precondition";
+    const failOutcome = runLogger.buildOutcomeSummary({
+      status: isBlocked ? "blocked" : "failed",
+      blockReason: isBlocked ? errorMessage : undefined,
+      errorMessage,
+    });
+    await runLogger.flush();
+
+    await failRunInternal(runId, activeRun, phaseEvents, errorMessage, failOutcome, isBlocked ? "blocked" : "failed");
   } finally {
     stopHeartbeat();
   }
@@ -525,13 +581,26 @@ async function failRunInternal(
   activeRun: ActiveRun,
   phaseEvents: PipelineProgressEvent[],
   errorMessage: string,
+  outcomeSummary?: Record<string, unknown>,
+  truthfulStatus?: string,
 ): Promise<void> {
   const finalProgress = JSON.stringify(phaseEvents.slice(-50));
+  const dbStatus = truthfulStatus || "failed";
   await storage.updateGenerationRunPhaseProgress(runId, finalProgress).catch(() => {});
-  await storage.failGenerationRun(runId, errorMessage).catch(() => {});
+  if (outcomeSummary) {
+    await storage.completeGenerationRun(runId, {
+      status: dbStatus,
+      outcomeReport: JSON.stringify(outcomeSummary),
+    }).catch(() => {});
+    if (dbStatus === "failed") {
+      await storage.failGenerationRun(runId, errorMessage).catch(() => {});
+    }
+  } else {
+    await storage.failGenerationRun(runId, errorMessage).catch(() => {});
+  }
 
   activeRun.completed = true;
-  activeRun.finalStatus = "failed";
+  activeRun.finalStatus = dbStatus;
   activeRun.error = errorMessage;
 
   Array.from(activeRun.sseListeners).forEach(listener => {

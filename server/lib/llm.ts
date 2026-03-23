@@ -31,11 +31,14 @@ export interface LLMMessage {
   content: string | LLMContentBlock[];
 }
 
+export const LLM_TIMEOUT_MS = 120_000;
+
 export interface LLMOptions {
   system: string;
   messages: LLMMessage[];
   maxTokens: number;
   abortSignal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface LLMResponse {
@@ -692,10 +695,38 @@ function normalizeStopReason(reason: string | null | undefined): string {
   }
 }
 
+function withTimeout(provider: LLMProvider): LLMProvider {
+  return {
+    create(options: LLMOptions): Promise<LLMResponse> {
+      const timeout = options.timeoutMs ?? LLM_TIMEOUT_MS;
+      const controller = new AbortController();
+      let timedOut = false;
+      if (options.abortSignal) {
+        options.abortSignal.addEventListener("abort", () => controller.abort(options.abortSignal!.reason), { once: true });
+      }
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error(`LLM call timed out after ${Math.round(timeout / 1000)}s`));
+      }, timeout);
+      return provider.create({ ...options, abortSignal: controller.signal })
+        .catch((err: any) => {
+          if (timedOut) {
+            throw new Error(`LLM call timed out after ${Math.round(timeout / 1000)}s`);
+          }
+          throw err;
+        })
+        .finally(() => clearTimeout(timer));
+    },
+    stream(options: LLMOptions): LLMStream {
+      return provider.stream(options);
+    },
+  };
+}
+
 const PROVIDER_REGISTRY: Record<string, (model: string) => LLMProvider> = {
-  anthropic: (model) => new AnthropicProvider(model),
-  openai: (model) => new OpenAIProvider(model),
-  google: (model) => new GeminiProvider(model),
+  anthropic: (model) => withTimeout(new AnthropicProvider(model)),
+  openai: (model) => withTimeout(new OpenAIProvider(model)),
+  google: (model) => withTimeout(new GeminiProvider(model)),
 };
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -856,3 +887,4 @@ export function getMetaValidationProviderName(): string {
   const model = getActiveMetaValidationModel();
   return getProviderForModel(model);
 }
+

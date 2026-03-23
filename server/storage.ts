@@ -29,6 +29,7 @@ export interface IStorage {
   updateGenerationRunSpecSnapshot(runId: string, specSnapshot: unknown): Promise<UipathGenerationRun | undefined>;
   completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string }): Promise<UipathGenerationRun | undefined>;
   failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined>;
+  updateGenerationRunStageLog(runId: string, stageLog: unknown): Promise<UipathGenerationRun | undefined>;
   failOrphanedRuns(): Promise<UipathGenerationRun[]>;
 }
 
@@ -189,6 +190,14 @@ export class DatabaseStorage implements IStorage {
   async failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined> {
     const [updated] = await db.update(uipathGenerationRuns)
       .set({ status: "failed", errorMessage, updatedAt: new Date(), completedAt: new Date() })
+      .where(eq(uipathGenerationRuns.runId, runId))
+      .returning();
+    return updated;
+  }
+
+  async updateGenerationRunStageLog(runId: string, stageLog: unknown): Promise<UipathGenerationRun | undefined> {
+    const [updated] = await db.update(uipathGenerationRuns)
+      .set({ stageLog, updatedAt: new Date() })
       .where(eq(uipathGenerationRuns.runId, runId))
       .returning();
     return updated;

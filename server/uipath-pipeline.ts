@@ -1197,18 +1197,6 @@ export async function generateUiPathPackage(
     const workflowCount = (pkg as any).workflows?.length || 0;
     tracker.complete("decomposition", `Decomposed into ${workflowCount} workflow(s)`, { workflowCount });
 
-    const runId = `run-${ideaId}-${Date.now()}`;
-    try {
-      await storage.createGenerationRun({
-        ideaId,
-        runId,
-        status: "spec_generating",
-        generationMode: mode,
-      });
-    } catch (e) {
-      console.warn(`[Pipeline] Failed to create generation run record: ${(e as Error).message}`);
-    }
-
     let specResult: SpecGenerationResult;
     try {
       specResult = await generateWorkflowSpecs(ideaId, pkg, {
@@ -1216,12 +1204,8 @@ export async function generateUiPathPackage(
         onProgress: options?.onProgress,
         onPipelineProgress: options?.onPipelineProgress,
         preloadedContext: ctx,
-        runId,
       });
     } catch (specErr) {
-      try {
-        await storage.updateGenerationRunStatus(runId, "failed", (specErr as Error).message);
-      } catch (_) {}
       throw specErr;
     }
 
@@ -1240,14 +1224,10 @@ export async function generateUiPathPackage(
         _downgradeAttempt: options?._downgradeAttempt,
         _accumulatedDowngrades: downgrades,
         _accumulatedWarnings: options?._accumulatedWarnings,
-        runId,
       });
 
       return result;
     } catch (compileErr) {
-      try {
-        await storage.updateGenerationRunStatus(runId, "failed", (compileErr as Error).message);
-      } catch (_) {}
       throw compileErr;
     }
   } finally {

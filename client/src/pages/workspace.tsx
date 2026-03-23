@@ -1705,12 +1705,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const generateDocument = useCallback(async (type: "PDD" | "SDD") => {
     if (isGeneratingDoc || isStreaming) return;
     startDocStreaming(type);
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), 180_000);
     try {
       const res = await fetch(`/api/ideas/${idea.id}/documents/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({ type }),
+        signal: abortController.signal,
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({ message: "Generation failed" }));
@@ -1720,12 +1723,16 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
     } catch (err: any) {
+      const message = err?.name === "AbortError"
+        ? "Document generation timed out after 3 minutes. Please try again."
+        : (err?.message || "Something went wrong. Please try again.");
       toast({
         title: `${type} generation failed`,
-        description: err?.message || "Something went wrong. Please try again.",
+        description: message,
         variant: "destructive",
       });
     } finally {
+      clearTimeout(timeoutId);
       stopDocStreaming({ force: true });
     }
   }, [isGeneratingDoc, isStreaming, startDocStreaming, stopDocStreaming, idea.id, toast]);

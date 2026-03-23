@@ -100,6 +100,7 @@ export type DeploymentManifest = typeof deploymentManifests.$inferSelect;
 export type InsertDeploymentManifest = z.infer<typeof insertDeploymentManifestSchema>;
 
 export const GENERATION_RUN_STATUSES = [
+  "running",
   "spec_generating",
   "spec_ready",
   "compiling",
@@ -108,6 +109,8 @@ export const GENERATION_RUN_STATUSES = [
   "packaging",
   "dhg_generating",
   "completed",
+  "completed_with_warnings",
+  "blocked",
   "failed",
 ] as const;
 export type GenerationRunStatus = (typeof GENERATION_RUN_STATUSES)[number];
@@ -122,6 +125,7 @@ export const uipathGenerationRuns = pgTable("uipath_generation_runs", {
   phaseProgress: text("phase_progress"),
   specSnapshot: jsonb("spec_snapshot"),
   outcomeReport: text("outcome_report"),
+  stageLog: jsonb("stage_log"),
   dhgContent: text("dhg_content"),
   errorMessage: text("error_message"),
   triggeredBy: text("triggered_by").notNull().default("manual"),

@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { getLLM } from "./lib/llm";
+import { RunLogger } from "./lib/run-logger";
 import { sanitizeChatForLLM } from "./lib/sanitize-chat";
 import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
@@ -318,6 +319,23 @@ async function generateDocument(ideaId: string, docType: string): Promise<Genera
   }
 
   if (docType === "SDD") {
+    const sddRunId = `sdd-${ideaId}-${Date.now()}`;
+    const runLogger = new RunLogger(sddRunId, "SDD");
+
+    try {
+      await storage.createGenerationRun({
+        ideaId,
+        runId: sddRunId,
+        status: "running",
+        generationMode: "sdd_generation",
+        triggeredBy: "manual",
+      });
+    } catch (e: any) {
+      console.warn(`[SDD] Failed to create generation run record: ${e.message}`);
+    }
+
+    try {
+    runLogger.stageStart("platform_capabilities");
     console.log("[SDD] Fetching platform capabilities for platform-aware SDD...");
     const platformProfile = await getPlatformCapabilities();
     let platformCapabilitiesText = platformProfile.configured
@@ -404,7 +422,9 @@ async function generateDocument(ideaId: string, docType: string): Promise<Genera
       }
     }
     console.log(`[SDD] Platform profile: ${platformProfile.summary}`);
+    runLogger.stageEnd("platform_capabilities", "succeeded", { configured: platformProfile.configured });
 
+    runLogger.stageStart("llm_parallel_generation");
     console.log("[SDD] Starting parallel generation (prose + artifacts)...");
     const startTime = Date.now();
     const systemPrompt = `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`;
@@ -429,13 +449,16 @@ async function generateDocument(ideaId: string, docType: string): Promise<Genera
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[SDD] Parallel generation completed in ${elapsed}s`);
+    runLogger.stageEnd("llm_parallel_generation", "succeeded", { elapsedSeconds: elapsed });
 
     const proseText = proseResponse.text;
     let artifactsText = artifactsResponse.text;
 
     if (!parseArtifactBlock(artifactsText)) {
       console.warn("[SDD] Primary artifacts call did not produce valid artifact block, retrying with directive prompt...");
+      runLogger.stageStart("artifacts_retry");
       const ARTIFACTS_RETRY_MAX = 2;
+      let retrySucceeded = false;
       for (let retry = 1; retry <= ARTIFACTS_RETRY_MAX; retry++) {
         try {
           const retryResponse = await getLLM().create({
@@ -448,35 +471,116 @@ async function generateDocument(ideaId: string, docType: string): Promise<Genera
           });
           if (parseArtifactBlock(retryResponse.text)) {
             console.log(`[SDD] Artifacts retry ${retry} succeeded`);
+            runLogger.recordRetry("artifacts_retry", retry);
             artifactsText = retryResponse.text;
+            retrySucceeded = true;
             break;
           }
           console.warn(`[SDD] Artifacts retry ${retry}/${ARTIFACTS_RETRY_MAX} did not produce valid block`);
+          runLogger.recordRetry("artifacts_retry", retry, "Response did not produce valid artifact block");
         } catch (retryErr: any) {
           console.error(`[SDD] Artifacts retry ${retry} error:`, retryErr?.message);
+          runLogger.recordRetry("artifacts_retry", retry, retryErr?.message || "Unknown retry error");
         }
       }
+      runLogger.stageEnd("artifacts_retry", retrySucceeded ? "succeeded" : "degraded", { retries: ARTIFACTS_RETRY_MAX });
     }
 
+    runLogger.stageStart("artifact_validation");
     const ensureResult = await ensureArtifactBlock(proseText, artifactsText);
 
     const hasBlock = /```orchestrator_artifacts/.test(ensureResult.content);
     console.log(`[SDD] Final document: ${ensureResult.content.length} chars, has artifacts block: ${hasBlock}, artifactsValid: ${ensureResult.artifactsValid}`);
     if (!ensureResult.artifactsValid) {
       console.warn(`[SDD] Artifact validation failed: ${ensureResult.validationResult.failure} — ${ensureResult.validationResult.details}`);
+      runLogger.stageEnd("artifact_validation", "degraded", {
+        artifactsValid: false,
+        failure: ensureResult.validationResult.failure,
+      });
+    } else {
+      runLogger.stageEnd("artifact_validation", "succeeded", { artifactsValid: true });
     }
+
+    const outcome = runLogger.buildOutcomeSummary();
+    await runLogger.flush();
+    const sddFinalStatus = outcome.status === "succeeded_degraded"
+      ? "completed_with_warnings"
+      : outcome.status === "failed" ? "failed" : "completed";
+    try {
+      await storage.completeGenerationRun(sddRunId, {
+        status: sddFinalStatus,
+        outcomeReport: JSON.stringify(outcome),
+      });
+    } catch {}
+
     return { content: ensureResult.content, artifactsValid: ensureResult.artifactsValid };
+    } catch (sddErr: any) {
+      const runningStages = runLogger.getStages().filter(s => s.outcome === "running");
+      for (const rs of runningStages) {
+        runLogger.stageEnd(rs.stage, "failed", undefined, sddErr?.message);
+      }
+      const failOutcome = runLogger.buildOutcomeSummary({ status: "failed", errorMessage: sddErr?.message });
+      await runLogger.flush();
+      try {
+        await storage.failGenerationRun(sddRunId, sddErr?.message || "Unknown SDD generation error");
+        await storage.completeGenerationRun(sddRunId, {
+          status: "failed",
+          outcomeReport: JSON.stringify(failOutcome),
+        });
+      } catch {}
+      throw sddErr;
+    }
   }
 
+  const pddRunId = `${docType.toLowerCase()}-${ideaId}-${Date.now()}`;
+  const pddLogger = new RunLogger(pddRunId, docType);
+
+  try {
+    await storage.createGenerationRun({
+      ideaId,
+      runId: pddRunId,
+      status: "running",
+      generationMode: `${docType.toLowerCase()}_generation`,
+      triggeredBy: "manual",
+    });
+  } catch (e: any) {
+    console.warn(`[${docType}] Failed to create generation run record: ${e.message}`);
+  }
+
+  pddLogger.stageStart("llm_generation");
   const prompt = docType === "PDD" ? PDD_PROMPT : UIPATH_PROMPT;
   const maxTokens = 4096;
-  const response = await getLLM().create({
-    maxTokens: maxTokens,
-    system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`,
-    messages: [...chatMessages, { role: "user", content: prompt }],
-  });
+  try {
+    const response = await getLLM().create({
+      maxTokens: maxTokens,
+      system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`,
+      messages: [...chatMessages, { role: "user", content: prompt }],
+    });
+    pddLogger.stageEnd("llm_generation", "succeeded");
 
-  return { content: response.text };
+    const outcome = pddLogger.buildOutcomeSummary();
+    await pddLogger.flush();
+    try {
+      await storage.completeGenerationRun(pddRunId, {
+        status: "completed",
+        outcomeReport: JSON.stringify(outcome),
+      });
+    } catch {}
+
+    return { content: response.text };
+  } catch (docErr: any) {
+    pddLogger.stageEnd("llm_generation", "failed", undefined, docErr?.message);
+    const failOutcome = pddLogger.buildOutcomeSummary({ status: "failed", errorMessage: docErr?.message });
+    await pddLogger.flush();
+    try {
+      await storage.failGenerationRun(pddRunId, docErr?.message || `${docType} generation failed`);
+      await storage.completeGenerationRun(pddRunId, {
+        status: "failed",
+        outcomeReport: JSON.stringify(failOutcome),
+      });
+    } catch {}
+    throw docErr;
+  }
 }
 
 export function registerDocumentRoutes(app: Express): void {
