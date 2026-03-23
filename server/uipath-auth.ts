@@ -128,10 +128,179 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
   return cachedConfig;
 }
 
+function logGrantedScopes(accessToken: string, resource: string, scopeSource: string): void {
+  try {
+    const jwtParts = accessToken.split(".");
+    if (jwtParts.length === 3) {
+      const payload = JSON.parse(Buffer.from(jwtParts[1], "base64url").toString("utf8"));
+      const tokenScopes: string[] = typeof payload.scope === "string"
+        ? payload.scope.split(" ")
+        : Array.isArray(payload.scope) ? payload.scope : [];
+      console.log(`[UiPath Auth] ${resource} token granted scopes: [${tokenScopes.join(", ")}] (acquired via ${scopeSource})`);
+    }
+  } catch (decodeErr: any) {
+    console.log(`[UiPath Auth] Could not decode JWT payload for ${resource}: ${decodeErr.message}`);
+  }
+}
+
+type ScopeTestResult = { label: string; scopes: string[]; ok: boolean; httpStatus: number; grantedScopes: string[] };
+
+async function testScopeCandidate(
+  config: UiPathAuthConfig,
+  resource: ResourceType,
+  candidate: { label: string; scopes: string[] }
+): Promise<ScopeTestResult> {
+  console.log(`[UiPath Auth] ${resource} pre-validation testing "${candidate.label}": [${candidate.scopes.join(", ")}]`);
+  const candParams = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    scope: candidate.scopes.join(" "),
+  });
+  const candController = new AbortController();
+  const candTimeoutId = setTimeout(() => candController.abort(), 15000);
+  try {
+    const candRes = await fetch(getTokenEndpoint(), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: candParams.toString(),
+      signal: candController.signal,
+    });
+    clearTimeout(candTimeoutId);
+    if (candRes.ok) {
+      const candData = await candRes.json();
+      if (candData.access_token) {
+        let grantedScopes: string[] = [];
+        try {
+          const parts = candData.access_token.split(".");
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+            grantedScopes = typeof payload.scope === "string"
+              ? payload.scope.split(" ")
+              : Array.isArray(payload.scope) ? payload.scope : [];
+          }
+        } catch { /* ignore */ }
+        console.log(`[UiPath Auth] ${resource} pre-validation "${candidate.label}" SUCCEEDED, granted: [${grantedScopes.join(", ")}]`);
+        return { label: candidate.label, scopes: candidate.scopes, ok: true, httpStatus: candRes.status, grantedScopes };
+      }
+    }
+    const candText = await candRes.text().catch(() => "");
+    console.log(`[UiPath Auth] ${resource} pre-validation "${candidate.label}" FAILED (${candRes.status}): ${candText.slice(0, 200)}`);
+    return { label: candidate.label, scopes: candidate.scopes, ok: false, httpStatus: candRes.status, grantedScopes: [] };
+  } catch (candErr: unknown) {
+    clearTimeout(candTimeoutId);
+    const errMsg = candErr instanceof Error ? candErr.message : "unknown";
+    console.warn(`[UiPath Auth] ${resource} pre-validation "${candidate.label}" error: ${errMsg}`);
+    return { label: candidate.label, scopes: candidate.scopes, ok: false, httpStatus: 0, grantedScopes: [] };
+  }
+}
+
+async function validateScopeCandidates(
+  config: UiPathAuthConfig,
+  resource: ResourceType,
+  serviceType: ServiceResourceType
+): Promise<CachedToken | null> {
+  const candidates = metadataService.getScopeCandidatesForService(serviceType, config.scopes);
+  if (candidates.length === 0) return null;
+
+  console.log(`[UiPath Auth] ${resource} scope mismatch detected — running pre-validation of ${candidates.length} candidate(s): ${candidates.map(c => `${c.label}=[${c.scopes.join(", ")}]`).join("; ")}`);
+
+  const duPrimaryLabels = new Set(["tenant-configured", "taxonomy-api", "taxonomy-non-api", "document-manager"]);
+  const primaryCandidates = resource === "DU"
+    ? candidates.filter(c => duPrimaryLabels.has(c.label))
+    : candidates;
+  const secondaryCandidates = resource === "DU"
+    ? candidates.filter(c => !duPrimaryLabels.has(c.label))
+    : [];
+
+  const allResults: ScopeTestResult[] = [];
+
+  for (const candidate of primaryCandidates) {
+    const result = await testScopeCandidate(config, resource, candidate);
+    allResults.push(result);
+  }
+
+  const primarySuccessful = allResults.filter(r => r.ok);
+
+  if (resource === "DU" && primarySuccessful.length === 0 && primaryCandidates.length > 0) {
+    const evidence = primaryCandidates.map(c => {
+      const r = allResults.find(r => r.label === c.label);
+      return `${c.label}=[${c.scopes.join(", ")}]→HTTP ${r?.httpStatus || "err"}`;
+    }).join("; ");
+    console.error(`[UiPath Auth] DU BLOCKER: All ${primaryCandidates.length} primary DU scope form(s) failed. Evidence: ${evidence}`);
+
+    for (const candidate of secondaryCandidates) {
+      const result = await testScopeCandidate(config, resource, candidate);
+      allResults.push(result);
+      if (result.ok) {
+        console.error(`[UiPath Auth] DU BLOCKER DIAGNOSTIC: Secondary candidate "${result.label}" [${result.scopes.join(", ")}] succeeded with ${result.grantedScopes.length} granted scopes — NOT used operationally per policy`);
+      }
+    }
+
+    console.error(`[UiPath Auth] DU BLOCKER: Stopping DU token acquisition. Both .Api and non-.Api DU scope forms rejected by tenant. Next step: verify External Application DU scope configuration in UiPath Automation Cloud.`);
+    return null;
+  }
+
+  const successful = primarySuccessful.length > 0 ? primarySuccessful : allResults.filter(r => r.ok);
+  const bestCandidate = successful.length > 0
+    ? successful.reduce((best, cur) => cur.grantedScopes.length > best.grantedScopes.length ? cur : best)
+    : null;
+
+  if (!bestCandidate) {
+    console.warn(`[UiPath Auth] ${resource} pre-validation: all ${allResults.length} candidates failed — no working scope form found`);
+    return null;
+  }
+
+  metadataService.setValidatedScopes(serviceType, bestCandidate.scopes);
+  console.log(`[UiPath Auth] ${resource} pre-validation selected "${bestCandidate.label}" [${bestCandidate.scopes.join(", ")}] (${successful.length} of ${allResults.length} candidates succeeded, selected has ${bestCandidate.grantedScopes.length} granted scopes)`);
+
+  const tokenScopes = bestCandidate.scopes.join(" ");
+  const finalParams = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    scope: tokenScopes,
+  });
+  const finalController = new AbortController();
+  const finalTimeoutId = setTimeout(() => finalController.abort(), 15000);
+  try {
+    const finalRes = await fetch(getTokenEndpoint(), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: finalParams.toString(),
+      signal: finalController.signal,
+    });
+    clearTimeout(finalTimeoutId);
+    if (finalRes.ok) {
+      const finalData = await finalRes.json();
+      if (finalData.access_token) {
+        const expiresIn = finalData.expires_in || 3600;
+        const expiresAt = Date.now() + expiresIn * 1000;
+        console.log(`[UiPath Auth] ${resource} token acquired via pre-validated "${bestCandidate.label}" for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
+        logGrantedScopes(finalData.access_token, resource, `pre-validated:${bestCandidate.label}`);
+        return { accessToken: finalData.access_token, expiresAt };
+      }
+    }
+  } catch {
+    clearTimeout(finalTimeoutId);
+  }
+
+  return null;
+}
+
 async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): Promise<CachedToken> {
-  const requestedScopes = resource === "OR" ? config.scopes : getResourceScopesFromMetadata(resource);
   const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
   const scopeSource = resource === "OR" ? "config" : metadataService.getScopeSource(serviceType);
+
+  if (resource !== "OR" && metadataService.hasScopeMismatch(serviceType)) {
+    const preValidated = await validateScopeCandidates(config, resource, serviceType);
+    if (preValidated) return preValidated;
+    if (resource === "DU") {
+      throw new UiPathAuthError(`DU token acquisition blocked: all primary DU scope forms failed and no operational fallback is permitted. Check External Application DU scope configuration in UiPath Automation Cloud.`);
+    }
+  }
+
+  const requestedScopes = resource === "OR" ? config.scopes : getResourceScopesFromMetadata(resource);
   console.log(`[UiPath Auth] Requesting ${resource} token with scopes [${requestedScopes}] (source: ${scopeSource})`);
   const params = new URLSearchParams({
     grant_type: "client_credentials",
@@ -151,11 +320,11 @@ async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): 
       body: params.toString(),
       signal: controller.signal,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     clearTimeout(timeoutId);
-    const msg = err.name === "AbortError"
+    const msg = err instanceof Error && err.name === "AbortError"
       ? "Token request timed out after 15s"
-      : `Token request failed: ${err.message}`;
+      : `Token request failed: ${err instanceof Error ? err.message : "unknown"}`;
     console.error(`[UiPath Auth] ${msg} (${resource} token, client: ${maskClientId(config.clientId)})`);
     throw new UiPathAuthError(msg);
   }
@@ -167,45 +336,72 @@ async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): 
     if (res.status === 400 && resource !== "OR") {
       const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
       const requestedScopeList = requestedScopes.split(" ");
+
+      const scopeCandidates = metadataService.getScopeCandidatesForService(serviceType, config.scopes);
       const altScopes = metadataService.getAlternateScopesForService(serviceType, requestedScopeList);
+
+      const duPrimaryLabels = new Set(["tenant-configured", "taxonomy-api", "taxonomy-non-api", "document-manager"]);
+      const candidateSets: Array<{ label: string; scopes: string[] }> = [];
+      for (const candidate of scopeCandidates) {
+        if (resource === "DU" && !duPrimaryLabels.has(candidate.label)) continue;
+        const candidateStr = candidate.scopes.join(" ");
+        if (candidateStr !== requestedScopes && !candidateSets.some(c => c.scopes.join(" ") === candidateStr)) {
+          candidateSets.push(candidate);
+        }
+      }
       if (altScopes.length > 0) {
-        console.log(`[UiPath Auth] ${resource} token failed with 400, retrying with alternate scope family: ${altScopes.join(" ")}`);
-        const altParams = new URLSearchParams({
+        const altStr = altScopes.join(" ");
+        if (altStr !== requestedScopes && !candidateSets.some(c => c.scopes.join(" ") === altStr)) {
+          candidateSets.push({ label: "alternate-family", scopes: altScopes });
+        }
+      }
+
+      console.log(`[UiPath Auth] ${resource} token failed with 400 (scopes: [${requestedScopes}], response: ${text.slice(0, 200)})`);
+      if (candidateSets.length > 0) {
+        console.log(`[UiPath Auth] ${resource} trying ${candidateSets.length} scope candidate(s): ${candidateSets.map(c => `${c.label}=[${c.scopes.join(", ")}]`).join("; ")}`);
+      }
+
+      for (const candidate of candidateSets) {
+        console.log(`[UiPath Auth] ${resource} attempting candidate "${candidate.label}": [${candidate.scopes.join(", ")}]`);
+        const candParams = new URLSearchParams({
           grant_type: "client_credentials",
           client_id: config.clientId,
           client_secret: config.clientSecret,
-          scope: altScopes.join(" "),
+          scope: candidate.scopes.join(" "),
         });
-        const altController = new AbortController();
-        const altTimeoutId = setTimeout(() => altController.abort(), 15000);
+        const candController = new AbortController();
+        const candTimeoutId = setTimeout(() => candController.abort(), 15000);
         try {
-          const altRes = await fetch(getTokenEndpoint(), {
+          const candRes = await fetch(getTokenEndpoint(), {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: altParams.toString(),
-            signal: altController.signal,
+            body: candParams.toString(),
+            signal: candController.signal,
           });
-          clearTimeout(altTimeoutId);
-          if (altRes.ok) {
-            const altData = await altRes.json();
-            if (altData.access_token) {
-              const expiresIn = altData.expires_in || 3600;
+          clearTimeout(candTimeoutId);
+          if (candRes.ok) {
+            const candData = await candRes.json();
+            if (candData.access_token) {
+              const expiresIn = candData.expires_in || 3600;
               const expiresAt = Date.now() + expiresIn * 1000;
-              console.log(`[UiPath Auth] ${resource} token acquired (alternate family) for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
-              return { accessToken: altData.access_token, expiresAt };
+              metadataService.setValidatedScopes(serviceType, candidate.scopes);
+              console.log(`[UiPath Auth] ${resource} token acquired via candidate "${candidate.label}" [${candidate.scopes.join(", ")}] for client ${maskClientId(config.clientId)}, expires in ${expiresIn}s`);
+              logGrantedScopes(candData.access_token, resource, candidate.label);
+              return { accessToken: candData.access_token, expiresAt };
             }
           } else {
-            const altText = await altRes.text().catch(() => "");
-            console.warn(`[UiPath Auth] ${resource} alternate family retry also failed (${altRes.status}): ${altText.slice(0, 200)}`);
+            const candText = await candRes.text().catch(() => "");
+            console.warn(`[UiPath Auth] ${resource} candidate "${candidate.label}" failed (${candRes.status}): ${candText.slice(0, 200)}`);
           }
-        } catch (altErr: any) {
-          clearTimeout(altTimeoutId);
-          console.warn(`[UiPath Auth] ${resource} alternate family retry error: ${altErr.message || "unknown"}`);
+        } catch (candErr: unknown) {
+          clearTimeout(candTimeoutId);
+          const errMsg = candErr instanceof Error ? candErr.message : "unknown";
+          console.warn(`[UiPath Auth] ${resource} candidate "${candidate.label}" error: ${errMsg}`);
         }
       }
     }
 
-    console.error(`[UiPath Auth] ${resource} token request failed (${res.status}) for client ${maskClientId(config.clientId)}`);
+    console.error(`[UiPath Auth] ${resource} token request failed (${res.status}) for client ${maskClientId(config.clientId)}: ${text.slice(0, 200)}`);
     throw new UiPathAuthError(`${resource} authentication failed (${res.status}): ${text.slice(0, 200)}`, res.status);
   }
 
@@ -337,6 +533,7 @@ export function invalidateAllTokens(): void {
 export function invalidateConfig(): void {
   cachedConfig = null;
   configLoadedAt = 0;
+  metadataService.clearValidatedScopes();
 }
 
 export async function getConfig(): Promise<UiPathAuthConfig | null> {
@@ -441,6 +638,79 @@ export async function getAccessToken(config: { clientId: string; clientSecret: s
 
   const data = await res.json();
   return data.access_token;
+}
+
+export async function testDuScopeForms(): Promise<Array<{ label: string; scopes: string[]; httpStatus: number; ok: boolean; grantedScopes: string[]; error?: string }>> {
+  const config = await loadConfig();
+  if (!config) {
+    return [{ label: "no-config", scopes: [], httpStatus: 0, ok: false, grantedScopes: [], error: "UiPath not configured" }];
+  }
+
+  const serviceType: ServiceResourceType = "DU";
+  const candidates = metadataService.getScopeCandidatesForService(serviceType, config.scopes);
+  const results: Array<{ label: string; scopes: string[]; httpStatus: number; ok: boolean; grantedScopes: string[]; error?: string }> = [];
+
+  for (const candidate of candidates) {
+    console.log(`[DU Scope Test] Testing "${candidate.label}": [${candidate.scopes.join(", ")}]`);
+    const params = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      scope: candidate.scopes.join(" "),
+    });
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(getTokenEndpoint(), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+
+      if (res.ok) {
+        const data = await res.json();
+        let grantedScopes: string[] = [];
+        if (data.access_token) {
+          try {
+            const parts = data.access_token.split(".");
+            if (parts.length === 3) {
+              const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+              grantedScopes = typeof payload.scope === "string"
+                ? payload.scope.split(" ")
+                : Array.isArray(payload.scope) ? payload.scope : [];
+            }
+          } catch { /* ignore */ }
+        }
+        console.log(`[DU Scope Test] "${candidate.label}" SUCCEEDED (${res.status}), granted: [${grantedScopes.join(", ")}]`);
+        results.push({ label: candidate.label, scopes: candidate.scopes, httpStatus: res.status, ok: true, grantedScopes });
+      } else {
+        const errText = await res.text().catch(() => "");
+        console.log(`[DU Scope Test] "${candidate.label}" FAILED (${res.status}): ${errText.slice(0, 200)}`);
+        results.push({ label: candidate.label, scopes: candidate.scopes, httpStatus: res.status, ok: false, grantedScopes: [], error: errText.slice(0, 200) });
+      }
+    } catch (err: any) {
+      console.log(`[DU Scope Test] "${candidate.label}" ERROR: ${err.message}`);
+      results.push({ label: candidate.label, scopes: candidate.scopes, httpStatus: 0, ok: false, grantedScopes: [], error: err.message });
+    }
+  }
+
+  const duPrimaryLabels = new Set(["tenant-configured", "taxonomy-api", "taxonomy-non-api", "document-manager"]);
+  const primarySuccess = results.find(r => r.ok && duPrimaryLabels.has(r.label));
+  if (primarySuccess) {
+    metadataService.setValidatedScopes(serviceType, primarySuccess.scopes);
+    console.log(`[DU Scope Test] Validated DU scope form (primary): "${primarySuccess.label}" [${primarySuccess.scopes.join(", ")}]`);
+  } else {
+    const secondarySuccess = results.find(r => r.ok && !duPrimaryLabels.has(r.label));
+    if (secondarySuccess) {
+      console.warn(`[DU Scope Test] DU BLOCKER: Only secondary candidate "${secondarySuccess.label}" succeeded — NOT persisted per policy`);
+    } else {
+      console.warn(`[DU Scope Test] All DU scope candidates failed — no validated form available`);
+    }
+  }
+
+  return results;
 }
 
 export async function tryAcquireResourceToken(resource: ResourceType): Promise<{ ok: boolean; scopes: string[]; error?: string }> {

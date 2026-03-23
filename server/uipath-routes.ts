@@ -381,6 +381,27 @@ export function registerUiPathRoutes(app: Express): void {
     return res.json(result);
   });
 
+  app.get("/api/settings/uipath/du-scope-diagnostics", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { testDuScopeForms } = await import("./uipath-auth");
+      const results = await testDuScopeForms();
+      const validatedScopes = metadataService.getValidatedScopes("DU");
+      const scopeSource = metadataService.getScopeSource("DU");
+      const currentMinimalScopes = metadataService.getMinimalScopesForService("DU");
+      const candidates = metadataService.getScopeCandidatesForService("DU");
+      return res.json({
+        scopeTestResults: results,
+        validatedScopes,
+        scopeSource,
+        currentMinimalScopes,
+        candidates: candidates.map(c => ({ label: c.label, scopes: c.scopes })),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/settings/uipath/status", async (_req: Request, res: Response) => {
     const config = await getUiPathConfig();
     return res.json({ configured: !!config });

@@ -104,6 +104,7 @@ class MetadataService {
   private oidcRefreshInterval: ReturnType<typeof setInterval> | null = null;
   private capabilityTaxonomy: CapabilityTaxonomyEntry[] | null = null;
   private activeEndpoints: Partial<Record<ServiceResourceType, string>> = {};
+  private validatedScopeOverrides: Map<ServiceResourceType, string[]> = new Map();
 
   load(): void {
     this.loadGeneration();
@@ -835,7 +836,72 @@ class MetadataService {
     return [];
   }
 
+  setValidatedScopes(resourceType: ServiceResourceType, scopes: string[]): void {
+    this.validatedScopeOverrides.set(resourceType, scopes);
+    console.log(`[MetadataService] Runtime-validated scopes for ${resourceType}: [${scopes.join(", ")}]`);
+  }
+
+  getValidatedScopes(resourceType: ServiceResourceType): string[] | null {
+    return this.validatedScopeOverrides.get(resourceType) || null;
+  }
+
+  clearValidatedScopes(): void {
+    if (this.validatedScopeOverrides.size > 0) {
+      console.log(`[MetadataService] Clearing ${this.validatedScopeOverrides.size} runtime-validated scope override(s) (config/tenant change)`);
+      this.validatedScopeOverrides.clear();
+    }
+  }
+
+  getScopeCandidatesForService(resourceType: ServiceResourceType, savedConfigScopes?: string): Array<{ label: string; scopes: string[] }> {
+    const candidates: Array<{ label: string; scopes: string[] }> = [];
+    const taxonomyScopes = this.getMinimalTokenScopes(resourceType);
+    const oidcScopes = this.getFullOidcScopesForService(resourceType);
+
+    const taxEntry = this.getCapabilityTaxonomy().find(e => e.serviceResourceType === resourceType && e.scopeFamily);
+    const scopePrefix = taxEntry?.scopeFamily;
+
+    if (savedConfigScopes && scopePrefix) {
+      const savedTokens = savedConfigScopes.split(/\s+/).filter(s => s.startsWith(scopePrefix + "."));
+      if (savedTokens.length > 0) {
+        candidates.push({ label: "tenant-configured", scopes: savedTokens });
+      }
+    }
+
+    if (taxonomyScopes.length > 0) {
+      candidates.push({ label: "taxonomy-api", scopes: taxonomyScopes });
+    }
+
+    if (taxonomyScopes.length > 0) {
+      const nonApiForm = taxonomyScopes.map(s => s.replace(/\.Api$/, ""));
+      if (nonApiForm.some((s, i) => s !== taxonomyScopes[i])) {
+        candidates.push({ label: "taxonomy-non-api", scopes: nonApiForm });
+      }
+    }
+
+    if (resourceType === "DU") {
+      const docMgrScope = "Du.DocumentManager.Document";
+      const hasDocMgr = candidates.some(c => c.scopes.includes(docMgrScope));
+      if (!hasDocMgr) {
+        candidates.push({ label: "document-manager", scopes: [docMgrScope] });
+      }
+    }
+
+    if (oidcScopes.length > 0) {
+      candidates.push({ label: "oidc-discovered", scopes: oidcScopes });
+    }
+
+    return candidates;
+  }
+
+  hasScopeMismatch(resourceType: ServiceResourceType): boolean {
+    const source = this.getScopeSource(resourceType);
+    return source === "oidc-live-mismatch" || source === "oidc-snapshot-mismatch";
+  }
+
   getScopesForService(resourceType: ServiceResourceType): string[] {
+    const validated = this.validatedScopeOverrides.get(resourceType);
+    if (validated && validated.length > 0) return validated;
+
     const fullScopes = this.getFullOidcScopesForService(resourceType);
     if (fullScopes.length > 0) return fullScopes;
 
@@ -848,6 +914,9 @@ class MetadataService {
   }
 
   getMinimalScopesForService(resourceType: ServiceResourceType): string[] {
+    const validated = this.validatedScopeOverrides.get(resourceType);
+    if (validated && validated.length > 0) return validated;
+
     if (this.oidcLiveScopes) {
       const oidcMinimal = this.pickMinimalFromOidc(resourceType, this.oidcLiveScopes);
       if (oidcMinimal.length > 0) return oidcMinimal;
@@ -866,14 +935,15 @@ class MetadataService {
     return [];
   }
 
-  getScopeSource(resourceType: ServiceResourceType): "oidc-live" | "oidc-snapshot" | "docs-override" | "baseline" | "fallback" | "none" {
+  getScopeSource(resourceType: ServiceResourceType): "oidc-live" | "oidc-snapshot" | "oidc-live-mismatch" | "oidc-snapshot-mismatch" | "baseline" | "fallback" | "none" | "runtime-validated" {
+    if (this.validatedScopeOverrides.has(resourceType)) return "runtime-validated";
     const minimal = this.getMinimalTokenScopes(resourceType);
     if (this.oidcLiveScopes) {
       const oidcScopes = this.findOidcScopesForService(resourceType, this.oidcLiveScopes);
       if (oidcScopes.length > 0) {
         if (minimal.length > 0) {
           const validated = minimal.filter(s => oidcScopes.includes(s));
-          if (validated.length === 0) return "docs-override";
+          if (validated.length === 0) return "oidc-live-mismatch";
         }
         return "oidc-live";
       }
@@ -883,7 +953,7 @@ class MetadataService {
       if (oidcScopes.length > 0) {
         if (minimal.length > 0) {
           const validated = minimal.filter(s => oidcScopes.includes(s));
-          if (validated.length === 0) return "docs-override";
+          if (validated.length === 0) return "oidc-snapshot-mismatch";
         }
         return "oidc-snapshot";
       }
@@ -900,8 +970,7 @@ class MetadataService {
     if (minimal.length > 0) {
       const validated = minimal.filter(s => fullFamily.includes(s));
       if (validated.length > 0) return validated;
-      console.log(`[MetadataService] Docs-backed scope override for ${resourceType}: taxonomy scopes [${minimal.join(", ")}] not found in OIDC discovery [${fullFamily.join(", ")}] — using taxonomy scopes as authoritative`);
-      return minimal;
+      console.log(`[MetadataService] Scope mismatch for ${resourceType}: taxonomy scopes [${minimal.join(", ")}] not found in OIDC discovery [${fullFamily.join(", ")}] — deferring to OIDC-discovered scopes (will validate at runtime via scope candidates)`);
     }
     const defaultScope = fullFamily.find(s => s.endsWith(".Default"));
     if (defaultScope) return [defaultScope];

@@ -1813,12 +1813,32 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     let genExtractionAvailable = false;
     let commsMiningAvailable = false;
     let duProbeStatus: number | null = null;
-    if (isTokenOk("DU")) {
+    const duScopeSource = metadataService.getScopeSource("DU");
+    const duRequestedScopes = metadataService.getMinimalScopesForService("DU");
+    const duTokenResult = tokenResults["DU"];
+    const duTokenOk = isTokenOk("DU");
+    console.log(`[UiPath Probe] DU diagnostics: tokenOk=${duTokenOk}, scopeSource=${duScopeSource}, requestedScopes=[${duRequestedScopes.join(", ")}]`);
+    if (duTokenResult?.status === "fulfilled" && duTokenResult.value.ok) {
+      console.log(`[UiPath Probe] DU token granted scopes: [${duTokenResult.value.scopes.join(", ")}]`);
+    } else if (duTokenResult?.status === "fulfilled" && !duTokenResult.value.ok) {
+      const duTokenError = "error" in duTokenResult.value ? String(duTokenResult.value.error) : "unknown";
+      console.log(`[UiPath Probe] DU token acquisition failed: ${duTokenError}`);
+    } else if (duTokenResult?.status === "rejected") {
+      console.log(`[UiPath Probe] DU token acquisition rejected: ${(duTokenResult as PromiseRejectedResult).reason?.message || "unknown"}`);
+    }
+    if (duTokenOk) {
       const duEntry = taxonomyByFlag.get("documentUnderstanding");
       if (duEntry?.probeConfig) {
         const duResult = await probeEndpointByTaxonomy(duEntry, config, headersByToken, metadataService);
         duAvailable = duResult.available;
         duProbeStatus = duResult.httpStatus;
+        let duProbeBody = "";
+        try {
+          if (duResult.response) {
+            duProbeBody = (await duResult.response.clone().text()).substring(0, 300);
+          }
+        } catch { /* ignore */ }
+        console.log(`[UiPath Probe] DU Discovery API probe: available=${duAvailable}, httpStatus=${duProbeStatus}, responseSnippet=${duProbeBody || "(empty)"}`);
       }
     }
 

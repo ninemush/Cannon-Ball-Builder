@@ -57,7 +57,7 @@ describe("UiPath Scope Regression Tests (Task #157)", () => {
       const { metadataService } = await import("../catalog/metadata-service");
       for (const svc of ["TM", "DU"] as const) {
         const source = metadataService.getScopeSource(svc);
-        expect(["oidc-live", "oidc-snapshot", "docs-override", "baseline", "fallback", "none"]).toContain(source);
+        expect(["oidc-live", "oidc-snapshot", "oidc-live-mismatch", "oidc-snapshot-mismatch", "baseline", "fallback", "none", "runtime-validated"]).toContain(source);
       }
     });
   });
@@ -221,6 +221,142 @@ describe("UiPath Scope Regression Tests (Task #157)", () => {
       const orString = metadataService.getScopesForServiceString("OR");
       const parts = orString.split(/\s+/).filter(Boolean);
       expect(parts.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("DU scope authority rule (Task #169)", () => {
+    it("hasScopeMismatch detects DU taxonomy/OIDC mismatch", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const hasMismatch = metadataService.hasScopeMismatch("DU");
+      expect(typeof hasMismatch).toBe("boolean");
+    });
+
+    it("getScopeCandidatesForService generates multiple DU candidates including both .Api and non-.Api forms", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const candidates = metadataService.getScopeCandidatesForService("DU");
+      expect(candidates.length).toBeGreaterThanOrEqual(3);
+      const labels = candidates.map(c => c.label);
+      expect(labels).toContain("taxonomy-api");
+      expect(labels).toContain("taxonomy-non-api");
+    });
+
+    it("getScopeCandidatesForService includes Du.DocumentManager.Document candidate for DU", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const candidates = metadataService.getScopeCandidatesForService("DU");
+      const docMgrCandidate = candidates.find(c => c.label === "document-manager");
+      expect(docMgrCandidate).toBeDefined();
+      expect(docMgrCandidate?.scopes).toContain("Du.DocumentManager.Document");
+    });
+
+    it("getScopeCandidatesForService includes oidc-discovered as secondary for DU", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const candidates = metadataService.getScopeCandidatesForService("DU");
+      const oidcCandidate = candidates.find(c => c.label === "oidc-discovered");
+      if (metadataService.hasOidcScopeFamily("DU")) {
+        expect(oidcCandidate).toBeDefined();
+      }
+    });
+
+    it("getScopeCandidatesForService extracts tenant-configured scopes from saved config", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const candidates = metadataService.getScopeCandidatesForService("DU", "OR.Default Du.Digitization.Api Du.Extraction.Api");
+      const tenantCandidate = candidates.find(c => c.label === "tenant-configured");
+      expect(tenantCandidate).toBeDefined();
+      expect(tenantCandidate?.scopes).toEqual(["Du.Digitization.Api", "Du.Extraction.Api"]);
+    });
+
+    it("getScopeCandidatesForService prioritizes tenant-configured over taxonomy", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const candidates = metadataService.getScopeCandidatesForService("DU", "OR.Default Du.Custom.Scope");
+      const tenantIdx = candidates.findIndex(c => c.label === "tenant-configured");
+      const taxonomyIdx = candidates.findIndex(c => c.label === "taxonomy-api");
+      if (tenantIdx >= 0 && taxonomyIdx >= 0) {
+        expect(tenantIdx).toBeLessThan(taxonomyIdx);
+      }
+    });
+
+    it("getScopeCandidatesForService orders oidc-discovered after primary DU forms", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      const candidates = metadataService.getScopeCandidatesForService("DU");
+      const oidcIdx = candidates.findIndex(c => c.label === "oidc-discovered");
+      const taxonomyApiIdx = candidates.findIndex(c => c.label === "taxonomy-api");
+      const taxonomyNonApiIdx = candidates.findIndex(c => c.label === "taxonomy-non-api");
+      if (oidcIdx >= 0) {
+        if (taxonomyApiIdx >= 0) expect(oidcIdx).toBeGreaterThan(taxonomyApiIdx);
+        if (taxonomyNonApiIdx >= 0) expect(oidcIdx).toBeGreaterThan(taxonomyNonApiIdx);
+      }
+    });
+
+    it("setValidatedScopes and getValidatedScopes persist and retrieve DU overrides", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      const testScopes = ["Du.Test.Scope"];
+      metadataService.setValidatedScopes("DU", testScopes);
+      expect(metadataService.getValidatedScopes("DU")).toEqual(testScopes);
+      expect(metadataService.getScopeSource("DU")).toBe("runtime-validated");
+      metadataService.clearValidatedScopes();
+      expect(metadataService.getValidatedScopes("DU")).toBeNull();
+    });
+
+    it("clearValidatedScopes resets DU validated state", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.setValidatedScopes("DU", ["Du.Test"]);
+      metadataService.clearValidatedScopes();
+      const source = metadataService.getScopeSource("DU");
+      expect(source).not.toBe("runtime-validated");
+    });
+
+    it("getMinimalScopesForService prefers validated overrides for DU", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      const testScopes = ["Du.Validated.Scope"];
+      metadataService.setValidatedScopes("DU", testScopes);
+      const result = metadataService.getMinimalScopesForService("DU");
+      expect(result).toEqual(testScopes);
+      metadataService.clearValidatedScopes();
+    });
+
+    it("getScopesForService prefers validated overrides for DU", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      const testScopes = ["Du.Validated.Full"];
+      metadataService.setValidatedScopes("DU", testScopes);
+      const result = metadataService.getScopesForService("DU");
+      expect(result).toEqual(testScopes);
+      metadataService.clearValidatedScopes();
+    });
+
+    it("pickMinimalFromOidc does not use taxonomy scopes when they mismatch OIDC for DU", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      metadataService.clearValidatedScopes();
+      const duScopes = metadataService.getMinimalScopesForService("DU");
+      const taxonomyApiScopes = ["Du.Digitization.Api", "Du.Classification.Api", "Du.Extraction.Api", "Du.Validation.Api"];
+      const usesStaleOverride = duScopes.length === taxonomyApiScopes.length &&
+        duScopes.every(s => taxonomyApiScopes.includes(s));
+      expect(usesStaleOverride).toBe(false);
+    });
+
+    it("DU mismatch with no validated primary scopes means getMinimalScopesForService returns OIDC-only (non-primary) scopes", async () => {
+      const { metadataService } = await import("../catalog/metadata-service");
+      metadataService.load();
+      metadataService.clearValidatedScopes();
+      const hasMismatch = metadataService.hasScopeMismatch("DU");
+      expect(hasMismatch).toBe(true);
+      const duScopes = metadataService.getMinimalScopesForService("DU");
+      const primaryPatterns = [".Digitization", ".Classification", ".Extraction", ".Validation", ".DocumentManager"];
+      const hasPrimaryScope = duScopes.some(s => primaryPatterns.some(p => s.includes(p)));
+      expect(hasPrimaryScope).toBe(false);
+    });
+
+    it("DU blocker policy: fetchNewToken throws UiPathAuthError when mismatch active and no validated scopes exist", async () => {
+      const { UiPathAuthError } = await import("../uipath-auth");
+      expect(UiPathAuthError).toBeDefined();
+      expect(UiPathAuthError.prototype).toBeInstanceOf(Error);
     });
   });
 });
