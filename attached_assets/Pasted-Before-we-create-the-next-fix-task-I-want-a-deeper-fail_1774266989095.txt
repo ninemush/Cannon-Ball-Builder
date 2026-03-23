@@ -1,0 +1,96 @@
+Before we create the next fix task, I want a deeper failure analysis of this generated UiPath package.
+
+Important:
+Do NOT jump straight to implementation yet.
+I want a more complete and rigorous analysis first so we do not under-scope the upstream fix.
+
+Context
+We now have:
+- the generated BirthdayGreetingsAutomation package files
+- Studio parser errors
+- dependency restore errors
+- red/unresolved activities
+- prior package review showing malformed expressions, unknown activities, empty endpoints, and structural drift
+
+The current analysis is directionally useful, but it appears too narrow and too optimistic.
+I want a full failure taxonomy of the package.
+
+What I want analyzed
+
+1. XML/XAML parser-breaking errors
+Identify every issue that can cause Studio to fail opening/parsing workflows, including:
+- malformed XML attributes
+- invalid characters
+- broken quoting
+- dangling braces/brackets
+- malformed expression text
+- deeply nested/corrupted InArgument/OutArgument wrappers
+
+2. Activity resolution errors
+Identify every issue that causes activities to appear red/unresolved in Studio, including:
+- unsupported activity types
+- missing/incorrect package references
+- namespace mismatches
+- activities emitted without a valid catalog/package contract
+
+3. Type-contract errors
+Identify all variable/activity contract mismatches, including:
+- wrong InArgument/OutArgument type wrappers
+- wrong ForEach.Values typing
+- SecureString mismatches
+- invalid object-vs-string-vs-datatable usage
+- broken Assign target/value typing
+
+4. Runtime completeness errors
+Identify all cases where the workflow may parse but still cannot function correctly, including:
+- empty Endpoint attributes
+- wrong token variable usage in auth headers
+- placeholder/TODO behavior in required runtime paths
+- stubs in mandatory execution paths
+- malformed API payloads or expressions
+
+5. Generator-structure errors
+Identify whether the package contains overlapping or conflicting orchestration models, including:
+- split workflow vs monolithic workflow duplication
+- ambiguous entry/authority structure
+- duplicated process logic in multiple XAMLs
+- partial generation drift
+
+6. Dependency authority errors
+Identify all dependency/version/package mapping issues, including:
+- suspicious/fabricated package versions
+- bad redirects
+- missing package contracts for generated activities
+- any project.json metadata drift still present
+
+7. Severity classification
+For each finding, classify:
+- parser-breaking
+- activity-resolution-breaking
+- runtime-breaking
+- quality/debt but non-blocking
+
+8. Root-cause consolidation
+After enumerating findings, tell me which generator layers are actually responsible:
+- template emission
+- workflow-tree assembly
+- compliance/sanitization
+- dependency resolution
+- activity catalog enforcement
+- final package validation
+
+Deliverable
+Please return:
+
+1. full failure taxonomy
+2. findings grouped by category and severity
+3. the smallest set of upstream root causes that explain most of the breakage
+4. recommendation on whether the next task should be:
+- one combined generator-correctness task
+- or 2-3 tightly scoped upstream tasks
+5. proposed task title(s) only after the analysis is complete
+
+Important:
+- This analysis should be based on the actual generated files and actual Studio errors
+- Do not stop at “nested arguments + stray brace”
+- I want the full picture before we commit to the next fix wave
