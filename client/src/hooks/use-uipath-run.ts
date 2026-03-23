@@ -26,13 +26,15 @@ export interface UiPathRunState {
 
 export interface PipelineLogEntry {
   id: string;
-  type: "started" | "heartbeat" | "completed" | "warning" | "failed";
+  type: "started" | "heartbeat" | "completed" | "warning" | "failed" | "progress";
   stage: string;
   message: string;
   elapsed?: number;
   context?: Record<string, any>;
   timestamp: number;
 }
+
+export type CancelState = "idle" | "cancelling" | "cancelled" | "cancel_failed";
 
 interface CompletedRunResult {
   runId: string;
@@ -54,6 +56,8 @@ export interface UseUiPathRunReturn {
   metaValidationChipStatus: string;
   metaValidationFixCount: number;
   liveStatus: string;
+  cancelState: CancelState;
+  generationStartTime: number | null;
 }
 
 export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
@@ -68,8 +72,11 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
   const [metaValidationChipStatus, setMetaValidationChipStatus] = useState<string>("ready");
   const [metaValidationFixCount, setMetaValidationFixCount] = useState(0);
   const [liveStatus, setLiveStatus] = useState("");
+  const [cancelState, setCancelState] = useState<CancelState>("idle");
+  const [generationStartTime, setGenerationStartTime] = useState<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const cancelRequestedRef = useRef(false);
 
   useEffect(() => {
     setCurrentRun(null);
@@ -80,7 +87,10 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     pipelineEntryCounter.current = 0;
     setIsRunning(false);
     setLiveStatus("");
+    setCancelState("idle");
+    setGenerationStartTime(null);
     activeRunIdRef.current = null;
+    cancelRequestedRef.current = false;
 
     (async () => {
       try {
@@ -106,6 +116,8 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
           setIsRunning(true);
           activeRunIdRef.current = run.runId;
           setLiveStatus("Generating UiPath package...");
+          setGenerationStartTime(run.createdAt || Date.now());
+          setCancelState("idle");
           subscribeToStream(ideaId, run.runId, true);
         } else if (run.status !== "CANCELLED") {
           setCompletedRuns(new Map([[run.runId, {
@@ -153,6 +165,22 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
 
     if (data.progress) {
       setLiveStatus(data.progress);
+      setPipelineLogEntries(prev => {
+        const existingIdx = prev.findIndex(e => e.type === "progress" && e.stage === "llm_generation");
+        const entry: PipelineLogEntry = {
+          id: "pe-llm-progress",
+          type: "progress",
+          stage: "llm_generation",
+          message: data.progress,
+          timestamp: Date.now(),
+        };
+        if (existingIdx >= 0) {
+          const next = [...prev];
+          next[existingIdx] = entry;
+          return next;
+        }
+        return [...prev, entry];
+      });
     }
 
     if (data.metaValidation) {
@@ -348,6 +376,9 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     setPipelineComplete(false);
     pipelineEntryCounter.current = 0;
     setMetaValidationChipStatus("ready");
+    setCancelState("idle");
+    setGenerationStartTime(Date.now());
+    cancelRequestedRef.current = false;
 
     try {
       const res = await fetch(`/api/ideas/${ideaId}/uipath-runs`, {
@@ -370,6 +401,22 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
       }
 
       const { runId } = await res.json();
+
+      if (cancelRequestedRef.current) {
+        fetch(`/api/ideas/${ideaId}/uipath-runs/${runId}/cancel`, {
+          method: "POST",
+          credentials: "include",
+        }).catch(() => {});
+        setCancelState("cancelled");
+        setCurrentRun({ runId, status: "CANCELLED", source, createdAt: Date.now() });
+        currentRunRef.current = { runId, status: "CANCELLED", source, createdAt: Date.now() };
+        setTimeout(() => {
+          setIsRunning(false);
+          setLiveStatus("");
+        }, 1500);
+        return;
+      }
+
       const newRun: UiPathRunState = {
         runId,
         status: "BUILDING",
@@ -394,31 +441,73 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
   }, [ideaId, isRunning, toast, subscribeToStream]);
 
   const doCancelRun = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
+    if (cancelState !== "idle" && cancelState !== "cancel_failed") return;
+    setCancelState("cancelling");
+    cancelRequestedRef.current = true;
     const runId = activeRunIdRef.current;
     if (runId) {
       fetch(`/api/ideas/${ideaId}/uipath-runs/${runId}/cancel`, {
         method: "POST",
         credentials: "include",
-      }).catch(() => {});
+      }).then((res) => {
+        if (res.ok) {
+          setCancelState("cancelled");
+          if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+          }
+          setCurrentRun(prev => {
+            if (!prev) return prev;
+            const updated = { ...prev, status: "CANCELLED" as UiPathRunStatus };
+            currentRunRef.current = updated;
+            return updated;
+          });
+          toast({
+            title: "Cancelled",
+            description: "Package generation was cancelled.",
+          });
+          setTimeout(() => {
+            setIsRunning(false);
+            setLiveStatus("");
+            activeRunIdRef.current = null;
+          }, 1500);
+        } else {
+          setCancelState("cancel_failed");
+          cancelRequestedRef.current = false;
+          toast({
+            title: "Cancel failed",
+            description: "Could not cancel the run. You can try again.",
+            variant: "destructive",
+          });
+        }
+      }).catch(() => {
+        setCancelState("cancel_failed");
+        cancelRequestedRef.current = false;
+        toast({
+          title: "Cancel failed",
+          description: "Could not reach the server. You can try again.",
+          variant: "destructive",
+        });
+      });
+    } else {
+      setCancelState("cancelled");
+      setCurrentRun(prev => {
+        if (!prev) return prev;
+        const updated = { ...prev, status: "CANCELLED" as UiPathRunStatus };
+        currentRunRef.current = updated;
+        return updated;
+      });
+      toast({
+        title: "Cancelled",
+        description: "Package generation was cancelled.",
+      });
+      setTimeout(() => {
+        setIsRunning(false);
+        setLiveStatus("");
+        activeRunIdRef.current = null;
+      }, 1500);
     }
-    setCurrentRun(prev => {
-      if (!prev) return prev;
-      const updated = { ...prev, status: "CANCELLED" as UiPathRunStatus };
-      currentRunRef.current = updated;
-      return updated;
-    });
-    setIsRunning(false);
-    setLiveStatus("");
-    activeRunIdRef.current = null;
-    toast({
-      title: "Cancelled",
-      description: "Package generation was cancelled.",
-    });
-  }, [ideaId, toast]);
+  }, [ideaId, toast, cancelState]);
 
   return {
     currentRun,
@@ -431,5 +520,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     metaValidationChipStatus,
     metaValidationFixCount,
     liveStatus,
+    cancelState,
+    generationStartTime,
   };
 }

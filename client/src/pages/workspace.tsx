@@ -45,7 +45,7 @@ import { PIPELINE_STAGES, type Idea, type PipelineStage, type ChatMessage as DBC
 import ProcessMapPanel from "@/components/process-map-panel";
 import { parseStepsFromText, parseStepsByView } from "@/lib/step-parser";
 import { DocumentCard, UiPathPackageCard } from "@/components/document-card";
-import { useUiPathRun, type PipelineLogEntry } from "@/hooks/use-uipath-run";
+import { useUiPathRun, type PipelineLogEntry, type CancelState } from "@/hooks/use-uipath-run";
 import { ArtifactHub } from "@/components/artifact-hub";
 import { MetaValidationBar } from "@/components/meta-validation-bar";
 import { formatEST, getStageBadgeClass } from "@/lib/utils";
@@ -298,6 +298,214 @@ function PipelineLogPanel({
               )}
             </div>
           ))}
+          <div ref={logEndRef} />
+        </div>
+        {isComplete && (
+          <div className="px-3 py-2 border-t border-border/30 pipeline-fade-in">
+            <div className="flex items-center gap-1.5">
+              <Check className="h-3 w-3 text-emerald-400" />
+              <span className="text-[11px] text-emerald-400 font-medium">Ready to deploy</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UiPathProgressPanel({
+  entries,
+  isComplete,
+  onCancel,
+  cancelState,
+  startTime,
+}: {
+  entries: PipelineLogEntry[];
+  isComplete: boolean;
+  onCancel?: () => void;
+  cancelState: CancelState;
+  startTime: number | null;
+}) {
+  const logEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!startTime) return;
+    const update = () => setElapsed(Math.round((Date.now() - startTime) / 1000));
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [entries.length]);
+
+  const hasBuildEntries = entries.some(e => e.stage !== "llm_generation");
+  const llmEntries = entries.filter(e => e.stage === "llm_generation");
+  const buildEntries = entries.filter(e => e.stage !== "llm_generation");
+  const llmPhaseComplete = hasBuildEntries || isComplete;
+
+  const activeStage = buildEntries.length > 0
+    ? buildEntries.filter(e => e.type === "started").pop()?.stage
+    : null;
+  const completedStages = new Set(buildEntries.filter(e => e.type === "completed").map(e => e.stage));
+  const currentActive = activeStage && !completedStages.has(activeStage) ? activeStage : null;
+
+  const dedupedBuild = buildEntries.reduce<PipelineLogEntry[]>((acc, entry) => {
+    if (entry.type === "heartbeat") {
+      const lastIdx = acc.findIndex(e => e.stage === entry.stage && e.type === "heartbeat");
+      if (lastIdx >= 0) {
+        acc[lastIdx] = entry;
+        return acc;
+      }
+    }
+    acc.push(entry);
+    return acc;
+  }, []);
+
+  const renderIcon = (entry: PipelineLogEntry) => {
+    const isActive = entry.stage === currentActive;
+    switch (entry.type) {
+      case "started":
+        return isActive
+          ? <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" data-testid={`pipeline-dot-active-${entry.stage}`} />
+          : <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />;
+      case "heartbeat":
+        return <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />;
+      case "completed":
+        return <Check className="h-3 w-3 text-emerald-400 shrink-0" />;
+      case "warning":
+        return <span className="text-amber-400 text-[10px] shrink-0">&#9888;</span>;
+      case "failed":
+        return <X className="h-3 w-3 text-red-400 shrink-0" />;
+      default:
+        return null;
+    }
+  };
+
+  const renderMessage = (entry: PipelineLogEntry) => {
+    switch (entry.type) {
+      case "started":
+        return <span className="text-muted-foreground/70 text-[11px]">{entry.message}</span>;
+      case "heartbeat":
+        return <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">{entry.message}</span>;
+      case "completed":
+        return <span className="text-foreground/90 text-[11px]">{entry.message}</span>;
+      case "warning":
+        return <span className="text-amber-400 text-[11px]">{entry.message}</span>;
+      case "failed":
+        return <span className="text-red-400 text-[11px]">{entry.message}</span>;
+      default:
+        return <span className="text-muted-foreground text-[11px]">{entry.message}</span>;
+    }
+  };
+
+  const cancelLabel = cancelState === "cancelling" ? "Cancelling..." : cancelState === "cancelled" ? "Cancelled" : cancelState === "cancel_failed" ? "Retry Cancel" : "Cancel";
+  const cancelDisabled = cancelState === "cancelling" || cancelState === "cancelled";
+
+  return (
+    <div className="flex justify-start" data-testid="uipath-progress-panel">
+      <div className="max-w-[90%] w-full rounded-lg bg-card border border-card-border rounded-bl-sm overflow-hidden" ref={containerRef}>
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border/30">
+          <div className="flex items-center gap-2">
+            <Package className="h-3.5 w-3.5 text-primary" />
+            <span className="text-[11px] font-semibold text-foreground/80">
+              {cancelState === "cancelled" ? "Cancelled" : isComplete ? "Pipeline Complete" : "Generating UiPath Package"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted-foreground/50 tabular-nums" data-testid="uipath-elapsed-timer">{elapsed}s</span>
+            {onCancel && !isComplete && (
+              <button
+                onClick={onCancel}
+                disabled={cancelDisabled}
+                className={`text-[10px] shrink-0 ${cancelDisabled ? "text-muted-foreground/40 cursor-not-allowed" : "text-muted-foreground hover:text-foreground underline"}`}
+                data-testid="button-cancel-uipath"
+              >
+                {cancelLabel}
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="max-h-[280px] overflow-y-auto px-3 py-1.5 space-y-1 scrollbar-thin">
+          <div className="flex items-center gap-2 py-1" data-testid="phase-ai-generation">
+            <div className="w-4 flex items-center justify-center shrink-0">
+              {llmPhaseComplete ? (
+                <Check className="h-3 w-3 text-emerald-400" />
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />
+              )}
+            </div>
+            <span className={`text-[11px] font-medium ${llmPhaseComplete ? "text-foreground/90" : "text-foreground/80"}`}>
+              AI Generation
+            </span>
+          </div>
+          {llmEntries.length > 0 && (
+            <div className="pl-6 space-y-0.5">
+              {llmEntries.map((entry) => (
+                <div key={entry.id} className="flex items-center gap-2 py-0.5" data-testid={`progress-entry-${entry.stage}`}>
+                  <div className="w-4 flex items-center justify-center shrink-0">
+                    {llmPhaseComplete ? (
+                      <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                    ) : (
+                      <CannonballSpinner />
+                    )}
+                  </div>
+                  <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">{entry.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!llmPhaseComplete && llmEntries.length === 0 && (
+            <div className="pl-6 space-y-0.5">
+              <div className="flex items-center gap-2 py-0.5">
+                <div className="w-4 flex items-center justify-center shrink-0">
+                  <CannonballSpinner />
+                </div>
+                <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">Generating UiPath package...</span>
+              </div>
+            </div>
+          )}
+
+          {(hasBuildEntries || (isComplete && !hasBuildEntries)) && (
+            <>
+              <div className="flex items-center gap-2 py-1 mt-1 border-t border-border/20 pt-2" data-testid="phase-package-build">
+                <div className="w-4 flex items-center justify-center shrink-0">
+                  {isComplete ? (
+                    <Check className="h-3 w-3 text-emerald-400" />
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />
+                  )}
+                </div>
+                <span className={`text-[11px] font-medium ${isComplete ? "text-foreground/90" : "text-foreground/80"}`}>
+                  Package Build
+                </span>
+              </div>
+              <div className="pl-6 space-y-0.5">
+                {dedupedBuild.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center gap-2 py-0.5 pipeline-log-entry"
+                    data-testid={`pipeline-entry-${entry.type}-${entry.stage}`}
+                  >
+                    <div className="w-4 flex items-center justify-center shrink-0">
+                      {renderIcon(entry)}
+                    </div>
+                    <div className="flex-1 min-w-0 truncate">
+                      {renderMessage(entry)}
+                    </div>
+                    {entry.type === "completed" && entry.elapsed !== undefined && (
+                      <span className="text-[9px] text-muted-foreground/50 shrink-0 tabular-nums ml-auto">{entry.elapsed.toFixed(1)}s</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <div ref={logEndRef} />
         </div>
         {isComplete && (
@@ -687,6 +895,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     metaValidationChipStatus,
     metaValidationFixCount,
     liveStatus: uipathLiveStatus,
+    cancelState: uipathCancelState,
+    generationStartTime: uipathStartTime,
   } = useUiPathRun(idea.id);
   const liveStatus = uipathIsRunning ? uipathLiveStatus : liveStatusLocal;
   const [docMetaValidationChipStatus, setDocMetaValidationChipStatus] = useState<string>("ready");
@@ -1914,10 +2124,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               return <StreamingProgressIndicator key={`${msg.id}-deploy`} mode="deploy" deployStep={deployStep} />;
             }
             if (uipathIsRunning) {
-              if (pipelineLogEntries.length > 0) {
-                return <PipelineLogPanel key={`${msg.id}-pipeline-log`} entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} />;
-              }
-              return <StreamingProgressIndicator key={`${msg.id}-doc-uipath`} mode="thinking" liveStatus={liveStatus} stage={idea.stage} classifiedIntent={"UIPATH_GEN"} onCancel={() => cancelUiPathRun()} />;
+              return <UiPathProgressPanel key={`${msg.id}-uipath-progress`} entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} />;
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
               const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD";
@@ -1998,11 +2205,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           );
         })}
         {uipathIsRunning && !streamingMsg && (
-          pipelineLogEntries.length > 0 ? (
-            <PipelineLogPanel entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} />
-          ) : (
-            <StreamingProgressIndicator mode="thinking" liveStatus={liveStatus} stage={idea.stage} classifiedIntent={"UIPATH_GEN"} onCancel={() => cancelUiPathRun()} />
-          )
+          <UiPathProgressPanel entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} />
         )}
         {isGeneratingDoc && !streamingMsg && !uipathIsRunning && (
           streamingDocContent && streamingDocContent.length > 10 ? (
@@ -2027,16 +2230,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           <StreamingProgressIndicator mode="deploy" deployStep={deployStep} />
         )}
 
-        {currentUiPathRun?.status === "BUILDING" && (
-          <div className="flex justify-center py-2" data-testid="uipath-building-indicator">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Package className="h-3.5 w-3.5 animate-pulse" />
-              <span>Generating UiPath package...</span>
-            </div>
-          </div>
-        )}
-
-        {currentUiPathRun?.status === "STALLED" && (
+        {currentUiPathRun?.status === "STALLED" && !uipathIsRunning && (
           <div className="flex justify-center py-2" data-testid="uipath-stalled-indicator">
             <div className="flex flex-col items-center gap-2">
               <div className="flex items-center gap-2 text-xs text-amber-500">
