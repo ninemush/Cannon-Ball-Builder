@@ -278,30 +278,54 @@ async function executeRun(
     if (!packageJson) {
       await storage.updateGenerationRunStatus(runId, "running", "llm_generation");
       console.log(`[RunManager] Run ${runId}: LLM generation phase started`);
-      emitProgress("Calling LLM to generate package specification...");
 
+      pipelineProgressCallback({ type: "started", stage: "llm_context_loading", message: "Loading PDD and SDD context" });
       const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
       const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
       const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
       const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
       const mapSummary = mapNodes.map((n: any) => ({ name: n.name, type: n.nodeType, role: n.role, system: n.system, description: n.description }));
+      pipelineProgressCallback({ type: "completed", stage: "llm_context_loading", message: "Context loaded", context: { hasPdd: !!pdd, mapNodeCount: mapSummary.length } });
 
+      pipelineProgressCallback({ type: "started", stage: "llm_prompt_assembly", message: "Preparing AI generation context" });
       let systemCtx = `You are a UiPath automation architect generating a production-ready package structure for "${idea.title}".\n\nApproved SDD:\n${sdd.content}`;
       if (pdd) systemCtx += `\n\nApproved PDD:\n${pdd.content}`;
       if (mapSummary.length > 0) systemCtx += `\n\nProcess Map Steps:\n${JSON.stringify(mapSummary)}`;
+      pipelineProgressCallback({ type: "completed", stage: "llm_prompt_assembly", message: "AI prompt assembled" });
+
+      pipelineProgressCallback({ type: "started", stage: "llm_generation", message: "Sending request to AI model" });
+      emitProgress("Sending request to AI model...");
 
       const keepAliveMessages = [
-        "Analysing your process specification...",
-        "Planning workflow structure...",
-        "Determining activity requirements...",
-        "Mapping data flows and variables...",
-        "Almost ready to build...",
+        "Analysing process specification and requirements...",
+        "Identifying automation boundaries and scope...",
+        "Mapping business rules to workflow logic...",
+        "Designing main workflow structure...",
+        "Planning sequence and flowchart activities...",
+        "Determining variable types and scopes...",
+        "Mapping input and output arguments...",
+        "Configuring application integration points...",
+        "Designing exception handling strategy...",
+        "Planning retry and recovery mechanisms...",
+        "Structuring UI automation selectors...",
+        "Defining transaction processing logic...",
+        "Building activity dependency graph...",
+        "Optimising workflow execution paths...",
+        "Generating invoke workflow references...",
+        "Finalising package dependencies...",
+        "Assembling complete package specification...",
+        "Performing final quality checks...",
+        "Wrapping up generation — almost there...",
       ];
       let keepAliveIdx = 0;
       const keepAliveInterval = setInterval(() => {
-        emitProgress(keepAliveMessages[keepAliveIdx % keepAliveMessages.length]);
-        keepAliveIdx++;
-      }, 5000);
+        if (keepAliveIdx < keepAliveMessages.length) {
+          emitProgress(keepAliveMessages[keepAliveIdx]);
+          keepAliveIdx++;
+        } else {
+          emitProgress("Still generating — AI model is processing your specification...");
+        }
+      }, 15000);
 
       let response;
       try {
@@ -315,7 +339,10 @@ async function executeRun(
       }
 
       console.log(`[RunManager] Run ${runId}: LLM generation phase completed`);
-      emitProgress("LLM response received, parsing JSON...");
+      pipelineProgressCallback({ type: "completed", stage: "llm_generation", message: "AI response received" });
+
+      pipelineProgressCallback({ type: "started", stage: "llm_parsing", message: "Parsing AI-generated specification" });
+      emitProgress("Parsing AI-generated specification...");
       const rawText = response.text || "{}";
 
       if (response.stopReason === "max_tokens") {
@@ -325,22 +352,24 @@ async function executeRun(
       try {
         const parsed = sanitizeAndParseJson(rawText);
         packageJson = uipathPackageSchema.parse(parsed);
-        emitProgress("Package JSON parsed successfully");
+        pipelineProgressCallback({ type: "completed", stage: "llm_parsing", message: "Package specification validated", context: { workflowCount: (packageJson.workflows || []).length } });
       } catch (parseErr: any) {
         emitProgress("Initial parse failed, attempting repair...");
         const repaired = repairTruncatedPackageJson(rawText);
         if (repaired) {
           try {
             packageJson = uipathPackageSchema.parse(repaired);
-            emitProgress(`Repaired JSON: ${(repaired.workflows || []).length} workflows recovered`);
+            pipelineProgressCallback({ type: "completed", stage: "llm_parsing", message: `Repaired: ${(repaired.workflows || []).length} workflows recovered`, context: { repaired: true } });
           } catch {}
         }
         if (!packageJson) {
+          pipelineProgressCallback({ type: "failed", stage: "llm_parsing", message: "Failed to parse AI-generated package" });
           throw new RunError("Failed to parse AI-generated package. Please try again.", "llm_parse");
         }
       }
 
       if (!packageJson.workflows || packageJson.workflows.length === 0) {
+        pipelineProgressCallback({ type: "failed", stage: "llm_parsing", message: "Package has no workflows" });
         throw new RunError("AI generated a package with no workflows. Please try again.", "llm_parse");
       }
     }

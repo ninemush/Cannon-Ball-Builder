@@ -35,7 +35,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DeploymentReportCard } from "@/components/deployment-report-card";
-import { CannonballSpinner } from "@/components/cannonball-spinner";
+import { PrimarySpinner } from "@/components/cannonball-spinner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -155,7 +155,7 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
     <div className="flex justify-start" data-testid={mode === "deploy" ? "deploy-progress-indicator" : "doc-generation-loading"}>
       <div className="max-w-[85%] rounded-lg px-3 py-2.5 bg-card border border-card-border rounded-bl-sm">
         <div className="flex items-center gap-2">
-          <CannonballSpinner />
+          <PrimarySpinner />
           <div className="flex flex-col gap-0.5">
             <p className="text-xs text-foreground/80 font-medium">{title}</p>
             <p className="text-[10px] text-muted-foreground">
@@ -344,9 +344,10 @@ function UiPathProgressPanel({
     }
   }, [entries.length]);
 
-  const hasBuildEntries = entries.some(e => e.stage !== "llm_generation");
-  const llmEntries = entries.filter(e => e.stage === "llm_generation");
-  const buildEntries = entries.filter(e => e.stage !== "llm_generation");
+  const llmStages = new Set(["llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing"]);
+  const hasBuildEntries = entries.some(e => !llmStages.has(e.stage));
+  const llmEntries = entries.filter(e => llmStages.has(e.stage));
+  const buildEntries = entries.filter(e => !llmStages.has(e.stage));
   const llmPhaseComplete = hasBuildEntries || isComplete;
 
   const activeStage = buildEntries.length > 0
@@ -446,25 +447,35 @@ function UiPathProgressPanel({
           </div>
           {llmEntries.length > 0 && (
             <div className="pl-6 space-y-0.5">
-              {llmEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center gap-2 py-0.5" data-testid={`progress-entry-${entry.stage}`}>
-                  <div className="w-4 flex items-center justify-center shrink-0">
-                    {llmPhaseComplete ? (
-                      <Check className="h-2.5 w-2.5 text-emerald-400/60" />
-                    ) : (
-                      <CannonballSpinner />
-                    )}
-                  </div>
-                  <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">{entry.message}</span>
-                </div>
-              ))}
+              {(() => {
+                const completedStagesSet = new Set(llmEntries.filter(e => e.type === "completed").map(e => e.stage));
+                const filtered = llmEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
+                return filtered.map((entry, idx) => {
+                  const isLast = idx === filtered.length - 1;
+                  const isDone = entry.type === "completed" || llmPhaseComplete;
+                  return (
+                    <div key={entry.id} className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-entry-${entry.stage}`}>
+                      <div className="w-4 flex items-center justify-center shrink-0">
+                        {isDone ? (
+                          <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                        ) : isLast ? (
+                          <PrimarySpinner size={12} />
+                        ) : (
+                          <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                        )}
+                      </div>
+                      <span className={`text-[11px] ${isDone ? "text-muted-foreground/50" : "text-muted-foreground/70 italic pipeline-ellipsis"}`}>{entry.message}</span>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           )}
           {!llmPhaseComplete && llmEntries.length === 0 && (
             <div className="pl-6 space-y-0.5">
               <div className="flex items-center gap-2 py-0.5">
                 <div className="w-4 flex items-center justify-center shrink-0">
-                  <CannonballSpinner />
+                  <PrimarySpinner />
                 </div>
                 <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">Generating UiPath package...</span>
               </div>

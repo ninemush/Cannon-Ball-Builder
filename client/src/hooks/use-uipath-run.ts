@@ -165,21 +165,19 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
 
     if (data.progress) {
       setLiveStatus(data.progress);
+      pipelineEntryCounter.current++;
       setPipelineLogEntries(prev => {
-        const existingIdx = prev.findIndex(e => e.type === "progress" && e.stage === "llm_generation");
-        const entry: PipelineLogEntry = {
-          id: "pe-llm-progress",
-          type: "progress",
+        const lastLlm = [...prev].reverse().find(e => e.stage === "llm_generation" && e.type === "progress");
+        const updated = lastLlm
+          ? prev.map(e => e === lastLlm ? { ...e, type: "completed" as const } : e)
+          : prev;
+        return [...updated, {
+          id: `pe-llm-${pipelineEntryCounter.current}`,
+          type: "progress" as const,
           stage: "llm_generation",
           message: data.progress,
           timestamp: Date.now(),
-        };
-        if (existingIdx >= 0) {
-          const next = [...prev];
-          next[existingIdx] = entry;
-          return next;
-        }
-        return [...prev, entry];
+        }];
       });
     }
 
