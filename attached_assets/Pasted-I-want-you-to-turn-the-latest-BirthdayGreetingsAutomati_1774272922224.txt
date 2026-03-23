@@ -1,0 +1,113 @@
+I want you to turn the latest BirthdayGreetingsAutomation package failure analysis into two upstream implementation tasks with a clear dependency between them.
+
+Important:
+- Do NOT patch the generated package manually
+- Do NOT create one giant monolithic task
+- Do NOT under-scope this into only “fix nested arguments”
+- These must be upstream generator/package fixes
+- Preserve current successful app flow as a compatibility contract unless an intentional correction is required
+- Avoid regressions in unrelated package generation flows
+
+Context
+We now have a detailed failure taxonomy for the generated package. The breakage clusters into two coherent upstream problem areas:
+
+Cluster A — XAML emission correctness
+- wrong namespace/activity emission (`ui:` used generically across packages)
+- deeply nested/corrupted InArgument/OutArgument wrappers
+- malformed XML attribute content / stray characters
+- missing activity/package namespace declarations
+- HTTP activity properties incomplete or malformed
+- expression sanitization gaps
+- unsupported activity stubs still present in required runtime paths
+
+Cluster B — Package authority and structure
+- dual orchestration model (split workflows + orphaned monolithic workflow)
+- conflicting credential patterns between orchestration models
+- dependency version authority failures
+- suspicious/fabricated project metadata/package versions
+- missing/incorrect package declarations
+- final package composition drift
+
+I want two tasks:
+- Task A must fix the XAML emission correctness layer
+- Task B must fix package authority / dependency validation / structural deduplication
+- Task B should depend on Task A, because package composition validation is much cleaner once the emitted XAML is structurally correct
+
+What I want back
+Please create both tasks with:
+1. title / number
+2. objective
+3. root-cause summary
+4. impact analysis
+5. done looks like
+6. out of scope
+7. tasks
+8. relevant files
+9. acceptance criteria
+10. dependency relationship between the two
+
+Task A requirements
+Task A should focus on:
+- namespace mapping per activity/package
+- argument wrapper collapse robustness
+- expression/XML sanitization
+- HTTP activity emission completeness
+- preventing unsupported/manual-implementation stubs in mandatory execution paths
+- ensuring generated XAML is Studio-openable and activity-resolvable
+
+Task A should explicitly address:
+- blanket `ui:` prefix misuse
+- missing package-specific namespace declarations
+- deeply nested InArgument/OutArgument wrappers beyond current sanitizer coverage
+- malformed attribute strings / stray braces / corrupted characters
+- empty or unbracketed Endpoint values
+- missing Headers/Body on generated HTTP calls where required
+- bare VB expressions not wrapped correctly
+- unsupported activity handling in required execution paths
+
+Task A acceptance criteria must include:
+- package opens in Studio without parser errors
+- activity resolution errors caused by wrong namespaces are eliminated
+- no malformed XML/XAML is emitted
+- no unsupported/manual-stub activities remain in mandatory runtime paths unless the package is explicitly blocked from shipping instead
+- split-workflow package remains executable and coherent
+
+Task B requirements
+Task B should focus on:
+- dependency version authority
+- package metadata validation
+- structural deduplication / final package composition
+- removing orphaned/conflicting workflow models
+- ensuring one authoritative execution structure in the package
+
+Task B should explicitly address:
+- suspicious/fabricated package versions
+- project metadata drift
+- missing dependency declarations where truly required
+- duplicate orchestration models
+- reconciling or eliminating monolithic orphan workflows
+- ensuring the package contains one coherent execution path
+- validating dependency versions against the real allowed/restorable source of truth
+
+Task B acceptance criteria must include:
+- project.json contains only validated/restorable dependency versions
+- no orphaned/conflicting duplicate execution model remains in the package
+- package structure is coherent and authoritative
+- currently working non-affected generation flows do not regress
+- Studio restore/package-open behavior remains clean after Task A output is packaged
+
+Impact analysis requirements
+For both tasks, explicitly analyze risk/impact to:
+- package generation
+- package download
+- UiPath deployment flow
+- PDD/SDD generation context
+- activity catalog enforcement
+- quality gate / meta-validation
+- unrelated package types that do not use the affected activities
+
+Important constraints
+- Task A and Task B should have clean boundaries
+- Task B should explicitly depend on Task A
+- Keep both tasks upstream, narrow, and executable
+- The purpose is to prevent this class of broken package from being emitted again, not to rescue one package by hand
