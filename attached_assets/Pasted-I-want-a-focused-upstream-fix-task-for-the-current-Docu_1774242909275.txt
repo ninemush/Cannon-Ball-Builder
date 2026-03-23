@@ -1,0 +1,102 @@
+I want a focused upstream fix task for the current Document Understanding / Generative Extraction failure, based on the latest investigation.
+
+Important constraints
+- Do NOT introduce regression
+- Do NOT hardcode scopes in scattered code paths
+- Do NOT undo the OIDC-driven architecture from Task #156
+- Keep the fix upstream, org-agnostic, and orchestrator-agnostic
+- Use MetadataService as the authority layer
+- Treat current working services as compatibility contracts
+
+Context
+Current behavior:
+- OIDC discovery returns only Du.Default for the DU family
+- CannonBall requests a DU token using Du.Default
+- token acquisition succeeds
+- DU probe to /du_/api/framework/projects?api-version=1 returns 403 with InvalidJwtScope
+- DU is shown as Unavailable (Authorization/Scope)
+- Generative Extraction also remains unavailable downstream
+
+Latest investigation suggests:
+- UiPath’s official Document Understanding API docs require documented DU application scopes such as:
+  - Du.Digitization
+  - Du.Classification
+  - Du.Extraction
+  - Du.Validation
+- the returned token scope appears as the corresponding .Api form
+- Du.Default appears to be insufficient / not the correct scope contract for DU API access
+- so this is likely a case where OIDC discovery is incomplete for DU, and the runtime needs a docs-backed override
+
+Goal
+Fix DU authentication and probing upstream in a principled way, then verify whether Generative Extraction also recovers or whether it has its own separate issue.
+
+What I want from you
+
+Phase 1 — Confirm the DU scope contract
+Before implementation, verify and report:
+1. which DU scopes are currently documented by UiPath for external application / client-credentials DU API access
+2. whether Du.Default is actually documented as a valid DU API access scope or not
+3. whether the current DU probe path is correct
+4. whether the current DU failure is fully explained by wrong requested scopes
+
+Phase 2 — Implement a docs-backed scope override mechanism
+I do NOT want a one-off DU hack scattered through the code.
+
+Implement a principled mechanism in MetadataService for:
+- OIDC-discovered scope truth by default
+- docs-backed scope overrides for known OIDC gaps/inconsistencies
+
+Requirements:
+1. the override mechanism must live in one central authority layer
+2. it must be explicit, curated, and traceable
+3. it must not require scattered special-cases in auth/probe code
+4. it must preserve the OIDC architecture as the default path
+
+Then apply that mechanism to Document Understanding.
+
+For DU specifically:
+- stop requesting only Du.Default if that is not the correct documented contract
+- request the documented DU scopes needed for DU API access
+- ensure the DU token acquisition path uses that corrected scope request
+- log the granted JWT scopes at useful diagnostic detail so scope mismatches are visible
+
+Phase 3 — Re-test DU and Generative Extraction
+After the DU fix:
+1. verify whether Document Understanding becomes available
+2. verify whether Generative Extraction also becomes available
+3. if Generative Extraction is still unavailable, determine whether:
+- it has its own auth/token issue
+- it is using the wrong token family
+- it is a separate capability-level issue after DU auth is fixed
+
+Do not assume both are fixed by the same change unless the runtime evidence proves it.
+
+Phase 4 — Safety / compatibility
+Ensure:
+- currently working services remain working
+- OR deployment/connectivity remains working
+- OIDC-driven architecture from #156 remains intact
+- no scattered hardcoded DU scope strings appear outside the central metadata authority layer
+- this mechanism can support future documented scope overrides for other services if needed
+
+What I want back
+Please return:
+1. concise confirmation of the DU scope contract from UiPath docs
+2. root cause summary
+3. design for the docs-backed scope override mechanism
+4. exact files/modules changed
+5. whether DU is now working
+6. whether Generative Extraction is now working
+7. if Generative Extraction still fails, exact reason why
+8. regression checks performed
+9. what I should test immediately
+
+Acceptance criteria
+- DU no longer relies only on Du.Default if that scope is insufficient for DU API access
+- a central docs-backed override mechanism exists in MetadataService for known OIDC gaps
+- DU token requests use the correct documented DU scopes
+- DU probe succeeds if the user’s UiPath app truly has the required DU scopes and permissions
+- Generative Extraction is re-evaluated after the DU fix and either works or is classified with exact evidence
+- no regression to currently working services
+- no rollback of the broader #156 architecture
+- no scattered DU-specific hacks outside the authority layer
