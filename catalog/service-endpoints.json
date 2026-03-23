@@ -99,6 +99,14 @@
       "lastVerifiedAt": "2026-03-21T06:19:01.851Z",
       "verificationSource": "manual-seed"
     },
+    "CONNECTIONS": {
+      "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/connections_",
+      "apiBasePath": "/api/v1",
+      "confidence": "official",
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-23T00:00:00.000Z",
+      "verificationSource": "live-probe"
+    },
     "AUTOMATIONOPS": {
       "urlTemplate": "https://cloud.uipath.com/{orgName}/{tenantName}/automationops_",
       "apiBasePath": "/api/v1",

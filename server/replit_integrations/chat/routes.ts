@@ -143,18 +143,35 @@ function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?:
     let integrationServiceContext = "";
     if (serviceAvailability.integrationServiceDiscovery?.available) {
       const is = serviceAvailability.integrationServiceDiscovery;
-      const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
+      const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
       if (activeConns.length > 0) {
+        const connectorKeyToMeta = new Map<string, IntegrationServiceConnector>();
+        for (const conn of is.connectors) {
+          connectorKeyToMeta.set(conn.id, conn);
+        }
         const connLines = activeConns.map((c: IntegrationServiceConnection) => {
-          let line = `- **${c.connectorName}** — Connection: "${c.name}" (ID: ${c.id}, Status: ${c.status})`;
-          if (c.accountName) line += ` [Account: ${c.accountName}]`;
+          const meta = c.connectorKey ? connectorKeyToMeta.get(c.connectorKey) : undefined;
+          let line = `- **${c.connectorName}**`;
+          if (meta?.categories && meta.categories.length > 0) {
+            line += ` [${meta.categories.join(", ")}]`;
+          }
+          line += ` — Connection: "${c.name}" (ID: ${c.id}, Status: ${c.status})`;
+          if (c.connectionIdentity || c.accountName) line += ` [Account: ${c.connectionIdentity || c.accountName}]`;
           if (c.isDefault) line += ` [Default]`;
+          const caps: string[] = [];
+          if (meta?.hasCRUDs) caps.push("CRUD");
+          if (meta?.hasEvents) caps.push("events");
+          if (meta?.hasMethods) caps.push("methods");
+          if (caps.length > 0) line += ` {${caps.join(", ")}}`;
           return line;
         }).join("\n");
 
         let opsCatalog = "";
-        const activeConnectorIds = [...new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorId).filter(Boolean))];
-        const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) => activeConnectorIds.includes(c.id) && c.operations && c.operations.length > 0);
+        const activeConnectorIds = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorId).filter(Boolean)));
+        const activeConnectorKeys = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorKey).filter(Boolean)));
+        const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) =>
+          (activeConnectorIds.includes(c.id) || activeConnectorKeys.includes(c.id)) && c.operations && c.operations.length > 0
+        );
         if (connectorsWithOps.length > 0) {
           opsCatalog = `\n\nAvailable Integration Service operations per connector:\n`;
           for (const connector of connectorsWithOps) {

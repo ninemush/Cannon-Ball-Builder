@@ -41,7 +41,7 @@ export const serviceEndpointEntrySchema = z.object({
   deprecationNotes: z.string().optional(),
 });
 
-export type ServiceResourceType = "OR" | "TM" | "DU" | "DF" | "PIMS" | "IXP" | "AI" | "HUB" | "IDENTITY" | "INTEGRATIONSERVICE" | "AUTOMATIONOPS" | "AUTOMATIONSTORE" | "APPS" | "ASSISTANT" | "AGENTS" | "AUTOPILOT" | "REINFER";
+export type ServiceResourceType = "OR" | "TM" | "DU" | "DF" | "PIMS" | "IXP" | "AI" | "HUB" | "IDENTITY" | "INTEGRATIONSERVICE" | "CONNECTIONS" | "AUTOMATIONOPS" | "AUTOMATIONSTORE" | "APPS" | "ASSISTANT" | "AGENTS" | "AUTOPILOT" | "REINFER";
 
 export const serviceEndpointsSchema = z.object({
   endpoints: z.record(z.string(), serviceEndpointEntrySchema),

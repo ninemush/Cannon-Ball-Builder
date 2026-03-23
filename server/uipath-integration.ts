@@ -1730,6 +1730,9 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
           try { baseUrl = metadataService.getServiceUrl(parentEntry.serviceResourceType, config); } catch { /* fallback */ }
         }
       }
+      if (e.serviceResourceType && e.serviceResourceType !== "OR") {
+        try { baseUrl = metadataService.getServiceUrl(e.serviceResourceType as import("./catalog/metadata-schemas").ServiceResourceType, config); } catch { /* fallback */ }
+      }
       if (tokenRes !== "OR" && tokenRes !== "PM") {
         try { baseUrl = metadataService.getServiceUrl(tokenRes as import("./catalog/metadata-schemas").ServiceResourceType, config); } catch { /* fallback */ }
       }
@@ -2478,13 +2481,13 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilityProfi
   try {
     isDiscovery = await discoverIntegrationService();
     if (isDiscovery.available) {
-      const activeConns = isDiscovery.connections.filter(c => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
+      const activeConns = isDiscovery.connections.filter(c => c.status === "connected" || c.status === "active");
       if (activeConns.length > 0) {
         const connectorNames = [...new Set(activeConns.map(c => c.connectorName).filter(Boolean))];
-        const totalOps = isDiscovery.connectors.reduce((sum, c) => sum + c.operations.length, 0);
+        const capConnectors = isDiscovery.connectors.filter(c => c.hasCRUDs || c.hasEvents || c.hasMethods);
         let isDesc = `${isDisplayName} (${activeConns.length} active connection(s): ${connectorNames.join(", ")}`;
-        if (totalOps > 0) {
-          isDesc += ` — ${totalOps} operations discovered`;
+        if (capConnectors.length > 0) {
+          isDesc += ` — ${capConnectors.length} connector(s) with capabilities`;
         }
         isDesc += `)`;
         availNames.push(isDesc);
@@ -3071,7 +3074,7 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
 
   if (isDiscovery && serviceDetails.integrationService) {
     const activeConns = isDiscovery.connections.filter(
-      (c: { status: string }) => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active"
+      (c: { status: string }) => c.status === "connected" || c.status === "active"
     );
     serviceDetails.integrationService.discoverySummary = {
       connectorCount: isDiscovery.connectors.length,
@@ -3139,6 +3142,16 @@ export type IntegrationServiceConnector = {
   iconUrl?: string;
   connectionCount: number;
   operations: ConnectorOperation[];
+  categories?: string[];
+  hasCRUDs?: boolean;
+  hasMethods?: boolean;
+  hasExtensions?: boolean;
+  hasHttpRequest?: boolean;
+  hasEvents?: boolean;
+  eventTypes?: string[];
+  vendorApiType?: string;
+  tier?: string;
+  lifecycleStage?: string;
 };
 
 export type IntegrationServiceConnection = {
@@ -3153,6 +3166,10 @@ export type IntegrationServiceConnection = {
   isDefault?: boolean;
   folderId?: string;
   eventCheckInterval?: number;
+  connectionIdentity?: string;
+  connectorKey?: string;
+  connectorCategories?: string[];
+  folderKey?: string;
 };
 
 export type IntegrationServiceDiscovery = {
@@ -3193,23 +3210,44 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
   try {
     const token = await getAccessToken(config);
     const { metadataService: mdsSvc3 } = await import("./catalog/metadata-service");
-    const base = mdsSvc3.getCloudBaseUrl(config);
     const hdrs: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     };
 
-    const isServiceUrl = mdsSvc3.getServiceUrl("INTEGRATIONSERVICE", config);
-    const connectorsUrl = `${isServiceUrl}/api/ConnectorDefinitions?$top=100`;
-    const connectionsUrl = `${isServiceUrl}/api/Connections?$top=100`;
+    let connectionsBaseUrl: string;
+    try {
+      connectionsBaseUrl = mdsSvc3.getServiceUrl("CONNECTIONS" as import("./catalog/metadata-schemas").ServiceResourceType, config);
+    } catch {
+      connectionsBaseUrl = mdsSvc3.getServiceUrl("INTEGRATIONSERVICE" as import("./catalog/metadata-schemas").ServiceResourceType, config);
+      console.log("[Integration Service] CONNECTIONS endpoint not found, falling back to INTEGRATIONSERVICE");
+    }
+    const connectionsUrl = `${connectionsBaseUrl}/api/v1/Connections?$top=200&$expand=connector,folder`;
+    const connectorsUrl = `${connectionsBaseUrl}/api/v1/Connectors?$top=500`;
 
-    const [connectorRes, connectionRes] = await Promise.allSettled([
-      fetch(connectorsUrl, { headers: hdrs }),
+    let [connectionRes, connectorRes] = await Promise.allSettled([
       fetch(connectionsUrl, { headers: hdrs }),
+      fetch(connectorsUrl, { headers: hdrs }),
     ]);
+
+    const connectionsFailed = connectionRes.status !== "fulfilled" || !connectionRes.value.ok;
+    const connectorsFailed = connectorRes.status !== "fulfilled" || !connectorRes.value.ok;
+    if (connectionsFailed && connectorsFailed) {
+      const fallbackBase = mdsSvc3.getServiceUrl("INTEGRATIONSERVICE" as import("./catalog/metadata-schemas").ServiceResourceType, config);
+      if (fallbackBase !== connectionsBaseUrl) {
+        console.log("[Integration Service] connections_ endpoints failed, trying integrationservice_ fallback");
+        const fbConnectionsUrl = `${fallbackBase}/api/Connections?$top=200`;
+        const fbConnectorsUrl = `${fallbackBase}/api/ConnectorDefinitions?$top=500`;
+        [connectionRes, connectorRes] = await Promise.allSettled([
+          fetch(fbConnectionsUrl, { headers: hdrs }),
+          fetch(fbConnectorsUrl, { headers: hdrs }),
+        ]);
+      }
+    }
 
     const connectors: IntegrationServiceConnector[] = [];
     const connections: IntegrationServiceConnection[] = [];
+    const connectorMap = new Map<string, IntegrationServiceConnector>();
 
     if (connectorRes.status === "fulfilled" && connectorRes.value.ok) {
       try {
@@ -3217,15 +3255,21 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
         const items = data.value || data.items || data || [];
         if (Array.isArray(items)) {
           for (const c of items) {
-            connectors.push({
-              id: String(c.id || c.Id || "").slice(0, 100),
+            const key = String(c.key || c.Key || c.id || c.Id || "").slice(0, 100);
+            const connector: IntegrationServiceConnector = {
+              id: key,
               name: sanitizeConnectorString(c.name || c.Name || c.displayName || c.DisplayName || ""),
               description: sanitizeConnectorString(c.description || c.Description || "") || undefined,
-              provider: sanitizeConnectorString(c.provider || c.Provider || "") || undefined,
-              iconUrl: c.iconUrl || c.IconUrl || undefined,
+              provider: sanitizeConnectorString(c.provider || c.Provider || c.publisherName || c.PublisherName || "") || undefined,
+              iconUrl: c.iconUrl || c.IconUrl || c.icon || c.Icon || undefined,
               connectionCount: c.connectionCount || c.ConnectionCount || 0,
               operations: [],
-            });
+              categories: Array.isArray(c.categories || c.Categories) ? (c.categories || c.Categories).map((cat: any) => String(cat)) : undefined,
+              tier: c.tier || c.Tier || undefined,
+              lifecycleStage: c.lifecycleStage || c.LifecycleStage || undefined,
+            };
+            connectors.push(connector);
+            connectorMap.set(key, connector);
           }
         }
       } catch (e) {
@@ -3233,7 +3277,7 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
       }
     } else {
       const status = connectorRes.status === "fulfilled" ? connectorRes.value.status : "error";
-      console.log(`[Integration Service] Connectors endpoint returned ${status}`);
+      console.log(`[Integration Service] Connectors endpoint (connections_) returned ${status}`);
     }
 
     if (connectionRes.status === "fulfilled" && connectionRes.value.ok) {
@@ -3242,18 +3286,30 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
         const items = data.value || data.items || data || [];
         if (Array.isArray(items)) {
           for (const c of items) {
+            const connectorObj = c.connector || c.Connector || {};
+            const folderObj = c.folder || c.Folder || {};
+            const rawState = String(c.state || c.State || c.status || c.Status || "unknown");
+            const normalizedStatus = rawState.toLowerCase() === "enabled" ? "connected"
+              : rawState.toLowerCase() === "failed" ? "failed"
+              : rawState.toLowerCase();
+            const connKey = String(connectorObj.key || connectorObj.Key || c.connectorKey || c.ConnectorKey || "").slice(0, 100);
+
             connections.push({
               id: String(c.id || c.Id || "").slice(0, 100),
-              connectorId: String(c.connectorId || c.ConnectorId || c.connectorDefinitionId || c.ConnectorDefinitionId || "").slice(0, 100),
-              connectorName: sanitizeConnectorString(c.connectorName || c.ConnectorName || c.connectorDisplayName || c.ConnectorDisplayName || ""),
+              connectorId: String(connectorObj.id || connectorObj.Id || c.connectorId || c.ConnectorId || "").slice(0, 100),
+              connectorName: sanitizeConnectorString(connectorObj.name || connectorObj.Name || connectorObj.displayName || c.connectorName || c.ConnectorName || ""),
               name: sanitizeConnectorString(c.name || c.Name || c.displayName || c.DisplayName || ""),
-              status: sanitizeConnectorString(c.status || c.Status || "unknown"),
+              status: normalizedStatus,
               createdAt: c.createdAt || c.CreatedAt || undefined,
-              provider: sanitizeConnectorString(c.provider || c.Provider || "") || undefined,
+              provider: sanitizeConnectorString(connectorObj.publisherName || connectorObj.provider || c.provider || "") || undefined,
               accountName: sanitizeConnectorString(c.accountName || c.AccountName || c.account || c.Account || "") || undefined,
               isDefault: c.isDefault ?? c.IsDefault ?? undefined,
-              folderId: c.folderId || c.FolderId || c.folderKey || c.FolderKey || undefined,
+              folderId: folderObj.id || folderObj.Id || c.folderId || c.FolderId || undefined,
               eventCheckInterval: typeof (c.eventCheckInterval ?? c.EventCheckInterval) === "number" ? (c.eventCheckInterval ?? c.EventCheckInterval) : undefined,
+              connectionIdentity: sanitizeConnectorString(c.connectionIdentity || c.ConnectionIdentity || c.identity || c.Identity || "") || undefined,
+              connectorKey: connKey || undefined,
+              connectorCategories: Array.isArray(connectorObj.categories || connectorObj.Categories) ? (connectorObj.categories || connectorObj.Categories).map((cat: any) => String(cat)) : undefined,
+              folderKey: String(folderObj.key || folderObj.Key || c.folderKey || c.FolderKey || "") || undefined,
             });
           }
         }
@@ -3262,54 +3318,40 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
       }
     } else {
       const status = connectionRes.status === "fulfilled" ? connectionRes.value.status : "error";
-      console.log(`[Integration Service] Connections endpoint returned ${status}`);
+      console.log(`[Integration Service] Connections endpoint (connections_) returned ${status}`);
     }
 
-    const activeConnections = connections.filter(c => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
-    const activeConnectorIds = [...new Set(activeConnections.map(c => c.connectorId).filter(Boolean))];
+    const activeConnections = connections.filter(c => c.status === "connected" || c.status === "active");
+    const activeConnectorKeys = [...new Set(activeConnections.map(c => c.connectorKey).filter(Boolean))];
 
-    if (activeConnectorIds.length > 0 && connectors.length > 0) {
-      const fetchOpsForConnector = async (connectorId: string): Promise<{ connectorId: string; operations: ConnectorOperation[] }> => {
-        const allOps: ConnectorOperation[] = [];
-        let skip = 0;
-        const pageSize = 100;
-        const maxPages = 5;
+    if (activeConnectorKeys.length > 0) {
+      const METADATA_CONCURRENCY = 10;
+      const fetchMetadata = async (connectorKey: string): Promise<void> => {
         try {
-          for (let page = 0; page < maxPages; page++) {
-            const opsUrl = `${isServiceUrl}/api/ConnectorDefinitions/${encodeURIComponent(connectorId)}/operations?$top=${pageSize}&$skip=${skip}`;
-            const opsRes = await fetch(opsUrl, { headers: hdrs });
-            if (!opsRes.ok) break;
-            const opsData = await opsRes.json();
-            const opsItems = opsData.value || opsData.items || opsData || [];
-            if (!Array.isArray(opsItems) || opsItems.length === 0) break;
-            for (const op of opsItems) {
-              const opType = String(op.type || op.Type || op.operationType || op.OperationType || "").toLowerCase();
-              const parsed: ConnectorOperation = {
-                id: String(op.id || op.Id || op.operationId || op.OperationId || "").slice(0, 200),
-                name: sanitizeConnectorString(op.name || op.Name || op.displayName || op.DisplayName || ""),
-                description: sanitizeConnectorString(op.description || op.Description || "") || undefined,
-                type: opType.includes("trigger") ? "trigger" : opType.includes("action") ? "action" : "unknown",
-              };
-              if (parsed.name) allOps.push(parsed);
+          const metaUrl = `${connectionsBaseUrl}/api/v1/Connectors/${encodeURIComponent(connectorKey)}/metadata`;
+          const metaRes = await fetch(metaUrl, { headers: hdrs });
+          if (!metaRes.ok) return;
+          const meta = await metaRes.json();
+          const connector = connectorMap.get(connectorKey);
+          if (connector) {
+            connector.hasCRUDs = meta.hasCRUDs ?? meta.hasCruds ?? undefined;
+            connector.hasMethods = meta.hasMethods ?? undefined;
+            connector.hasExtensions = meta.hasExtensions ?? undefined;
+            connector.hasHttpRequest = meta.hasHttpRequest ?? undefined;
+            connector.hasEvents = meta.hasEvents ?? undefined;
+            connector.vendorApiType = meta.vendorApiType || meta.VendorApiType || undefined;
+            if (Array.isArray(meta.eventTypes || meta.EventTypes)) {
+              connector.eventTypes = (meta.eventTypes || meta.EventTypes).map((et: any) => String(et));
             }
-            if (opsItems.length < pageSize) break;
-            skip += pageSize;
           }
         } catch (e) {
-          console.warn(`[Integration Service] Failed to fetch operations for connector ${connectorId}:`, e);
+          console.warn(`[Integration Service] Failed to fetch metadata for connector ${connectorKey}:`, e);
         }
-        return { connectorId, operations: allOps };
       };
 
-      const opsPromises = activeConnectorIds.map(fetchOpsForConnector);
-      const opsResults = await Promise.allSettled(opsPromises);
-      for (const result of opsResults) {
-        if (result.status === "fulfilled" && result.value) {
-          const connector = connectors.find(c => c.id === result.value.connectorId);
-          if (connector) {
-            connector.operations = result.value.operations;
-          }
-        }
+      for (let i = 0; i < activeConnectorKeys.length; i += METADATA_CONCURRENCY) {
+        const batch = activeConnectorKeys.slice(i, i + METADATA_CONCURRENCY);
+        await Promise.allSettled(batch.map(fetchMetadata));
       }
     }
 
@@ -3321,13 +3363,13 @@ export async function discoverIntegrationService(): Promise<IntegrationServiceDi
 
     let summary = "";
     if (isAvailable) {
-      const totalOps = connectors.reduce((sum, c) => sum + c.operations.length, 0);
+      const capCount = connectors.filter(c => c.hasCRUDs || c.hasEvents || c.hasMethods).length;
       summary = `Integration Service: ${connectors.length} connector(s) available, ${activeConnections.length} active connection(s)`;
       if (connectorNames.length > 0) {
         summary += ` (${connectorNames.join(", ")})`;
       }
-      if (totalOps > 0) {
-        summary += ` — ${totalOps} operation(s) discovered`;
+      if (capCount > 0) {
+        summary += ` — ${capCount} connector(s) with capability metadata`;
       }
     } else {
       summary = "Integration Service is not available or has no connectors configured.";

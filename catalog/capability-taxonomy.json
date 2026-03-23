@@ -366,7 +366,7 @@
   },
   {
     "flagKey": "integrationService",
-    "serviceResourceType": "INTEGRATIONSERVICE",
+    "serviceResourceType": "CONNECTIONS",
     "displayName": "Integration Service",
     "description": "500+ pre-built connectors to enterprise systems (SAP, Salesforce, ServiceNow, Microsoft 365, etc.)",
     "category": "product",
@@ -383,7 +383,7 @@
       "recommendedStep": "Ensure the Orchestrator token has access to the Integration Service Connections API. If the probe succeeds (HTTP 200/401/403), the service will show as available or limited."
     },
     "probeConfig": {
-      "probePath": "/api/Connections?$top=1",
+      "probePath": "/api/v1/Connections?$top=1",
       "tokenResource": "OR",
       "acceptLimitedAuth": true
     }

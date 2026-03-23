@@ -279,7 +279,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
         }
         if (platformProfile.integrationService?.available) {
           const is = platformProfile.integrationService;
-          const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
+          const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
           if (activeConns.length > 0) {
             const connMap = new Map<string, IntegrationServiceConnection[]>();
             for (const conn of activeConns) {
@@ -291,7 +291,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
             Array.from(connMap.entries()).forEach(([connectorName, conns]) => {
               const connDetails = conns.map((c: IntegrationServiceConnection) => {
                 let detail = `"${c.name}"`;
-                if (c.accountName) detail += ` (account: ${c.accountName})`;
+                if (c.connectionIdentity || c.accountName) detail += ` (account: ${c.connectionIdentity || c.accountName})`;
                 return detail;
               }).join(", ");
               isContext += `- **${connectorName}**: ${conns.length} connection(s) — ${connDetails}\n`;
@@ -328,18 +328,49 @@ async function generateDocument(ideaId: string, docType: string): Promise<string
     }
     if (platformProfile.integrationService?.available && platformCapabilitiesText) {
       const is = platformProfile.integrationService;
-      const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active");
+      const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
       if (activeConns.length > 0) {
+        const connectorKeyToMeta = new Map<string, IntegrationServiceConnector>();
+        for (const conn of is.connectors) {
+          connectorKeyToMeta.set(conn.id, conn);
+        }
+
         let connLines = activeConns.map((c: IntegrationServiceConnection) => {
-          let line = `- **${c.connectorName}** — Connection: "${c.name}" (ID: ${c.id})`;
-          if (c.accountName) line += ` [Account: ${c.accountName}]`;
-          if (c.isDefault) line += ` [Default]`;
+          const meta = c.connectorKey ? connectorKeyToMeta.get(c.connectorKey) : undefined;
+          let line = `- **${c.connectorName}**`;
+          if (meta?.categories && meta.categories.length > 0) {
+            line += ` [${meta.categories.join(", ")}]`;
+          }
+          line += `: `;
+          const caps: string[] = [];
+          if (meta?.hasCRUDs) caps.push("CRUD");
+          if (meta?.hasMethods) caps.push("methods");
+          if (meta?.hasEvents) {
+            const eventDetail = meta.eventTypes && meta.eventTypes.length > 0
+              ? `${meta.eventTypes.join("/")} events`
+              : "events";
+            caps.push(eventDetail);
+          }
+          if (meta?.hasHttpRequest) caps.push("HTTP request");
+          if (meta?.hasExtensions) caps.push("extensions");
+          if (caps.length > 0) {
+            line += caps.join(" + ");
+          } else {
+            line += "basic connectivity";
+          }
+          line += `, connected`;
+          if (c.connectionIdentity || c.accountName) {
+            line += ` as ${c.connectionIdentity || c.accountName}`;
+          }
           return line;
         }).join("\n");
 
         let opsCatalog = "";
         const activeConnectorIds = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorId).filter(Boolean)));
-        const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) => activeConnectorIds.includes(c.id) && c.operations && c.operations.length > 0);
+        const activeConnectorKeys = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorKey).filter(Boolean)));
+        const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) =>
+          (activeConnectorIds.includes(c.id) || activeConnectorKeys.includes(c.id)) && c.operations && c.operations.length > 0
+        );
         if (connectorsWithOps.length > 0) {
           opsCatalog = `\n\nINTEGRATION SERVICE — OPERATION CATALOG (per connector):\n`;
           for (const connector of connectorsWithOps) {
