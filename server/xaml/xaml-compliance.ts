@@ -2,6 +2,7 @@ import { escapeXml } from "../lib/xml-utils";
 import { ACTIVITY_NAME_ALIAS_MAP } from "../uipath-activity-registry";
 import { catalogService } from "../catalog/catalog-service";
 import { XMLValidator } from "fast-xml-parser";
+import { QualityGateError } from "../uipath-shared";
 
 export type TargetFramework = "Windows" | "Portable";
 
@@ -713,6 +714,56 @@ for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
   }
 }
 
+const DATETIME_FORMAT_SAFE_PREFIXES = new Set(["HH", "MM", "ss", "dd", "yyyy", "mm", "hh"]);
+
+function stripAttributeValuesAndTextContent(xml: string): string {
+  let result = "";
+  let i = 0;
+  while (i < xml.length) {
+    if (xml[i] === "<") {
+      const tagEnd = xml.indexOf(">", i);
+      if (tagEnd === -1) {
+        result += xml.slice(i);
+        break;
+      }
+      const tagContent = xml.slice(i, tagEnd + 1);
+      let cleaned = "";
+      let j = 0;
+      while (j < tagContent.length) {
+        if (tagContent[j] === '"') {
+          cleaned += '"';
+          j++;
+          while (j < tagContent.length && tagContent[j] !== '"') j++;
+          if (j < tagContent.length) {
+            cleaned += '"';
+            j++;
+          }
+        } else if (tagContent[j] === "'") {
+          cleaned += "'";
+          j++;
+          while (j < tagContent.length && tagContent[j] !== "'") j++;
+          if (j < tagContent.length) {
+            cleaned += "'";
+            j++;
+          }
+        } else {
+          cleaned += tagContent[j];
+          j++;
+        }
+      }
+      result += cleaned;
+      i = tagEnd + 1;
+    } else {
+      const nextTag = xml.indexOf("<", i);
+      if (nextTag === -1) {
+        break;
+      }
+      i = nextTag;
+    }
+  }
+  return result;
+}
+
 export function validateNamespacePrefixes(xml: string): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
@@ -723,14 +774,16 @@ export function validateNamespacePrefixes(xml: string): { valid: boolean; errors
     declaredPrefixes.set(m[1], m[2]);
   }
 
+  const strippedXml = stripAttributeValuesAndTextContent(xml);
+
   const usedPrefixes = new Set<string>();
   const tagPrefixPattern = /<\/?([a-zA-Z][a-zA-Z0-9]*):/g;
-  while ((m = tagPrefixPattern.exec(xml)) !== null) {
+  while ((m = tagPrefixPattern.exec(strippedXml)) !== null) {
     usedPrefixes.add(m[1]);
   }
 
   const attrPrefixPattern = /\s([a-zA-Z][a-zA-Z0-9]*):[a-zA-Z]/g;
-  while ((m = attrPrefixPattern.exec(xml)) !== null) {
+  while ((m = attrPrefixPattern.exec(strippedXml)) !== null) {
     if (m[1] !== "xmlns") {
       usedPrefixes.add(m[1]);
     }
@@ -738,6 +791,7 @@ export function validateNamespacePrefixes(xml: string): { valid: boolean; errors
 
   Array.from(usedPrefixes).forEach(prefix => {
     if (prefix === "xml") return;
+    if (DATETIME_FORMAT_SAFE_PREFIXES.has(prefix)) return;
     if (!declaredPrefixes.has(prefix)) {
       errors.push(`Namespace prefix "${prefix}" is used in activity tags but has no corresponding xmlns declaration`);
       return;
@@ -1223,7 +1277,32 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     for (const err of nsValidation.errors) {
       console.error(`[XAML Compliance] Namespace validation: ${err}`);
     }
-    throw new Error(`XAML namespace validation failed: ${nsValidation.errors.join("; ")}`);
+    const nsMessage = `XAML namespace validation failed: ${nsValidation.errors.join("; ")}`;
+    console.warn(`[XAML Compliance] Namespace failure will trigger auto-downgrade path: ${nsMessage}`);
+    throw new QualityGateError(nsMessage, {
+      passed: false,
+      violations: nsValidation.errors.map(e => ({
+        check: "namespace-prefix-undeclared",
+        severity: "error" as const,
+        category: "completeness" as const,
+        file: "Main.xaml",
+        detail: e,
+      })),
+      positiveEvidence: [],
+      completenessLevel: "incomplete" as const,
+      summary: {
+        blockedPatterns: 0,
+        completenessErrors: nsValidation.errors.length,
+        completenessWarnings: 0,
+        accuracyErrors: 0,
+        accuracyWarnings: 0,
+        runtimeSafetyErrors: 0,
+        runtimeSafetyWarnings: 0,
+        logicLocationWarnings: 0,
+        totalErrors: nsValidation.errors.length,
+        totalWarnings: 0,
+      },
+    });
   }
 
   const semanticValidation = validateActivityTagSemantics(xml);
