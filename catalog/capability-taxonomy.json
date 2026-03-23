@@ -147,7 +147,10 @@
     "probeStrategy": "own-endpoint",
     "scopeFamily": "Du",
     "minimalScopes": [
-      "Du.Default"
+      "Du.Digitization",
+      "Du.Classification",
+      "Du.Extraction",
+      "Du.Validation"
     ],
     "uiSection": "primary",
     "defaultRemediationTemplate": {

@@ -57,7 +57,7 @@ describe("UiPath Scope Regression Tests (Task #157)", () => {
       const { metadataService } = await import("../catalog/metadata-service");
       for (const svc of ["TM", "DU"] as const) {
         const source = metadataService.getScopeSource(svc);
-        expect(["oidc-live", "oidc-snapshot", "baseline", "fallback", "none"]).toContain(source);
+        expect(["oidc-live", "oidc-snapshot", "docs-override", "baseline", "fallback", "none"]).toContain(source);
       }
     });
   });

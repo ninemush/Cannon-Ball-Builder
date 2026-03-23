@@ -130,6 +130,9 @@ async function loadConfig(): Promise<UiPathAuthConfig | null> {
 
 async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): Promise<CachedToken> {
   const requestedScopes = resource === "OR" ? config.scopes : getResourceScopesFromMetadata(resource);
+  const serviceType = (TOKEN_RESOURCE_TO_SERVICE[resource] || resource) as ServiceResourceType;
+  const scopeSource = resource === "OR" ? "config" : metadataService.getScopeSource(serviceType);
+  console.log(`[UiPath Auth] Requesting ${resource} token with scopes [${requestedScopes}] (source: ${scopeSource})`);
   const params = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: config.clientId,
@@ -223,13 +226,17 @@ async function fetchNewToken(config: UiPathAuthConfig, resource: ResourceType): 
       const tokenScopes: string[] = typeof payload.scope === "string"
         ? payload.scope.split(" ")
         : Array.isArray(payload.scope) ? payload.scope : [];
-      const scopeCounts = new Map<string, number>();
-      for (const s of tokenScopes) {
-        const prefix = s.split(".")[0];
-        scopeCounts.set(prefix, (scopeCounts.get(prefix) || 0) + 1);
+      if (resource === "OR") {
+        const scopeCounts = new Map<string, number>();
+        for (const s of tokenScopes) {
+          const prefix = s.split(".")[0];
+          scopeCounts.set(prefix, (scopeCounts.get(prefix) || 0) + 1);
+        }
+        const summary = Array.from(scopeCounts.entries()).map(([k, v]) => `${k}=${v}`).join(", ");
+        console.log(`[UiPath Auth] ${resource} token granted scopes (by prefix): ${summary}`);
+      } else {
+        console.log(`[UiPath Auth] ${resource} token granted scopes: [${tokenScopes.join(", ")}] (requested via ${scopeSource})`);
       }
-      const summary = Array.from(scopeCounts.entries()).map(([k, v]) => `${k}=${v}`).join(", ");
-      console.log(`[UiPath Auth] ${resource} token scopes: ${summary}`);
     }
   } catch (decodeErr: any) {
     console.log(`[UiPath Auth] Could not decode JWT payload: ${decodeErr.message}`);

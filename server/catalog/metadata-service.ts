@@ -861,10 +861,29 @@ class MetadataService {
     return [];
   }
 
-  getScopeSource(resourceType: ServiceResourceType): "oidc-live" | "oidc-snapshot" | "baseline" | "fallback" | "none" {
-    if (this.oidcLiveScopes && this.findOidcScopesForService(resourceType, this.oidcLiveScopes).length > 0) return "oidc-live";
-    if (this.oidcSnapshot && this.findOidcScopesForService(resourceType, this.oidcSnapshot).length > 0) return "oidc-snapshot";
-    if (this.getMinimalTokenScopes(resourceType).length > 0) return "baseline";
+  getScopeSource(resourceType: ServiceResourceType): "oidc-live" | "oidc-snapshot" | "docs-override" | "baseline" | "fallback" | "none" {
+    const minimal = this.getMinimalTokenScopes(resourceType);
+    if (this.oidcLiveScopes) {
+      const oidcScopes = this.findOidcScopesForService(resourceType, this.oidcLiveScopes);
+      if (oidcScopes.length > 0) {
+        if (minimal.length > 0) {
+          const validated = minimal.filter(s => oidcScopes.includes(s));
+          if (validated.length === 0) return "docs-override";
+        }
+        return "oidc-live";
+      }
+    }
+    if (this.oidcSnapshot) {
+      const oidcScopes = this.findOidcScopesForService(resourceType, this.oidcSnapshot);
+      if (oidcScopes.length > 0) {
+        if (minimal.length > 0) {
+          const validated = minimal.filter(s => oidcScopes.includes(s));
+          if (validated.length === 0) return "docs-override";
+        }
+        return "oidc-snapshot";
+      }
+    }
+    if (minimal.length > 0) return "baseline";
     if (resourceType === "OR") return "fallback";
     return "none";
   }
@@ -876,6 +895,8 @@ class MetadataService {
     if (minimal.length > 0) {
       const validated = minimal.filter(s => fullFamily.includes(s));
       if (validated.length > 0) return validated;
+      console.log(`[MetadataService] Docs-backed scope override for ${resourceType}: taxonomy scopes [${minimal.join(", ")}] not found in OIDC discovery [${fullFamily.join(", ")}] — using taxonomy scopes as authoritative`);
+      return minimal;
     }
     const defaultScope = fullFamily.find(s => s.endsWith(".Default"));
     if (defaultScope) return [defaultScope];
