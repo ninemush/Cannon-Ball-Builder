@@ -61,6 +61,7 @@ export type TruthfulStatus =
   | "endpoint_failure"
   | "not_provisioned"
   | "auth_scope"
+  | "requires_dedicated_token"
   | "unsupported_external_api"
   | "internal_probe_error"
   | "unknown";
@@ -117,6 +118,8 @@ export type ProbeConfig = {
   acceptLimitedAuth?: boolean;
 };
 
+export type AuthModel = "oauth" | "dedicated-token" | "none" | "unknown";
+
 export type CapabilityTaxonomyEntry = {
   flagKey: string;
   serviceResourceType: ServiceResourceType;
@@ -124,6 +127,7 @@ export type CapabilityTaxonomyEntry = {
   description: string;
   category: "service" | "capability" | "product" | "observation";
   parentService?: string;
+  authModel?: AuthModel;
   apiSupport: ApiSupportLevel;
   probeStrategy: ProbeStrategy;
   probeConfig?: ProbeConfig;

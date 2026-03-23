@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { appSettings } from "@shared/schema";
+import { appSettings, uipathConnections } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import archiver from "archiver";
 import { metadataService as _mdsStatic, ORCHESTRATOR_ODATA_PATHS as ODP } from "./catalog/metadata-service";
@@ -80,6 +80,91 @@ export async function getUiPathConfig(): Promise<UiPathConfig | null> {
     };
   }
   return null;
+}
+
+export async function getCommunicationsMiningToken(): Promise<string | null> {
+  const activeRows = await db
+    .select()
+    .from(uipathConnections)
+    .where(eq(uipathConnections.isActive, true));
+  if (activeRows.length === 0) return null;
+  return activeRows[0].communicationsMiningToken || null;
+}
+
+export async function saveCommunicationsMiningToken(token: string): Promise<void> {
+  const activeRows = await db
+    .select()
+    .from(uipathConnections)
+    .where(eq(uipathConnections.isActive, true));
+  if (activeRows.length === 0) {
+    throw new Error("No active UiPath connection found. Configure an Orchestrator connection first.");
+  }
+  await db
+    .update(uipathConnections)
+    .set({ communicationsMiningToken: token.trim() })
+    .where(eq(uipathConnections.id, activeRows[0].id));
+}
+
+export async function clearCommunicationsMiningToken(): Promise<void> {
+  const activeRows = await db
+    .select()
+    .from(uipathConnections)
+    .where(eq(uipathConnections.isActive, true));
+  if (activeRows.length > 0) {
+    await db
+      .update(uipathConnections)
+      .set({ communicationsMiningToken: null })
+      .where(eq(uipathConnections.id, activeRows[0].id));
+  }
+}
+
+export async function getCommunicationsMiningStatus(): Promise<{
+  configured: boolean;
+  connected: boolean;
+  message: string;
+}> {
+  const config = await getUiPathConfig();
+  if (!config) {
+    return { configured: false, connected: false, message: "UiPath is not configured" };
+  }
+
+  const token = await getCommunicationsMiningToken();
+  if (!token) {
+    return { configured: false, connected: false, message: "Communications Mining API token not configured" };
+  }
+
+  try {
+    const { metadataService } = await import("./catalog/metadata-service");
+    const reinferUrl = metadataService.getServiceUrl("REINFER", config);
+    const res = await fetch(`${reinferUrl}/api/v1/datasets`, {
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return {
+        configured: true,
+        connected: false,
+        message: `Communications Mining connection failed (${res.status}): ${text.slice(0, 200)}`,
+      };
+    }
+
+    return {
+      configured: true,
+      connected: true,
+      message: "Connected to Communications Mining",
+    };
+  } catch (err: any) {
+    return {
+      configured: true,
+      connected: false,
+      message: `Communications Mining connection error: ${err.message}`,
+    };
+  }
 }
 
 function extractOrgName(input: string): string {
@@ -1354,6 +1439,7 @@ type UnifiedProbeResult = {
   serverlessDetected?: boolean;
   probeHttpStatuses?: Record<string, number | null>;
   tokenFailures?: Record<string, string>;
+  cmRequiresDedicatedToken?: boolean;
   cachedAt: number;
   probeFailed?: boolean;
   probeError?: string;
@@ -1796,36 +1882,47 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
     }
 
     let cmProbeStatus: number | null = null;
+    let cmRequiresDedicatedToken = false;
     const cmEntry = taxonomyByFlag.get("communicationsMining");
     if (cmEntry?.probeConfig) {
-      const reinferUrl = metadataService.getServiceUrl("REINFER", config);
-      const cmProbeUrl = `${reinferUrl}${cmEntry.probeConfig.probePath}`;
-      const ixpHdrs = headersByToken["IXP"] || hdrs;
-      try {
-        const cmRes = await fetch(cmProbeUrl, { headers: ixpHdrs });
-        cmProbeStatus = cmRes.status;
-        if (cmRes.ok) {
-          const cmText = await cmRes.text();
-          const trimmedCm = cmText.trim();
-          if (trimmedCm.length > 0 && !trimmedCm.startsWith("<")) {
-            try {
-              const cmData = JSON.parse(trimmedCm);
-              if (!cmData.errorCode && !cmData.ErrorCode && !cmData["odata.error"]) {
-                commsMiningAvailable = true;
-                metadataService.updateServiceReachability("REINFER", "reachable");
-                console.log("[UiPath Probe] Communications Mining available");
-              }
-            } catch { /* invalid json */ }
+      const cmToken = await getCommunicationsMiningToken();
+      if (cmToken) {
+        const reinferUrl = metadataService.getServiceUrl("REINFER", config);
+        const cmProbeUrl = `${reinferUrl}${cmEntry.probeConfig.probePath}`;
+        const cmHdrs: Record<string, string> = {
+          "Authorization": `Bearer ${cmToken}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        };
+        try {
+          const cmRes = await fetch(cmProbeUrl, { headers: cmHdrs });
+          cmProbeStatus = cmRes.status;
+          if (cmRes.ok) {
+            const cmText = await cmRes.text();
+            const trimmedCm = cmText.trim();
+            if (trimmedCm.length > 0 && !trimmedCm.startsWith("<")) {
+              try {
+                const cmData = JSON.parse(trimmedCm);
+                if (!cmData.errorCode && !cmData.ErrorCode && !cmData["odata.error"]) {
+                  commsMiningAvailable = true;
+                  metadataService.updateServiceReachability("REINFER", "reachable");
+                  console.log("[UiPath Probe] Communications Mining available (dedicated token)");
+                }
+              } catch { /* invalid json */ }
+            }
+            if (!commsMiningAvailable) {
+              console.warn(`[UiPath Probe] Communications Mining probe returned ${cmRes.status}: ${cmText.substring(0, 200)}`);
+            }
+          } else {
+            let bodySnippet = "";
+            try { const t = await cmRes.text(); bodySnippet = t.substring(0, 200); } catch { /* ignore */ }
+            console.warn(`[UiPath Probe] Communications Mining probe returned ${cmRes.status}: ${bodySnippet}`);
           }
-          if (!commsMiningAvailable) {
-            console.warn(`[UiPath Probe] Communications Mining probe returned ${cmRes.status}: ${cmText.substring(0, 200)}`);
-          }
-        } else {
-          let bodySnippet = "";
-          try { const t = await cmRes.text(); bodySnippet = t.substring(0, 200); } catch { /* ignore */ }
-          console.warn(`[UiPath Probe] Communications Mining probe returned ${cmRes.status}: ${bodySnippet}`);
-        }
-      } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining probe failed: ${e.message}`); }
+        } catch (e: any) { console.warn(`[UiPath Probe] Communications Mining probe failed: ${e.message}`); }
+      } else {
+        cmRequiresDedicatedToken = true;
+        console.log("[UiPath Probe] Communications Mining skipped — no dedicated API token configured");
+      }
     }
 
     let aiAvailable = false;
@@ -2094,6 +2191,7 @@ async function probeAllServices(): Promise<UnifiedProbeResult> {
       serverlessDetected,
       probeHttpStatuses,
       tokenFailures: Object.keys(tokenFailures).length > 0 ? tokenFailures : undefined,
+      cmRequiresDedicatedToken,
       cachedAt: Date.now(),
     };
 
@@ -2876,11 +2974,15 @@ export async function probeServiceAvailability(): Promise<ServiceAvailabilityMap
 
     const effectiveProbeError = probeError || tokenFailure || undefined;
 
+    const isCmRequiringToken = flagKey === "communicationsMining" && probe.cmRequiresDedicatedToken;
+
     let truthfulStatus: import("./catalog/metadata-schemas").TruthfulStatus;
     if (isUnsupportedService) {
       truthfulStatus = "unsupported_external_api";
     } else if (effectiveAvailable) {
       truthfulStatus = "available";
+    } else if (isCmRequiringToken) {
+      truthfulStatus = "requires_dedicated_token";
     } else if (isAuthResponse) {
       truthfulStatus = "auth_scope";
     } else if (tokenFailure && !effectiveHttpStatus) {

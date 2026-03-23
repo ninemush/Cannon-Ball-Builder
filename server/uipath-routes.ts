@@ -186,6 +186,7 @@ export function registerUiPathRoutes(app: Express): void {
         ...r,
         clientSecret: r.clientSecret ? "••••••••" : "",
         automationHubToken: r.automationHubToken ? "••••••••" : "",
+        communicationsMiningToken: r.communicationsMiningToken ? "••••••••" : "",
       }));
       return res.json(masked);
     } catch (err: any) {
@@ -218,7 +219,7 @@ export function registerUiPathRoutes(app: Express): void {
         auth.invalidateConfig();
         clearProbeCache(); metadataService.clearReachability();
       }
-      return res.json({ ...row, clientSecret: "••••••••", automationHubToken: row.automationHubToken ? "••••••••" : "" });
+      return res.json({ ...row, clientSecret: "••••••••", automationHubToken: row.automationHubToken ? "••••••••" : "", communicationsMiningToken: row.communicationsMiningToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -249,7 +250,7 @@ export function registerUiPathRoutes(app: Express): void {
         auth.invalidateConfig();
         clearProbeCache(); metadataService.clearReachability();
       }
-      return res.json({ ...updated, clientSecret: "••••••••", automationHubToken: updated.automationHubToken ? "••••••••" : "" });
+      return res.json({ ...updated, clientSecret: "••••••••", automationHubToken: updated.automationHubToken ? "••••••••" : "", communicationsMiningToken: updated.communicationsMiningToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -282,7 +283,7 @@ export function registerUiPathRoutes(app: Express): void {
       auth.invalidateAllTokens();
       auth.invalidateConfig();
       clearProbeCache(); metadataService.clearReachability();
-      return res.json({ ...activated, clientSecret: "••••••••", automationHubToken: activated.automationHubToken ? "••••••••" : "" });
+      return res.json({ ...activated, clientSecret: "••••••••", automationHubToken: activated.automationHubToken ? "••••••••" : "", communicationsMiningToken: activated.communicationsMiningToken ? "••••••••" : "" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -1822,6 +1823,46 @@ export function registerUiPathRoutes(app: Express): void {
     try {
       const { clearAutomationHubToken } = await import("./automation-hub");
       await clearAutomationHubToken();
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/settings/communications-mining/status", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { getCommunicationsMiningStatus } = await import("./uipath-integration");
+      const status = await getCommunicationsMiningStatus();
+      return res.json(status);
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/settings/communications-mining/token", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { token } = req.body;
+      if (!token || !String(token).trim()) {
+        return res.status(400).json({ message: "Token is required" });
+      }
+      const { saveCommunicationsMiningToken, getCommunicationsMiningStatus } = await import("./uipath-integration");
+      await saveCommunicationsMiningToken(token);
+      clearProbeCache(); metadataService.clearReachability();
+      const status = await getCommunicationsMiningStatus();
+      return res.json({ success: true, status });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/settings/communications-mining/token", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      const { clearCommunicationsMiningToken } = await import("./uipath-integration");
+      await clearCommunicationsMiningToken();
+      clearProbeCache(); metadataService.clearReachability();
       return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });

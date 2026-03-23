@@ -24,6 +24,7 @@ export const uipathConnections = pgTable("uipath_connections", {
   folderId: text("folder_id"),
   folderName: text("folder_name"),
   automationHubToken: text("automation_hub_token"),
+  communicationsMiningToken: text("communications_mining_token"),
   isActive: boolean("is_active").notNull().default(false),
   lastTestedAt: timestamp("last_tested_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

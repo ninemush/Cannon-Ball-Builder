@@ -202,6 +202,7 @@
     "description": "Email/message stream analysis, intent detection, sentiment analysis, intelligent routing",
     "category": "capability",
     "parentService": "ixp",
+    "authModel": "dedicated-token",
     "apiSupport": "documented",
     "probeStrategy": "own-endpoint",
     "scopeFamily": "Ixp",
@@ -210,9 +211,9 @@
     ],
     "uiSection": "primary",
     "defaultRemediationTemplate": {
-      "reason": "Communications Mining is not available.",
+      "reason": "Communications Mining requires a dedicated Communications Mining API token, not OAuth scopes.",
       "actionOwner": "uipath-admin",
-      "recommendedStep": "Enable Communications Mining on your tenant and add the Ixp.ExternalService resource with Ixp.ApiAccess scope."
+      "recommendedStep": "Generate a Communications Mining API token from UiPath IXP > My Account > API token, then configure it in Settings > Communications Mining."
     },
     "customProbeHandler": "communicationsMining",
     "probeConfig": {

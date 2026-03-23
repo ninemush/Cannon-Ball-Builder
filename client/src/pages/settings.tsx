@@ -51,6 +51,7 @@ import {
   ArrowRightLeft,
   Database,
   Code,
+  MessageSquare,
 } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -1481,6 +1482,7 @@ type UipathConnection = {
   folderId: string | null;
   folderName: string | null;
   automationHubToken: string | null;
+  communicationsMiningToken: string | null;
   isActive: boolean;
   lastTestedAt: string | null;
   createdAt: string;
@@ -2093,6 +2095,137 @@ function AutomationHubPanel() {
           ) : null}
         </div>
       )}
+    </Card>
+  );
+}
+
+function CommunicationsMiningPanel() {
+  const { toast } = useToast();
+  const [cmToken, setCmToken] = useState("");
+  const [showCmToken, setShowCmToken] = useState(false);
+
+  const { data: cmStatus, isLoading: cmStatusLoading } = useQuery<{
+    configured: boolean;
+    connected: boolean;
+    message: string;
+  }>({
+    queryKey: ["/api/settings/communications-mining/status"],
+  });
+
+  const saveTokenMutation = useMutation({
+    mutationFn: async (token: string) => {
+      const res = await apiRequest("POST", "/api/settings/communications-mining/token", { token });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/communications-mining/status"] });
+      setCmToken("");
+      if (data.status?.connected) {
+        toast({ title: "Communications Mining connected", description: data.status.message });
+      } else {
+        toast({ title: "Token saved", description: data.status?.message || "Token saved but connection test failed", variant: "destructive" });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to save token", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const clearTokenMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", "/api/settings/communications-mining/token");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/communications-mining/status"] });
+      toast({ title: "Communications Mining token removed" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to remove token", description: error.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card className="p-4 sm:p-6 space-y-4" data-testid="card-communications-mining">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-5 w-5 text-[#e8450a]" />
+          <h3 className="text-sm font-semibold text-foreground">Communications Mining</h3>
+        </div>
+        {cmStatusLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : cmStatus?.connected ? (
+          <Badge variant="outline" className="border-green-600 text-green-500 text-[10px]" data-testid="badge-cm-connected">
+            <CheckCircle2 className="h-3 w-3 mr-1" />
+            Connected
+          </Badge>
+        ) : cmStatus?.configured ? (
+          <Badge variant="outline" className="border-yellow-600 text-yellow-500 text-[10px]" data-testid="badge-cm-error">
+            <AlertTriangle className="h-3 w-3 mr-1" />
+            Connection Error
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-muted-foreground text-[10px]" data-testid="badge-cm-not-configured">
+            Not Configured
+          </Badge>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Connect to UiPath Communications Mining for email/message stream analysis, intent detection, and intelligent routing. This service requires a dedicated API token (not OAuth).
+      </p>
+
+      {cmStatus?.message && !cmStatus.connected && cmStatus.configured && (
+        <div className="text-xs text-yellow-500 bg-yellow-500/10 rounded p-2" data-testid="text-cm-error">
+          {cmStatus.message}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <Label className="text-xs text-muted-foreground">Communications Mining API Token</Label>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Input
+              type={showCmToken ? "text" : "password"}
+              placeholder={cmStatus?.configured ? "••••••••" : "Paste your Communications Mining API token"}
+              value={cmToken}
+              onChange={(e) => setCmToken(e.target.value)}
+              className="pr-10 text-sm"
+              data-testid="input-cm-token"
+            />
+            <button
+              type="button"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setShowCmToken(!showCmToken)}
+              data-testid="button-toggle-cm-token"
+            >
+              {showCmToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => saveTokenMutation.mutate(cmToken)}
+            disabled={!cmToken.trim() || saveTokenMutation.isPending}
+            data-testid="button-save-cm-token"
+          >
+            {saveTokenMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+          </Button>
+          {cmStatus?.configured && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => clearTokenMutation.mutate()}
+              disabled={clearTokenMutation.isPending}
+              data-testid="button-clear-cm-token"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          Generate this in UiPath IXP &gt; My Account &gt; API token.
+        </p>
+      </div>
     </Card>
   );
 }
@@ -3150,6 +3283,7 @@ function IntegrationsTab() {
         {config?.configured && <IntegrationServicePanel />}
 
         {config?.configured && <AutomationHubPanel />}
+        {config?.configured && <CommunicationsMiningPanel />}
 
         {step < 3 && (
           <div className="flex items-center gap-3 pt-2">

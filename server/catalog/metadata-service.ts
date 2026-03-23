@@ -34,6 +34,7 @@ const TRUTHFUL_STATUS_LABELS: Record<TruthfulStatus, string> = {
   endpoint_failure: "Unavailable (Not Reachable)",
   not_provisioned: "Unavailable (Service Not Provisioned)",
   auth_scope: "Unavailable (Authorization/Scope)",
+  requires_dedicated_token: "Unavailable (Requires Communications Mining API Token)",
   unsupported_external_api: "Unavailable (No External App API)",
   internal_probe_error: "Error (Probe Failed)",
   unknown: "Unknown (Not Verified)",
@@ -631,6 +632,7 @@ class MetadataService {
       endpoint_failure: "Service endpoint could not be reached. This may be temporary.",
       not_provisioned: "This service is not enabled on your tenant.",
       auth_scope: "Your app credentials don't have permission for this service.",
+      requires_dedicated_token: "This service requires a dedicated API token. Configure it in Settings.",
       unsupported_external_api: "This service does not support External Application API access.",
       internal_probe_error: "An internal error occurred while probing this service.",
       unknown: "This service hasn't been verified yet.",
@@ -683,7 +685,10 @@ class MetadataService {
           if (allErrors.length > 0) {
             console.error(`[MetadataService] Taxonomy validation errors:\n  ${allErrors.join("\n  ")}`);
           }
-          this.capabilityTaxonomy = parsed as CapabilityTaxonomyEntry[];
+          this.capabilityTaxonomy = (parsed as CapabilityTaxonomyEntry[]).map(entry => ({
+            ...entry,
+            authModel: entry.authModel || "oauth",
+          }));
           console.log(`[MetadataService] Loaded ${CAPABILITY_TAXONOMY_FILE}: ${this.capabilityTaxonomy.length} entries (${allErrors.length} validation warnings)`);
           return;
         }

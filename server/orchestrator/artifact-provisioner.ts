@@ -2136,11 +2136,38 @@ async function provisionCommunicationsMining(
   if (!streams?.length) return [];
   const results: DeploymentResult[] = [];
 
+  const reinferUrl = metadataService.getServiceUrl("REINFER", config);
   const cloudBase = metadataService.getCloudBaseUrl(config);
   const cmConsoleUrl = `${cloudBase}/communicationsmining_`;
 
+  const { getCommunicationsMiningToken } = await import("../uipath-integration");
+  const cmToken = await getCommunicationsMiningToken();
+
+  if (!cmToken) {
+    for (const stream of streams) {
+      const intentsSummary = stream.intents?.join(", ") || "N/A";
+      const entitiesSummary = stream.entities?.join(", ") || "N/A";
+      const routingSummary = stream.routingRules?.map(r => `${r.intent} → ${r.action}: ${r.target}`).join("; ") || "N/A";
+      results.push({
+        artifact: "Communications Mining",
+        name: stream.name,
+        status: "manual" as const,
+        message: `Communications Mining requires a dedicated API token. Generate one from UiPath IXP > My Account > API token, then configure it in Settings > Communications Mining.`,
+        manualSteps: [
+          `Configure a Communications Mining API token in Settings > Communications Mining`,
+          `Open Communications Mining console at ${cmConsoleUrl}`,
+          `Create a new dataset named "${stream.name}" with source type: ${stream.sourceType || "email"}`,
+          `Configure intent labels: ${intentsSummary}`,
+          `Configure entity extraction for: ${entitiesSummary}`,
+          `Set up routing rules: ${routingSummary}`,
+        ],
+      });
+    }
+    return results;
+  }
+
   const hdrs: Record<string, string> = {
-    "Authorization": `Bearer ${token}`,
+    "Authorization": `Bearer ${cmToken}`,
     "Content-Type": "application/json",
     "Accept": "application/json",
   };
@@ -2149,7 +2176,7 @@ async function provisionCommunicationsMining(
   let discoverySuccess = false;
 
   try {
-    const listRes = await fetch(`${cloudBase}/communicationsmining_/api/v1/datasets`, { headers: hdrs });
+    const listRes = await fetch(`${reinferUrl}/api/v1/datasets`, { headers: hdrs });
     const listText = await listRes.text();
     console.log(`[UiPath Deploy] Communications Mining Discovery GET /datasets -> ${listRes.status}: ${listText.slice(0, 300)}`);
 
