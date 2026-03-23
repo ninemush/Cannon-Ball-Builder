@@ -49,6 +49,11 @@
       "min": "2.23.0",
       "max": "2.99.0",
       "preferred": "2.24.3"
+    },
+    "Newtonsoft.Json": {
+      "min": "13.0.1",
+      "max": "13.99.0",
+      "preferred": "13.0.3"
     }
   },
   "minimumRequiredPackages": [

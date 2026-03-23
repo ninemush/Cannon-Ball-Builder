@@ -611,6 +611,21 @@ export function isKnownActivity(activityName: string): boolean {
 
 export { getBlockedActivities, isActivityAllowed } from "./uipath-activity-policy";
 
+const TYPE_ARGUMENT_PACKAGE_MAP: Record<string, string> = {
+  "Newtonsoft.Json": "Newtonsoft.Json",
+  "Newtonsoft.Json.Linq.JToken": "Newtonsoft.Json",
+  "Newtonsoft.Json.Linq.JObject": "Newtonsoft.Json",
+  "Newtonsoft.Json.Linq.JArray": "Newtonsoft.Json",
+  "Newtonsoft.Json.Linq.JValue": "Newtonsoft.Json",
+  "System.Data.DataTable": "UiPath.Database.Activities",
+  "System.Data.DataRow": "UiPath.Database.Activities",
+  "System.Net.Mail.MailMessage": "UiPath.Mail.Activities",
+  "UiPath.Excel.Activities": "UiPath.Excel.Activities",
+  "UiPath.Mail.Activities": "UiPath.Mail.Activities",
+  "UiPath.Web.Activities": "UiPath.Web.Activities",
+  "UiPath.Database.Activities": "UiPath.Database.Activities",
+};
+
 export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
   const packages = new Set<string>();
   packages.add("UiPath.System.Activities");
@@ -631,6 +646,37 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     const entry = FALLBACK_REGISTRY[actTag];
     if (entry?.package && !isFrameworkAssembly(entry.package)) {
       packages.add(entry.package);
+    }
+  }
+
+  const typeArgPattern = /x:TypeArguments="([^"]+)"/g;
+  while ((match = typeArgPattern.exec(xamlContent)) !== null) {
+    const typeArgs = match[1];
+    for (const [typeRef, pkg] of Object.entries(TYPE_ARGUMENT_PACKAGE_MAP)) {
+      if (typeArgs.includes(typeRef) && !isFrameworkAssembly(pkg)) {
+        packages.add(pkg);
+      }
+    }
+  }
+
+  const assemblyRefPattern = /clr-namespace:([^;]+);assembly=([^"]+)/g;
+  while ((match = assemblyRefPattern.exec(xamlContent)) !== null) {
+    const assemblyName = match[2].trim();
+    if (assemblyName === "Newtonsoft.Json") {
+      packages.add("Newtonsoft.Json");
+    }
+  }
+
+  const newtonsoftPatterns = [
+    /Newtonsoft\.Json/,
+    /JToken/,
+    /JObject\.Parse/,
+    /JArray\.Parse/,
+  ];
+  for (const pattern of newtonsoftPatterns) {
+    if (pattern.test(xamlContent)) {
+      packages.add("Newtonsoft.Json");
+      break;
     }
   }
 

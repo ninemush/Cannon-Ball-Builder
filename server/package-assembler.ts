@@ -222,6 +222,252 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+const VALID_STUDIO_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
+function validateStudioVersion(version: string): boolean {
+  if (!VALID_STUDIO_VERSION_PATTERN.test(version)) return false;
+  const parts = version.split(".").map(Number);
+  if (parts[0] < 20 || parts[0] > 30) return false;
+  return true;
+}
+
+function isVersionFromValidatedSource(
+  studioProfile: StudioProfile | null,
+  metaTarget: { version: string } | null,
+): string | null {
+  if (studioProfile?.studioVersion && validateStudioVersion(studioProfile.studioVersion)) {
+    return studioProfile.studioVersion;
+  }
+  if (metaTarget?.version && validateStudioVersion(metaTarget.version)) {
+    return metaTarget.version;
+  }
+  return null;
+}
+
+function buildReachabilityGraph(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  libPath: string,
+): { reachable: Set<string>; unreachable: Set<string>; graph: Map<string, string[]> } {
+  const allFiles = new Map<string, string>();
+  const prefix = libPath + "/";
+
+  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+    if (path.endsWith(".xaml")) {
+      const relPath = path.startsWith(prefix) ? path.slice(prefix.length) : (path.split("/").pop() || path);
+      allFiles.set(relPath, content);
+    }
+  });
+  for (const entry of xamlEntries) {
+    const relPath = entry.name.startsWith(prefix) ? entry.name.slice(prefix.length) : (entry.name.split("/").pop() || entry.name);
+    if (relPath.endsWith(".xaml") && !allFiles.has(relPath)) {
+      allFiles.set(relPath, entry.content);
+    }
+  }
+
+  const graph = new Map<string, string[]>();
+  const invokePattern = /WorkflowFileName="([^"]+)"/g;
+
+  Array.from(allFiles.entries()).forEach(([file, content]) => {
+    const refs: string[] = [];
+    let match;
+    while ((match = invokePattern.exec(content)) !== null) {
+      const ref = match[1].replace(/\\/g, "/").replace(/^[./]+/, "");
+      refs.push(ref);
+    }
+    graph.set(file, refs);
+  });
+
+  const reachable = new Set<string>();
+  const queue = ["Main.xaml"];
+  reachable.add("Main.xaml");
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const refs = graph.get(current) || [];
+    for (const ref of refs) {
+      if (!reachable.has(ref) && allFiles.has(ref)) {
+        reachable.add(ref);
+        queue.push(ref);
+      }
+    }
+  }
+
+  const unreachable = new Set<string>();
+  Array.from(allFiles.keys()).forEach(file => {
+    if (!reachable.has(file)) {
+      unreachable.add(file);
+    }
+  });
+
+  return { reachable, unreachable, graph };
+}
+
+function removeUnreachableFiles(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  unreachable: Set<string>,
+  libPath: string,
+): { removedFiles: string[]; reasons: string[] } {
+  const removedFiles: string[] = [];
+  const reasons: string[] = [];
+
+  Array.from(unreachable).forEach(file => {
+    const archivePath = `${libPath}/${file}`;
+    if (deferredWrites.has(archivePath)) {
+      deferredWrites.delete(archivePath);
+      removedFiles.push(file);
+      reasons.push(`Removed "${file}": unreachable from Main.xaml entry-point graph — no InvokeWorkflowFile reference chain leads to this file`);
+      console.log(`[Structural Dedup] Removed unreachable file: ${file}`);
+    }
+  });
+
+  const prefix = libPath + "/";
+  for (let i = xamlEntries.length - 1; i >= 0; i--) {
+    const entryName = xamlEntries[i].name;
+    const relPath = entryName.startsWith(prefix) ? entryName.slice(prefix.length) : (entryName.split("/").pop() || entryName);
+    if (unreachable.has(relPath)) {
+      if (!removedFiles.includes(relPath)) {
+        removedFiles.push(relPath);
+        reasons.push(`Removed "${relPath}" from xamlEntries: unreachable from Main.xaml entry-point graph`);
+      }
+      xamlEntries.splice(i, 1);
+      console.log(`[Structural Dedup] Removed unreachable xamlEntry: ${relPath}`);
+    }
+  }
+
+  return { removedFiles, reasons };
+}
+
+type CredentialStrategy = "GetAsset" | "GetCredential" | "mixed" | "none";
+
+function detectCredentialStrategy(xamlContent: string): CredentialStrategy {
+  const hasGetAsset = /<ui:GetAsset[\s>]/.test(xamlContent);
+  const hasGetCredential = /<ui:GetCredential[\s>]/.test(xamlContent);
+  if (hasGetAsset && hasGetCredential) return "mixed";
+  if (hasGetAsset) return "GetAsset";
+  if (hasGetCredential) return "GetCredential";
+  return "none";
+}
+
+function reconcileCredentialStrategy(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+): { strategy: CredentialStrategy; reconciled: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  let globalHasAsset = false;
+  let globalHasCredential = false;
+
+  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+    if (path.endsWith(".xaml")) {
+      const strategy = detectCredentialStrategy(content);
+      if (strategy === "GetAsset" || strategy === "mixed") globalHasAsset = true;
+      if (strategy === "GetCredential" || strategy === "mixed") globalHasCredential = true;
+    }
+  });
+
+  for (const entry of xamlEntries) {
+    const strategy = detectCredentialStrategy(entry.content);
+    if (strategy === "GetAsset" || strategy === "mixed") globalHasAsset = true;
+    if (strategy === "GetCredential" || strategy === "mixed") globalHasCredential = true;
+  }
+
+  if (!globalHasAsset || !globalHasCredential) {
+    const strategy = globalHasCredential ? "GetCredential" : (globalHasAsset ? "GetAsset" : "none");
+    return { strategy, reconciled: false, warnings };
+  }
+
+  const targetStrategy: CredentialStrategy = "GetCredential";
+  warnings.push(
+    `Mixed credential strategies detected (both GetAsset and GetCredential). ` +
+    `Reconciled to "${targetStrategy}" for consistency across all workflows.`
+  );
+  console.log(`[Credential Reconciliation] Mixed strategies detected — reconciling to ${targetStrategy}`);
+
+  return { strategy: targetStrategy, reconciled: true, warnings };
+}
+
+interface PostAssemblyValidationResult {
+  passed: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+function runPostAssemblyValidation(
+  deps: Record<string, string>,
+  studioVersion: string,
+  xamlEntries: Array<{ name: string; content: string }>,
+  deferredWrites: Map<string, string>,
+  libPath: string,
+  studioProfile: StudioProfile | null,
+  metaTarget: { version: string } | null,
+): PostAssemblyValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  for (const [pkgName, version] of Object.entries(deps)) {
+    const cleanVersion = extractExactVersion(version);
+    let isValidated = false;
+
+    if (studioProfile) {
+      const preferred = getPreferredVersion(studioProfile, pkgName);
+      if (preferred) isValidated = true;
+    }
+    if (!isValidated && catalogService.isLoaded()) {
+      const catalogVersion = catalogService.getConfirmedVersion(pkgName);
+      if (catalogVersion) isValidated = true;
+    }
+    if (!isValidated) {
+      const metaVersion = _metadataService.getPreferredVersion(pkgName);
+      if (metaVersion) isValidated = true;
+    }
+
+    if (!isValidated) {
+      errors.push(`Dependency "${pkgName}" version "${version}" is not in any validated version registry`);
+    }
+  }
+
+  if (!validateStudioVersion(studioVersion)) {
+    errors.push(`studioVersion "${studioVersion}" does not match a valid Studio version format`);
+  } else {
+    const validatedVersion = isVersionFromValidatedSource(studioProfile, metaTarget);
+    if (!validatedVersion) {
+      errors.push(`studioVersion "${studioVersion}" is not from a validated source (studio profile or metadata service)`);
+    } else if (validatedVersion !== studioVersion) {
+      warnings.push(`studioVersion "${studioVersion}" differs from validated source version "${validatedVersion}"`);
+    }
+  }
+
+  const { reachable, unreachable } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
+
+  const fileRelPaths = new Set<string>();
+  const valPrefix = libPath + "/";
+  Array.from(deferredWrites.entries()).forEach(([path]) => {
+    if (path.endsWith(".xaml")) {
+      const relPath = path.startsWith(valPrefix) ? path.slice(valPrefix.length) : (path.split("/").pop() || path);
+      fileRelPaths.add(relPath);
+    }
+  });
+  for (const entry of xamlEntries) {
+    const relPath = entry.name.startsWith(valPrefix) ? entry.name.slice(valPrefix.length) : (entry.name.split("/").pop() || entry.name);
+    if (relPath.endsWith(".xaml")) fileRelPaths.add(relPath);
+  }
+
+  if (!fileRelPaths.has("Main.xaml")) {
+    errors.push("Entry point file Main.xaml does not exist in the package");
+  }
+
+  if (unreachable.size > 0) {
+    warnings.push(`${unreachable.size} XAML file(s) unreachable from Main.xaml: ${Array.from(unreachable).join(", ")}`);
+  }
+
+  return {
+    passed: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
 function sanitizeDeps(deps: Record<string, string>): void {
   for (const [key, val] of Object.entries(deps)) {
     if (isFrameworkAssembly(key)) {
@@ -398,14 +644,10 @@ export function resolveDependencies(
     }
 
     if (!version) {
-      warnings.push({
-        code: "DEPENDENCY_NOT_IN_CATALOG",
-        message: `Package ${pkgName} is referenced by activities but has no version in the catalog, studio profile, or baseline fallbacks — omitted from project.json`,
-        stage: "dependency-resolution",
-        recoverable: true,
-      });
-      console.warn(`[Dependency Resolution] Package ${pkgName} not found in any version source — skipping`);
-      continue;
+      throw new Error(
+        `[Dependency Resolution] FATAL: Package "${pkgName}" is referenced by activities but has no validated version in the catalog, studio profile, or metadata service. ` +
+        `Cannot emit a fabricated version — build aborted. Add this package to the generation-metadata.json packageVersionRanges or activity catalog to resolve.`
+      );
     }
 
     deps[pkgName] = version;
@@ -1228,11 +1470,86 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       deferredWrites.set(`${libPath}/Main.xaml`, compliancePass(mainXaml, "Main.xaml"));
     }
 
+    {
+      console.log(`[Structural Dedup] Building reachability graph from Main.xaml entry point...`);
+      const { reachable, unreachable, graph } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
+      console.log(`[Structural Dedup] Reachability analysis: ${reachable.size} reachable, ${unreachable.size} unreachable out of ${reachable.size + unreachable.size} total XAML files`);
+
+      if (unreachable.size > 0) {
+        const { removedFiles, reasons } = removeUnreachableFiles(deferredWrites, xamlEntries, unreachable, libPath);
+        for (const reason of reasons) {
+          console.log(`[Structural Dedup] ${reason}`);
+          dependencyWarnings.push({
+            code: "STRUCTURAL_DEDUP_REMOVED",
+            message: reason,
+            stage: "structural-deduplication",
+            recoverable: true,
+          });
+        }
+        console.log(`[Structural Dedup] Removed ${removedFiles.length} unreachable file(s): ${removedFiles.join(", ")}`);
+      } else {
+        console.log(`[Structural Dedup] All XAML files are reachable from Main.xaml — no orphaned files detected`);
+      }
+
+      Array.from(graph.entries()).forEach(([file, refs]) => {
+        if (refs.length > 0) {
+          console.log(`[Structural Dedup] ${file} -> ${refs.join(", ")}`);
+        }
+      });
+    }
+
+    {
+      const credResult = reconcileCredentialStrategy(deferredWrites, xamlEntries);
+      if (credResult.reconciled) {
+        for (const warning of credResult.warnings) {
+          dependencyWarnings.push({
+            code: "CREDENTIAL_STRATEGY_RECONCILED",
+            message: warning,
+            stage: "credential-reconciliation",
+            recoverable: true,
+          });
+        }
+        console.log(`[Credential Reconciliation] Reconciled to strategy: ${credResult.strategy}`);
+      } else if (credResult.strategy !== "none") {
+        console.log(`[Credential Reconciliation] Consistent strategy detected: ${credResult.strategy}`);
+      }
+    }
+
     const configCsv = generateConfigXlsx(projectName, sddContent || undefined, orchestratorArtifacts);
     archive.append(configCsv, { name: `${libPath}/Data/Config.xlsx` });
 
-    const allXamlContent = xamlEntries.map(e => e.content).join("\n");
+    const allXamlParts: string[] = xamlEntries.map(e => e.content);
+    Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+      if (path.endsWith(".xaml")) {
+        allXamlParts.push(content);
+      }
+    });
+    const allXamlContent = allXamlParts.join("\n");
     const scannedPackages = scanXamlForRequiredPackages(allXamlContent);
+
+    {
+      const usedPackages = new Set(Array.from(scannedPackages));
+      usedPackages.add("UiPath.System.Activities");
+      const unusedDeps: string[] = [];
+      for (const pkgName of Object.keys(deps)) {
+        if (!usedPackages.has(pkgName) && pkgName !== "UiPath.System.Activities") {
+          unusedDeps.push(pkgName);
+        }
+      }
+      for (const pkgName of unusedDeps) {
+        console.log(`[Dependency Alignment] Removing unused dependency: ${pkgName} — not referenced in any emitted XAML`);
+        dependencyWarnings.push({
+          code: "DEPENDENCY_UNUSED_REMOVED",
+          message: `Package ${pkgName} was in dependencies but not referenced in any emitted XAML (activity tags, TypeArguments, or expressions) — removed`,
+          stage: "dependency-alignment",
+          recoverable: true,
+        });
+        delete deps[pkgName];
+      }
+      if (unusedDeps.length > 0) {
+        console.log(`[Dependency Alignment] Removed ${unusedDeps.length} unused dependenc(ies): ${unusedDeps.join(", ")}`);
+      }
+    }
     for (const rawPkgName of scannedPackages) {
       const pkgName = normalizePackageName(rawPkgName);
       if (deps[pkgName]) continue;
@@ -1261,19 +1578,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           deps[pkgName] = fallback;
           dependencyWarnings.push({
             code: "DEPENDENCY_DISCOVERED_IN_XAML",
-            message: `Package ${pkgName} was discovered in emitted XAML but not in catalog — using baseline fallback version ${fallback}`,
+            message: `Package ${pkgName} was discovered in emitted XAML but not in catalog — using metadata service fallback version ${fallback}`,
             stage: "dependency-crosscheck",
             recoverable: true,
           });
-          console.warn(`[Dependency CrossCheck] Using baseline fallback for ${pkgName}: ${fallback}`);
+          console.warn(`[Dependency CrossCheck] Using metadata service fallback for ${pkgName}: ${fallback}`);
         } else {
-          dependencyWarnings.push({
-            code: "DEPENDENCY_NOT_IN_CATALOG",
-            message: `Package ${pkgName} is used in XAML but has no version in any source — omitted from project.json`,
-            stage: "dependency-crosscheck",
-            recoverable: true,
-          });
-          console.warn(`[Dependency CrossCheck] Package ${pkgName} found in XAML but no version available — omitting`);
+          throw new Error(
+            `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in emitted XAML but has no validated version in the catalog, studio profile, or metadata service. ` +
+            `Cannot emit a fabricated version — build aborted. Add this package to the generation-metadata.json packageVersionRanges or activity catalog to resolve.`
+          );
         }
       }
     }
@@ -1289,6 +1603,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     if (!studioVer) {
       throw new Error("Cannot assemble package: Studio version is unavailable. MetadataService and StudioProfile both failed to load.");
     }
+    const validatedStudioVer = isVersionFromValidatedSource(_studioProfile, _metaTarget);
+    if (!validatedStudioVer) {
+      throw new Error(
+        `Cannot assemble package: Studio version "${studioVer}" is not from a validated source. ` +
+        `Ensure studio-profile.json or generation-metadata.json is properly configured with a valid studioVersion.`
+      );
+    }
+    if (validatedStudioVer !== studioVer) {
+      console.warn(`[Studio Version] Using validated version ${validatedStudioVer} instead of derived version ${studioVer}`);
+    }
     const projectJson: Record<string, any> = {
       name: projectName,
       description: pkg.description || "",
@@ -1297,7 +1621,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       webServices: [],
       entitiesStores: [],
       schemaVersion: "4.0",
-      studioVersion: studioVer,
+      studioVersion: validatedStudioVer,
       projectVersion: version,
       runtimeOptions: {
         autoDispose: false,
@@ -1953,8 +2277,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
         if (fallback) {
           deps[pkgName] = fallback;
-          autoFixSummary.push(`Added dependency from baseline fallback: ${pkgName}@${fallback}`);
-          console.warn(`[Dependency CrossCheck] Post-fix: using baseline fallback for ${pkgName}: ${fallback}`);
+          autoFixSummary.push(`Added dependency from metadata service fallback: ${pkgName}@${fallback}`);
+          console.warn(`[Dependency CrossCheck] Post-fix: using metadata service fallback for ${pkgName}: ${fallback}`);
+        } else {
+          throw new Error(
+            `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in post-remediation XAML but has no validated version. ` +
+            `Build aborted. Add this package to the generation-metadata.json packageVersionRanges or activity catalog.`
+          );
         }
       }
 
@@ -2364,6 +2693,39 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     }
     projectJson.dependencies = { ...deps };
+
+    {
+      console.log(`[Post-Assembly Validation] Running final validation pass...`);
+      const postValidation = runPostAssemblyValidation(
+        deps,
+        projectJson.studioVersion,
+        xamlEntries,
+        deferredWrites,
+        libPath,
+        _studioProfile,
+        _metaTarget,
+      );
+
+      for (const warning of postValidation.warnings) {
+        console.warn(`[Post-Assembly Validation] WARNING: ${warning}`);
+        dependencyWarnings.push({
+          code: "POST_ASSEMBLY_WARNING",
+          message: warning,
+          stage: "post-assembly-validation",
+          recoverable: true,
+        });
+      }
+
+      if (!postValidation.passed) {
+        const errorDetails = postValidation.errors.map(e => `  - ${e}`).join("\n");
+        console.error(`[Post-Assembly Validation] FAILED with ${postValidation.errors.length} error(s):\n${errorDetails}`);
+        throw new Error(
+          `Post-assembly validation failed with ${postValidation.errors.length} error(s):\n${errorDetails}`
+        );
+      }
+
+      console.log(`[Post-Assembly Validation] PASSED — all dependency versions validated, entry point verified, studio version confirmed`);
+    }
 
     const finalProjectJsonStr = JSON.stringify(projectJson, null, 2);
     archive.append(finalProjectJsonStr, { name: `${libPath}/project.json` });
