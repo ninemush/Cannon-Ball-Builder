@@ -1,0 +1,50 @@
+The investigation is sufficiently complete for this run. I do not want another broad investigation pass.
+
+Please create two separate implementation tasks based on the concrete root causes already identified.
+
+Task A
+Fix REFramework XAML corruption in the compliance/sanitization pass
+
+Known root cause:
+- the package build failed with:
+  - XAML XML well-formedness validation failed: Potentially unclosed XML tags detected: Activity, StateMachine, State, Transition
+- this was introduced during the compliance pass
+- `generateReFrameworkMainXaml()` produced structurally correct XAML
+- `sanitizeXmlArtifacts()` then corrupted XAML markup extensions like `{x:Reference State_Init}` by stripping the closing `}`
+- this malformed the `<Transition>` references and caused the later well-formedness failure
+
+I want a task that fixes this upstream and safely.
+The sanitization logic must not corrupt valid XAML markup extensions such as:
+- `{x:Reference ...}`
+- `{Binding ...}`
+- and similar valid brace-based XAML constructs
+
+Task B
+Fix UiPath package progress rendering truthfulness
+
+Known root cause:
+- SSE events are flowing
+- observer transport is working for this run
+- the problem is in the frontend progress rendering/modeling
+- `UiPathProgressPanel` collapses completed sub-stages and leaves the user with a nearly static “AI Generation / Generating UiPath package...” experience during long spec decomposition
+- build-phase entries appear too late / feel collapsed rather than telling a continuous truthful story
+
+I want a task that makes the package progress panel truthfully render the real progress it already receives.
+
+Please return both tasks in the usual format:
+- title / objective
+- root-cause summary
+- impact analysis
+- done looks like
+- out of scope
+- tasks
+- relevant files
+- acceptance criteria
+- dependencies
+
+Important:
+- do not reopen the investigation broadly
+- use the identified root causes above
+- keep the tasks separate
+- Task A is backend-only
+- Task B is frontend-only
