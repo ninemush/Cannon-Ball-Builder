@@ -373,9 +373,11 @@ function UiPathProgressPanel({
   }, [entries.length]);
 
   const specStages = new Set(["spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing", "decomposition", "complexity_classification", "spec_generating", "confidence_assessment", "spec_ready"]);
-  const hasBuildEntries = entries.some(e => !specStages.has(e.stage));
+  const terminalStages = new Set(["complete"]);
+  const isBuildEntry = (e: PipelineLogEntry) => !specStages.has(e.stage) && !terminalStages.has(e.stage);
+  const hasBuildEntries = entries.some(isBuildEntry);
   const llmEntries = entries.filter(e => specStages.has(e.stage));
-  const buildEntries = entries.filter(e => !specStages.has(e.stage));
+  const buildEntries = entries.filter(isBuildEntry);
   const llmPhaseComplete = hasBuildEntries || isComplete;
 
   const failedEntry = entries.find(e => e.type === "failed");
@@ -513,8 +515,13 @@ function UiPathProgressPanel({
                 const workflowEntries = llmEntries.filter(e => isPerWorkflowEntry(e));
 
                 const completedStagesSet = new Set(nonWorkflowEntries.filter(e => e.type === "completed").map(e => e.stage));
+                const completedElapsed = new Map(nonWorkflowEntries.filter(e => e.type === "completed" && e.elapsed !== undefined).map(e => [e.stage, e.elapsed!]));
+                const startedStages = new Set(nonWorkflowEntries.filter(e => e.type === "started").map(e => e.stage));
                 const realEntries = nonWorkflowEntries.filter(e => e.type !== "heartbeat");
-                const filtered = realEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
+                const filtered = realEntries.filter(e => {
+                  if (e.type === "completed" && startedStages.has(e.stage)) return false;
+                  return true;
+                });
                 const lastHeartbeat = [...nonWorkflowEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation" || e.stage === "spec_workflow_detail" || e.stage === "spec_generating" || e.stage === "confidence_assessment"));
                 const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has(lastHeartbeat.stage);
 
@@ -539,22 +546,24 @@ function UiPathProgressPanel({
                   <>
                     {filtered.map((entry, idx) => {
                       const isLast = idx === filtered.length - 1 && !showHeartbeat && !hasWorkflowEntries;
-                      const isDone = entry.type === "completed" || llmPhaseComplete;
+                      const stageCompleted = completedStagesSet.has(entry.stage);
+                      const isDone = stageCompleted || llmPhaseComplete;
+                      const stageElapsed = completedElapsed.get(entry.stage);
                       return (
                         <div key={entry.id} className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-entry-${entry.stage}`}>
                           <div className="w-4 flex items-center justify-center shrink-0">
                             {isDone ? (
-                              <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                              <Check className="h-2.5 w-2.5 text-emerald-400" />
                             ) : isLast ? (
                               <PrimarySpinner size={12} />
                             ) : (
-                              <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                              <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />
                             )}
                           </div>
-                          <span className={`text-[11px] ${isDone ? "text-muted-foreground/50" : "text-muted-foreground/70"}`}>
+                          <span className={`text-[11px] ${isDone ? "text-foreground/70" : "text-muted-foreground/70"}`}>
                             {friendlyLabel(entry.stage, entry.message)}
-                            {entry.type === "completed" && entry.elapsed !== undefined && (
-                              <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{entry.elapsed.toFixed(1)}s</span>
+                            {isDone && stageElapsed !== undefined && (
+                              <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{stageElapsed.toFixed(1)}s</span>
                             )}
                           </span>
                         </div>
@@ -569,7 +578,7 @@ function UiPathProgressPanel({
                       </div>
                     )}
                     {hasWorkflowEntries && (
-                      <div className="pl-4 space-y-0.5 mt-0.5">
+                      <div className="space-y-0.5 mt-0.5">
                         {workflowOrder.map((wfName) => {
                           const wf = workflowMap.get(wfName)!;
                           const index = wf.started?.context?.index ?? "?";
@@ -577,24 +586,28 @@ function UiPathProgressPanel({
                           const isActive = wf.started && !wf.completed;
                           const isDone = !!wf.completed;
                           const isStubbed = wf.warnings.some(w => w.context?.outcome === "stubbed") || wf.completed?.context?.outcome === "stubbed";
+                          const isTimedOut = wf.warnings.some(w => w.context?.outcome === "timed_out") || wf.completed?.context?.outcome === "timed_out";
                           return (
                             <div key={wfName}>
-                              <div className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-workflow-${wfName}`}>
+                              <div className={`flex items-center gap-2 py-0.5 pipeline-log-entry ${isActive ? "bg-orange-400/5 rounded px-1 -mx-1" : ""}`} data-testid={`progress-workflow-${wfName}`}>
                                 <div className="w-4 flex items-center justify-center shrink-0">
-                                  {isDone && isStubbed ? (
-                                    <span className="text-amber-400 text-[10px] shrink-0">&#9888;</span>
+                                  {isDone && (isStubbed || isTimedOut) ? (
+                                    <span className="text-amber-400 text-[11px] shrink-0">&#9888;</span>
                                   ) : isDone ? (
-                                    <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                                    <Check className="h-2.5 w-2.5 text-emerald-400" />
                                   ) : isActive ? (
-                                    <PrimarySpinner size={10} />
+                                    <PrimarySpinner size={12} />
                                   ) : (
                                     <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/20 shrink-0" />
                                   )}
                                 </div>
-                                <span className={`text-[10px] ${isDone ? "text-muted-foreground/50" : isActive ? "text-muted-foreground/70" : "text-muted-foreground/40"}`}>
+                                <span className={`text-[11px] ${isDone && (isStubbed || isTimedOut) ? "text-amber-400/80" : isDone ? "text-foreground/70" : isActive ? "text-foreground/80 font-medium" : "text-muted-foreground/40"}`}>
                                   {index}/{total}: {wfName}
+                                  {isDone && (isStubbed || isTimedOut) && (
+                                    <span className="text-amber-400/70 text-[9px] ml-1">{isTimedOut ? "(timed out)" : "(stubbed)"}</span>
+                                  )}
                                   {isDone && wf.completed!.elapsed !== undefined && (
-                                    <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{wf.completed!.elapsed.toFixed(1)}s</span>
+                                    <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{wf.completed!.elapsed.toFixed(1)}s</span>
                                   )}
                                   {isActive && wf.started && (
                                     <WorkflowElapsedTimer startTimestamp={wf.started.timestamp} />
