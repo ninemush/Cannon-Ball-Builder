@@ -165,20 +165,6 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
 
     if (data.progress) {
       setLiveStatus(data.progress);
-      pipelineEntryCounter.current++;
-      setPipelineLogEntries(prev => {
-        const lastLlm = [...prev].reverse().find(e => e.stage === "llm_generation" && e.type === "progress");
-        const updated = lastLlm
-          ? prev.map(e => e === lastLlm ? { ...e, type: "completed" as const } : e)
-          : prev;
-        return [...updated, {
-          id: `pe-llm-${pipelineEntryCounter.current}`,
-          type: "progress" as const,
-          stage: "llm_generation",
-          message: data.progress,
-          timestamp: Date.now(),
-        }];
-      });
     }
 
     if (data.metaValidation) {
@@ -251,6 +237,18 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
         const updated = { ...prev, status: "FAILED" as UiPathRunStatus };
         currentRunRef.current = updated;
         return updated;
+      });
+      pipelineEntryCounter.current++;
+      setPipelineLogEntries(prev => {
+        const hasFailEntry = prev.some(e => e.type === "failed");
+        if (hasFailEntry) return prev;
+        return [...prev, {
+          id: `pe-fail-${pipelineEntryCounter.current}`,
+          type: "failed" as const,
+          stage: "unknown",
+          message: data.error,
+          timestamp: Date.now(),
+        }];
       });
       toast({
         title: "Package generation failed",

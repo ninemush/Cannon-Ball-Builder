@@ -179,7 +179,32 @@ async function executeRun(
   const activeRun = activeRuns.get(runId)!;
   const callbacks = options?.callbacks;
   const phaseEvents: PipelineProgressEvent[] = [];
-  const runLogger = new RunLogger(runId, "uipath_package");
+  let _pipelineProgressCallback: PipelineProgressCallback | null = null;
+
+  const runLoggerOnlyStages = new Set(["sdd_validation", "cache_hit", "build_pipeline"]);
+
+  const runLogger = new RunLogger(runId, "uipath_package", (stageEvent) => {
+    if (!_pipelineProgressCallback) return;
+    if (stageEvent.stage.startsWith("pipeline_")) return;
+    if (!runLoggerOnlyStages.has(stageEvent.stage)) return;
+    if (stageEvent.type === "stage_start") {
+      _pipelineProgressCallback({
+        type: "started",
+        stage: stageEvent.stage,
+        message: `Stage started: ${stageEvent.stage}`,
+      });
+    } else if (stageEvent.type === "stage_end") {
+      const eventType = stageEvent.outcome === "failed" ? "failed" as const
+        : stageEvent.outcome === "degraded" ? "warning" as const
+        : "completed" as const;
+      _pipelineProgressCallback({
+        type: eventType,
+        stage: stageEvent.stage,
+        message: stageEvent.error || `Stage ${stageEvent.outcome}: ${stageEvent.stage}`,
+        elapsed: stageEvent.durationMs ? Math.round(stageEvent.durationMs / 100) / 10 : undefined,
+      });
+    }
+  });
 
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -225,6 +250,7 @@ async function executeRun(
       storage.updateGenerationRunPhaseProgress(runId, JSON.stringify(phaseEvents.slice(-50))).catch(() => {});
     }
   };
+  _pipelineProgressCallback = pipelineProgressCallback;
 
   const emitProgress = (message: string) => {
     if (callbacks?.onProgress) {
@@ -354,12 +380,12 @@ async function executeRun(
       ];
       let keepAliveIdx = 0;
       const keepAliveInterval = setInterval(() => {
-        if (keepAliveIdx < keepAliveMessages.length) {
-          emitProgress(keepAliveMessages[keepAliveIdx]);
-          keepAliveIdx++;
-        } else {
-          emitProgress("Still generating — AI model is processing your specification...");
-        }
+        const msg = keepAliveIdx < keepAliveMessages.length
+          ? keepAliveMessages[keepAliveIdx]
+          : "Still generating — AI model is processing your specification...";
+        keepAliveIdx++;
+        pipelineProgressCallback({ type: "heartbeat", stage: "llm_generation", message: msg });
+        emitProgress(msg);
       }, 15000);
 
       let response;
@@ -540,6 +566,11 @@ async function executeRun(
     for (const rs of runningStages) {
       runLogger.stageEnd(rs.stage, "failed", undefined, errorMessage);
     }
+
+    const lastStartedStage = phaseEvents.filter(e => e.type === "started").pop()?.stage;
+    const rawFailedStage = runningStages[0]?.stage || lastStartedStage || "unknown";
+    const failedStage = rawFailedStage.startsWith("pipeline_") ? rawFailedStage.slice("pipeline_".length) : rawFailedStage;
+    pipelineProgressCallback({ type: "failed", stage: failedStage, message: errorMessage });
 
     if (callbacks?.onFail) {
       try { callbacks.onFail(errorMessage, errorContext); } catch {}

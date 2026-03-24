@@ -382,6 +382,31 @@ function UiPathProgressPanel({
   const buildEntries = entries.filter(e => !llmStages.has(e.stage));
   const llmPhaseComplete = hasBuildEntries || isComplete;
 
+  const failedEntry = entries.find(e => e.type === "failed");
+
+  const stageLabelMap: Record<string, string> = {
+    sdd_validation: "Validating SDD",
+    cache_hit: "Loading cached result",
+    build_pipeline: "Build pipeline",
+    llm_context_loading: "Loading context",
+    llm_prompt_assembly: "Preparing prompt",
+    llm_generation: "AI generation",
+    llm_parsing: "Parsing response",
+    decomposition: "Decomposing workflows",
+    complexity_classification: "Classifying complexity",
+    spec_generating: "Generating specifications",
+    confidence_assessment: "Assessing AI capabilities",
+    spec_ready: "Specifications ready",
+    ai_enrichment_tree: "Tree-based AI enrichment",
+    ai_enrichment_legacy: "Legacy AI enrichment",
+    deterministic_scaffold: "Deterministic scaffold",
+    compiling: "Compiling XAML workflows",
+    validating: "Validating archive",
+    ai_enrichment: "AI enrichment",
+    complete: "Pipeline complete",
+  };
+  const friendlyLabel = (stage: string, fallback: string) => stageLabelMap[stage] || fallback;
+
   const activeStage = buildEntries.length > 0
     ? buildEntries.filter(e => e.type === "started").pop()?.stage
     : null;
@@ -421,17 +446,18 @@ function UiPathProgressPanel({
   };
 
   const renderMessage = (entry: PipelineLogEntry) => {
+    const label = friendlyLabel(entry.stage, entry.message);
     switch (entry.type) {
       case "started":
-        return <span className="text-muted-foreground/70 text-[11px]">{entry.message}</span>;
+        return <span className="text-muted-foreground/70 text-[11px]">{label}</span>;
       case "heartbeat":
-        return <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">{entry.message}</span>;
+        return <span className="text-muted-foreground/50 text-[11px] italic pipeline-ellipsis">{entry.message}</span>;
       case "completed":
         return <span className="text-foreground/90 text-[11px]">{entry.message}</span>;
       case "warning":
         return <span className="text-amber-400 text-[11px]">{entry.message}</span>;
       case "failed":
-        return <span className="text-red-400 text-[11px]">{entry.message}</span>;
+        return <span className="text-red-400 text-[11px] font-medium">{entry.message}</span>;
       default:
         return <span className="text-muted-foreground text-[11px]">{entry.message}</span>;
     }
@@ -447,7 +473,7 @@ function UiPathProgressPanel({
           <div className="flex items-center gap-2">
             <Package className="h-3.5 w-3.5 text-primary" />
             <span className="text-[11px] font-semibold text-foreground/80">
-              {cancelState === "cancelled" ? "Cancelled" : isComplete ? "Pipeline Complete" : "Generating UiPath Package"}
+              {cancelState === "cancelled" ? "Cancelled" : failedEntry ? "Pipeline Failed" : isComplete ? "Pipeline Complete" : "Generating UiPath Package"}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -481,25 +507,45 @@ function UiPathProgressPanel({
             <div className="pl-6 space-y-0.5">
               {(() => {
                 const completedStagesSet = new Set(llmEntries.filter(e => e.type === "completed").map(e => e.stage));
-                const filtered = llmEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
-                return filtered.map((entry, idx) => {
-                  const isLast = idx === filtered.length - 1;
-                  const isDone = entry.type === "completed" || llmPhaseComplete;
-                  return (
-                    <div key={entry.id} className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-entry-${entry.stage}`}>
-                      <div className="w-4 flex items-center justify-center shrink-0">
-                        {isDone ? (
-                          <Check className="h-2.5 w-2.5 text-emerald-400/60" />
-                        ) : isLast ? (
+                const realEntries = llmEntries.filter(e => e.type !== "heartbeat");
+                const filtered = realEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
+                const lastHeartbeat = [...llmEntries].reverse().find(e => e.type === "heartbeat" && e.stage === "llm_generation");
+                const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has("llm_generation");
+                return (
+                  <>
+                    {filtered.map((entry, idx) => {
+                      const isLast = idx === filtered.length - 1 && !showHeartbeat;
+                      const isDone = entry.type === "completed" || llmPhaseComplete;
+                      return (
+                        <div key={entry.id} className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-entry-${entry.stage}`}>
+                          <div className="w-4 flex items-center justify-center shrink-0">
+                            {isDone ? (
+                              <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                            ) : isLast ? (
+                              <PrimarySpinner size={12} />
+                            ) : (
+                              <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                            )}
+                          </div>
+                          <span className={`text-[11px] ${isDone ? "text-muted-foreground/50" : "text-muted-foreground/70"}`}>
+                            {friendlyLabel(entry.stage, entry.message)}
+                            {entry.type === "completed" && entry.elapsed !== undefined && (
+                              <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{entry.elapsed.toFixed(1)}s</span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {showHeartbeat && (
+                      <div className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid="progress-llm-keepalive">
+                        <div className="w-4 flex items-center justify-center shrink-0">
                           <PrimarySpinner size={12} />
-                        ) : (
-                          <Check className="h-2.5 w-2.5 text-emerald-400/60" />
-                        )}
+                        </div>
+                        <span className="text-[11px] text-muted-foreground/50 italic pipeline-ellipsis">{lastHeartbeat.message}</span>
                       </div>
-                      <span className={`text-[11px] ${isDone ? "text-muted-foreground/50" : "text-muted-foreground/70 italic pipeline-ellipsis"}`}>{entry.message}</span>
-                    </div>
-                  );
-                });
+                    )}
+                  </>
+                );
               })()}
             </div>
           )}
@@ -551,7 +597,20 @@ function UiPathProgressPanel({
           )}
           <div ref={logEndRef} />
         </div>
-        {isComplete && (
+        {failedEntry && (
+          <div className="px-3 py-2 border-t border-red-500/30 bg-red-500/5 pipeline-fade-in" data-testid="uipath-failure-banner">
+            <div className="flex items-center gap-1.5">
+              <X className="h-3 w-3 text-red-400 shrink-0" />
+              <div className="min-w-0">
+                <span className="text-[11px] text-red-400 font-medium block">
+                  Failed at: {friendlyLabel(failedEntry.stage, failedEntry.stage)}
+                </span>
+                <span className="text-[10px] text-red-400/70 block truncate">{failedEntry.message}</span>
+              </div>
+            </div>
+          </div>
+        )}
+        {isComplete && !failedEntry && (
           <div className="px-3 py-2 border-t border-border/30 pipeline-fade-in">
             <div className="flex items-center gap-1.5">
               <Check className="h-3 w-3 text-emerald-400" />

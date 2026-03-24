@@ -1074,8 +1074,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         const enrichmentLabel = isSimpleTier ? "single-pass" : "tree-based";
         const treeTimeout = isSimpleTier ? 30000 : 45000;
         console.log(`[UiPath] Requesting ${enrichmentLabel} AI enrichment for ${processNodes.length} process nodes${isSimpleTier ? " (simple tier — no retry)" : ""} (timeout: ${treeTimeout}ms, cascade budget: ${CASCADE_BUDGET_MS}ms)...`);
+        if (onProgress) onProgress({ type: "started", stage: "ai_enrichment_tree", message: `Starting ${enrichmentLabel} AI enrichment` });
         const treeHeartbeat = onProgress ? setInterval(() => {
-          onProgress({ type: "heartbeat", stage: "ai_enrichment", message: isSimpleTier ? "AI is generating workflow structure (streamlined)..." : "AI is building the workflow tree structure — this may take a minute for complex processes..." });
+          onProgress({ type: "heartbeat", stage: "ai_enrichment_tree", message: isSimpleTier ? "AI is generating workflow structure (streamlined)..." : "AI is building the workflow tree structure — this may take a minute for complex processes..." });
         }, 10000) : null;
         try {
           const treeResult = await enrichWithAITree(
@@ -1091,36 +1092,45 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           if (treeResult && treeResult.status === "success") {
             treeEnrichment = treeResult;
             console.log(`[UiPath] Tree enrichment successful: "${treeResult.workflowSpec.name}", ${treeResult.workflowSpec.variables.length} variables`);
+            if (onProgress) onProgress({ type: "completed", stage: "ai_enrichment_tree", message: `Tree enrichment complete — ${treeResult.workflowSpec.variables.length} variables mapped` });
           } else if (treeResult && treeResult.status === "validation_failed") {
             const errorSummary = treeResult.validationErrors.join("; ");
             console.log(`[UiPath] Tree enrichment validation failed${isSimpleTier ? " (no retry — simple tier)" : " after retry"}: ${errorSummary} — falling through to ${isSimpleTier ? "scaffold" : "legacy/scaffold"}`);
+            if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_tree", message: `Tree enrichment validation failed — falling back to ${isSimpleTier ? "deterministic scaffold" : "legacy enrichment"}` });
           }
         } finally {
           if (treeHeartbeat) clearInterval(treeHeartbeat);
         }
       } catch (err: any) {
         console.log(`[UiPath] Tree enrichment error: ${err.message} — falling back to ${complexityTier === "simple" ? "scaffold" : "legacy/scaffold"}`);
+        if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_tree", message: `Tree enrichment failed — falling back to ${complexityTier === "simple" ? "deterministic scaffold" : "legacy enrichment"}` });
       }
 
       if (!treeEnrichment && complexityTier === "simple") {
         console.log(`[UiPath] Simple-tier process — skipping legacy AI enrichment fallback, using deterministic scaffold`);
+        if (onProgress) onProgress({ type: "started", stage: "deterministic_scaffold", message: "Building deterministic scaffold (simple tier)" });
         const scaffold = buildDeterministicScaffold(processNodes, projectName, sddContent || undefined);
         treeEnrichment = scaffold.treeEnrichment;
         _usedAIFallback = scaffold.usedAIFallback;
+        if (onProgress) onProgress({ type: "completed", stage: "deterministic_scaffold", message: "Deterministic scaffold built" });
       } else if (!treeEnrichment) {
         const elapsedMs = Date.now() - cascadeStart;
         const remainingBudget = CASCADE_BUDGET_MS - elapsedMs;
         if (remainingBudget < 5000) {
           console.log(`[UiPath] Cascade budget exhausted (${elapsedMs}ms elapsed, ${remainingBudget}ms remaining) — skipping legacy enrichment, using deterministic scaffold`);
+          if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_legacy", message: "Cascade budget exhausted — skipping legacy enrichment" });
+          if (onProgress) onProgress({ type: "started", stage: "deterministic_scaffold", message: "Building deterministic scaffold (budget exhausted)" });
           const scaffold = buildDeterministicScaffold(processNodes, projectName, sddContent || undefined);
           treeEnrichment = scaffold.treeEnrichment;
           _usedAIFallback = scaffold.usedAIFallback;
+          if (onProgress) onProgress({ type: "completed", stage: "deterministic_scaffold", message: "Deterministic scaffold built" });
         } else {
           const legacyTimeout = Math.min(remainingBudget, 30000);
           try {
             console.log(`[UiPath] Falling back to legacy AI enrichment for ${processNodes.length} process nodes (timeout: ${legacyTimeout}ms, ${remainingBudget}ms budget remaining)...`);
+            if (onProgress) onProgress({ type: "started", stage: "ai_enrichment_legacy", message: "Falling back to legacy AI enrichment" });
             const legacyHeartbeat = onProgress ? setInterval(() => {
-              onProgress({ type: "heartbeat", stage: "ai_enrichment", message: "AI is enriching workflow activities — this may take a minute for complex processes..." });
+              onProgress({ type: "heartbeat", stage: "ai_enrichment_legacy", message: "AI is enriching workflow activities — this may take a minute for complex processes..." });
             }, 10000) : null;
             try {
               enrichment = await enrichWithAI(
@@ -1134,21 +1144,25 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               );
               if (enrichment) {
                 console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
+                if (onProgress) onProgress({ type: "completed", stage: "ai_enrichment_legacy", message: `Legacy enrichment complete — ${enrichment.nodes.length} nodes enriched` });
               }
             } finally {
               if (legacyHeartbeat) clearInterval(legacyHeartbeat);
             }
           } catch (err: any) {
             console.log(`[UiPath] AI enrichment failed (falling back to keyword classification): ${err.message}`);
+            if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_legacy", message: "Legacy enrichment failed — falling back to deterministic scaffold" });
           }
         }
       }
 
       if (!treeEnrichment && !enrichment && processNodes.length > 0) {
         console.log(`[UiPath] All AI enrichment paths failed — generating deterministic scaffold from ${processNodes.length} process nodes`);
+        if (onProgress) onProgress({ type: "started", stage: "deterministic_scaffold", message: "All AI enrichment failed — generating deterministic scaffold" });
         const scaffold = buildDeterministicScaffold(processNodes, projectName, sddContent || undefined);
         treeEnrichment = scaffold.treeEnrichment;
         _usedAIFallback = scaffold.usedAIFallback;
+        if (onProgress) onProgress({ type: "completed", stage: "deterministic_scaffold", message: "Deterministic scaffold generated" });
       }
     } else if (processNodes.length > 0 && !sddContent) {
       console.log(`[UiPath] No SDD content available — generating map-only deterministic scaffold from ${processNodes.length} process nodes`);
