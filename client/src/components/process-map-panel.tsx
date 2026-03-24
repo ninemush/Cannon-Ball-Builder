@@ -599,6 +599,137 @@ function getEdgeSourceHandle(
   return "left";
 }
 
+function getLabelSemanticSide(label: string | null | undefined): "left" | "right" | null {
+  const lbl = (label || "").trim();
+  if (/^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl)) return "right";
+  if (/^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl)) return "left";
+  return null;
+}
+
+function fixDecisionHandlesPostLayout(
+  layoutNodes: Node[],
+  edges: Edge[],
+  nodeTypeMap: Record<string, string>
+): Edge[] {
+  const nodePositions: Record<string, { x: number; y: number; width: number; height: number }> = {};
+  layoutNodes.forEach((n) => {
+    const nodeType = (n.data as any)?.nodeType || "task";
+    const dims = getNodeDimensions(nodeType);
+    nodePositions[n.id] = {
+      x: n.position.x + dims.width / 2,
+      y: n.position.y + dims.height / 2,
+      width: dims.width,
+      height: dims.height,
+    };
+  });
+
+  const edgesBySource: Record<string, Edge[]> = {};
+  edges.forEach((e) => {
+    if (!edgesBySource[e.source]) edgesBySource[e.source] = [];
+    edgesBySource[e.source].push(e);
+  });
+
+  const updatedEdges = [...edges];
+
+  for (const sourceId of Object.keys(edgesBySource)) {
+    const srcType = nodeTypeMap[sourceId] || "task";
+    const isDecision = srcType === "decision" || srcType === "agent-decision";
+    if (!isDecision) continue;
+
+    const siblings = edgesBySource[sourceId];
+    if (siblings.length !== 2) continue;
+
+    const srcPos = nodePositions[sourceId];
+    if (!srcPos) continue;
+
+    const edge0 = siblings[0];
+    const edge1 = siblings[1];
+    const tgt0 = nodePositions[edge0.target];
+    const tgt1 = nodePositions[edge1.target];
+    if (!tgt0 || !tgt1) continue;
+
+    const bothBelow = tgt0.y > srcPos.y && tgt1.y > srcPos.y;
+    const dx = Math.abs(tgt0.x - tgt1.x);
+    const isXAmbiguous = dx < 5;
+
+    let handle0: string;
+    let handle1: string;
+
+    if (bothBelow && isXAmbiguous) {
+      const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
+      const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
+      handle0 = sem0 === "left" ? "bottom-left" : "bottom-right";
+      handle1 = sem1 === "right" ? "bottom-right" : "bottom-left";
+      if (handle0 === handle1) {
+        handle0 = "bottom-left";
+        handle1 = "bottom-right";
+      }
+    } else if (bothBelow) {
+      if (tgt0.x < tgt1.x) {
+        handle0 = "bottom-left";
+        handle1 = "bottom-right";
+      } else {
+        handle0 = "bottom-right";
+        handle1 = "bottom-left";
+      }
+    } else if (isXAmbiguous) {
+      const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
+      const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
+      handle0 = sem0 || "left";
+      handle1 = sem1 || "right";
+      if (handle0 === handle1) {
+        handle0 = "left";
+        handle1 = "right";
+      }
+    } else {
+      if (tgt0.x < tgt1.x) {
+        handle0 = "left";
+        handle1 = "right";
+      } else {
+        handle0 = "right";
+        handle1 = "left";
+      }
+    }
+
+    const isLeftRight0 = handle0 === "left" || handle0 === "right";
+    const isLeftRight1 = handle1 === "left" || handle1 === "right";
+    if (isLeftRight0 && isLeftRight1) {
+      const wouldCross =
+        (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
+        (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
+      if (wouldCross) {
+        const tmp = handle0;
+        handle0 = handle1;
+        handle1 = tmp;
+      }
+    }
+
+    const isBottom0 = handle0 === "bottom-left" || handle0 === "bottom-right";
+    const isBottom1 = handle1 === "bottom-left" || handle1 === "bottom-right";
+    if (isBottom0 && isBottom1) {
+      const wouldCross =
+        (handle0 === "bottom-left" && handle1 === "bottom-right" && tgt0.x > tgt1.x) ||
+        (handle0 === "bottom-right" && handle1 === "bottom-left" && tgt0.x < tgt1.x);
+      if (wouldCross) {
+        const tmp = handle0;
+        handle0 = handle1;
+        handle1 = tmp;
+      }
+    }
+
+    const idx0 = updatedEdges.findIndex((e) => e.id === edge0.id);
+    const idx1 = updatedEdges.findIndex((e) => e.id === edge1.id);
+    if (idx0 >= 0) {
+      updatedEdges[idx0] = { ...updatedEdges[idx0], sourceHandle: handle0 };
+    }
+    if (idx1 >= 0) {
+      updatedEdges[idx1] = { ...updatedEdges[idx1], sourceHandle: handle1 };
+    }
+  }
+
+  return updatedEdges;
+}
+
 function applyDagreLayout(
   nodes: Node[],
   edges: Edge[],
@@ -968,6 +1099,8 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
           { position: Position.Left, id: "left" },
         ]}
       />
+      <Handle type="source" position={Position.Bottom} id="bottom-left" style={{ left: '35%', opacity: 0, width: 1, height: 1 }} />
+      <Handle type="source" position={Position.Bottom} id="bottom-right" style={{ left: '65%', opacity: 0, width: 1, height: 1 }} />
       <div
         className="absolute transition-all hover:brightness-110"
         style={{
@@ -1204,6 +1337,8 @@ function AgentDecisionNode({ data, id }: { data: any; id: string }) {
           { position: Position.Left, id: "left" },
         ]}
       />
+      <Handle type="source" position={Position.Bottom} id="bottom-left" style={{ left: '35%', opacity: 0, width: 1, height: 1 }} />
+      <Handle type="source" position={Position.Bottom} id="bottom-right" style={{ left: '65%', opacity: 0, width: 1, height: 1 }} />
       <div
         className="absolute transition-all hover:brightness-110"
         style={{
@@ -1898,7 +2033,9 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     } else {
       layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
     }
+    const fixedEdges = fixDecisionHandlesPostLayout(layoutNodes, rawEdges, nodeTypeMap);
     setNodes(layoutNodes);
+    setEdges(fixedEdges);
     layoutNodes.forEach((n) => {
       const d = n.data as any;
       if (d.dbId && d.dbId > 0) {
@@ -1906,7 +2043,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       }
     });
     setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
-  }, [mapData, activeView, detailLevel, setNodes, fitView]);
+  }, [mapData, activeView, detailLevel, setNodes, setEdges, fitView]);
 
   useEffect(() => {
     if (onRelayout) onRelayout(doRelayout);
@@ -2029,8 +2166,9 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       }
     }
 
+    const fixedEdges2 = fixDecisionHandlesPostLayout(layoutNodes, rawEdges, nodeTypeMap2);
     setNodes(layoutNodes);
-    setEdges(rawEdges);
+    setEdges(fixedEdges2);
     dataVersionRef.current += 1;
 
     if (levelChanged || (!hasInitialFitRef.current && layoutNodes.length > 0)) {

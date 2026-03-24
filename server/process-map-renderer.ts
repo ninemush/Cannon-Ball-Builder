@@ -76,6 +76,120 @@ function getEdgeSourceHandle(
   return "left";
 }
 
+function getLabelSemanticSide(label: string | null | undefined): "left" | "right" | null {
+  const lbl = (label || "").trim();
+  if (/^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl)) return "right";
+  if (/^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl)) return "left";
+  return null;
+}
+
+function fixDecisionHandlesPostLayout(
+  layoutNodes: LayoutNode[],
+  layoutEdges: LayoutEdge[],
+  nodeTypeMap: Record<string, string>
+): void {
+  const nodePositions: Record<string, { x: number; y: number; width: number; height: number }> = {};
+  layoutNodes.forEach((n) => {
+    nodePositions[n.id] = { x: n.x + n.width / 2, y: n.y + n.height / 2, width: n.width, height: n.height };
+  });
+
+  const edgesBySource: Record<string, LayoutEdge[]> = {};
+  layoutEdges.forEach((e) => {
+    if (!edgesBySource[e.source]) edgesBySource[e.source] = [];
+    edgesBySource[e.source].push(e);
+  });
+
+  for (const sourceId of Object.keys(edgesBySource)) {
+    const srcType = nodeTypeMap[sourceId] || "task";
+    const isDecision = srcType === "decision" || srcType === "agent-decision";
+    if (!isDecision) continue;
+
+    const siblings = edgesBySource[sourceId];
+    if (siblings.length !== 2) continue;
+
+    const srcPos = nodePositions[sourceId];
+    if (!srcPos) continue;
+
+    const edge0 = siblings[0];
+    const edge1 = siblings[1];
+    const tgt0 = nodePositions[edge0.target];
+    const tgt1 = nodePositions[edge1.target];
+    if (!tgt0 || !tgt1) continue;
+
+    const bothBelow = tgt0.y > srcPos.y && tgt1.y > srcPos.y;
+    const dx = Math.abs(tgt0.x - tgt1.x);
+    const isXAmbiguous = dx < 5;
+
+    let handle0: string;
+    let handle1: string;
+
+    if (bothBelow && isXAmbiguous) {
+      const sem0 = getLabelSemanticSide(edge0.label);
+      const sem1 = getLabelSemanticSide(edge1.label);
+      handle0 = sem0 === "left" ? "bottom-left" : "bottom-right";
+      handle1 = sem1 === "right" ? "bottom-right" : "bottom-left";
+      if (handle0 === handle1) {
+        handle0 = "bottom-left";
+        handle1 = "bottom-right";
+      }
+    } else if (bothBelow) {
+      if (tgt0.x < tgt1.x) {
+        handle0 = "bottom-left";
+        handle1 = "bottom-right";
+      } else {
+        handle0 = "bottom-right";
+        handle1 = "bottom-left";
+      }
+    } else if (isXAmbiguous) {
+      const sem0 = getLabelSemanticSide(edge0.label);
+      const sem1 = getLabelSemanticSide(edge1.label);
+      handle0 = sem0 || "left";
+      handle1 = sem1 || "right";
+      if (handle0 === handle1) {
+        handle0 = "left";
+        handle1 = "right";
+      }
+    } else {
+      if (tgt0.x < tgt1.x) {
+        handle0 = "left";
+        handle1 = "right";
+      } else {
+        handle0 = "right";
+        handle1 = "left";
+      }
+    }
+
+    const isLeftRight0 = handle0 === "left" || handle0 === "right";
+    const isLeftRight1 = handle1 === "left" || handle1 === "right";
+    if (isLeftRight0 && isLeftRight1) {
+      const wouldCross =
+        (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
+        (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
+      if (wouldCross) {
+        const tmp = handle0;
+        handle0 = handle1;
+        handle1 = tmp;
+      }
+    }
+
+    const isBottom0 = handle0 === "bottom-left" || handle0 === "bottom-right";
+    const isBottom1 = handle1 === "bottom-left" || handle1 === "bottom-right";
+    if (isBottom0 && isBottom1) {
+      const wouldCross =
+        (handle0 === "bottom-left" && handle1 === "bottom-right" && tgt0.x > tgt1.x) ||
+        (handle0 === "bottom-right" && handle1 === "bottom-left" && tgt0.x < tgt1.x);
+      if (wouldCross) {
+        const tmp = handle0;
+        handle0 = handle1;
+        handle1 = tmp;
+      }
+    }
+
+    edge0.sourceHandle = handle0;
+    edge1.sourceHandle = handle1;
+  }
+}
+
 function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
   const g = new dagre.graphlib.Graph({ multigraph: true });
   g.setDefaultEdgeLabel(() => ({}));
@@ -130,22 +244,6 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
     const siblings = edgesBySource[String(edge.sourceNodeId)] || [edge];
     const sourceHandle = getEdgeSourceHandle(isDecision, edge.label, siblings, edge);
 
-    if (isDecision && points.length >= 1) {
-      const srcNode = layoutNodes.find(n => n.id === String(edge.sourceNodeId));
-      if (srcNode) {
-        const cx = srcNode.x + srcNode.width / 2;
-        const cy = srcNode.y + srcNode.height / 2;
-        const diamondR = 24;
-        if (sourceHandle === "left") {
-          points[0] = { x: cx - diamondR, y: cy };
-        } else if (sourceHandle === "right") {
-          points[0] = { x: cx + diamondR, y: cy };
-        } else {
-          points[0] = { x: cx, y: cy + diamondR };
-        }
-      }
-    }
-
     return {
       source: String(edge.sourceNodeId),
       target: String(edge.targetNodeId),
@@ -155,6 +253,30 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
       sourceHandle,
     };
   });
+
+  fixDecisionHandlesPostLayout(layoutNodes, layoutEdges, nodeTypeMap);
+
+  for (const le of layoutEdges) {
+    if (le.isDecisionSource && le.points.length >= 1) {
+      const srcNode = layoutNodes.find(n => n.id === le.source);
+      if (srcNode) {
+        const cx = srcNode.x + srcNode.width / 2;
+        const cy = srcNode.y + srcNode.height / 2;
+        const diamondR = 24;
+        if (le.sourceHandle === "left") {
+          le.points[0] = { x: cx - diamondR, y: cy };
+        } else if (le.sourceHandle === "right") {
+          le.points[0] = { x: cx + diamondR, y: cy };
+        } else if (le.sourceHandle === "bottom-left") {
+          le.points[0] = { x: cx - diamondR * 0.5, y: cy + diamondR };
+        } else if (le.sourceHandle === "bottom-right") {
+          le.points[0] = { x: cx + diamondR * 0.5, y: cy + diamondR };
+        } else {
+          le.points[0] = { x: cx, y: cy + diamondR };
+        }
+      }
+    }
+  }
 
   return { layoutNodes, layoutEdges };
 }
@@ -305,9 +427,10 @@ export async function renderProcessMapImage(
       let lx: number, ly: number;
       if (edge.isDecisionSource && edge.points.length >= 2) {
         const srcPt = edge.points[0];
-        const xDir = edge.sourceHandle === "left" ? -1 : edge.sourceHandle === "right" ? 1 : 0;
-        lx = srcPt.x + xDir * 35;
-        ly = srcPt.y + 25;
+        const isBottomHandle = edge.sourceHandle === "bottom-left" || edge.sourceHandle === "bottom-right";
+        const xDir = edge.sourceHandle === "left" ? -1 : edge.sourceHandle === "right" ? 1 : edge.sourceHandle === "bottom-left" ? -0.5 : edge.sourceHandle === "bottom-right" ? 0.5 : 0;
+        lx = srcPt.x + xDir * (isBottomHandle ? 30 : 35);
+        ly = srcPt.y + (isBottomHandle ? 20 : 25);
       } else {
         const midIdx = Math.floor(edge.points.length / 2);
         lx = edge.points[midIdx]?.x || 0;
