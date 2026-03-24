@@ -1,0 +1,108 @@
+I want the next package-generation tasks defined from the actual issues observed in the latest run.
+
+Important:
+Do NOT frame model selection as a bug.
+The configured model split is intentional:
+- general model = GPT-5.2
+- code model = Claude Sonnet 4.6
+
+The actual problems from the run are:
+
+1. The UI progress tracker stalled for 200+ seconds with no meaningful stage-level updates
+2. The build pipeline failed through three cascading failure modes:
+   - tree enricher timeout
+   - legacy enricher malformed JSON
+   - deterministic scaffold semantic XAML validation failure
+3. Total user wait was ~6.5 minutes and still ended in failure
+
+I want two focused upstream tasks created from this evidence.
+
+Task 1:
+UiPath package build resilience and compile correctness
+
+Task 2:
+UiPath package progress truthfulness
+
+Please return both tasks in the usual format:
+- title / objective
+- root-cause summary
+- impact analysis
+- done looks like
+- out of scope
+- tasks
+- relevant files
+- acceptance criteria
+- dependencies
+
+Task 1 requirements
+This task should cover the actual build-pipeline failure chain:
+
+A. Tree enricher resilience
+- investigate why tree-based enrichment still times out
+- determine the right fix:
+  - stage-specific timeout
+  - smaller enrichment batches/chunks
+  - better decomposition
+  - prompt/context reduction
+  - bounded retry/fallback behavior
+- the enrichment path should not sit for minutes and then fail opaquely
+
+B. Legacy enricher fallback
+- investigate why the legacy fallback is still returning malformed JSON
+- determine whether it should be repaired, constrained, or replaced
+- if retained, it must be bounded and useful
+- if not reliable, it should not waste significant time before the next fallback
+
+C. Deterministic scaffold compile correctness
+- fix the semantic validation failure where `Assign` (a System.Activities type) was emitted with `ui:` prefix
+- ensure the deterministic scaffold / last-resort fallback path is actually semantically valid and Studio-safe
+- fallback paths must not just exist — they must be able to pass compile validation
+
+Task 1 acceptance criteria should include:
+- package generation no longer spends minutes cascading through failing enrichment/fallback paths without a bounded strategy
+- tree-based enrichment has an appropriate timeout and recovery model
+- legacy fallback is either made reliable enough to justify keeping or is constrained so it cannot dominate failure time
+- deterministic scaffold output passes semantic validation
+- `Assign` / System.Activities prefix error is eliminated
+- package generation either succeeds or fails quickly and truthfully with a precise stage-level reason
+
+Task 2 requirements
+This task should focus on truthful package-generation progress.
+
+Current problem:
+- the backend already knows many real stages
+- but the user still experienced a coarse/stalled progress tracker for 200+ seconds
+
+Use the real backend package stages from the run, including:
+- sdd_validation
+- pipeline_llm_context_loading
+- pipeline_llm_prompt_assembly
+- pipeline_llm_generation
+- llm_parsing
+- pipeline_decomposition
+- pipeline_complexity_classification
+- pipeline_spec_generating
+- pipeline_confidence_assessment
+- pipeline_spec_ready
+- pipeline_compiling
+- any enrichment/fallback transitions
+- final semantic validation failure
+
+I want:
+- the frontend to show the real current stage and elapsed time
+- fallback transitions reflected clearly
+- the failure stage shown immediately and accurately
+- no long-running package build should look nearly static if real backend stage data exists
+
+Task 2 acceptance criteria should include:
+- real backend package-generation stages drive the progress UI
+- the user can tell which stage is currently running
+- enrichment timeout/fallback transitions are visible
+- final failure stage and reason are shown clearly
+- synthetic placeholder progress is not the default when real stage data already exists
+
+Important constraints
+- do not bundle these into one giant task
+- keep them upstream
+- do not patch one package manually
+- use the actual observed run as the basis for root-cause definition
