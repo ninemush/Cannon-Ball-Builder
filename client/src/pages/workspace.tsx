@@ -378,7 +378,7 @@ function UiPathProgressPanel({
     }
   }, [entries.length]);
 
-  const specStages = new Set(["spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing", "decomposition", "complexity_classification", "spec_generating", "confidence_assessment", "spec_ready"]);
+  const specStages = new Set(["sdd_validation", "spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing", "decomposition", "complexity_classification", "spec_generating", "confidence_assessment", "spec_ready"]);
   const terminalStages = new Set(["complete"]);
   const isBuildEntry = (e: PipelineLogEntry) => !specStages.has(e.stage) && !terminalStages.has(e.stage);
   const hasBuildEntries = entries.some(isBuildEntry);

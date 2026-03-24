@@ -72,7 +72,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
   const [completedRuns, setCompletedRuns] = useState<Map<string, CompletedRunResult>>(new Map());
   const [pipelineLogEntries, setPipelineLogEntries] = useState<PipelineLogEntry[]>([]);
   const [pipelineComplete, setPipelineComplete] = useState(false);
-  const pipelineEntryCounter = useRef(0);
+
   const [isRunning, setIsRunning] = useState(false);
   const [showProgressPanel, setShowProgressPanel] = useState(false);
   const [metaValidationChipStatus, setMetaValidationChipStatus] = useState<string>("ready");
@@ -114,9 +114,8 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     if (data.pipelineEvent) {
       const evt = data.pipelineEvent;
       console.log(`[useUiPathRun] pipelineEvent received: stage=${evt.stage}, type=${evt.type}, message=${evt.message}, runId=${runId}`);
-      pipelineEntryCounter.current++;
       setPipelineLogEntries(prev => [...prev, {
-        id: `pe-${pipelineEntryCounter.current}`,
+        id: `pe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         type: evt.type,
         stage: evt.stage,
         message: evt.message,
@@ -207,12 +206,11 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
         currentRunRef.current = updated;
         return updated;
       });
-      pipelineEntryCounter.current++;
       setPipelineLogEntries(prev => {
         const hasFailEntry = prev.some(e => e.type === "failed");
         if (hasFailEntry) return prev;
         return [...prev, {
-          id: `pe-fail-${pipelineEntryCounter.current}`,
+          id: `pe-fail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           type: "failed" as const,
           stage: "unknown",
           message: data.error,
@@ -268,6 +266,9 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
   processSSEDataRef.current = processSSEData;
 
   const subscribeToStream = useCallback((ideaId: string, runId: string, replay?: boolean) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
@@ -341,12 +342,11 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
           }, delay);
         } else {
           console.error(`[useUiPathRun] SSE retries exhausted after ${SSE_MAX_RETRIES} attempts`);
-          pipelineEntryCounter.current++;
           setPipelineLogEntries(prev => {
             const hasFailEntry = prev.some(e => e.type === "failed");
             if (hasFailEntry) return prev;
             return [...prev, {
-              id: `pe-fail-${pipelineEntryCounter.current}`,
+              id: `pe-fail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               type: "failed" as const,
               stage: "connection",
               message: "Connection lost — could not reconnect to server",
@@ -368,7 +368,6 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     setCompletedRuns(new Map());
     setPipelineLogEntries([]);
     setPipelineComplete(false);
-    pipelineEntryCounter.current = 0;
     setIsRunning(false);
     setShowProgressPanel(false);
     setLiveStatus("");
@@ -442,7 +441,6 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     setLiveStatus("Generating UiPath package...");
     setPipelineLogEntries([]);
     setPipelineComplete(false);
-    pipelineEntryCounter.current = 0;
     setMetaValidationChipStatus("ready");
     setCancelState("idle");
     setGenerationStartTime(Date.now());
