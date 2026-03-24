@@ -4,6 +4,7 @@ import { sanitizeJsonString, stripCodeFences } from "./lib/json-utils";
 import { isActivityAllowed } from "./uipath-activity-policy";
 import type { AutomationPattern } from "./uipath-activity-registry";
 import { catalogService, type ProcessType, type PaletteEntry } from "./catalog/catalog-service";
+import { getActivityPrefixStrict } from "./xaml/xaml-compliance";
 import { buildTemplateBlock, formatTemplateBlockForPrompt, formatCompactTemplateBlockForPrompt, shouldUseCompactFormat } from "./catalog/xaml-template-builder";
 import { validateWorkflowSpec, type WorkflowSpec as TreeWorkflowSpec, type WorkflowNode, type PropertyValue } from "./workflow-spec-types";
 import { isValueIntent, type ValueIntent } from "./xaml/expression-builder";
@@ -337,21 +338,13 @@ Generate the enriched workflow specification. For each node, provide the specifi
           if (typeof act.delayBefore !== "number") act.delayBefore = undefined;
           if (typeof act.delayAfter !== "number") act.delayAfter = undefined;
 
-          const uiPrefixActivities = new Set([
-            "InvokeWorkflowFile", "RetryScope", "AddQueueItem", "GetTransactionItem",
-            "SetTransactionStatus", "LogMessage", "GetCredential", "GetAsset",
-            "TakeScreenshot", "AddLogFields", "HttpClient", "DeserializeJson",
-            "SerializeJson", "Comment", "ShouldRetry",
-            "ExcelApplicationScope", "UseExcel", "ExcelReadRange", "ExcelWriteRange",
-            "SendSmtpMailMessage", "SendOutlookMailMessage", "GetImapMailMessage",
-            "ExecuteQuery", "ExecuteNonQuery", "ConnectToDatabase",
-            "ReadTextFile", "WriteTextFile", "PathExists",
-            "DigitizeDocument", "ClassifyDocument", "ExtractDocumentData", "ValidateDocumentData",
-            "Rethrow",
-          ]);
-          const bareType = act.activityType.replace(/^ui:/, "");
-          if (uiPrefixActivities.has(bareType) && !act.activityType.startsWith("ui:")) {
-            act.activityType = `ui:${bareType}`;
+          const bareType = act.activityType.replace(/^[a-zA-Z][a-zA-Z0-9]*:/, "");
+          const canonicalPrefix = getActivityPrefixStrict(bareType);
+          if (canonicalPrefix !== null) {
+            const canonicalType = canonicalPrefix ? `${canonicalPrefix}:${bareType}` : bareType;
+            if (act.activityType !== canonicalType) {
+              act.activityType = canonicalType;
+            }
           }
 
           if (act.activityType === "ui:InvokeWorkflowFile") {

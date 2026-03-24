@@ -926,7 +926,13 @@ export function validateActivityTagSemantics(xml: string): { valid: boolean; err
     }
 
     if (strictPrefix !== emittedPrefix) {
-      errors.push(`Activity "${activityName}" emitted with prefix "${emittedPrefix}:" but catalog maps it to "${strictPrefix || "(no prefix)"}:" — namespace mismatch will cause Studio resolution errors`);
+      const escaped = activityName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const targetTag = strictPrefix ? `${strictPrefix}:${activityName}` : activityName;
+      repairedXml = repairedXml.replace(new RegExp(`<${emittedPrefix}:${escaped}(\\s|>|\\/)`, "g"), `<${targetTag}$1`);
+      repairedXml = repairedXml.replace(new RegExp(`<\\/${emittedPrefix}:${escaped}>`, "g"), `</${targetTag}>`);
+      repairedXml = repairedXml.replace(new RegExp(`<${emittedPrefix}:${escaped}\\.`, "g"), `<${targetTag}.`);
+      repairedXml = repairedXml.replace(new RegExp(`<\\/${emittedPrefix}:${escaped}\\.`, "g"), `</${targetTag}.`);
+      warnings.push(`Activity "${activityName}" had prefix "${emittedPrefix}:" auto-corrected to "${strictPrefix || "(no prefix)"}:" (catalog prefix mismatch)`);
     }
   }
 
@@ -1379,6 +1385,23 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
 
   xml = ensureVariableDeclarations(xml);
 
+  const semanticValidation = validateActivityTagSemantics(xml);
+  if (semanticValidation.repairedXml !== xml) {
+    console.log(`[XAML Compliance] Auto-repaired activity prefix mismatches`);
+    xml = semanticValidation.repairedXml;
+  }
+  if (semanticValidation.warnings.length > 0) {
+    for (const warn of semanticValidation.warnings) {
+      console.warn(`[XAML Compliance] Activity tag warning: ${warn}`);
+    }
+  }
+  if (!semanticValidation.valid) {
+    for (const err of semanticValidation.errors) {
+      console.error(`[XAML Compliance] Activity tag semantic error: ${err}`);
+    }
+    throw new Error(`XAML activity tag semantic validation failed: ${semanticValidation.errors.join("; ")}`);
+  }
+
   const nsValidation = validateNamespacePrefixes(xml);
   if (!nsValidation.valid) {
     for (const err of nsValidation.errors) {
@@ -1410,23 +1433,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
         totalWarnings: 0,
       },
     });
-  }
-
-  const semanticValidation = validateActivityTagSemantics(xml);
-  if (semanticValidation.repairedXml !== xml) {
-    console.log(`[XAML Compliance] Auto-repaired System.Activities prefix mismatches`);
-    xml = semanticValidation.repairedXml;
-  }
-  if (semanticValidation.warnings.length > 0) {
-    for (const warn of semanticValidation.warnings) {
-      console.warn(`[XAML Compliance] Activity tag warning: ${warn}`);
-    }
-  }
-  if (!semanticValidation.valid) {
-    for (const err of semanticValidation.errors) {
-      console.error(`[XAML Compliance] Activity tag semantic error: ${err}`);
-    }
-    throw new Error(`XAML activity tag semantic validation failed: ${semanticValidation.errors.join("; ")}`);
   }
 
   xml = normalizeAssignArgumentNesting(xml);

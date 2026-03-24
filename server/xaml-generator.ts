@@ -1444,7 +1444,7 @@ export function renderActivity(
   ]);
 
   if (catalogService.isLoaded()) {
-    const lookupName = activityType.replace(/^ui:/, "");
+    const lookupName = activityType.replace(/^[a-zA-Z][a-zA-Z0-9]*:/, "");
     if (!BUILTIN_ACTIVITY_TYPES.has(lookupName) && !BUILTIN_ACTIVITY_TYPES.has(activityType)) {
       const schema = catalogService.getActivitySchema(lookupName);
       if (!schema) {
