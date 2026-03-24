@@ -1,0 +1,62 @@
+Yes — please create a focused task for the UiPath package progress streaming issue after page refresh / reconnection.
+
+Context
+The latest evidence shows:
+- the SSE stream is connected
+- the server is emitting pipeline events
+- the event payload format appears correct
+- but after refresh/reconnect, the UI still does not reliably show pipeline progress entries
+- the panel remains stuck on a generic “AI Generation / Generating UiPath package...” fallback
+
+Important:
+Please do not assume the root cause is already proven.
+The stale-closure theory and replay-burst theory are plausible, but they are still hypotheses.
+I want the task scoped around making the reconnect/event-delivery path robust and diagnosing the actual break.
+
+Please create the task in the usual format:
+- title / objective
+- root-cause summary
+- impact analysis
+- done looks like
+- out of scope
+- tasks
+- relevant files
+- acceptance criteria
+- dependencies
+
+Task requirements
+
+1. Reconnect correctness
+- when the page refreshes and an active UiPath run exists, the latest run is recovered correctly
+- the stream reconnects correctly
+- replay events are applied
+- live events after replay continue to update the UI
+
+2. Event-delivery robustness
+- verify and fix any issue where replay or live events fail to reach `processSSEData` / `pipelineLogEntries`
+- explicitly check for:
+  - stale callback/closure issues
+  - state reset races
+  - duplicate subscription guards blocking the active stream path incorrectly
+  - replay/live handoff issues
+
+3. Replay burst handling
+- ensure large replay bursts do not cause events to be silently dropped, swallowed, or ignored
+- replayed entries should still result in a truthful visible panel state
+
+4. Stream resilience
+- if the SSE stream errors or closes unexpectedly, the client should have bounded retry/recovery behavior for active runs
+- avoid infinite retry loops
+
+5. User-visible outcome
+- after refresh during an active package generation run, the user should see the real current progress again, not a generic fallback spinner
+
+Important constraints
+- do not limit the task to one assumed root cause unless it is verified
+- do not treat server-side event emission as sufficient; the acceptance bar is the actual rendered progress after refresh/reconnect
+- keep this focused on UiPath run progress streaming/reconnect robustness, not generic UI redesign
+
+Please also include:
+- your best current hypothesis for the break
+- what to log/instrument to prove it
+- what I should test immediately in a live refresh-during-run scenario
