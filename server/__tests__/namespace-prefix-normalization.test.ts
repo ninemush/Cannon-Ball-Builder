@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getActivityPrefixStrict, validateActivityTagSemantics, validateNamespacePrefixes } from "../xaml/xaml-compliance";
+import { getActivityPrefixStrict, validateActivityTagSemantics, validateNamespacePrefixes, normalizeNamespaceAliases, makeUiPathCompliant } from "../xaml/xaml-compliance";
 
 describe("XAML namespace prefix normalization", () => {
   describe("getActivityPrefixStrict canonical prefix lookup", () => {
@@ -82,6 +82,177 @@ describe("XAML namespace prefix normalization", () => {
 
       const nsResultAfter = validateNamespacePrefixes(semanticResult.repairedXml);
       expect(nsResultAfter.errors.filter(e => e.includes("uia"))).toHaveLength(0);
+    });
+  });
+
+  describe("normalizeNamespaceAliases — alias-to-canonical prefix mapping", () => {
+    it("normalizes dataservice: to uds:", () => {
+      const xml = `<dataservice:QueryRecords DisplayName="Query" /><dataservice:UpdateRecord DisplayName="Update" /></dataservice:UpdateRecord>`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<uds:QueryRecords ");
+      expect(result.xml).toContain("<uds:UpdateRecord ");
+      expect(result.xml).toContain("</uds:UpdateRecord>");
+      expect(result.xml).not.toContain("dataservice:");
+      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.warnings[0]).toContain("dataservice");
+      expect(result.warnings[0]).toContain("uds");
+    });
+
+    it("normalizes persistence: to upers:", () => {
+      const xml = `<persistence:CreateBookmark DisplayName="Create Bookmark" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<upers:CreateBookmark ");
+      expect(result.xml).not.toContain("persistence:");
+    });
+
+    it("normalizes excel: to uexcel:", () => {
+      const xml = `<excel:ReadRange DisplayName="Read Range" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<uexcel:ReadRange ");
+      expect(result.xml).not.toMatch(/(?<!u)excel:/);
+    });
+
+    it("normalizes mail: to umail:", () => {
+      const xml = `<mail:SendMail DisplayName="Send" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<umail:SendMail ");
+      expect(result.xml).not.toMatch(/(?<!u)mail:/);
+    });
+
+    it("normalizes database: to udb:", () => {
+      const xml = `<database:ExecuteQuery DisplayName="Execute" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<udb:ExecuteQuery ");
+      expect(result.xml).not.toContain("database:");
+    });
+
+    it("normalizes ds: abbreviation to uds:", () => {
+      const xml = `<ds:QueryRecords DisplayName="Query" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<uds:QueryRecords ");
+      expect(result.xml).not.toMatch(/(<\/?)ds:/);
+    });
+
+    it("normalizes datafabric: to uds:", () => {
+      const xml = `<datafabric:QueryRecords DisplayName="Query" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<uds:QueryRecords ");
+      expect(result.xml).not.toContain("datafabric:");
+    });
+
+    it("also normalizes xmlns declarations for aliased prefixes", () => {
+      const xml = `xmlns:dataservice="clr-namespace:UiPath.DataService.Activities" <dataservice:QueryRecords />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("xmlns:uds=");
+      expect(result.xml).toContain("<uds:QueryRecords ");
+    });
+
+    it("removes duplicate xmlns when canonical prefix already declared", () => {
+      const xml = `<Activity xmlns:uds="clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities" xmlns:dataservice="clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities">
+        <dataservice:QueryRecords DisplayName="Query" />
+      </Activity>`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toContain("<uds:QueryRecords ");
+      expect(result.xml).not.toContain("xmlns:dataservice");
+      const xmlnsCount = (result.xml.match(/xmlns:uds=/g) || []).length;
+      expect(xmlnsCount).toBe(1);
+    });
+
+    it("does not modify already-canonical prefixes", () => {
+      const xml = `<uds:QueryRecords DisplayName="Query" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toBe(xml);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it("does not modify unknown prefixes with no package mapping", () => {
+      const xml = `<randomprefix:SomeActivity DisplayName="Activity" />`;
+      const result = normalizeNamespaceAliases(xml);
+      expect(result.xml).toBe(xml);
+      expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  describe("comment-orphan cleanup — XML comments stripped before namespace validation", () => {
+    it("comment containing prefixed activity name does not cause namespace validation failure", () => {
+      const xml = `<!-- UNKNOWN ACTIVITY: dataservice:QueryRecords -->
+        <ui:Comment Text="Unknown activity" DisplayName="stub" />`;
+      const nsResult = validateNamespacePrefixes(xml);
+      expect(nsResult.errors.filter(e => e.includes("dataservice"))).toHaveLength(0);
+    });
+
+    it("comment with multiple prefixed names does not pollute usedPrefixes", () => {
+      const xml = `<!-- UNKNOWN ACTIVITY: someprefix:SomeActivity -->
+        <!-- UNKNOWN ACTIVITY: anotherprefix:AnotherActivity -->
+        <ui:Click DisplayName="Click" />`;
+      const nsResult = validateNamespacePrefixes(xml);
+      expect(nsResult.errors.filter(e => e.includes("someprefix"))).toHaveLength(0);
+      expect(nsResult.errors.filter(e => e.includes("anotherprefix"))).toHaveLength(0);
+    });
+
+    it("real tags outside comments still get validated", () => {
+      const xml = `<!-- comment -->
+        <unknownprefix:SomeActivity DisplayName="Activity" />`;
+      const nsResult = validateNamespacePrefixes(xml);
+      expect(nsResult.valid).toBe(false);
+      expect(nsResult.errors.some(e => e.includes("unknownprefix"))).toBe(true);
+    });
+  });
+
+  describe("truly unknown prefixes still fail validation", () => {
+    it("unmappable prefix with no xmlns declaration fails namespace validation", () => {
+      const xml = `<totallyunknown:SomeActivity DisplayName="Activity" />`;
+      const nsResult = validateNamespacePrefixes(xml);
+      expect(nsResult.valid).toBe(false);
+      expect(nsResult.errors.some(e => e.includes("totallyunknown"))).toBe(true);
+    });
+
+    it("unmappable prefix is not affected by normalizeNamespaceAliases", () => {
+      const xml = `<totallyunknown:SomeActivity DisplayName="Activity" />`;
+      const aliasResult = normalizeNamespaceAliases(xml);
+      expect(aliasResult.xml).toBe(xml);
+      expect(aliasResult.warnings).toHaveLength(0);
+    });
+  });
+
+  describe("combined scenario — aliased prefixes and comment stubs together", () => {
+    it("XAML with aliased prefix tags and comment stubs processes without error", () => {
+      const xml = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+        xmlns:ui="http://schemas.uipath.com/workflow/activities"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:dataservice="clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities">
+        <Sequence>
+          <dataservice:QueryRecords DisplayName="Query Records" />
+          <!-- UNKNOWN ACTIVITY: dataservice:GetRobotAsset -->
+          <ui:Comment Text="Unknown activity" DisplayName="GetRobotAsset (stub)" />
+        </Sequence>
+      </Activity>`;
+
+      const aliasResult = normalizeNamespaceAliases(xml);
+      expect(aliasResult.xml).toContain("<uds:QueryRecords ");
+      expect(aliasResult.xml).toContain("xmlns:uds=");
+
+      const nsResult = validateNamespacePrefixes(aliasResult.xml);
+      expect(nsResult.errors).toHaveLength(0);
+      expect(nsResult.valid).toBe(true);
+    });
+
+    it("makeUiPathCompliant handles XAML with aliased prefixes and comment stubs end-to-end", () => {
+      const xml = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:dataservice="clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities">
+  <Sequence DisplayName="Main">
+    <dataservice:QueryRecords DisplayName="Query Records" />
+    <!-- UNKNOWN ACTIVITY: dataservice:GetRobotAsset — "Get Asset" -->
+    <ui:Comment Text="Unknown activity type: dataservice:GetRobotAsset. Manual implementation required." DisplayName="Get Asset (stub)" />
+  </Sequence>
+</Activity>`;
+
+      const result = makeUiPathCompliant(xml);
+      expect(result).toContain("<uds:QueryRecords ");
+      expect(result).not.toMatch(/<dataservice:/);
+      expect(result).toBeDefined();
     });
   });
 });

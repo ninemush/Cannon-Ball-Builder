@@ -27,6 +27,53 @@ export const PACKAGE_NAMESPACE_MAP: Record<string, PackageNamespaceInfo> = {
   "System.Activities": { prefix: "", xmlns: "http://schemas.microsoft.com/netfx/2009/xaml/activities", clrNamespace: "System.Activities", assembly: "System.Activities" },
 };
 
+const EXTRA_PREFIX_ALIASES: Record<string, string> = {
+  "ds": "uds",
+  "datafabric": "uds",
+  "ocr": "uocr",
+};
+
+const PREFIX_ALIAS_MAP: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const [packageName, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+    if (!info.prefix) continue;
+    const parts = packageName.replace(/^UiPath\./, "").replace(/\.Activities$/, "").split(".");
+    for (const part of parts) {
+      const alias = part.toLowerCase();
+      if (alias !== info.prefix && !map[alias]) {
+        map[alias] = info.prefix;
+      }
+    }
+  }
+  for (const [alias, canonical] of Object.entries(EXTRA_PREFIX_ALIASES)) {
+    if (!map[alias]) {
+      map[alias] = canonical;
+    }
+  }
+  return map;
+})();
+
+export function normalizeNamespaceAliases(xml: string): { xml: string; warnings: string[] } {
+  const warnings: string[] = [];
+  let result = xml;
+
+  for (const [alias, canonical] of Object.entries(PREFIX_ALIAS_MAP)) {
+    const aliasPattern = new RegExp(`(<\\/?)${alias}:`, "g");
+    if (aliasPattern.test(result)) {
+      result = result.replace(new RegExp(`(<\\/?)${alias}:`, "g"), `$1${canonical}:`);
+      const hasCanonicalXmlns = new RegExp(`xmlns:${canonical}=`).test(result);
+      if (hasCanonicalXmlns) {
+        result = result.replace(new RegExp(`\\s*xmlns:${alias}="[^"]*"`, "g"), "");
+      } else {
+        result = result.replace(new RegExp(`xmlns:${alias}=`, "g"), `xmlns:${canonical}=`);
+      }
+      warnings.push(`Normalized namespace alias "${alias}:" to canonical prefix "${canonical}:"`);
+    }
+  }
+
+  return { xml: result, warnings };
+}
+
 const SYSTEM_ACTIVITIES_NO_PREFIX = new Set([
   "Assign", "If", "TryCatch", "Sequence", "Delay", "Throw", "While", "DoWhile",
   "ForEach", "Flowchart", "FlowStep", "FlowDecision", "FlowSwitch", "Switch",
@@ -807,6 +854,14 @@ function stripAttributeValuesAndTextContent(xml: string): string {
   let result = "";
   let i = 0;
   while (i < xml.length) {
+    if (xml.startsWith("<!--", i)) {
+      const commentEnd = xml.indexOf("-->", i + 4);
+      if (commentEnd === -1) {
+        break;
+      }
+      i = commentEnd + 3;
+      continue;
+    }
     if (xml[i] === "<") {
       const tagEnd = xml.indexOf(">", i);
       if (tagEnd === -1) {
@@ -1392,6 +1447,14 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   }
 
   xml = ensureVariableDeclarations(xml);
+
+  const aliasNormalization = normalizeNamespaceAliases(xml);
+  if (aliasNormalization.warnings.length > 0) {
+    xml = aliasNormalization.xml;
+    for (const warn of aliasNormalization.warnings) {
+      console.warn(`[XAML Compliance] Alias normalization: ${warn}`);
+    }
+  }
 
   const semanticValidation = validateActivityTagSemantics(xml);
   if (semanticValidation.repairedXml !== xml) {
