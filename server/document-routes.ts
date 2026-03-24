@@ -453,7 +453,7 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
     runLogger.stageStart("llm_parallel_generation");
     console.log("[SDD] Starting parallel generation (prose + artifacts)...");
     const startTime = Date.now();
-    const systemPrompt = `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`;
+    const systemPrompt = `You are a Senior Solution Architect generating formal documents for the "${idea.title}" project. You think in solution patterns (dispatcher-performer, REFramework, attended hybrid, queue-driven fan-out) and select them with deliberate rationale — not by default. You make platform trade-offs explicitly: why Orchestrator queues vs Data Fabric, why attended vs unattended, why Integration Service connectors vs custom HTTP. You design for operability — every component has a monitoring, alerting, and SLA adherence story. You consider deployment topology (on-prem vs cloud, Serverless vs classic robots) and licensing implications. Your documents are architecturally intentional, not templated. Be specific and use details from the conversation.${contextPrompt}`;
 
     const packageRegistryContext = metadataService.getPackageRegistryContext();
     const ideaAutomationType = (idea.automationType as string) || undefined;
@@ -463,7 +463,7 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
     slimArtifactsCtx.automationType = ideaAutomationType;
     const sddArtifactsPrompt = buildSddArtifactsPrompt(slimArtifactsCtx);
 
-    const artifactsSystemPrompt = `You are a professional automation consultant generating deployment artifacts for the "${idea.title}" project.${contextPrompt}\n\nIMPORTANT: Your response MUST begin immediately with the \`\`\`orchestrator_artifacts fenced code block. Do NOT include any prose, explanation, or text before the opening fence.`;
+    const artifactsSystemPrompt = `You are a Senior Solution Architect generating deployment artifacts for the "${idea.title}" project. You think in solution patterns (dispatcher-performer, REFramework, attended hybrid, queue-driven fan-out) and select them with deliberate rationale. You make platform trade-offs explicitly, design for operability (monitoring, alerting, SLA adherence), and consider deployment topology and licensing implications.${contextPrompt}\n\nIMPORTANT: Your response MUST begin immediately with the \`\`\`orchestrator_artifacts fenced code block. Do NOT include any prose, explanation, or text before the opening fence.`;
 
     const proseChatMessages = sanitizeChatForLLM(history, { maxMessages: 20 });
 

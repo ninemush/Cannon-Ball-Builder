@@ -48,7 +48,9 @@ interface ScaffoldResult {
   executionOrder?: string[];
 }
 
-const SCAFFOLD_PROMPT = `Based on the approved SDD and any PDD/process map context provided, generate a project scaffold for a UiPath automation package. Output a JSON object with this exact shape:
+const SCAFFOLD_PROMPT = `You are a Senior Developer and Solution Architect. Apply production engineering rigor: enforce strict naming conventions (PascalCase project and workflow names, camelCase variables, PascalCase arguments), single-responsibility decomposition (each workflow does one thing well), meaningful shared arguments that cross workflow boundaries with clear direction, and realistic dependency declarations. Anticipate common runtime failures (selector timeouts, credential expiry, file locks) in the scaffold structure by ensuring error-handler and retry workflows are included where appropriate. Comply strictly with the JSON schema below — no extra fields, no missing required fields, no prose outside the JSON.
+
+Based on the approved SDD and any PDD/process map context provided, generate a project scaffold for a UiPath automation package. Output a JSON object with this exact shape:
 
 {
   "projectName": "string (PascalCase, no spaces)",
@@ -105,7 +107,9 @@ function buildDetailPrompt(workflow: ScaffoldWorkflowEntry, scaffold: ScaffoldRe
     contextLines.push(`Shared orchestrator assets: ${scaffold.sharedAssetNames.join(", ")}`);
   }
 
-  return `Generate the full workflow specification for the "${workflow.name}" workflow in the UiPath project "${scaffold.projectName}".
+  return `You are a Senior Developer and Solution Architect. Apply production engineering rigor: use camelCase for all variable names, provide meaningful defaultValues (not empty strings for critical variables), include logging-level annotations in step notes at every decision point and error handler, use realistic selectorHints with tag/attribute structure (not just placeholder text), and set errorHandling deliberately — "none" only for steps that genuinely cannot fail. Anticipate specific runtime failures (selector not found, API timeout, file locked, stale data) rather than relying on generic TryCatch. Comply strictly with the JSON schema below — no extra fields, no missing required fields, no prose outside the JSON.
+
+Generate the full workflow specification for the "${workflow.name}" workflow in the UiPath project "${scaffold.projectName}".
 
 PROJECT CONTEXT:
 ${contextLines.join("\n")}

@@ -37,7 +37,9 @@ function buildReviewPrompt(categories: ErrorCategory[], xamlContent: string, wor
     .map((cat) => `### ${cat}\n${ERROR_CATEGORY_DESCRIPTIONS[cat]}`)
     .join("\n\n");
 
-  return `You are a UiPath XAML quality reviewer. Your task is to review the following XAML file for SPECIFIC error categories only. Do NOT look for issues outside the listed categories.
+  return `You are a Senior Developer and Solution Architect acting as a UiPath XAML quality reviewer. Apply production engineering judgment: flag naming convention violations (camelCase variables, PascalCase arguments, descriptive DisplayNames), missing or generic logging (every TryCatch must log specific context, not just "Error occurred"), single-responsibility violations (workflows doing too many things), unrealistic or brittle selectors (missing fallback attributes, over-reliance on idx), and error handling that swallows exceptions silently. Prioritize findings by production impact — a missing retry on an HTTP call matters more than a cosmetic naming issue. Comply strictly with the JSON output schema below.
+
+Your task is to review the following XAML file for SPECIFIC error categories only. Do NOT look for issues outside the listed categories.
 
 ## Workflow: ${workflowName}
 

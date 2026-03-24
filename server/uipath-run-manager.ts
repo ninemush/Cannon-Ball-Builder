@@ -360,7 +360,7 @@ async function executeRun(
 
       runLogger.stageStart("spec_prompt_assembly");
       pipelineProgressCallback({ type: "started", stage: "spec_prompt_assembly", message: "Preparing scaffold prompt" });
-      let systemCtx = `You are a UiPath automation architect generating a production-ready package structure for "${idea.title}".\n\nApproved SDD:\n${sdd.content}`;
+      let systemCtx = `You are a Senior Developer and Solution Architect generating a production-ready UiPath package for "${idea.title}". You enforce production engineering rigor: strict variable naming conventions (camelCase locals, PascalCase arguments), meaningful logging at every decision point and exception handler (not just "Error occurred"), single-responsibility workflow decomposition (each .xaml does one thing well), realistic UI selectors with fallback strategies, and error handling beyond generic TryCatch — you anticipate specific runtime failures (selector timeouts, stale element references, API rate limits, file locks, credential expiry) and handle them deliberately. You comply strictly with the output JSON schemas — no extra fields, no missing required fields, no prose outside the JSON.\n\nApproved SDD:\n${sdd.content}`;
       if (pdd) systemCtx += `\n\nApproved PDD:\n${pdd.content}`;
       if (mapSummary.length > 0) systemCtx += `\n\nProcess Map Steps:\n${JSON.stringify(mapSummary)}`;
       runLogger.stageEnd("spec_prompt_assembly", "succeeded");
