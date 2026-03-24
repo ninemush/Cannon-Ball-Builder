@@ -398,7 +398,16 @@ ${automationType === "agent" ? `- This is an AI Agent automation. Steps should p
 - The TO-BE must show the NEW automated workflow, not a copy of AS-IS with minor changes.
 - Show which steps are automated, which are human-in-the-loop, and how UiPath services are leveraged.
 - Do NOT output AS-IS steps. Only output TO-BE.
-- If regenerating the TO-BE map, output the COMPLETE set of [STEP:] tags — the system will clear and replace.` : `MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
+- If regenerating the TO-BE map, output the COMPLETE set of [STEP:] tags — the system will clear and replace.
+
+PROPORTIONALITY GUARDRAILS (CRITICAL — do NOT over-elaborate):
+- The TO-BE map must be proportionate to the AS-IS complexity. A simple 5-step AS-IS should NOT become a 25-step TO-BE.
+- Do NOT add error-handling sub-flows for every step — only where the AS-IS process already had failure modes or decision points.
+- Do NOT add monitoring, logging, audit trail, or infrastructure steps unless the user explicitly requested them.
+- Do NOT add retry/fallback logic for steps that are straightforward data transfers or simple actions.
+- Do NOT create redundant parallel paths that split and merge without meaningful divergence.
+- Do NOT create more than 2-3 End nodes unless the AS-IS process genuinely had 4+ distinct terminal outcomes.
+- Each step in the TO-BE must correspond to a real automation action — not a conceptual placeholder like "Initialize Process" or "Cleanup Resources" unless the process specifically needs it.` : `MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
 - The visual process map panel ONLY renders when you output [STEP:] tags. Text descriptions of steps do NOT build the map. If you say "here are the steps" but don't output [STEP:] tags, nothing appears.
 - When generating a process map from user input (document, image, description), generate ONLY the AS-IS Process Map showing the current manual process.
 - Use the section header "AS-IS Process Map" followed immediately by [STEP:] tags.
@@ -1131,6 +1140,7 @@ CRITICAL RULES:
       })();
       let toBeMapMode: "to-be" | undefined;
       let asIsContextForToBe = "";
+      let complexityGuidance = "";
 
       if (isToBeGeneration || isToBeModification) {
         const asIsNodesForContext = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
@@ -1154,6 +1164,47 @@ CRITICAL RULES:
             })
             .join("\n");
           toBeMapMode = "to-be";
+
+          const stepCount = asIsNodesForContext.filter(n => n.nodeType !== "start" && n.nodeType !== "end").length;
+          const decisionCount = asIsNodesForContext.filter(n => n.nodeType === "decision" || n.nodeType === "agent-decision").length;
+          const distinctSystems = new Set(asIsNodesForContext.map(n => n.system).filter(s => s && s !== "N/A")).size;
+          const branchCount = Array.from(edgeMap.values()).filter(edges => edges.length >= 2).length;
+
+          let complexityScore = stepCount + (decisionCount * 2) + (distinctSystems * 1.5) + (branchCount * 1.5);
+          let tier: "simple" | "moderate" | "complex";
+          if (complexityScore <= 12) {
+            tier = "simple";
+          } else if (complexityScore <= 25) {
+            tier = "moderate";
+          } else {
+            tier = "complex";
+          }
+
+          const totalAsIsNodes = asIsNodesForContext.length;
+          let targetMin: number, targetMax: number;
+          if (tier === "simple") {
+            targetMin = totalAsIsNodes;
+            targetMax = Math.max(totalAsIsNodes + 4, Math.round(totalAsIsNodes * 1.5));
+          } else if (tier === "moderate") {
+            targetMin = totalAsIsNodes;
+            targetMax = Math.round(totalAsIsNodes * 2);
+          } else {
+            targetMin = totalAsIsNodes;
+            targetMax = Math.round(totalAsIsNodes * 2.5);
+          }
+          if (distinctSystems >= 4) {
+            targetMax += Math.round((distinctSystems - 3) * 2);
+          }
+
+          const tierGuidelines: Record<string, string> = {
+            simple: `This is a SIMPLE process (${totalAsIsNodes} total As-Is nodes including Start/End). The To-Be MUST be proportionate — aim for ${targetMin}-${targetMax} total nodes (including Start and End).${decisionCount === 0 ? " The As-Is had no decision points, so the To-Be does NOT need to add decisions — a linear automated flow is acceptable." : ""} Do NOT add error-handling sub-flows, monitoring steps, retry logic, logging steps, or infrastructure steps unless the user explicitly mentioned them. Do NOT add parallel paths that did not exist in the As-Is. Keep the automation streamlined.${distinctSystems >= 4 ? ` Note: this process touches ${distinctSystems} systems, so integration setup steps are acceptable within the target range.` : ""}`,
+            moderate: `This is a MODERATE process (${totalAsIsNodes} total As-Is nodes including Start/End). The To-Be should have roughly ${targetMin}-${targetMax} total nodes. You may add a few automation-specific steps (e.g., exception queues, validation checks) but do NOT over-elaborate. Avoid adding error-handling sub-flows for every step — only add them where the As-Is process already had decision points or failure modes.${distinctSystems >= 4 ? ` Note: this process touches ${distinctSystems} systems, so integration steps are acceptable within the target range.` : ""}`,
+            complex: `This is a COMPLEX process (${totalAsIsNodes} total As-Is nodes including Start/End). The To-Be may have ${targetMin}-${targetMax} total nodes. You have room for automation detail including exception handling, parallel processing, and integration steps — but each added step must correspond to a real automation need visible in the As-Is map. Do not invent sub-flows that the user never described.`,
+          };
+
+          complexityGuidance = `\nAS-IS COMPLEXITY PROFILE: ${stepCount} process steps, ${decisionCount} decisions, ${distinctSystems} distinct systems, ${branchCount} branch points → Tier: ${tier.toUpperCase()}\nPROPORTIONALITY RULE (CRITICAL): ${tierGuidelines[tier]}`;
+
+          console.log(`[Chat] As-Is complexity for idea=${ideaId}: totalNodes=${totalAsIsNodes}, steps=${stepCount}, decisions=${decisionCount}, systems=${distinctSystems}, branches=${branchCount}, score=${complexityScore}, tier=${tier}, target=${targetMin}-${targetMax}`);
         }
       }
 
@@ -1209,7 +1260,7 @@ CRITICAL RULES:
         const serviceListText = detectedServices.length > 0
           ? `The following UiPath services are AVAILABLE on the connected tenant: ${detectedServices.join("; ")}. Design the TO-BE process to leverage these specific capabilities.`
           : "No specific UiPath service availability was detected. Design the TO-BE process using standard UiPath platform capabilities.";
-        intentOverride = `\n\nFEASIBILITY ASSESSMENT + TO-BE GENERATION DIRECTIVE: First, perform the automation type assessment — evaluate whether this process is best served by RPA, Agent, or Hybrid. Output the [AUTOMATION_TYPE:] tag with your assessment. Then generate the TO-BE process map. Use the header 'TO-BE Process Map' followed by [STEP:] tags. Show the automated future state based on the approved AS-IS map. ${serviceListText} Use agent-specific step types if the automation type is 'agent' or 'hybrid'. Do NOT regenerate the AS-IS map. Do NOT output any AS-IS steps. Do NOT generate documents.`;
+        intentOverride = `\n\nFEASIBILITY ASSESSMENT + TO-BE GENERATION DIRECTIVE: First, perform the automation type assessment — evaluate whether this process is best served by RPA, Agent, or Hybrid. Output the [AUTOMATION_TYPE:] tag with your assessment. Then generate the TO-BE process map. Use the header 'TO-BE Process Map' followed by [STEP:] tags. Show the automated future state based on the approved AS-IS map. ${serviceListText} Use agent-specific step types if the automation type is 'agent' or 'hybrid'. Do NOT regenerate the AS-IS map. Do NOT output any AS-IS steps. Do NOT generate documents.${complexityGuidance}`;
       } else if (chatApprovalDone && approvalIntent) {
         const nextStep = approvalIntent === "PDD" ? "I'll now generate the SDD." : approvalIntent === "SDD" ? "I'll now generate the UiPath automation package." : "";
         intentOverride = `\n\nAPPROVAL CONFIRMATION DIRECTIVE: The ${approvalIntent} has just been approved via the user's chat message. Respond with a brief confirmation (1-3 sentences). You MUST include the exact phrase "${approvalIntent} approved" in your response. ${nextStep} Do NOT generate any documents or use [DOC:] tags in this response — the next step will be triggered automatically. IMPORTANT: You MUST NOT generate an SDD or PDD or any document in this response. Only confirm the approval. The client will handle the next step.`;
