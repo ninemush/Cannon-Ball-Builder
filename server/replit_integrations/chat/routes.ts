@@ -1005,7 +1005,7 @@ export function registerChatRoutes(app: Express): void {
         }
         const classifyRes = await getLLM().create({
           maxTokens: 20,
-          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, UIPATH_GEN, DEPLOY, DHG, or CHAT.
+          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). The user is currently in the "${idea.stage}" stage. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, UIPATH_GEN, DEPLOY, DHG, or CHAT.
 
 CRITICAL RULES:
 - Classify as PDD, SDD, or PDD_SDD ONLY when the user's LATEST message contains an EXPLICIT request to generate, write, create, produce, or regenerate a document. Look for action verbs like "generate", "write", "create", "produce", "draft", "regenerate", "build", "make" paired with "PDD", "SDD", "document", "design document".
@@ -1015,7 +1015,8 @@ CRITICAL RULES:
 - Short responses, feedback, confirmations, opinions, or general discussion about the process should ALWAYS be classified as CHAT. Examples of CHAT: "no i think they make sense in this scenario", "yes that looks right", "I agree", "sounds good", "let's go with that", "what about edge cases?", "can you explain more?", "that's correct".
 - If the user is APPROVING a document (e.g. "I approve", "looks good, approved"), classify as CHAT — approvals are not generation requests.
 - When in doubt, ALWAYS classify as CHAT. It is much better to incorrectly classify as CHAT than to incorrectly trigger document generation.
-- If both documents are being requested for generation, reply PDD_SDD.`,
+- If both documents are being requested for generation, reply PDD_SDD.
+- STAGE AWARENESS: The user is in the "${idea.stage}" stage. If the user is in "Idea" stage (gathering as-is process details), almost all messages should be CHAT. PDD/SDD require at least "Design" stage. UIPATH_GEN/DHG require at least "Build" stage. DEPLOY requires "Deploy" stage. Do NOT classify early-stage process discussion as a generation or deployment intent.`,
           messages: recentMessages,
         });
         const rawClassify = classifyRes.text.trim();
@@ -1032,6 +1033,23 @@ CRITICAL RULES:
       if (chatApprovalDone && (classifiedIntent === "PDD" || classifiedIntent === "SDD" || classifiedIntent === "PDD_SDD")) {
         console.log(`[Chat] Downgrading intent ${classifiedIntent} → CHAT (approval already processed)`);
         classifiedIntent = "CHAT";
+      }
+
+      const stageIdx = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
+      const STAGE_REQUIREMENTS: Record<string, number> = {
+        "PDD": PIPELINE_STAGES.indexOf("Design"),
+        "SDD": PIPELINE_STAGES.indexOf("Design"),
+        "PDD_SDD": PIPELINE_STAGES.indexOf("Design"),
+        "UIPATH_GEN": PIPELINE_STAGES.indexOf("Build"),
+        "DEPLOY": PIPELINE_STAGES.indexOf("Deploy"),
+        "DHG": PIPELINE_STAGES.indexOf("Build"),
+      };
+      if (classifiedIntent !== "CHAT" && STAGE_REQUIREMENTS[classifiedIntent] !== undefined) {
+        const requiredIdx = STAGE_REQUIREMENTS[classifiedIntent];
+        if (stageIdx < requiredIdx) {
+          console.log(`[Chat] Downgrading intent ${classifiedIntent} → CHAT (current stage "${idea.stage}" is earlier than required stage "${PIPELINE_STAGES[requiredIdx]}")`);
+          classifiedIntent = "CHAT";
+        }
       }
 
       try { res.write(`data: ${JSON.stringify({ intentClassified: classifiedIntent })}\n\n`); } catch {}

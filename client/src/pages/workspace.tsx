@@ -1520,6 +1520,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         if (data.intentClassified) {
           localClassifiedIntent = data.intentClassified;
           setClassifiedIntent(data.intentClassified);
+          setLiveStatus("");
         }
         if (data.done) {
           setStreamingMsg((prev) =>
