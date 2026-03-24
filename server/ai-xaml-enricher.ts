@@ -276,6 +276,8 @@ Generate the enriched workflow specification. For each node, provide the specifi
         maxTokens: 8192,
         system: systemPrompt,
         messages: [{ role: "user", content: userMessage }],
+        timeoutMs,
+        abortSignal: controller.signal,
       });
 
       clearTimeout(timeout);
@@ -288,7 +290,21 @@ Generate the enriched workflow specification. For each node, provide the specifi
       const jsonText = stripCodeFences(response.text.trim());
       const sanitized = sanitizeJsonString(jsonText);
 
-      const parsed = JSON.parse(sanitized) as EnrichmentResult;
+      let parsed: EnrichmentResult;
+      try {
+        parsed = JSON.parse(sanitized) as EnrichmentResult;
+      } catch (parseErr: any) {
+        console.log(`[AI XAML Enricher] Initial JSON parse failed: ${parseErr.message} — attempting repair`);
+        const { repairTruncatedPackageJson } = await import("./uipath-prompts");
+        const repaired = repairTruncatedPackageJson(sanitized);
+        if (repaired && repaired.nodes && Array.isArray(repaired.nodes)) {
+          console.log(`[AI XAML Enricher] JSON repair succeeded — recovered ${repaired.nodes.length} nodes`);
+          parsed = repaired as EnrichmentResult;
+        } else {
+          console.log("[AI XAML Enricher] JSON repair failed — could not recover valid enrichment structure");
+          return null;
+        }
+      }
 
       if (!parsed.nodes || !Array.isArray(parsed.nodes)) {
         console.log("[AI XAML Enricher] Invalid response structure — missing nodes array");
@@ -578,6 +594,8 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
           maxTokens: 16384,
           system: systemPrompt,
           messages,
+          timeoutMs,
+          abortSignal: controller.signal,
         });
 
         clearTimeout(timeout);

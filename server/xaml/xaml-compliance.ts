@@ -809,9 +809,10 @@ export function validateNamespacePrefixes(xml: string): { valid: boolean; errors
   return { valid: errors.length === 0, errors };
 }
 
-export function validateActivityTagSemantics(xml: string): { valid: boolean; errors: string[]; warnings: string[] } {
+export function validateActivityTagSemantics(xml: string): { valid: boolean; errors: string[]; warnings: string[]; repairedXml: string } {
   const errors: string[] = [];
   const warnings: string[] = [];
+  let repairedXml = xml;
 
   const activityTagPattern = /<([a-zA-Z][a-zA-Z0-9]*):([A-Z][a-zA-Z0-9]*)[\s>\/]/g;
   let m;
@@ -828,7 +829,12 @@ export function validateActivityTagSemantics(xml: string): { valid: boolean; err
     if (["x", "s", "scg", "scg2", "sco", "sap", "sap2010", "mva", "mc"].includes(emittedPrefix)) continue;
 
     if (SYSTEM_ACTIVITIES_NO_PREFIX.has(activityName)) {
-      errors.push(`Activity "${activityName}" is a System.Activities type but was emitted with prefix "${emittedPrefix}:" — must have no prefix to avoid Studio resolution errors`);
+      const escaped = activityName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      repairedXml = repairedXml.replace(new RegExp(`<${emittedPrefix}:${escaped}(\\s|>|\\/)`, "g"), `<${activityName}$1`);
+      repairedXml = repairedXml.replace(new RegExp(`<\\/${emittedPrefix}:${escaped}>`, "g"), `</${activityName}>`);
+      repairedXml = repairedXml.replace(new RegExp(`<${emittedPrefix}:${escaped}\\.`, "g"), `<${activityName}.`);
+      repairedXml = repairedXml.replace(new RegExp(`<\\/${emittedPrefix}:${escaped}\\.`, "g"), `</${activityName}.`);
+      warnings.push(`Activity "${activityName}" had prefix "${emittedPrefix}:" auto-corrected to no prefix (System.Activities type)`);
       continue;
     }
 
@@ -845,7 +851,7 @@ export function validateActivityTagSemantics(xml: string): { valid: boolean; err
     }
   }
 
-  return { valid: errors.length === 0, errors, warnings };
+  return { valid: errors.length === 0, errors, warnings, repairedXml };
 }
 
 export function validateXmlWellFormedness(xml: string): { valid: boolean; errors: string[] } {
@@ -1270,6 +1276,14 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `<${propTag}><InArgument${attrs}>${wrappedExpr}</InArgument></${propTag}>`;
   });
 
+  for (const sysActivity of Array.from(SYSTEM_ACTIVITIES_NO_PREFIX)) {
+    const escaped = sysActivity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    xml = xml.replace(new RegExp(`<ui:${escaped}(\\s|>|\\/)`, "g"), `<${sysActivity}$1`);
+    xml = xml.replace(new RegExp(`<\\/ui:${escaped}>`, "g"), `</${sysActivity}>`);
+    xml = xml.replace(new RegExp(`<ui:${escaped}\\.`, "g"), `<${sysActivity}.`);
+    xml = xml.replace(new RegExp(`<\\/ui:${escaped}\\.`, "g"), `</${sysActivity}.`);
+  }
+
   xml = ensureVariableDeclarations(xml);
 
   const nsValidation = validateNamespacePrefixes(xml);
@@ -1306,6 +1320,10 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   }
 
   const semanticValidation = validateActivityTagSemantics(xml);
+  if (semanticValidation.repairedXml !== xml) {
+    console.log(`[XAML Compliance] Auto-repaired System.Activities prefix mismatches`);
+    xml = semanticValidation.repairedXml;
+  }
   if (semanticValidation.warnings.length > 0) {
     for (const warn of semanticValidation.warnings) {
       console.warn(`[XAML Compliance] Activity tag warning: ${warn}`);

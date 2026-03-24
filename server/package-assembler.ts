@@ -1067,10 +1067,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       console.log(`[UiPath Cache] Enrichment cache MISS — enrichment fingerprint changed`);
     }
     if (!canReuseEnrichment && processNodes.length > 0 && sddContent) {
+      const CASCADE_BUDGET_MS = 60000;
+      const cascadeStart = Date.now();
       try {
         const isSimpleTier = complexityTier === "simple";
         const enrichmentLabel = isSimpleTier ? "single-pass" : "tree-based";
-        console.log(`[UiPath] Requesting ${enrichmentLabel} AI enrichment for ${processNodes.length} process nodes${isSimpleTier ? " (simple tier — no retry)" : ""}...`);
+        const treeTimeout = isSimpleTier ? 30000 : 45000;
+        console.log(`[UiPath] Requesting ${enrichmentLabel} AI enrichment for ${processNodes.length} process nodes${isSimpleTier ? " (simple tier — no retry)" : ""} (timeout: ${treeTimeout}ms, cascade budget: ${CASCADE_BUDGET_MS}ms)...`);
         const treeHeartbeat = onProgress ? setInterval(() => {
           onProgress({ type: "heartbeat", stage: "ai_enrichment", message: isSimpleTier ? "AI is generating workflow structure (streamlined)..." : "AI is building the workflow tree structure — this may take a minute for complex processes..." });
         }, 10000) : null;
@@ -1081,7 +1084,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             sddContent,
             orchestratorArtifacts,
             projectName,
-            isSimpleTier ? 30000 : 45000,
+            treeTimeout,
             automationPattern,
             isSimpleTier,
           );
@@ -1105,29 +1108,39 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         treeEnrichment = scaffold.treeEnrichment;
         _usedAIFallback = scaffold.usedAIFallback;
       } else if (!treeEnrichment) {
-        try {
-          console.log(`[UiPath] Falling back to legacy AI enrichment for ${processNodes.length} process nodes...`);
-          const legacyHeartbeat = onProgress ? setInterval(() => {
-            onProgress({ type: "heartbeat", stage: "ai_enrichment", message: "AI is enriching workflow activities — this may take a minute for complex processes..." });
-          }, 10000) : null;
+        const elapsedMs = Date.now() - cascadeStart;
+        const remainingBudget = CASCADE_BUDGET_MS - elapsedMs;
+        if (remainingBudget < 5000) {
+          console.log(`[UiPath] Cascade budget exhausted (${elapsedMs}ms elapsed, ${remainingBudget}ms remaining) — skipping legacy enrichment, using deterministic scaffold`);
+          const scaffold = buildDeterministicScaffold(processNodes, projectName, sddContent || undefined);
+          treeEnrichment = scaffold.treeEnrichment;
+          _usedAIFallback = scaffold.usedAIFallback;
+        } else {
+          const legacyTimeout = Math.min(remainingBudget, 30000);
           try {
-            enrichment = await enrichWithAI(
-              processNodes,
-              processEdges,
-              sddContent,
-              orchestratorArtifacts,
-              projectName,
-              45000,
-              automationPattern
-            );
-            if (enrichment) {
-              console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
+            console.log(`[UiPath] Falling back to legacy AI enrichment for ${processNodes.length} process nodes (timeout: ${legacyTimeout}ms, ${remainingBudget}ms budget remaining)...`);
+            const legacyHeartbeat = onProgress ? setInterval(() => {
+              onProgress({ type: "heartbeat", stage: "ai_enrichment", message: "AI is enriching workflow activities — this may take a minute for complex processes..." });
+            }, 10000) : null;
+            try {
+              enrichment = await enrichWithAI(
+                processNodes,
+                processEdges,
+                sddContent,
+                orchestratorArtifacts,
+                projectName,
+                legacyTimeout,
+                automationPattern
+              );
+              if (enrichment) {
+                console.log(`[UiPath] AI enrichment successful: ${enrichment.nodes.length} enriched nodes, REFramework=${enrichment.useReFramework}, ${enrichment.decomposition?.length || 0} sub-workflows`);
+              }
+            } finally {
+              if (legacyHeartbeat) clearInterval(legacyHeartbeat);
             }
-          } finally {
-            if (legacyHeartbeat) clearInterval(legacyHeartbeat);
+          } catch (err: any) {
+            console.log(`[UiPath] AI enrichment failed (falling back to keyword classification): ${err.message}`);
           }
-        } catch (err: any) {
-          console.log(`[UiPath] AI enrichment failed (falling back to keyword classification): ${err.message}`);
         }
       }
 
