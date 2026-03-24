@@ -589,12 +589,14 @@ function getEdgeSourceHandle(
   const isNoEdge = /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl);
   if (isNoEdge) return "right";
   const isYesEdge = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl);
-  if (isYesEdge) return "bottom";
+  if (isYesEdge) return "left";
   if (siblings.length > 1) {
     const idx = siblings.indexOf(edge);
-    return idx === 0 ? "bottom" : "right";
+    if (idx === 0) return "left";
+    if (idx === 1) return "right";
+    return "bottom";
   }
-  return "bottom";
+  return "left";
 }
 
 function applyDagreLayout(

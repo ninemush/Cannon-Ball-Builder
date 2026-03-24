@@ -38,6 +38,7 @@ interface LayoutEdge {
   label: string;
   points: { x: number; y: number }[];
   isDecisionSource?: boolean;
+  sourceHandle?: string;
 }
 
 const MAX_SVG_DIMENSION = 4000;
@@ -52,6 +53,27 @@ function getNodeDimensions(nodeType: string): { width: number; height: number } 
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 1) + "\u2026";
+}
+
+function getEdgeSourceHandle(
+  isDecision: boolean,
+  label: string | null | undefined,
+  siblings: MapEdge[],
+  edge: MapEdge
+): string {
+  if (!isDecision) return "bottom";
+  const lbl = (label || "").trim();
+  const isNoEdge = /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl);
+  if (isNoEdge) return "right";
+  const isYesEdge = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl);
+  if (isYesEdge) return "left";
+  if (siblings.length > 1) {
+    const idx = siblings.indexOf(edge);
+    if (idx === 0) return "left";
+    if (idx === 1) return "right";
+    return "bottom";
+  }
+  return "left";
 }
 
 function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
@@ -93,17 +115,44 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
   const nodeTypeMap: Record<string, string> = {};
   nodes.forEach(n => { nodeTypeMap[String(n.id)] = n.nodeType || "task"; });
 
+  const edgesBySource: Record<string, MapEdge[]> = {};
+  for (const edge of edges) {
+    const key = String(edge.sourceNodeId);
+    if (!edgesBySource[key]) edgesBySource[key] = [];
+    edgesBySource[key].push(edge);
+  }
+
   const layoutEdges: LayoutEdge[] = edges.map((edge) => {
     const edgeData = g.edge(String(edge.sourceNodeId), String(edge.targetNodeId), String(edge.id));
     const points = edgeData?.points || [];
     const srcType = nodeTypeMap[String(edge.sourceNodeId)] || "task";
+    const isDecision = srcType === "decision" || srcType === "agent-decision";
+    const siblings = edgesBySource[String(edge.sourceNodeId)] || [edge];
+    const sourceHandle = getEdgeSourceHandle(isDecision, edge.label, siblings, edge);
+
+    if (isDecision && points.length >= 1) {
+      const srcNode = layoutNodes.find(n => n.id === String(edge.sourceNodeId));
+      if (srcNode) {
+        const cx = srcNode.x + srcNode.width / 2;
+        const cy = srcNode.y + srcNode.height / 2;
+        const diamondR = 24;
+        if (sourceHandle === "left") {
+          points[0] = { x: cx - diamondR, y: cy };
+        } else if (sourceHandle === "right") {
+          points[0] = { x: cx + diamondR, y: cy };
+        } else {
+          points[0] = { x: cx, y: cy + diamondR };
+        }
+      }
+    }
 
     return {
       source: String(edge.sourceNodeId),
       target: String(edge.targetNodeId),
       label: edge.label || "",
       points,
-      isDecisionSource: srcType === "decision" || srcType === "agent-decision",
+      isDecisionSource: isDecision,
+      sourceHandle,
     };
   });
 
@@ -256,14 +305,7 @@ export async function renderProcessMapImage(
       let lx: number, ly: number;
       if (edge.isDecisionSource && edge.points.length >= 2) {
         const srcPt = edge.points[0];
-        let divergePt = edge.points[edge.points.length - 1];
-        for (let pi = 1; pi < edge.points.length; pi++) {
-          if (Math.abs(edge.points[pi].x - srcPt.x) > 5) {
-            divergePt = edge.points[pi];
-            break;
-          }
-        }
-        const xDir = divergePt.x > srcPt.x ? 1 : divergePt.x < srcPt.x ? -1 : 0;
+        const xDir = edge.sourceHandle === "left" ? -1 : edge.sourceHandle === "right" ? 1 : 0;
         lx = srcPt.x + xDir * 35;
         ly = srcPt.y + 25;
       } else {
