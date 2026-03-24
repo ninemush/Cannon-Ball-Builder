@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { validateWorkflowSpec, WorkflowSpecSchema } from "../workflow-spec-types";
 import { getCachedPipelineResult, findUiPathMessage } from "../uipath-pipeline";
+import { sanitizeXmlArtifacts, makeUiPathCompliant } from "../xaml/xaml-compliance";
+import { validateXamlContent } from "../xaml-generator";
 
 describe("UiPath Package Generation Fixes", () => {
   describe("FIX 1 — maxRetries schema validation (nonnegative)", () => {
@@ -284,6 +286,193 @@ describe("UiPath Package Generation Fixes", () => {
       expect("READY" === "FAILED").toBe(false);
       expect("READY_WITH_WARNINGS" === "FAILED").toBe(false);
       expect("BUILDING" === "FAILED").toBe(false);
+    });
+  });
+
+  describe("FIX 4 — XAML markup extension preservation in sanitizeXmlArtifacts", () => {
+    it("preserves {x:Reference ...} in attribute values", () => {
+      const xml = `<Transition To="{x:Reference State_Init}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`To="{x:Reference State_Init}"`);
+    });
+
+    it("preserves {x:Null} in attribute values", () => {
+      const xml = `<Variable Default="{x:Null}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Default="{x:Null}"`);
+    });
+
+    it("preserves {Binding ...} in attribute values", () => {
+      const xml = `<TextBlock Text="{Binding Path=Name}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Text="{Binding Path=Name}"`);
+    });
+
+    it("preserves {StaticResource ...} in attribute values", () => {
+      const xml = `<Border Style="{StaticResource MainStyle}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Style="{StaticResource MainStyle}"`);
+    });
+
+    it("preserves {DynamicResource ...} in attribute values", () => {
+      const xml = `<Button Background="{DynamicResource AccentBrush}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Background="{DynamicResource AccentBrush}"`);
+    });
+
+    it("preserves {TemplateBinding ...} in attribute values", () => {
+      const xml = `<Border BorderBrush="{TemplateBinding BorderBrush}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`BorderBrush="{TemplateBinding BorderBrush}"`);
+    });
+
+    it("preserves {RelativeSource ...} in attribute values", () => {
+      const xml = `<Binding RelativeSource="{RelativeSource Self}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`RelativeSource="{RelativeSource Self}"`);
+    });
+
+    it("preserves {x:Type ...} in attribute values", () => {
+      const xml = `<DataTemplate DataType="{x:Type local:MyClass}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`DataType="{x:Type local:MyClass}"`);
+    });
+
+    it("preserves {x:Static ...} in attribute values", () => {
+      const xml = `<MenuItem Header="{x:Static props:Resources.MenuLabel}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Header="{x:Static props:Resources.MenuLabel}"`);
+    });
+
+    it("preserves {x:Array ...} in attribute values", () => {
+      const xml = `<ComboBox ItemsSource="{x:Array Type=x:String}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`ItemsSource="{x:Array Type=x:String}"`);
+    });
+
+    it("still removes genuinely stray } from non-markup-extension attribute values", () => {
+      const xml = `<Assign DisplayName="Set Value}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`DisplayName="Set Value"`);
+      expect(result).not.toContain(`Set Value}"`);
+    });
+
+    it("still removes stray } after quoted attribute values", () => {
+      const xml = `<Assign DisplayName="Test" } />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).not.toMatch(/"Test"\s*\}/);
+    });
+
+    it("REFramework XAML with x:Reference transitions survives makeUiPathCompliant", () => {
+      const reframeworkXaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StateMachine DisplayName="REFramework Main">
+    <State DisplayName="Init" x:Name="State_Init">
+      <State.Entry>
+        <Sequence DisplayName="Initialize">
+          <ui:LogMessage Level="Info" Message="'Init'" DisplayName="Log Init" />
+        </Sequence>
+      </State.Entry>
+      <Transition DisplayName="Init -> Get Transaction" To="{x:Reference State_GetTransaction}" />
+    </State>
+    <State DisplayName="Get Transaction" x:Name="State_GetTransaction">
+      <State.Entry>
+        <Sequence DisplayName="Get Data">
+          <ui:LogMessage Level="Info" Message="'Get Transaction'" DisplayName="Log Get" />
+        </Sequence>
+      </State.Entry>
+      <Transition DisplayName="Get -> End" To="{x:Reference State_End}" />
+    </State>
+    <State DisplayName="End" x:Name="State_End" IsFinal="True">
+      <State.Entry>
+        <Sequence DisplayName="Cleanup">
+          <ui:LogMessage Level="Info" Message="'End'" DisplayName="Log End" />
+        </Sequence>
+      </State.Entry>
+    </State>
+    <StateMachine.InitialState>
+      <x:Reference>State_Init</x:Reference>
+    </StateMachine.InitialState>
+  </StateMachine>
+</Activity>`;
+      const compliant = makeUiPathCompliant(reframeworkXaml, "Windows");
+      expect(compliant).toContain(`To="{x:Reference State_GetTransaction}"`);
+      expect(compliant).toContain(`To="{x:Reference State_End}"`);
+
+      const violations = validateXamlContent([{ name: "Main.xaml", content: compliant }]);
+      const xmlErrors = violations.filter(v => v.check === "xml-wellformedness");
+      expect(xmlErrors.length).toBe(0);
+    });
+
+    it("preserves unlisted {x:CustomExtension ...} generically", () => {
+      const xml = `<Element Prop="{x:CustomExtension SomeArg}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Prop="{x:CustomExtension SomeArg}"`);
+    });
+
+    it("preserves {local:MyExtension ...} with arbitrary namespace prefix", () => {
+      const xml = `<Element Prop="{local:MyConverter Param=1}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`Prop="{local:MyConverter Param=1}"`);
+    });
+
+    it("{Binding ...} survives makeUiPathCompliant round-trip", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <Assign DisplayName="Set Val">
+      <Assign.To><OutArgument x:TypeArguments="x:String">[result]</OutArgument></Assign.To>
+      <Assign.Value><InArgument x:TypeArguments="x:String">{Binding Path=Name}</InArgument></Assign.Value>
+    </Assign>
+  </Sequence>
+</Activity>`;
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain("{Binding Path=Name}");
+    });
+
+    it("{StaticResource ...} survives makeUiPathCompliant round-trip", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <Assign DisplayName="Set Style">
+      <Assign.To><OutArgument x:TypeArguments="x:String">[style]</OutArgument></Assign.To>
+      <Assign.Value><InArgument x:TypeArguments="x:String">{StaticResource MainStyle}</InArgument></Assign.Value>
+    </Assign>
+  </Sequence>
+</Activity>`;
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain("{StaticResource MainStyle}");
+    });
+
+    it("{x:Null} survives makeUiPathCompliant round-trip", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="test" Default="{x:Null}" />
+    </Sequence.Variables>
+  </Sequence>
+</Activity>`;
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toContain(`Default="{x:Null}"`);
+    });
+
+    it("preserves multiple different markup extensions in the same XAML", () => {
+      const xml = `<Transition To="{x:Reference State_Init}" />
+<Variable Default="{x:Null}" />
+<TextBlock Text="{Binding Name}" />`;
+      const result = sanitizeXmlArtifacts(xml);
+      expect(result).toContain(`To="{x:Reference State_Init}"`);
+      expect(result).toContain(`Default="{x:Null}"`);
+      expect(result).toContain(`Text="{Binding Name}"`);
     });
   });
 });

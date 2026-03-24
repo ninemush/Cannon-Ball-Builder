@@ -719,8 +719,15 @@ function fixBareVariableRefsInExpressionAttributes(xml: string): string {
   return xml;
 }
 
-function sanitizeXmlArtifacts(xml: string): string {
+const XAML_MARKUP_EXTENSION_PATTERN = /^\{(?:\w+:\w+|Binding|StaticResource|DynamicResource|TemplateBinding|RelativeSource)\b/;
+
+function isXamlMarkupExtension(value: string): boolean {
+  return XAML_MARKUP_EXTENSION_PATTERN.test(value.trim());
+}
+
+export function sanitizeXmlArtifacts(xml: string): string {
   xml = xml.replace(/="([^"]*?[^}\]])(\}+)"/g, (match, val, braces) => {
+    if (isXamlMarkupExtension(val)) return match;
     if (/\[.*\]/.test(val + braces)) return match;
     if (/New\s+Dictionary|From\s*\{/.test(val)) return match;
     console.log(`[XAML Compliance] Removed stray } from attribute value`);
@@ -728,6 +735,7 @@ function sanitizeXmlArtifacts(xml: string): string {
   });
 
   xml = xml.replace(/"([^"]*?)"\s*\}(?=\s|>|\/)/g, (match, val) => {
+    if (isXamlMarkupExtension(val)) return match;
     if (/\[.*\]/.test(match)) return match;
     return `"${val}"`;
   });
