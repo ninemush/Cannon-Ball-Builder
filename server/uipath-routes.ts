@@ -2036,6 +2036,7 @@ export function registerUiPathRoutes(app: Express): void {
           callbacks: {
             onProgress: (message: string) => emitObserverProgress(observerRunId, message),
             onPipelineEvent: (evt) => {
+              console.log(`[UiPathRoute] onPipelineEvent callback fired: stage=${evt.stage}, type=${evt.type}, observerRun=${observerRunId}`);
               emitObserverPipelineEvent(observerRunId, evt);
               emitObserverProgress(observerRunId, evt.message);
             },
@@ -2256,21 +2257,36 @@ export function registerUiPathRoutes(app: Express): void {
     const replay = req.query.replay === "true";
 
     if (observerRun) {
+      const heartbeatInterval = setInterval(() => {
+        try {
+          if (res.writableEnded) { clearInterval(heartbeatInterval); return; }
+          res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
+          if (typeof (res as any).flush === "function") (res as any).flush();
+        } catch { clearInterval(heartbeatInterval); }
+      }, 15000);
+
+      res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
+      if (typeof (res as any).flush === "function") (res as any).flush();
+
       const unsubscribe = subscribeToObserverRun(runId, (event) => {
         try {
           if (res.writableEnded) return;
+          console.log(`[ObserverSSE] Sending event type=${event.type} for run=${runId}`);
           res.write(`data: ${JSON.stringify(event.data)}\n\n`);
           if (typeof (res as any).flush === "function") (res as any).flush();
 
           if (event.type === "done" || event.type === "error") {
+            clearInterval(heartbeatInterval);
             res.end();
           }
         } catch (e: any) {
+          clearInterval(heartbeatInterval);
           unsubscribe();
         }
       }, replay);
 
       if (isObserverTerminalStatus(observerRun.status) && !replay) {
+        clearInterval(heartbeatInterval);
         res.write(`data: ${JSON.stringify({ done: true, status: observerRun.status, warnings: observerRun.warnings, templateComplianceScore: observerRun.complianceScore, completenessLevel: observerRun.completenessLevel, outcomeSummary: observerRun.outcomeSummary })}\n\n`);
         res.end();
         unsubscribe();
@@ -2278,6 +2294,7 @@ export function registerUiPathRoutes(app: Express): void {
       }
 
       req.on("close", () => {
+        clearInterval(heartbeatInterval);
         unsubscribe();
       });
     } else if (dbActiveRun) {

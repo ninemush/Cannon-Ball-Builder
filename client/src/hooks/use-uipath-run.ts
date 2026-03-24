@@ -145,6 +145,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
 
     if (data.pipelineEvent) {
       const evt = data.pipelineEvent;
+      console.log(`[useUiPathRun] Pipeline event received: stage=${evt.stage}, type=${evt.type}, message=${evt.message}`);
       pipelineEntryCounter.current++;
       setPipelineLogEntries(prev => [...prev, {
         id: `pe-${pipelineEntryCounter.current}`,
@@ -307,6 +308,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     abortControllerRef.current = controller;
 
     const url = `/api/ideas/${ideaId}/uipath-runs/${runId}/stream${replay ? "?replay=true" : ""}`;
+    console.log(`[useUiPathRun] Subscribing to SSE stream: ${url}`);
     fetch(url, { credentials: "include", signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) {

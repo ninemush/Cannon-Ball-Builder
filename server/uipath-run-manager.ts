@@ -748,6 +748,7 @@ export function emitObserverProgress(runId: string, message: string): void {
 }
 
 export function emitObserverPipelineEvent(runId: string, evt: PipelineProgressEvent): void {
+  console.log(`[ObserverPipeline] Emitting pipeline event: stage=${evt.stage}, type=${evt.type}, run=${runId}`);
   emitObserverEvent(runId, { type: "pipeline", data: { pipelineEvent: evt }, timestamp: Date.now() });
 }
 
@@ -811,6 +812,7 @@ export function subscribeToObserverRun(runId: string, onEvent: (event: ObserverR
   }
 
   if (replayAll) {
+    console.log(`[ObserverSubscribe] Replaying ${entry.events.length} events for run=${runId}`);
     for (const evt of entry.events) {
       onEvent(evt);
     }

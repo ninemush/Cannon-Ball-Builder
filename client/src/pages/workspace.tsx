@@ -387,7 +387,7 @@ function UiPathProgressPanel({
     }
   }, [entries.length]);
 
-  const specStages = new Set(["spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing"]);
+  const specStages = new Set(["spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing", "decomposition", "complexity_classification", "spec_generating", "confidence_assessment", "spec_ready"]);
   const hasBuildEntries = entries.some(e => !specStages.has(e.stage));
   const llmEntries = entries.filter(e => specStages.has(e.stage));
   const buildEntries = entries.filter(e => !specStages.has(e.stage));
@@ -530,7 +530,7 @@ function UiPathProgressPanel({
                 const completedStagesSet = new Set(nonWorkflowEntries.filter(e => e.type === "completed").map(e => e.stage));
                 const realEntries = nonWorkflowEntries.filter(e => e.type !== "heartbeat");
                 const filtered = realEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
-                const lastHeartbeat = [...nonWorkflowEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation" || e.stage === "spec_workflow_detail"));
+                const lastHeartbeat = [...nonWorkflowEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation" || e.stage === "spec_workflow_detail" || e.stage === "spec_generating" || e.stage === "confidence_assessment"));
                 const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has(lastHeartbeat.stage);
 
                 const workflowMap = new Map<string, { started?: PipelineLogEntry; completed?: PipelineLogEntry; warnings: PipelineLogEntry[] }>();
