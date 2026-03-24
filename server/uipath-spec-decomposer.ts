@@ -8,6 +8,9 @@ import { RunLogger } from "./lib/run-logger";
 const SCAFFOLD_MAX_TOKENS = 4096;
 const DETAIL_MAX_TOKENS = 8192;
 const DETAIL_RETRY_LIMIT = 2;
+const DETAIL_LLM_TIMEOUT_MS = 90_000;
+const DECOMPOSITION_AGGREGATE_TIMEOUT_MS = 5 * 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 4_000;
 
 export interface DecompositionMetrics {
   scaffoldDurationMs: number;
@@ -444,12 +447,75 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   onPipelineProgress?.({ type: "started", stage: "spec_workflow_detail", message: `Generating ${orderedWorkflows.length} workflow detail(s)` });
 
+  const detailPhaseStart = Date.now();
+  let aggregateTimedOut = false;
+
+  let heartbeatState = { index: 0, name: orderedWorkflows[0]?.name || "", total: orderedWorkflows.length };
+  const heartbeatInterval = setInterval(() => {
+    const elapsed = ((Date.now() - detailPhaseStart) / 1000).toFixed(1);
+    onPipelineProgress?.({
+      type: "heartbeat",
+      stage: "spec_workflow_detail",
+      message: `Generating workflow ${heartbeatState.index + 1}/${heartbeatState.total}: ${heartbeatState.name} (${elapsed}s elapsed)`,
+      elapsed: parseFloat(elapsed),
+      context: { workflowName: heartbeatState.name, index: heartbeatState.index + 1, total: heartbeatState.total },
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  try {
   for (let i = 0; i < orderedWorkflows.length; i++) {
     const entry = orderedWorkflows[i];
+    heartbeatState = { index: i, name: entry.name, total: orderedWorkflows.length };
+
+    if (Date.now() - detailPhaseStart > DECOMPOSITION_AGGREGATE_TIMEOUT_MS) {
+      aggregateTimedOut = true;
+      const remainingNames = orderedWorkflows.slice(i).map(w => w.name);
+      console.warn(`[SpecDecomposer] Run ${runId}: Aggregate timeout (${DECOMPOSITION_AGGREGATE_TIMEOUT_MS}ms) exceeded — stubbing ${remainingNames.length} remaining workflow(s): ${remainingNames.join(", ")}`);
+
+      for (let j = i; j < orderedWorkflows.length; j++) {
+        const remaining = orderedWorkflows[j];
+        const stub = makeStubWorkflow(remaining);
+        workflowDetails.set(remaining.name, stub);
+        metrics.stubCount++;
+        mergeWarnings.push(`Workflow "${remaining.name}" was stubbed due to aggregate timeout`);
+        metrics.perWorkflow.push({
+          name: remaining.name,
+          status: "stubbed",
+          attempts: 0,
+          durationMs: 0,
+        });
+        onPipelineProgress?.({
+          type: "warning",
+          stage: "spec_workflow_detail",
+          message: `Workflow "${remaining.name}" stubbed due to aggregate timeout`,
+          context: { workflowName: remaining.name, index: j + 1, total: orderedWorkflows.length, outcome: "stubbed", reason: "aggregate_timeout" },
+        });
+      }
+
+      try {
+        const partialWorkflows = Array.from(workflowDetails.values());
+        const partialSpec = {
+          projectName: scaffold.projectName,
+          description: scaffold.description,
+          dependencies: scaffold.dependencies,
+          workflows: partialWorkflows,
+        };
+        await storage.updateGenerationRunSpecSnapshot(runId, {
+          partialSpec,
+          completedWorkflows: partialWorkflows.map(w => w.name),
+          stubbedWorkflows: remainingNames,
+          totalWorkflows: scaffold.workflows.length,
+          timestamp: new Date().toISOString(),
+        });
+      } catch {}
+      break;
+    }
+
     const wfStart = Date.now();
     let attempts = 0;
     let succeeded = false;
 
+    console.log(`[SpecDecomposer] Run ${runId}: Starting workflow ${i + 1}/${orderedWorkflows.length}: "${entry.name}"`);
     onProgress?.(`Generating workflow ${i + 1}/${orderedWorkflows.length}: ${entry.name}...`);
     onPipelineProgress?.({
       type: "started",
@@ -461,20 +527,44 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     const detailPrompt = buildDetailPrompt(entry, scaffold);
 
     for (let attempt = 0; attempt <= DETAIL_RETRY_LIMIT; attempt++) {
+      const aggregateRemaining = DECOMPOSITION_AGGREGATE_TIMEOUT_MS - (Date.now() - detailPhaseStart);
+      if (aggregateRemaining <= 0) {
+        aggregateTimedOut = true;
+        console.warn(`[SpecDecomposer] Run ${runId}: Aggregate timeout reached during retries for "${entry.name}" — stubbing`);
+        const stub = makeStubWorkflow(entry);
+        workflowDetails.set(entry.name, stub);
+        metrics.stubCount++;
+        mergeWarnings.push(`Workflow "${entry.name}" was stubbed due to aggregate timeout (during retry ${attempt + 1})`);
+        onPipelineProgress?.({
+          type: "warning",
+          stage: "spec_workflow_detail",
+          message: `Workflow "${entry.name}" stubbed due to aggregate timeout`,
+          context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length, outcome: "stubbed", reason: "aggregate_timeout_mid_retry" },
+        });
+        break;
+      }
+
       attempts++;
       metrics.totalLlmCalls++;
 
+      console.log(`[SpecDecomposer] Run ${runId}: Workflow "${entry.name}" attempt ${attempt + 1}/${DETAIL_RETRY_LIMIT + 1}`);
+
       try {
+        const perWorkflowTimeout = Math.min(DETAIL_LLM_TIMEOUT_MS, aggregateRemaining);
+
         const detailResponse = await getCodeLLM().create({
           maxTokens: DETAIL_MAX_TOKENS,
           system: systemContext,
           messages: [{ role: "user", content: detailPrompt }],
-          timeoutMs: SDD_LLM_TIMEOUT_MS,
+          timeoutMs: perWorkflowTimeout,
         });
 
         const detail = parseWorkflowDetail(detailResponse.text || "{}", entry.name);
         workflowDetails.set(entry.name, detail);
         succeeded = true;
+
+        const wfDuration = Date.now() - wfStart;
+        console.log(`[SpecDecomposer] Run ${runId}: Workflow "${entry.name}" succeeded in ${wfDuration}ms (${attempts} attempt(s))`);
 
         onPipelineProgress?.({
           type: "completed",
@@ -502,7 +592,8 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
         break;
       } catch (err: any) {
-        console.warn(`[SpecDecomposer] Run ${runId}: Detail call for "${entry.name}" attempt ${attempt + 1} failed: ${err?.message}`);
+        const wfDuration = Date.now() - wfStart;
+        console.warn(`[SpecDecomposer] Run ${runId}: Workflow "${entry.name}" attempt ${attempt + 1} failed after ${wfDuration}ms: ${err?.message}`);
         runLogger.recordRetry(`spec_workflow_detail_${entry.name}`, attempt + 1, err?.message);
         onPipelineProgress?.({
           type: "warning",
@@ -512,7 +603,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
         });
 
         if (attempt === DETAIL_RETRY_LIMIT) {
-          console.error(`[SpecDecomposer] Run ${runId}: Stubbing workflow "${entry.name}" after ${attempts} attempts`);
+          console.error(`[SpecDecomposer] Run ${runId}: Stubbing workflow "${entry.name}" after ${attempts} attempts (${wfDuration}ms)`);
           const stub = makeStubWorkflow(entry);
           workflowDetails.set(entry.name, stub);
           metrics.stubCount++;
@@ -558,12 +649,15 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
       durationMs: Date.now() - wfStart,
     });
   }
+  } finally {
+    clearInterval(heartbeatInterval);
+  }
 
   onPipelineProgress?.({
     type: "completed",
     stage: "spec_workflow_detail",
-    message: `All ${orderedWorkflows.length} workflow details generated (${metrics.stubCount} stubbed)`,
-    context: { totalWorkflows: orderedWorkflows.length, stubCount: metrics.stubCount },
+    message: `All ${orderedWorkflows.length} workflow details generated (${metrics.stubCount} stubbed${aggregateTimedOut ? ", aggregate timeout triggered" : ""})`,
+    context: { totalWorkflows: orderedWorkflows.length, stubCount: metrics.stubCount, aggregateTimedOut },
   });
 
   onPipelineProgress?.({ type: "started", stage: "spec_merge", message: "Merging workflow specifications" });
