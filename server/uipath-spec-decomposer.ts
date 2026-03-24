@@ -452,7 +452,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
     onProgress?.(`Generating workflow ${i + 1}/${orderedWorkflows.length}: ${entry.name}...`);
     onPipelineProgress?.({
-      type: "heartbeat",
+      type: "started",
       stage: "spec_workflow_detail",
       message: `Generating workflow ${i + 1}/${orderedWorkflows.length}: ${entry.name}`,
       context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length },
@@ -475,6 +475,14 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
         const detail = parseWorkflowDetail(detailResponse.text || "{}", entry.name);
         workflowDetails.set(entry.name, detail);
         succeeded = true;
+
+        onPipelineProgress?.({
+          type: "completed",
+          stage: "spec_workflow_detail",
+          message: `Workflow ${i + 1}/${orderedWorkflows.length} complete: ${entry.name}`,
+          elapsed: (Date.now() - wfStart) / 1000,
+          context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length },
+        });
 
         try {
           const partialWorkflows = Array.from(workflowDetails.values());
@@ -514,6 +522,13 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
             stage: "spec_workflow_detail",
             message: `Workflow "${entry.name}" stubbed after ${attempts} failed attempts`,
             context: { workflowName: entry.name, attempts, outcome: "stubbed", reason: err?.message },
+          });
+          onPipelineProgress?.({
+            type: "completed",
+            stage: "spec_workflow_detail",
+            message: `Workflow ${i + 1}/${orderedWorkflows.length} stubbed: ${entry.name}`,
+            elapsed: (Date.now() - wfStart) / 1000,
+            context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length, outcome: "stubbed" },
           });
 
           try {

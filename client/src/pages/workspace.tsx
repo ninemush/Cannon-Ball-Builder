@@ -345,6 +345,17 @@ function PipelineLogPanel({
   );
 }
 
+function WorkflowElapsedTimer({ startTimestamp }: { startTimestamp: number }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const update = () => setElapsed(Math.round((Date.now() - startTimestamp) / 1000));
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [startTimestamp]);
+  return <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{elapsed}s</span>;
+}
+
 function UiPathProgressPanel({
   entries,
   isComplete,
@@ -512,15 +523,37 @@ function UiPathProgressPanel({
           {llmEntries.length > 0 && (
             <div className="pl-6 space-y-0.5">
               {(() => {
-                const completedStagesSet = new Set(llmEntries.filter(e => e.type === "completed").map(e => e.stage));
-                const realEntries = llmEntries.filter(e => e.type !== "heartbeat");
+                const isPerWorkflowEntry = (e: PipelineLogEntry) => e.stage === "spec_workflow_detail" && !!e.context?.workflowName;
+                const nonWorkflowEntries = llmEntries.filter(e => !isPerWorkflowEntry(e));
+                const workflowEntries = llmEntries.filter(e => isPerWorkflowEntry(e));
+
+                const completedStagesSet = new Set(nonWorkflowEntries.filter(e => e.type === "completed").map(e => e.stage));
+                const realEntries = nonWorkflowEntries.filter(e => e.type !== "heartbeat");
                 const filtered = realEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
-                const lastHeartbeat = [...llmEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation"));
-                const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has("spec_scaffold") && !completedStagesSet.has("llm_generation");
+                const lastHeartbeat = [...nonWorkflowEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation" || e.stage === "spec_workflow_detail"));
+                const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has(lastHeartbeat.stage);
+
+                const workflowMap = new Map<string, { started?: PipelineLogEntry; completed?: PipelineLogEntry; warnings: PipelineLogEntry[] }>();
+                const workflowOrder: string[] = [];
+                for (const entry of workflowEntries) {
+                  const wfName = entry.context?.workflowName as string | undefined;
+                  if (!wfName) continue;
+                  if (!workflowMap.has(wfName)) {
+                    workflowMap.set(wfName, { warnings: [] });
+                    workflowOrder.push(wfName);
+                  }
+                  const wf = workflowMap.get(wfName)!;
+                  if (entry.type === "started") wf.started = entry;
+                  else if (entry.type === "completed") wf.completed = entry;
+                  else if (entry.type === "warning") wf.warnings.push(entry);
+                }
+
+                const hasWorkflowEntries = workflowOrder.length > 0;
+
                 return (
                   <>
                     {filtered.map((entry, idx) => {
-                      const isLast = idx === filtered.length - 1 && !showHeartbeat;
+                      const isLast = idx === filtered.length - 1 && !showHeartbeat && !hasWorkflowEntries;
                       const isDone = entry.type === "completed" || llmPhaseComplete;
                       return (
                         <div key={entry.id} className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-entry-${entry.stage}`}>
@@ -548,6 +581,50 @@ function UiPathProgressPanel({
                           <PrimarySpinner size={12} />
                         </div>
                         <span className="text-[11px] text-muted-foreground/50 italic pipeline-ellipsis">{lastHeartbeat.message}</span>
+                      </div>
+                    )}
+                    {hasWorkflowEntries && (
+                      <div className="pl-4 space-y-0.5 mt-0.5">
+                        {workflowOrder.map((wfName) => {
+                          const wf = workflowMap.get(wfName)!;
+                          const index = wf.started?.context?.index ?? "?";
+                          const total = wf.started?.context?.total ?? "?";
+                          const isActive = wf.started && !wf.completed;
+                          const isDone = !!wf.completed;
+                          const isStubbed = wf.warnings.some(w => w.context?.outcome === "stubbed") || wf.completed?.context?.outcome === "stubbed";
+                          return (
+                            <div key={wfName}>
+                              <div className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-workflow-${wfName}`}>
+                                <div className="w-4 flex items-center justify-center shrink-0">
+                                  {isDone && isStubbed ? (
+                                    <span className="text-amber-400 text-[10px] shrink-0">&#9888;</span>
+                                  ) : isDone ? (
+                                    <Check className="h-2.5 w-2.5 text-emerald-400/60" />
+                                  ) : isActive ? (
+                                    <PrimarySpinner size={10} />
+                                  ) : (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/20 shrink-0" />
+                                  )}
+                                </div>
+                                <span className={`text-[10px] ${isDone ? "text-muted-foreground/50" : isActive ? "text-muted-foreground/70" : "text-muted-foreground/40"}`}>
+                                  {index}/{total}: {wfName}
+                                  {isDone && wf.completed!.elapsed !== undefined && (
+                                    <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{wf.completed!.elapsed.toFixed(1)}s</span>
+                                  )}
+                                  {isActive && wf.started && (
+                                    <WorkflowElapsedTimer startTimestamp={wf.started.timestamp} />
+                                  )}
+                                </span>
+                              </div>
+                              {wf.warnings.map((warn) => (
+                                <div key={warn.id} className="flex items-center gap-2 py-0.5 pl-6 pipeline-log-entry" data-testid={`progress-workflow-warning-${wfName}`}>
+                                  <span className="text-amber-400 text-[9px]">&#9888;</span>
+                                  <span className="text-amber-400/80 text-[9px]">{warn.message}</span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </>
