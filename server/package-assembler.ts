@@ -48,6 +48,7 @@ import archiver from "archiver";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
+  import { PACKAGE_NAMESPACE_MAP } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
 
 async function getProbeCache() {
@@ -56,11 +57,11 @@ async function getProbeCache() {
 }
 
 function getBaselineFallbackVersion(pkgName: string, _framework: "Windows" | "Portable"): string | null {
-  const preferred = _metadataService.getPreferredVersion(pkgName);
-  if (preferred) return preferred;
+  const validated = _metadataService.getValidatedVersion(pkgName);
+  if (validated) return validated;
   if (!_metadataService.getStudioTarget()) {
     _metadataService.load();
-    return _metadataService.getPreferredVersion(pkgName);
+    return _metadataService.getValidatedVersion(pkgName);
   }
   return null;
 }
@@ -468,6 +469,81 @@ function runPostAssemblyValidation(
     errors,
     warnings,
   };
+}
+
+function buildAssemblyToPackageMap(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+    if (info.assembly && !isFrameworkAssembly(packageId)) {
+      map.set(info.assembly, packageId);
+    }
+  }
+  return map;
+}
+
+function extractXamlNamespaceAndAssemblyPackages(allXamlContent: string): Set<string> {
+  const packages = new Set<string>();
+  const assemblyToPackage = buildAssemblyToPackageMap();
+
+  const xmlnsPattern = /xmlns:\w+="clr-namespace:[^;]*;assembly=([^"]+)"/g;
+  let match;
+  while ((match = xmlnsPattern.exec(allXamlContent)) !== null) {
+    const assemblyName = match[1].trim();
+    const pkgId = assemblyToPackage.get(assemblyName);
+    if (pkgId) {
+      packages.add(pkgId);
+    }
+  }
+
+  const assemblyRefPattern = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+  while ((match = assemblyRefPattern.exec(allXamlContent)) !== null) {
+    const assemblyName = match[1].trim();
+    const pkgId = assemblyToPackage.get(assemblyName);
+    if (pkgId) {
+      packages.add(pkgId);
+    }
+  }
+
+  return packages;
+}
+
+function validateNamespaceCoverage(
+  allXamlContent: string,
+  deps: Record<string, string>,
+): string[] {
+  const warnings: string[] = [];
+  const assemblyToPackage = buildAssemblyToPackageMap();
+  const depPackages = new Set(Object.keys(deps));
+
+  const xmlnsPattern = /xmlns:(\w+)="clr-namespace:([^;]*);assembly=([^"]+)"/g;
+  let match;
+  while ((match = xmlnsPattern.exec(allXamlContent)) !== null) {
+    const [, prefix, , assemblyName] = match;
+    const trimmedAssembly = assemblyName.trim();
+    if (isFrameworkAssembly(trimmedAssembly)) continue;
+    if (trimmedAssembly === "System.Activities" || trimmedAssembly === "mscorlib" || trimmedAssembly === "System" || trimmedAssembly === "System.Core" || trimmedAssembly === "System.Data") continue;
+
+    const pkgId = assemblyToPackage.get(trimmedAssembly);
+    if (pkgId) {
+      if (!depPackages.has(pkgId)) {
+        warnings.push(`Namespace prefix "${prefix}" references assembly "${trimmedAssembly}" (package: ${pkgId}) which is not in project.json dependencies`);
+      }
+    }
+  }
+
+  const assemblyRefPattern = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+  while ((match = assemblyRefPattern.exec(allXamlContent)) !== null) {
+    const assemblyName = match[1].trim();
+    if (isFrameworkAssembly(assemblyName)) continue;
+    if (assemblyName === "System.Activities" || assemblyName === "mscorlib" || assemblyName === "System" || assemblyName === "System.Core" || assemblyName === "System.Data") continue;
+
+    const pkgId = assemblyToPackage.get(assemblyName);
+    if (pkgId && !depPackages.has(pkgId)) {
+      warnings.push(`AssemblyReference "${assemblyName}" (package: ${pkgId}) is not covered by project.json dependencies`);
+    }
+  }
+
+  return warnings;
 }
 
 function sanitizeDeps(deps: Record<string, string>): void {
@@ -1726,6 +1802,12 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     {
       const usedPackages = new Set(Array.from(scannedPackages));
       usedPackages.add("UiPath.System.Activities");
+
+      const nsAndAsmPackages = extractXamlNamespaceAndAssemblyPackages(allXamlContent);
+      for (const pkg of nsAndAsmPackages) {
+        usedPackages.add(pkg);
+      }
+
       const unusedDeps: string[] = [];
       for (const pkgName of Object.keys(deps)) {
         if (!usedPackages.has(pkgName) && pkgName !== "UiPath.System.Activities") {
@@ -1733,10 +1815,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
       }
       for (const pkgName of unusedDeps) {
-        console.log(`[Dependency Alignment] Removing unused dependency: ${pkgName} — not referenced in any emitted XAML`);
+        console.log(`[Dependency Alignment] Removing unused dependency: ${pkgName} — not referenced in any emitted XAML (activity tags, namespace imports, or assembly references)`);
         dependencyWarnings.push({
           code: "DEPENDENCY_UNUSED_REMOVED",
-          message: `Package ${pkgName} was in dependencies but not referenced in any emitted XAML (activity tags, TypeArguments, or expressions) — removed`,
+          message: `Package ${pkgName} was in dependencies but not referenced in any emitted XAML (activity tags, namespace imports, assembly references, TypeArguments, or expressions) — removed`,
           stage: "dependency-alignment",
           recoverable: true,
         });
@@ -1755,16 +1837,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
       let resolved = false;
       if (catalogService.isLoaded()) {
-        const catalogVersion = catalogService.getConfirmedVersion(pkgName);
+        const catalogVersion = catalogService.getPreferredVersion(pkgName);
         if (catalogVersion) {
           deps[pkgName] = catalogVersion;
           dependencyWarnings.push({
             code: "DEPENDENCY_DISCOVERED_IN_XAML",
-            message: `Package ${pkgName} was not resolved proactively but was discovered in emitted XAML — added from catalog (v${catalogVersion}). This indicates a gap in the activity catalog mapping.`,
+            message: `Package ${pkgName} was not resolved proactively but was discovered in emitted XAML — added from catalog preferred version (v${catalogVersion}). This indicates a gap in the activity catalog mapping.`,
             stage: "dependency-crosscheck",
             recoverable: true,
           });
-          console.warn(`[Dependency CrossCheck] Gap detected: ${pkgName} found in XAML but not in proactive resolution — added from catalog v${catalogVersion}`);
+          console.warn(`[Dependency CrossCheck] Gap detected: ${pkgName} found in XAML but not in proactive resolution — added from catalog preferred v${catalogVersion}`);
           resolved = true;
         }
       }
@@ -1774,11 +1856,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           deps[pkgName] = fallback;
           dependencyWarnings.push({
             code: "DEPENDENCY_DISCOVERED_IN_XAML",
-            message: `Package ${pkgName} was discovered in emitted XAML but not in catalog — using metadata service fallback version ${fallback}`,
+            message: `Package ${pkgName} was discovered in emitted XAML but not in catalog — using validated metadata service version ${fallback}`,
             stage: "dependency-crosscheck",
             recoverable: true,
           });
-          console.warn(`[Dependency CrossCheck] Using metadata service fallback for ${pkgName}: ${fallback}`);
+          console.warn(`[Dependency CrossCheck] Using validated metadata service version for ${pkgName}: ${fallback}`);
         } else {
           throw new Error(
             `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in emitted XAML but has no validated version in the catalog, studio profile, or metadata service. ` +
@@ -1787,6 +1869,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
       }
     }
+
+    validateAndEnforceDependencyCompatibility(deps, dependencyWarnings);
 
     const allGaps = aggregateGaps(xamlResults);
 
@@ -1872,6 +1956,37 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (!isValidNuGetVersion(val)) {
         console.log(`[UiPath Final Check] Removing invalid dependency after sanitize: ${key}=${val}`);
         delete deps[key];
+      }
+    }
+
+    {
+      const nsCoverageWarnings = validateNamespaceCoverage(allXamlContent, deps);
+      for (const warning of nsCoverageWarnings) {
+        console.warn(`[Namespace Coverage] ${warning}`);
+        dependencyWarnings.push({
+          code: "NAMESPACE_MISSING_DEPENDENCY",
+          message: warning,
+          stage: "namespace-coverage-validation",
+          recoverable: true,
+        });
+
+        const pkgMatch = warning.match(/\(package: ([^)]+)\)/);
+        if (pkgMatch) {
+          const missingPkg = pkgMatch[1];
+          if (!deps[missingPkg] && !isFrameworkAssembly(missingPkg)) {
+            let version: string | null = null;
+            if (catalogService.isLoaded()) {
+              version = catalogService.getPreferredVersion(missingPkg);
+            }
+            if (!version) {
+              version = getBaselineFallbackVersion(missingPkg, tf as "Windows" | "Portable");
+            }
+            if (version) {
+              deps[missingPkg] = version;
+              console.log(`[Namespace Coverage] Auto-added missing dependency ${missingPkg}@${version} to satisfy namespace/assembly reference`);
+            }
+          }
+        }
       }
     }
 
@@ -2485,19 +2600,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           continue;
         }
         if (catalogService.isLoaded()) {
-          const catalogVersion = catalogService.getConfirmedVersion(pkgName);
+          const catalogVersion = catalogService.getPreferredVersion(pkgName);
           if (catalogVersion) {
             deps[pkgName] = catalogVersion;
             autoFixSummary.push(`Added dependency from catalog crosscheck: ${pkgName}@${catalogVersion}`);
-            console.warn(`[Dependency CrossCheck] Post-fix gap: ${pkgName} discovered in XAML after meta-validation — added from catalog v${catalogVersion}`);
+            console.warn(`[Dependency CrossCheck] Post-fix gap: ${pkgName} discovered in XAML after meta-validation — added from catalog preferred v${catalogVersion}`);
             continue;
           }
         }
         const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
         if (fallback) {
           deps[pkgName] = fallback;
-          autoFixSummary.push(`Added dependency from metadata service fallback: ${pkgName}@${fallback}`);
-          console.warn(`[Dependency CrossCheck] Post-fix: using metadata service fallback for ${pkgName}: ${fallback}`);
+          autoFixSummary.push(`Added dependency from validated metadata service: ${pkgName}@${fallback}`);
+          console.warn(`[Dependency CrossCheck] Post-fix: using validated metadata service version for ${pkgName}: ${fallback}`);
         } else {
           throw new Error(
             `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in post-remediation XAML but has no validated version. ` +
@@ -2505,6 +2620,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           );
         }
       }
+
+      validateAndEnforceDependencyCompatibility(deps, dependencyWarnings);
 
       const fixedProjectJsonStr = JSON.stringify(projectJson, null, 2);
 

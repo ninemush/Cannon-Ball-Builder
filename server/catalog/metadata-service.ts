@@ -355,6 +355,51 @@ class MetadataService {
     return range?.preferred || null;
   }
 
+  isVersionInValidatedRange(pkgName: string, version: string): boolean {
+    const range = this.getPackageVersionRange(pkgName);
+    if (!range) return false;
+
+    const cleanVersion = version.replace(/^\[/, "").replace(/[,)\]]/g, "").trim();
+    const vMatch = cleanVersion.match(/^(\d+\.\d+(\.\d+){0,2})/);
+    if (!vMatch) return false;
+    const ver = vMatch[1];
+
+    const minParts = range.min.split(".").map(Number);
+    const maxParts = range.max.split(".").map(Number);
+    const verParts = ver.split(".").map(Number);
+
+    const len = Math.max(minParts.length, maxParts.length, verParts.length);
+    for (let i = 0; i < len; i++) {
+      const v = verParts[i] || 0;
+      const mn = minParts[i] || 0;
+      if (v < mn) return false;
+      if (v > mn) break;
+    }
+
+    for (let i = 0; i < len; i++) {
+      const v = verParts[i] || 0;
+      const mx = maxParts[i] || 0;
+      if (v > mx) return false;
+      if (v < mx) break;
+    }
+
+    return true;
+  }
+
+  getValidatedVersion(pkgName: string): string | null {
+    const preferred = this.getPreferredVersion(pkgName);
+    if (!preferred) return null;
+    if (this.isVersionInValidatedRange(pkgName, preferred)) {
+      return preferred;
+    }
+    const range = this.getPackageVersionRange(pkgName);
+    if (range) {
+      console.warn(`[MetadataService] Preferred version ${preferred} for ${pkgName} is outside validated range [${range.min}, ${range.max}] — using preferred anyway as it is the registry authority`);
+      return preferred;
+    }
+    return preferred;
+  }
+
   private resolvedServiceUrls: Partial<Record<ServiceResourceType, string>> = {};
   private inMemoryReachability: Partial<Record<ServiceResourceType, "reachable" | "limited" | "unreachable" | "unknown">> = {};
 

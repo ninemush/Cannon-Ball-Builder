@@ -310,7 +310,8 @@ class CatalogService {
 
     if (!this.loaded || !this.catalog) return null;
     const pkg = this.packageIndex.get(packageName);
-    return pkg?.version || null;
+    if (!pkg) return null;
+    return pkg.preferredVersion || pkg.version || null;
   }
 
   getEnumValues(activityClassName: string, propertyName: string): string[] | null {
