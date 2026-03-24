@@ -336,7 +336,7 @@ function ConnectedSystemsSection({ discovery }: { discovery: ISDiscovery }) {
 }
 
 export function IntegrationStatusBar() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   const { data: health, error: healthError } = useQuery<HealthData>({
     queryKey: ["/api/uipath/health"],
