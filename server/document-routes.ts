@@ -6,7 +6,7 @@ import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { getPlatformCapabilities, type IntegrationServiceConnection, type IntegrationServiceConnector, type ConnectorOperation } from "./uipath-integration";
+import { getPlatformCapabilities, type PlatformCapabilityProfile, type IntegrationServiceConnection, type IntegrationServiceConnector, type ConnectorOperation } from "./uipath-integration";
 import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPackage, computeVersion, getCachedPipelineResult } from "./uipath-pipeline";
 import { generateConfigXlsx } from "./package-assembler";
 import { startUiPathGenerationRun, type TriggerSource, type RunCallbacks, type RunResult } from "./uipath-run-manager";
@@ -61,9 +61,9 @@ async function verifyIdeaAccess(req: Request, res: Response): Promise<string | n
 }
 
 
-function buildSddProsePrompt(platformCapabilities?: string, packageRegistryContext?: string): string {
+function buildSddProsePrompt(platformCapabilities?: string, packageRegistryContext?: string, automationType?: string): string {
   const platformContext = platformCapabilities
-    ? `\n\nIMPORTANT — PLATFORM-AWARE DESIGN:\n${platformCapabilities}\n\nYou MUST design the solution to leverage the available services optimally. Consider the full breadth of the UiPath platform:\n- **Unattended vs Attended automation**: Use unattended bots for back-office tasks, attended for human-assisted work\n- **Agentic automation / AI Agents**: For processes needing intelligent decision-making, context understanding, or natural language processing\n- **Action Center**: For human-in-the-loop steps — approvals, validations, exception review, escalations. Define complete form schemas with field definitions, data types, and validation rules. Configure SLA with due time, warning threshold, and escalation policy. Link task results to Data Fabric entities for persistence.\n- **Data Fabric / Data Service**: For structured data persistence — define entities with typed fields to store process data across workflow runs. Use entities as the data backbone connecting Action Center tasks, Apps, and XAML workflows. Read/write via the Entity Service API.\n- **Apps**: For citizen-developer web interfaces — form-based UIs for manual input, oversight dashboards, and human interaction points. Apps connect directly to Data Fabric entities and can trigger or receive data from automation workflows.\n- **IXP (Intelligent Xtraction & Processing)**: The unified multi-modal data extraction platform. AUTO-SELECT the right extraction approach:\n  - **Classic Document Understanding (DU)**: For structured/semi-structured forms with known layouts — invoices, receipts, purchase orders, tax forms. Uses OCR + ML classification + template-based extraction with pre-trained models. Best when document types are well-defined and high-volume.\n  - **Generative Extraction**: For unstructured documents — contracts, legal agreements, reports, correspondence, medical records. Uses LLM-powered extraction without requiring pre-trained models or taxonomy definitions. Best when document formats vary widely or when rapid deployment is needed without model training.\n  - **Communications Mining**: For email/message streams — customer support emails, internal communications, chat transcripts. Analyzes intent, sentiment, entities, and routes communications intelligently. Best for triage, categorization, and extracting actionable data from conversation flows.\n- **Integration Service**: For pre-built API connectors to enterprise systems (SAP, Salesforce, ServiceNow, etc.) instead of custom HTTP calls\n- **Storage Buckets**: For centralized file storage — input documents, output reports, templates, audit logs\n- **AI Center**: For custom ML models — classification, prediction, NLP, anomaly detection\n- **Test Manager**: For automated test suites to validate the automation\n- **Apps**: For citizen developer interfaces where manual input or oversight is needed\n\n- **Maestro**: For BPMN-based process orchestration — when the solution needs coordinated process models with service tasks (linked to Orchestrator processes), user tasks (via Action Center), gateways with conditional routing, event triggers, process apps, and case management. Prefer Maestro over traditional Orchestrator triggers when orchestrating multi-step processes that combine automated and human tasks in a structured BPMN flow\nIXP EXTRACTION APPROACH SELECTION (when the process involves documents or communications):\nYou MUST explicitly select and justify the extraction approach in the Architecture section:\n1. Analyze document types mentioned in the process — are they structured forms, unstructured documents, or communications?\n2. Select: Classic DU for structured forms, Generative Extraction for unstructured docs, Communications Mining for email/message streams, or a combination.\n3. Specify extraction field mappings — what fields need to be extracted from each document type.\n4. Define validation rules — confidence thresholds, human review triggers, business rule validations.\n\nFor each available service, explain HOW it will be used in the solution. For unavailable services, include a "## 8. Platform Recommendations" section explaining what each missing service would unlock and the concrete benefits it would provide for this specific automation.`
+    ? `\n\nIMPORTANT — PLATFORM-AWARE DESIGN:\n${platformCapabilities}\n\nLeverage available services optimally. Key capabilities:\n- **Unattended/Attended**: Unattended for back-office, attended for human-assisted work\n- **AI Agents**: For intelligent decision-making and NLP-driven processes\n- **Action Center**: Human-in-the-loop approvals/validations with form schemas, SLAs, and Data Fabric entity linking\n- **Data Fabric**: Typed entities for cross-run data persistence, connecting Action Center, Apps, and workflows\n- **Apps**: Citizen-developer web UIs for input/oversight, connected to Data Fabric entities\n- **IXP**: Auto-select extraction: Classic DU for structured forms (invoices, POs), Generative Extraction for unstructured docs (contracts, reports), Communications Mining for email/message triage\n- **Integration Service**: Pre-built connectors (SAP, Salesforce, etc.) — prefer over custom HTTP\n- **Storage Buckets**: Centralized file storage\n- **AI Center**: Custom ML models\n- **Maestro**: BPMN orchestration combining service tasks, user tasks, and gateways — prefer over triggers for multi-step human+automated flows\n\nFor document processes: specify extraction approach, field mappings, and validation rules (confidence thresholds, review triggers) in the Architecture section.\nFor each available service, explain HOW it is used. For unavailable services, include a "Platform Recommendations" section with concrete benefits.`
     : "";
 
   return `The SME has approved the PDD. Generate the Solution Design Document for this UiPath automation. You are designing a solution that will be FULLY DEPLOYED — every artifact you specify will be automatically provisioned on the connected UiPath platform.
@@ -88,25 +88,68 @@ Include these sections:
 7a) Governance Compliance — if governance policies are active, include a section confirming compliance with each active policy and how the solution design adheres to naming conventions, restricted activity rules, and required error handling patterns
 8) Data Model and Entity Design — define all Data Fabric entities with their complete field schemas, relationships between entities, and which workflows/Action Center tasks reference each entity
 
-AGENT ARCHITECTURE (MANDATORY when automation type is agent or hybrid):
-If this automation uses AI agents, you MUST include a dedicated "## 8. Agent Architecture" section with:
-- **Agent Type**: autonomous (operates independently with goal-based reasoning), conversational (interactive chat-based with user), or coded (developer-written Python/JS agent logic)
+${(automationType === "agent" || automationType === "hybrid") ? `AGENT ARCHITECTURE (MANDATORY for ${automationType} automation):
+Include a dedicated "## 8. Agent Architecture" section with:
+- **Agent Type**: autonomous, conversational, or coded
 - **Agent Identity**: name, purpose, and behavioral system prompt
-- **Tool Definitions**: each tool the agent can invoke, mapped to a specific deployed Orchestrator process by name (e.g., "InvoiceExtractor" tool → calls the "Extract_Invoice_Data" process). Include input/output argument schemas.
-- **Context Grounding Strategy**: which storage buckets provide reference documents, what document sources feed the agent's knowledge, refresh cadence, and embedding model if applicable
-- **Escalation Rules**: conditions under which the agent escalates to a human, mapped to specific Action Center task catalogs by name (e.g., "confidence < 0.7" → escalate to "InvoiceReview_Catalog")
-- **Guardrails**: safety constraints, output validation rules, PII handling, and maximum iteration limits
-- **Agent Interaction Flow**: how the agent fits into the broader automation — which RPA process triggers it, what it returns, and how its output feeds downstream steps
+- **Tool Definitions**: each tool mapped to a deployed Orchestrator process by name, with input/output argument schemas
+- **Context Grounding Strategy**: storage buckets, document sources, refresh cadence, embedding model
+- **Escalation Rules**: conditions mapped to Action Center task catalogs by name
+- **Guardrails**: safety constraints, output validation, PII handling, max iteration limits
+- **Agent Interaction Flow**: which RPA process triggers the agent, what it returns, downstream steps
 
-Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.${packageRegistryContext ? `\n\n${packageRegistryContext}\n\nPACKAGE VERSION RULES (MANDATORY):\n- For every UiPath package you reference, use the EXACT preferred version from the registry above (e.g., "UiPath.System.Activities 25.10.7").\n- Do NOT write "Latest stable", "Latest", or invent version numbers.\n- If a package is needed but NOT listed in the registry above, you MUST note: "[package name] — version not verified (not in validated registry)" instead of guessing a version.` : ""}`;
+` : ""}Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.${packageRegistryContext ? `\n\n${packageRegistryContext}\n\nPACKAGE VERSION RULES (MANDATORY):\n- For every UiPath package you reference, use the EXACT preferred version from the registry above (e.g., "UiPath.System.Activities 25.10.7").\n- Do NOT write "Latest stable", "Latest", or invent version numbers.\n- If a package is needed but NOT listed in the registry above, you MUST note: "[package name] — version not verified (not in validated registry)" instead of guessing a version.` : ""}`;
 }
 
-function buildSddArtifactsPrompt(platformCapabilities?: string): string {
-  const platformContext = platformCapabilities
-    ? `\n\nPLATFORM AVAILABILITY:\n${platformCapabilities}\n\nOnly generate artifacts for services that are AVAILABLE. For unavailable services, do NOT include their artifact arrays.`
-    : "";
+interface SlimArtifactsContext {
+  availableServices?: string;
+  activeConnections?: { connectorName: string; connectionName: string; connectionId: string }[];
+  automationType?: string;
+}
 
-  return `Based on the approved PDD and conversation, generate ONLY the Orchestrator & Platform Deployment Specification (Section 9) for a UiPath automation SDD.${platformContext}
+function buildArtifactsContext(platformProfile: PlatformCapabilityProfile): SlimArtifactsContext {
+  const ctx: SlimArtifactsContext = {};
+
+  if (platformProfile?.configured) {
+    const availNames: string[] = [];
+    const avail = platformProfile.available || {};
+    for (const [key, val] of Object.entries(avail)) {
+      if (val) availNames.push(key);
+    }
+    if (availNames.length > 0) {
+      ctx.availableServices = availNames.map(n => `${n}: available`).join(", ");
+    }
+  }
+
+  if (platformProfile?.integrationService?.available) {
+    const is = platformProfile.integrationService;
+    const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
+    if (activeConns.length > 0) {
+      ctx.activeConnections = activeConns.map((c: IntegrationServiceConnection) => ({
+        connectorName: c.connectorName,
+        connectionName: c.name,
+        connectionId: c.id,
+      }));
+    }
+  }
+
+  return ctx;
+}
+
+function buildSddArtifactsPrompt(artifactsContext?: SlimArtifactsContext): string {
+  let platformContext = "";
+  if (artifactsContext?.availableServices) {
+    platformContext = `\n\nAVAILABLE PLATFORM SERVICES: ${artifactsContext.availableServices}\nOnly generate artifacts for services that are AVAILABLE. For unavailable services, do NOT include their artifact arrays.`;
+  }
+  if (artifactsContext?.activeConnections && artifactsContext.activeConnections.length > 0) {
+    const connList = artifactsContext.activeConnections.map(c => `- ${c.connectorName}: "${c.connectionName}" (ID: ${c.connectionId})`).join("\n");
+    platformContext += `\n\nACTIVE INTEGRATION SERVICE CONNECTIONS:\n${connList}\nUse exact connector/connection names and IDs in integrationServiceConnectors entries.`;
+  }
+  if (artifactsContext?.automationType) {
+    platformContext += `\n\nAutomation type: ${artifactsContext.automationType}`;
+  }
+
+  return `Based on the approved PDD, generate ONLY the Orchestrator & Platform Deployment Specification (Section 9) for a UiPath automation SDD.${platformContext}
 
 You MUST output a fenced code block tagged \`\`\`orchestrator_artifacts with a complete JSON object defining EVERY deployable artifact needed. This is machine-parsed and used to AUTO-PROVISION all artifacts on the connected UiPath platform. Every artifact you include WILL be created automatically.
 
@@ -365,54 +408,36 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
           if (meta?.categories && meta.categories.length > 0) {
             line += ` [${meta.categories.join(", ")}]`;
           }
-          line += `: `;
-          const caps: string[] = [];
-          if (meta?.hasCRUDs) caps.push("CRUD");
-          if (meta?.hasMethods) caps.push("methods");
-          if (meta?.hasEvents) {
-            const eventDetail = meta.eventTypes && meta.eventTypes.length > 0
-              ? `${meta.eventTypes.join("/")} events`
-              : "events";
-            caps.push(eventDetail);
-          }
-          if (meta?.hasHttpRequest) caps.push("HTTP request");
-          if (meta?.hasExtensions) caps.push("extensions");
-          if (caps.length > 0) {
-            line += caps.join(" + ");
-          } else {
-            line += "basic connectivity";
-          }
-          line += `, connected`;
+          line += `: connection "${c.name}" (ID: ${c.id})`;
           if (c.connectionIdentity || c.accountName) {
-            line += ` as ${c.connectionIdentity || c.accountName}`;
+            line += `, account: ${c.connectionIdentity || c.accountName}`;
           }
           return line;
         }).join("\n");
 
         let opsCatalog = "";
+        const MAX_OPS_PER_CONNECTOR = 5;
         const activeConnectorIds = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorId).filter(Boolean)));
         const activeConnectorKeys = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorKey).filter(Boolean)));
         const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) =>
           (activeConnectorIds.includes(c.id) || activeConnectorKeys.includes(c.id)) && c.operations && c.operations.length > 0
         );
         if (connectorsWithOps.length > 0) {
-          opsCatalog = `\n\nINTEGRATION SERVICE — OPERATION CATALOG (per connector):\n`;
+          opsCatalog = `\n\nINTEGRATION SERVICE — KEY OPERATIONS (top ${MAX_OPS_PER_CONNECTOR} per connector):\n`;
           for (const connector of connectorsWithOps) {
             const actions = connector.operations.filter((o: ConnectorOperation) => o.type === "action");
             const triggers = connector.operations.filter((o: ConnectorOperation) => o.type === "trigger");
-            const unknown = connector.operations.filter((o: ConnectorOperation) => o.type === "unknown");
-            opsCatalog += `\n**${connector.name}** (${connector.operations.length} operations):\n`;
+            opsCatalog += `\n**${connector.name}** (${connector.operations.length} total operations):\n`;
             if (actions.length > 0) {
-              opsCatalog += `  Actions: ${actions.map((a: ConnectorOperation) => `"${a.name}"`).join(", ")}\n`;
+              const shown = actions.slice(0, MAX_OPS_PER_CONNECTOR);
+              opsCatalog += `  Actions: ${shown.map((a: ConnectorOperation) => `"${a.name}"`).join(", ")}${actions.length > MAX_OPS_PER_CONNECTOR ? ` (+${actions.length - MAX_OPS_PER_CONNECTOR} more)` : ""}\n`;
             }
             if (triggers.length > 0) {
-              opsCatalog += `  Triggers: ${triggers.map((t: ConnectorOperation) => `"${t.name}"`).join(", ")}\n`;
-            }
-            if (unknown.length > 0) {
-              opsCatalog += `  Other: ${unknown.map((u: ConnectorOperation) => `"${u.name}"`).join(", ")}\n`;
+              const shown = triggers.slice(0, MAX_OPS_PER_CONNECTOR);
+              opsCatalog += `  Triggers: ${shown.map((t: ConnectorOperation) => `"${t.name}"`).join(", ")}${triggers.length > MAX_OPS_PER_CONNECTOR ? ` (+${triggers.length - MAX_OPS_PER_CONNECTOR} more)` : ""}\n`;
             }
           }
-          opsCatalog += `\nWhen specifying UiPath activities, reference exact operation names from the catalog above. Use the UiPath.IntegrationService.Activities package with the connector-specific activity (e.g., connector action "Send Email" → use Integration Service "Send Email" activity). For triggers, specify the Integration Service trigger by name (e.g., "When a new email is received" trigger). In the orchestrator artifacts schema, declare Integration Service connectors as dependencies using the integrationServiceConnectors array rather than designing custom HTTP calls.`;
+          opsCatalog += `\nReference exact operation names above. Use UiPath.IntegrationService.Activities package. Declare connectors as dependencies in integrationServiceConnectors array.`;
         }
 
         platformCapabilitiesText += `\n\nINTEGRATION SERVICE — CONNECTED ENTERPRISE SYSTEMS:\nThe following Integration Service connections are ACTIVE and ready to use:\n${connLines}\n\nWhen designing integration points, you MUST use these Integration Service connectors instead of custom HTTP activities. Reference the specific connector name in the "UiPath Activities and Packages Required" section and include the UiPath.IntegrationService.Activities package. In the "Integration Points" section, specify the connector name and connection ID for each connected system.${opsCatalog}`;
@@ -431,10 +456,16 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
     const systemPrompt = `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`;
 
     const packageRegistryContext = metadataService.getPackageRegistryContext();
-    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText, packageRegistryContext);
-    const sddArtifactsPrompt = buildSddArtifactsPrompt(platformCapabilitiesText);
+    const ideaAutomationType = (idea.automationType as string) || undefined;
+    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText, packageRegistryContext, ideaAutomationType);
 
-    const artifactsSystemPrompt = systemPrompt + "\n\nIMPORTANT: Your response MUST begin immediately with the ```orchestrator_artifacts fenced code block. Do NOT include any prose, explanation, or text before the opening fence.";
+    const slimArtifactsCtx = buildArtifactsContext(platformProfile);
+    slimArtifactsCtx.automationType = ideaAutomationType;
+    const sddArtifactsPrompt = buildSddArtifactsPrompt(slimArtifactsCtx);
+
+    const artifactsSystemPrompt = `You are a professional automation consultant generating deployment artifacts for the "${idea.title}" project.${contextPrompt}\n\nIMPORTANT: Your response MUST begin immediately with the \`\`\`orchestrator_artifacts fenced code block. Do NOT include any prose, explanation, or text before the opening fence.`;
+
+    const proseChatMessages = sanitizeChatForLLM(history, { maxMessages: 20 });
 
     const sddTimeout = SDD_LLM_TIMEOUT_MS;
     console.log(`[SDD] Using timeout of ${sddTimeout / 1000}s for LLM calls`);
@@ -443,13 +474,13 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
       getLLM().create({
         maxTokens: 6144,
         system: systemPrompt,
-        messages: [...chatMessages, { role: "user", content: sddProsePrompt }],
+        messages: [...proseChatMessages, { role: "user", content: sddProsePrompt }],
         timeoutMs: sddTimeout,
       }),
       getLLM().create({
         maxTokens: 4096,
         system: artifactsSystemPrompt,
-        messages: [...chatMessages, { role: "user", content: sddArtifactsPrompt }],
+        messages: [{ role: "user", content: sddArtifactsPrompt }],
         timeoutMs: sddTimeout,
       }),
     ]);
@@ -483,10 +514,10 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
       try {
         const retryResponse = await getLLM().create({
           maxTokens: 4096,
-          system: "You are a UiPath automation consultant. Output ONLY the orchestrator_artifacts fenced code block. Start your response immediately with ```orchestrator_artifacts — no prose, no explanation before or after.",
-          messages: [...chatMessages, {
+          system: `You are a UiPath automation consultant. Output ONLY the orchestrator_artifacts fenced code block. Start your response immediately with \`\`\`orchestrator_artifacts — no prose, no explanation before or after.${contextPrompt}`,
+          messages: [{
             role: "user",
-            content: `Your previous attempt to generate the deployment specification did not produce valid structured output. Generate ONLY the deployment artifacts block now.\n\nStart immediately with:\n\`\`\`orchestrator_artifacts\n{\n  ...\n}\n\`\`\`\n\nInclude all queues, assets, machines, triggers, environments, and other artifacts needed for this automation.`
+            content: `Your previous attempt did not produce valid structured output. Generate ONLY the deployment artifacts block now.\n\n${sddArtifactsPrompt}`
           }],
           timeoutMs: sddTimeout,
         });
