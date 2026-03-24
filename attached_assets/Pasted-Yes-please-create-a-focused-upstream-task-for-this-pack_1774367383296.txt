@@ -1,0 +1,51 @@
+Yes — please create a focused upstream task for this package-generation failure.
+
+Context
+The latest build failed because AI-generated XAML used a `dataservice:` namespace prefix for Data Service activities, but the system’s canonical registered prefix is `uds:` for `UiPath.DataService.Activities`.
+
+The likely chain is:
+- AI/tree assembly emitted tags like `dataservice:QueryRecords`, `dataservice:UpdateRecord`, `dataservice:CreateRecord`
+- the namespace map expects `uds:`
+- namespace scanning/validation sees `dataservice:` with no corresponding declaration
+- validation fails
+- auto-downgrade retries but the same mismatch persists
+
+I want this fixed upstream and generally, not as a one-off package patch.
+
+Please create the task in the usual format:
+- title / objective
+- root-cause summary
+- impact analysis
+- done looks like
+- out of scope
+- tasks
+- relevant files
+- acceptance criteria
+- dependencies
+
+Task requirements
+
+1. Canonical prefix normalization for known aliases
+- support known prefix aliases like `dataservice` mapping to the canonical registered prefix for Data Service activities
+- normalization should happen before hard namespace validation
+
+2. Keep validation strict after normalization
+- known aliases should be auto-normalized
+- truly unknown prefixes should still fail clearly rather than being guessed
+
+3. Prevent orphan prefix artifacts
+- ensure that when unknown/unsupported activities are stubbed or replaced with comments, leftover namespace usage does not continue to poison namespace validation
+
+4. Generalize where appropriate
+- this should be implemented as part of a broader known-prefix-alias normalization rule where possible
+- not just a one-line special case for `dataservice`
+
+Important constraints
+- do not patch this one package manually
+- do not weaken namespace validation into permissive guessing
+- prefer canonical prefix normalization before validation, followed by strict validation
+- keep the fix upstream and reusable for future alias mismatches
+
+Please also include:
+- whether this should be folded into the existing namespace-prefix normalization work or treated as a linked follow-up
+- what I should test immediately with Data Service activities after the fix
