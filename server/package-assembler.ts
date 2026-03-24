@@ -16,6 +16,7 @@ import archiver from "archiver";
     generateDhgSummary,
     makeUiPathCompliant,
     ensureBracketWrapped,
+    normalizeAssignArgumentNesting,
     validateXamlContent,
     generateStubWorkflow,
     selectGenerationMode,
@@ -1395,6 +1396,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           for (const correction of validation.corrections) {
             if (correction.type === "move-to-child-element") {
               const propName = correction.property;
+              if (className === "Assign" && (propName === "To" || propName === "Value")) {
+                continue;
+              }
               const propVal = attrs[propName];
               if (propVal === undefined) continue;
               const wrapper = correction.argumentWrapper || "InArgument";
@@ -2189,14 +2193,22 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                 } else if (correction.type === "wrap-in-argument" && correction.argumentWrapper) {
                   const propName = correction.property;
                   const className = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
+
+                  if (className === "Assign" && (propName === "To" || propName === "Value")) {
+                    continue;
+                  }
+
                   const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                   const wrapper = correction.argumentWrapper;
                   const xType = correction.typeArguments || clrToXamlType("System.String");
 
                   const childTagRegex = new RegExp(
-                    `(<${escapedClassName}\\.${propName}>)\\s*(?!<(?:InArgument|OutArgument|InOutArgument)[\\s>])([\\s\\S]*?)\\s*(<\\/${escapedClassName}\\.${propName}>)`,
+                    `(<${escapedClassName}\\.${propName}>)\\s*(?!<(?:InArgument|OutArgument|InOutArgument)[\\s>\\n])([\\s\\S]*?)\\s*(<\\/${escapedClassName}\\.${propName}>)`,
                   );
-                  if (childTagRegex.test(content)) {
+                  const alreadyWrappedRegex = new RegExp(
+                    `<${escapedClassName}\\.${propName}>[\\s\\n]*<(?:InArgument|OutArgument|InOutArgument)[\\s>]`,
+                  );
+                  if (childTagRegex.test(content) && !alreadyWrappedRegex.test(content)) {
                     content = content.replace(childTagRegex,
                       `$1\n            <${wrapper} x:TypeArguments="${xType}">$2</${wrapper}>\n          $3`
                     );
@@ -2233,6 +2245,21 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
       } catch (err: any) {
         console.warn(`[Activity Catalog] Post-generation validation failed: ${err.message}`);
+      }
+    }
+
+    for (let i = 0; i < xamlEntries.length; i++) {
+      const entry = xamlEntries[i];
+      const normalized = normalizeAssignArgumentNesting(entry.content);
+      if (normalized !== entry.content) {
+        console.log(`[XAML Post-Pass] ${entry.name}: normalized nested Assign argument wrappers`);
+        xamlEntries[i] = { name: entry.name, content: normalized };
+        const archivePath = Array.from(deferredWrites.keys()).find(
+          p => (p.split("/").pop() || p) === entry.name
+        );
+        if (archivePath) {
+          deferredWrites.set(archivePath, normalized);
+        }
       }
     }
 

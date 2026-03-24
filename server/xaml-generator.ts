@@ -24,6 +24,7 @@ export {
   looksLikeVariableRef,
   smartBracketWrap,
   makeUiPathCompliant,
+  normalizeAssignArgumentNesting,
   type TargetFramework,
 } from "./xaml/xaml-compliance";
 

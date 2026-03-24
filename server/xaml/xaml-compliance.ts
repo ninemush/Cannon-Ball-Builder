@@ -390,6 +390,85 @@ function collapseDoubledArgumentsXmlParser(xml: string): string {
   return xml;
 }
 
+export function normalizeAssignArgumentNesting(xml: string): string {
+  const nestedOutInTo = /<Assign\.To>\s*<OutArgument([^>]*)>\s*<OutArgument[\s\S]*?<\/OutArgument>\s*<\/OutArgument>\s*<\/Assign\.To>/;
+  const nestedInInValue = /<Assign\.Value>\s*<InArgument([^>]*)>\s*<InArgument[\s\S]*?<\/InArgument>\s*<\/InArgument>\s*<\/Assign\.Value>/;
+  let passes = 0;
+  const MAX = 20;
+
+  while (passes < MAX && (nestedOutInTo.test(xml) || nestedInInValue.test(xml))) {
+    xml = xml.replace(
+      /<Assign\.To>([\s\S]*?)<\/Assign\.To>/g,
+      (_match, inner) => {
+        let content = inner;
+        let stripped = true;
+        while (stripped) {
+          stripped = false;
+          content = content.replace(
+            /<OutArgument([^>]*)>\s*<OutArgument([^>]*)>([\s\S]*?)<\/OutArgument>\s*<\/OutArgument>/g,
+            (_m: string, outerAttrs: string, innerAttrs: string, c: string) => {
+              stripped = true;
+              const attrs = (innerAttrs || outerAttrs).trim();
+              return `<OutArgument${attrs ? " " + attrs : ""}>${c.trim()}</OutArgument>`;
+            }
+          );
+        }
+        return `<Assign.To>${content}</Assign.To>`;
+      }
+    );
+
+    xml = xml.replace(
+      /<Assign\.Value>([\s\S]*?)<\/Assign\.Value>/g,
+      (_match, inner) => {
+        let content = inner;
+        let stripped = true;
+        while (stripped) {
+          stripped = false;
+          content = content.replace(
+            /<InArgument([^>]*)>\s*<InArgument([^>]*)>([\s\S]*?)<\/InArgument>\s*<\/InArgument>/g,
+            (_m: string, outerAttrs: string, innerAttrs: string, c: string) => {
+              stripped = true;
+              const attrs = (innerAttrs || outerAttrs).trim();
+              return `<InArgument${attrs ? " " + attrs : ""}>${c.trim()}</InArgument>`;
+            }
+          );
+        }
+        return `<Assign.Value>${content}</Assign.Value>`;
+      }
+    );
+
+    passes++;
+  }
+
+  if (nestedOutInTo.test(xml) || nestedInInValue.test(xml)) {
+    throw new Error(`[XAML Compliance] FATAL: Assign argument nesting persists after ${MAX} normalization passes — XAML is malformed`);
+  }
+
+  const assignToBlocks = xml.match(/<Assign\.To>[\s\S]*?<\/Assign\.To>/g) || [];
+  for (const block of assignToBlocks) {
+    const outArgCount = (block.match(/<OutArgument[\s>]/g) || []).length;
+    if (outArgCount === 0) {
+      throw new Error(`[XAML Compliance] Assign.To missing <OutArgument> wrapper: ${block.slice(0, 200)}`);
+    }
+    if (outArgCount > 1) {
+      throw new Error(`[XAML Compliance] Assign.To has ${outArgCount} <OutArgument> wrappers (expected 1): ${block.slice(0, 200)}`);
+    }
+  }
+
+  const assignValueBlocks = xml.match(/<Assign\.Value>[\s\S]*?<\/Assign\.Value>/g) || [];
+  for (const block of assignValueBlocks) {
+    const inArgCount = (block.match(/<InArgument[\s>]/g) || []).length;
+    if (inArgCount === 0) {
+      throw new Error(`[XAML Compliance] Assign.Value missing <InArgument> wrapper: ${block.slice(0, 200)}`);
+    }
+    if (inArgCount > 1) {
+      throw new Error(`[XAML Compliance] Assign.Value has ${inArgCount} <InArgument> wrappers (expected 1): ${block.slice(0, 200)}`);
+    }
+  }
+
+  return xml;
+}
+
 const VB_RESERVED_WORDS = new Set([
   "true", "false", "nothing", "null", "not", "and", "or", "andalso", "orelse",
   "is", "isnot", "if", "ctype", "directcast", "gettype", "typeof", "new",
@@ -1264,6 +1343,20 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `<Assign.Value><InArgument${attrs}>${wrappedExpr}</InArgument></Assign.Value>`;
   });
 
+  xml = xml.replace(/<Assign\.To>\s*(?!<OutArgument[\s>])([\s\S]*?)\s*<\/Assign\.To>/g, (_match, content) => {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed.startsWith("<OutArgument")) return _match;
+    const wrappedExpr = ensureBracketWrapped(trimmed);
+    return `<Assign.To><OutArgument x:TypeArguments="x:Object">${wrappedExpr}</OutArgument></Assign.To>`;
+  });
+
+  xml = xml.replace(/<Assign\.Value>\s*(?!<InArgument[\s>])([\s\S]*?)\s*<\/Assign\.Value>/g, (_match, content) => {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed.startsWith("<InArgument")) return _match;
+    const wrappedExpr = smartBracketWrap(trimmed);
+    return `<Assign.Value><InArgument x:TypeArguments="x:Object">${wrappedExpr}</InArgument></Assign.Value>`;
+  });
+
   xml = xml.replace(/<(\w+(?::\w+)?\.[\w.]+)>\s*<OutArgument([^>]*)>([^<]*)<\/OutArgument>\s*<\/\1>/g, (_match, propTag, attrs, expr) => {
     if (propTag.startsWith("Assign.")) return _match;
     const wrappedExpr = ensureBracketWrapped(expr);
@@ -1335,6 +1428,8 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     }
     throw new Error(`XAML activity tag semantic validation failed: ${semanticValidation.errors.join("; ")}`);
   }
+
+  xml = normalizeAssignArgumentNesting(xml);
 
   const xmlValidation = validateXmlWellFormedness(xml);
   if (!xmlValidation.valid) {
