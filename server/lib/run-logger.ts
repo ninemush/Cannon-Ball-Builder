@@ -21,17 +21,29 @@ export interface RunOutcomeSummary {
   errorMessage?: string;
 }
 
+export interface StageEvent {
+  type: "stage_start" | "stage_end";
+  stage: string;
+  outcome: StageLogEntry["outcome"];
+  durationMs?: number;
+  error?: string;
+}
+
+export type StageEventListener = (event: StageEvent) => void;
+
 export class RunLogger {
   private runId: string;
   private runType: string;
   private stages: StageLogEntry[] = [];
   private runStartedAt: number;
   private flushQueued = false;
+  private stageEventListener?: StageEventListener;
 
-  constructor(runId: string, runType: string) {
+  constructor(runId: string, runType: string, onStageEvent?: StageEventListener) {
     this.runId = runId;
     this.runType = runType;
     this.runStartedAt = Date.now();
+    this.stageEventListener = onStageEvent;
     console.log(`[RunLogger] Run ${runId} (${runType}) started`);
   }
 
@@ -45,6 +57,7 @@ export class RunLogger {
     this.stages.push(entry);
     console.log(`[RunLogger] [${this.runId}] Stage "${stage}" started`);
     this.queueFlush();
+    this.emitStageEvent({ type: "stage_start", stage, outcome: "running" });
     return entry;
   }
 
@@ -62,6 +75,7 @@ export class RunLogger {
     if (error) entry.error = error;
     console.log(`[RunLogger] [${this.runId}] Stage "${stage}" ${outcome} (${entry.durationMs}ms)${error ? ` — ${error}` : ""}`);
     this.queueFlush();
+    this.emitStageEvent({ type: "stage_end", stage, outcome, durationMs: entry.durationMs, error });
   }
 
   recordRetry(stage: string, attempt: number, error?: string): void {
@@ -78,6 +92,12 @@ export class RunLogger {
     this.stages.push(retryEntry);
     console.log(`[RunLogger] [${this.runId}] Retry ${attempt} for "${stage}"${error ? `: ${error}` : ""}`);
     this.queueFlush();
+    this.emitStageEvent({
+      type: "stage_end",
+      stage: `${stage}_retry`,
+      outcome: retryEntry.outcome,
+      error,
+    });
   }
 
   recordFallback(stage: string, reason: string): void {
@@ -93,6 +113,11 @@ export class RunLogger {
     this.stages.push(fbEntry);
     console.log(`[RunLogger] [${this.runId}] Fallback for "${stage}": ${reason}`);
     this.queueFlush();
+    this.emitStageEvent({
+      type: "stage_end",
+      stage: `${stage}_fallback`,
+      outcome: "degraded",
+    });
   }
 
   buildOutcomeSummary(overrides?: Partial<RunOutcomeSummary>): RunOutcomeSummary {
@@ -123,11 +148,25 @@ export class RunLogger {
     return [...this.stages];
   }
 
+  getRunId(): string {
+    return this.runId;
+  }
+
   async flush(): Promise<void> {
     try {
       await storage.updateGenerationRunStageLog(this.runId, this.stages);
     } catch (err: any) {
       console.warn(`[RunLogger] Failed to persist stage log for ${this.runId}: ${err?.message}`);
+    }
+  }
+
+  private emitStageEvent(event: StageEvent): void {
+    if (this.stageEventListener) {
+      try {
+        this.stageEventListener(event);
+      } catch (e: any) {
+        console.warn(`[RunLogger] Stage event listener error: ${e?.message}`);
+      }
     }
   }
 

@@ -1324,7 +1324,6 @@ CRITICAL RULES:
       let stopReason = "";
       let docProgressDocType: "PDD" | "SDD" | null = null;
       let docProgressStarted = false;
-      let lastEmittedSectionNumber = -1;
 
       for await (const event of stream) {
         if (clientDisconnected) {
@@ -1356,21 +1355,6 @@ CRITICAL RULES:
                 docProgressStarted = true;
                 try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch { /* ignore */ }
                 console.log(`[Chat] Detected inline PDD generation (no [DOC:] tag) — enabling doc progress`);
-              }
-            }
-          }
-
-          if (docProgressStarted && docProgressDocType) {
-            const sectionRe = /## (?:(\d+)[\.\)]\s+)?([^\n]+)/g;
-            let sMatch: RegExpExecArray | null;
-            let highestFound = lastEmittedSectionNumber;
-            while ((sMatch = sectionRe.exec(fullResponse)) !== null) {
-              const sectionNumber = sMatch[1] ? parseInt(sMatch[1], 10) : (highestFound + 1);
-              highestFound = Math.max(highestFound, sectionNumber);
-              if (sectionNumber > lastEmittedSectionNumber) {
-                lastEmittedSectionNumber = sectionNumber;
-                const sectionName = sMatch[2].trim();
-                try { res.write(`data: ${JSON.stringify({ docProgress: { section: sectionName, sectionNumber, docType: docProgressDocType } })}\n\n`); } catch { /* ignore */ }
               }
             }
           }

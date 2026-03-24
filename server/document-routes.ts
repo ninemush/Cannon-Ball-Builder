@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { getLLM, SDD_LLM_TIMEOUT_MS } from "./lib/llm";
-import { RunLogger } from "./lib/run-logger";
+import { RunLogger, type StageEventListener } from "./lib/run-logger";
 import { sanitizeChatForLLM } from "./lib/sanitize-chat";
 import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
@@ -259,7 +259,7 @@ interface GenerateDocumentResult {
   artifactWarnings?: string[];
 }
 
-async function generateDocument(ideaId: string, docType: string): Promise<GenerateDocumentResult> {
+async function generateDocument(ideaId: string, docType: string, onStageEvent?: StageEventListener): Promise<GenerateDocumentResult> {
   const idea = await storage.getIdea(ideaId);
   if (!idea) throw new Error("Idea not found");
 
@@ -321,7 +321,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<Genera
 
   if (docType === "SDD") {
     const sddRunId = `sdd-${ideaId}-${Date.now()}`;
-    const runLogger = new RunLogger(sddRunId, "SDD");
+    const runLogger = new RunLogger(sddRunId, "SDD", onStageEvent);
 
     try {
       await storage.createGenerationRun({
@@ -556,7 +556,7 @@ async function generateDocument(ideaId: string, docType: string): Promise<Genera
   }
 
   const pddRunId = `${docType.toLowerCase()}-${ideaId}-${Date.now()}`;
-  const pddLogger = new RunLogger(pddRunId, docType);
+  const pddLogger = new RunLogger(pddRunId, docType, onStageEvent);
 
   try {
     await storage.createGenerationRun({
@@ -730,6 +730,25 @@ export function registerDocumentRoutes(app: Express): void {
       return res.status(400).json({ message: "Invalid document type" });
     }
 
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const sseWrite = (data: Record<string, unknown>) => {
+      try {
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify(data)}\n\n`);
+          if (typeof (res as any).flush === "function") (res as any).flush();
+        }
+      } catch {}
+    };
+
+    const onStageEvent: StageEventListener = (event) => {
+      sseWrite({ stageEvent: event });
+    };
+
     try {
       const existing = await documentStorage.getLatestDocument(ideaId, type);
       const version = existing ? existing.version + 1 : 1;
@@ -738,7 +757,7 @@ export function registerDocumentRoutes(app: Express): void {
         await documentStorage.updateDocument(existing.id, { status: "superseded" });
       }
 
-      const genResult = await generateDocument(ideaId, type);
+      const genResult = await generateDocument(ideaId, type, onStageEvent);
       let content = genResult.content;
       const artifactsValid = type === "SDD" ? (genResult.artifactsValid ?? null) : null;
       const artifactWarnings = type === "SDD" && genResult.artifactWarnings?.length
@@ -813,12 +832,14 @@ export function registerDocumentRoutes(app: Express): void {
         `[DOC:${type}:${doc.id}]${content}`
       );
 
-      return res.json(doc);
+      sseWrite({ done: true, doc });
+      res.end();
     } catch (error: any) {
       const msg = error?.message || error?.toString() || "Unknown error";
       console.error(`Error generating ${type}:`, msg);
       if (error?.status) console.error(`API status: ${error.status}`);
-      return res.status(500).json({ message: `Failed to generate ${type}: ${msg.slice(0, 200)}` });
+      sseWrite({ error: true, message: `Failed to generate ${type}: ${msg.slice(0, 200)}` });
+      res.end();
     }
   });
 

@@ -88,6 +88,14 @@ const INTENT_THINKING_MESSAGES: Record<string, string> = {
   "FEASIBILITY": "Running feasibility assessment...",
 };
 
+const STAGE_DISPLAY_LABELS: Record<string, string> = {
+  "platform_capabilities": "Fetching platform capabilities...",
+  "llm_parallel_generation": "Generating prose and artifacts...",
+  "llm_generation": "Generating document content...",
+  "artifacts_retry": "Retrying artifact generation...",
+  "artifact_validation": "Validating artifacts...",
+};
+
 interface StreamingProgressProps {
   mode: "thinking" | "doc" | "deploy";
   liveStatus?: string;
@@ -101,11 +109,28 @@ interface StreamingProgressProps {
 
 function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection, deployStep, onCancel, stage, classifiedIntent }: StreamingProgressProps) {
   const [elapsed, setElapsed] = useState(0);
+  const [hasReceivedRealStage, setHasReceivedRealStage] = useState(false);
+  const gracePeriodExpiredRef = useRef(false);
+  const [gracePeriodExpired, setGracePeriodExpired] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => setElapsed((p) => p + 1), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      gracePeriodExpiredRef.current = true;
+      setGracePeriodExpired(true);
+    }, 9000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (currentSection && !hasReceivedRealStage) {
+      setHasReceivedRealStage(true);
+    }
+  }, [currentSection, hasReceivedRealStage]);
 
   const steps = DOC_PROGRESS_STEPS[docType || "PDD"] || DOC_PROGRESS_STEPS.PDD;
   const stepDuration = docType === "UiPath" ? 10 : 6;
@@ -139,11 +164,17 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
   }
 
   const isUiPath = docType === "UiPath";
+  const getDocStatusText = () => {
+    if (isUiPath) return currentSection || fallbackStep;
+    if (hasReceivedRealStage && currentSection) return currentSection;
+    if (!hasReceivedRealStage && !gracePeriodExpired) return "Starting generation...";
+    if (!hasReceivedRealStage && gracePeriodExpired) return fallbackStep;
+    return fallbackStep;
+  };
+
   const statusText = mode === "deploy"
     ? (deployStep || "Preparing deployment...")
-    : isUiPath
-      ? (currentSection || fallbackStep)
-      : (currentSection ? `Now writing: ${currentSection}` : fallbackStep);
+    : getDocStatusText();
 
   const title = mode === "deploy"
     ? "Deploying to UiPath..."
@@ -1329,9 +1360,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               docGenIdAtStart = docGenIdRef.current;
             }
           }
-          if (data.docProgress.section) {
-            setDocProgressSection(data.docProgress.section);
-          }
         }
         if (data.deployStatus) {
           if (data.deployComplete) {
@@ -1728,10 +1756,59 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         body: JSON.stringify({ type }),
         signal: abortController.signal,
       });
+
       if (!res.ok) {
         const data = await res.json().catch(() => ({ message: "Generation failed" }));
         throw new Error(data.message || "Generation failed");
       }
+
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("text/event-stream") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let sseError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.stageEvent) {
+                const evt = data.stageEvent;
+                const stageName = evt.stage.replace(/_retry$/, "").replace(/_fallback$/, "");
+                const label = STAGE_DISPLAY_LABELS[stageName] || `Processing ${stageName.replace(/_/g, " ")}...`;
+                if (evt.type === "stage_start") {
+                  setDocProgressSection(label);
+                } else if (evt.type === "stage_end" && evt.outcome === "failed" && evt.error) {
+                  setDocProgressSection(`Failed: ${evt.error.slice(0, 100)}`);
+                }
+              }
+
+              if (data.error) {
+                sseError = data.message || "Generation failed";
+              }
+
+              if (data.done) {
+                break;
+              }
+            } catch {}
+          }
+        }
+
+        if (sseError) {
+          throw new Error(sseError);
+        }
+      }
+
       await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
       await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
