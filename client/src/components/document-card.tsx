@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { getApprovalReadiness } from "@/lib/document-readiness";
 import { useToast } from "@/hooks/use-toast";
 import {
   FileText,
@@ -88,9 +89,10 @@ interface DocumentCardProps {
   streaming?: boolean;
   streamingElapsed?: number;
   onCancelStreaming?: () => void;
+  artifactsValid?: boolean | null;
 }
 
-export function DocumentCard({ docType, docId, content, ideaId, isApproved, version, onApproved, streaming, streamingElapsed, onCancelStreaming }: DocumentCardProps) {
+export function DocumentCard({ docType, docId, content, ideaId, isApproved, version, onApproved, streaming, streamingElapsed, onCancelStreaming, artifactsValid }: DocumentCardProps) {
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
   const [showReviseInput, setShowReviseInput] = useState(false);
@@ -108,6 +110,8 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
 
   const isDocApprovedFromHistory = !streaming && (versionHistory?.some(v => v.id === docId && v.status === "approved") ?? false);
   const effectivelyApproved = !streaming && (isApproved || isDocApprovedFromHistory);
+  const approvalReadiness = getApprovalReadiness(docType, artifactsValid);
+  const approvalBlocked = approvalReadiness === "blocked";
 
   useEffect(() => {
     if (streaming && sections.length > 0) {
@@ -362,7 +366,27 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
 
       {!effectivelyApproved && !streaming && docId > 0 && (
         <div className="px-4 py-3 border-t border-border/30 space-y-2">
-          {showApproveConfirm ? (
+          {approvalBlocked ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-destructive/10 border border-destructive/20" data-testid={`blocked-reason-${docType.toLowerCase()}`}>
+                <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
+                <span className="text-[11px] text-destructive">
+                  Deployment artifacts are missing or invalid. Request a revision to regenerate.
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs flex-1"
+                  onClick={() => setShowReviseInput(true)}
+                  data-testid={`button-request-revision-${docType.toLowerCase()}`}
+                >
+                  Request Revision
+                </Button>
+              </div>
+            </div>
+          ) : showApproveConfirm ? (
             <div className="flex items-center gap-2">
               <p className="text-[11px] text-muted-foreground flex-1">
                 Confirm approval of this {docType}?

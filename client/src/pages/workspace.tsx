@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type MutableRefObject } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { getApprovalReadiness } from "@/lib/document-readiness";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link, useLocation } from "wouter";
@@ -1934,6 +1935,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       }
     }
     if (hasSddDoc && sddApprovalData?.document && !sddApprovalData?.approval) {
+      if (getApprovalReadiness("SDD", sddApprovalData.document.artifactsValid) === "blocked") {
+        return null;
+      }
       const sddMsg = [...displayMessages].reverse().find(m => m.docType === "SDD" && m.docId);
       if (sddMsg && !approvedDocIds.has(sddMsg.docId!)) {
         return { docType: "SDD", docId: sddMsg.docId! };
@@ -2163,6 +2167,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     ideaId={idea.id}
                     isApproved={!isLatest || approvedDocIds.has(msg.docId)}
                     onApproved={() => handleDocApproved(msg.docType!, msg.docId)}
+                    artifactsValid={msg.docType === "SDD" && isLatest ? sddApprovalData?.document?.artifactsValid : undefined}
                   />
                 </div>
               </div>
