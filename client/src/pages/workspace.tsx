@@ -376,10 +376,10 @@ function UiPathProgressPanel({
     }
   }, [entries.length]);
 
-  const llmStages = new Set(["llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing"]);
-  const hasBuildEntries = entries.some(e => !llmStages.has(e.stage));
-  const llmEntries = entries.filter(e => llmStages.has(e.stage));
-  const buildEntries = entries.filter(e => !llmStages.has(e.stage));
+  const specStages = new Set(["spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing"]);
+  const hasBuildEntries = entries.some(e => !specStages.has(e.stage));
+  const llmEntries = entries.filter(e => specStages.has(e.stage));
+  const buildEntries = entries.filter(e => !specStages.has(e.stage));
   const llmPhaseComplete = hasBuildEntries || isComplete;
 
   const failedEntry = entries.find(e => e.type === "failed");
@@ -388,6 +388,12 @@ function UiPathProgressPanel({
     sdd_validation: "Validating SDD",
     cache_hit: "Loading cached result",
     build_pipeline: "Build pipeline",
+    spec_context_loading: "Loading context",
+    spec_prompt_assembly: "Preparing prompt",
+    spec_scaffold: "AI generation",
+    spec_workflow_detail: "Workflow detail",
+    spec_merge: "Validating specification",
+    spec_handoff: "Handing off to build",
     llm_context_loading: "Loading context",
     llm_prompt_assembly: "Preparing prompt",
     llm_generation: "AI generation",
@@ -509,8 +515,8 @@ function UiPathProgressPanel({
                 const completedStagesSet = new Set(llmEntries.filter(e => e.type === "completed").map(e => e.stage));
                 const realEntries = llmEntries.filter(e => e.type !== "heartbeat");
                 const filtered = realEntries.filter(e => !(e.type === "started" && completedStagesSet.has(e.stage)));
-                const lastHeartbeat = [...llmEntries].reverse().find(e => e.type === "heartbeat" && e.stage === "llm_generation");
-                const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has("llm_generation");
+                const lastHeartbeat = [...llmEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation"));
+                const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has("spec_scaffold") && !completedStagesSet.has("llm_generation");
                 return (
                   <>
                     {filtered.map((entry, idx) => {

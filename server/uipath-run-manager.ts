@@ -235,14 +235,17 @@ async function executeRun(
       try { callbacks.onPipelineEvent(event); } catch {}
     }
 
-    if (event.type === "started" && event.stage) {
-      runLogger.stageStart(`pipeline_${event.stage}`, event.context ? { ...event.context } : undefined);
-    } else if (event.type === "completed" && event.stage) {
-      runLogger.stageEnd(`pipeline_${event.stage}`, "succeeded", event.context ? { ...event.context } : undefined);
-    } else if (event.type === "failed" && event.stage) {
-      runLogger.stageEnd(`pipeline_${event.stage}`, "failed", event.context ? { ...event.context } : undefined, event.message);
-    } else if (event.type === "warning" && event.stage) {
-      runLogger.recordFallback(`pipeline_${event.stage}`, event.message || "warning");
+    const isSpecStage = event.stage?.startsWith("spec_");
+    if (!isSpecStage) {
+      if (event.type === "started" && event.stage) {
+        runLogger.stageStart(`pipeline_${event.stage}`, event.context ? { ...event.context } : undefined);
+      } else if (event.type === "completed" && event.stage) {
+        runLogger.stageEnd(`pipeline_${event.stage}`, "succeeded", event.context ? { ...event.context } : undefined);
+      } else if (event.type === "failed" && event.stage) {
+        runLogger.stageEnd(`pipeline_${event.stage}`, "failed", event.context ? { ...event.context } : undefined, event.message);
+      } else if (event.type === "warning" && event.stage) {
+        runLogger.recordFallback(`pipeline_${event.stage}`, event.message || "warning");
+      }
     }
 
     storage.updateGenerationRunStatus(runId, "running", event.stage).catch(() => {});
@@ -337,23 +340,27 @@ async function executeRun(
     }
 
     if (!packageJson) {
-      runLogger.stageStart("llm_generation");
-      await storage.updateGenerationRunStatus(runId, "running", "llm_generation");
-      console.log(`[RunManager] Run ${runId}: Decomposed LLM generation phase started`);
+      runLogger.stageStart("spec_generation");
+      await storage.updateGenerationRunStatus(runId, "running", "spec_generation");
+      console.log(`[RunManager] Run ${runId}: Spec generation phase started`);
 
-      pipelineProgressCallback({ type: "started", stage: "llm_context_loading", message: "Loading PDD and SDD context" });
+      runLogger.stageStart("spec_context_loading");
+      pipelineProgressCallback({ type: "started", stage: "spec_context_loading", message: "Loading SDD, PDD and process map" });
       const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
       const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
       const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
       const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
       const mapSummary = mapNodes.map((n: any) => ({ name: n.name, type: n.nodeType, role: n.role, system: n.system, description: n.description }));
-      pipelineProgressCallback({ type: "completed", stage: "llm_context_loading", message: "Context loaded", context: { hasPdd: !!pdd, mapNodeCount: mapSummary.length } });
+      runLogger.stageEnd("spec_context_loading", "succeeded", { hasPdd: !!pdd, mapNodeCount: mapSummary.length });
+      pipelineProgressCallback({ type: "completed", stage: "spec_context_loading", message: "Context loaded", context: { hasPdd: !!pdd, mapNodeCount: mapSummary.length } });
 
-      pipelineProgressCallback({ type: "started", stage: "llm_prompt_assembly", message: "Preparing AI generation context" });
+      runLogger.stageStart("spec_prompt_assembly");
+      pipelineProgressCallback({ type: "started", stage: "spec_prompt_assembly", message: "Preparing scaffold prompt" });
       let systemCtx = `You are a UiPath automation architect generating a production-ready package structure for "${idea.title}".\n\nApproved SDD:\n${sdd.content}`;
       if (pdd) systemCtx += `\n\nApproved PDD:\n${pdd.content}`;
       if (mapSummary.length > 0) systemCtx += `\n\nProcess Map Steps:\n${JSON.stringify(mapSummary)}`;
-      pipelineProgressCallback({ type: "completed", stage: "llm_prompt_assembly", message: "AI prompt assembled" });
+      runLogger.stageEnd("spec_prompt_assembly", "succeeded");
+      pipelineProgressCallback({ type: "completed", stage: "spec_prompt_assembly", message: "Scaffold prompt assembled" });
 
       try {
         const decomposedResult = await generateDecomposedSpec({
@@ -367,7 +374,7 @@ async function executeRun(
         packageJson = decomposedResult.packageSpec;
 
         const decompositionMetrics = decomposedResult.metrics;
-        runLogger.stageEnd("llm_generation", "succeeded", {
+        runLogger.stageEnd("spec_generation", "succeeded", {
           decomposed: true,
           workflowCount: packageJson.workflows.length,
           stubCount: decompositionMetrics.stubCount,
@@ -376,33 +383,23 @@ async function executeRun(
           totalElapsedMs: decompositionMetrics.totalElapsedMs,
           perWorkflow: decompositionMetrics.perWorkflow,
         });
-        pipelineProgressCallback({
-          type: "completed",
-          stage: "llm_generation",
-          message: `Decomposed generation complete: ${packageJson.workflows.length} workflows (${decompositionMetrics.stubCount} stubbed)`,
-          context: {
-            workflowCount: packageJson.workflows.length,
-            stubCount: decompositionMetrics.stubCount,
-            totalLlmCalls: decompositionMetrics.totalLlmCalls,
-          },
-        });
 
-        runLogger.stageStart("llm_parsing");
-        pipelineProgressCallback({ type: "started", stage: "llm_parsing", message: "Validating merged package specification" });
+        runLogger.stageStart("spec_merge");
+        pipelineProgressCallback({ type: "started", stage: "spec_merge", message: "Validating merged package specification" });
         emitProgress("Validating merged package specification...");
-        runLogger.stageEnd("llm_parsing", "succeeded", {
+        runLogger.stageEnd("spec_merge", "succeeded", {
           workflowCount: packageJson.workflows.length,
           decomposed: true,
         });
         pipelineProgressCallback({
           type: "completed",
-          stage: "llm_parsing",
-          message: "Package specification validated",
+          stage: "spec_merge",
+          message: `Specification validated — ${packageJson.workflows.length} workflow(s)`,
           context: { workflowCount: packageJson.workflows.length },
         });
       } catch (decompErr: any) {
-        runLogger.stageEnd("llm_generation", "failed", undefined, decompErr?.message);
-        pipelineProgressCallback({ type: "failed", stage: "llm_generation", message: decompErr?.message || "Decomposed generation failed" });
+        runLogger.stageEnd("spec_generation", "failed", undefined, decompErr?.message);
+        pipelineProgressCallback({ type: "failed", stage: "spec_generation", message: decompErr?.message || "Spec generation failed" });
         throw new RunError(
           `Package spec generation failed: ${decompErr?.message || "Unknown error"}. Please try again.`,
           "llm_parse",
@@ -410,9 +407,15 @@ async function executeRun(
       }
 
       if (!packageJson.workflows || packageJson.workflows.length === 0) {
-        pipelineProgressCallback({ type: "failed", stage: "llm_parsing", message: "Package has no workflows" });
+        pipelineProgressCallback({ type: "failed", stage: "spec_merge", message: "Package has no workflows" });
         throw new RunError("AI generated a package with no workflows. Please try again.", "llm_parse");
       }
+
+      const workflowCount = packageJson.workflows.length;
+      runLogger.stageStart("spec_handoff");
+      pipelineProgressCallback({ type: "started", stage: "spec_handoff", message: "Spec generation complete, handing off to build pipeline" });
+      runLogger.stageEnd("spec_handoff", "succeeded");
+      pipelineProgressCallback({ type: "completed", stage: "spec_handoff", message: `Handing off ${workflowCount} workflow(s) to build pipeline` });
     }
 
     if (callbacks?.onPackageResolved) callbacks.onPackageResolved(packageJson);

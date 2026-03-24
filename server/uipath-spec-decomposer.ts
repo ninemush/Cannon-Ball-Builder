@@ -351,9 +351,9 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
   };
   const mergeWarnings: string[] = [];
 
-  onPipelineProgress?.({ type: "started", stage: "llm_scaffold", message: "Generating project scaffold" });
+  onPipelineProgress?.({ type: "started", stage: "spec_scaffold", message: "Generating project scaffold" });
   onProgress?.("Generating project scaffold...");
-  runLogger.stageStart("llm_scaffold");
+  runLogger.stageStart("spec_scaffold");
 
   const scaffoldStart = Date.now();
   let scaffoldResponse;
@@ -366,8 +366,8 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     });
     metrics.totalLlmCalls++;
   } catch (err: any) {
-    runLogger.stageEnd("llm_scaffold", "failed", undefined, err?.message);
-    onPipelineProgress?.({ type: "failed", stage: "llm_scaffold", message: "Scaffold generation failed" });
+    runLogger.stageEnd("spec_scaffold", "failed", undefined, err?.message);
+    onPipelineProgress?.({ type: "failed", stage: "spec_scaffold", message: "Scaffold generation failed" });
     throw new Error(`Scaffold LLM call failed: ${err?.message}`);
   }
   metrics.scaffoldDurationMs = Date.now() - scaffoldStart;
@@ -376,8 +376,8 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
   try {
     scaffold = parseScaffold(scaffoldResponse.text || "{}");
   } catch (err: any) {
-    runLogger.stageEnd("llm_scaffold", "failed", undefined, err?.message);
-    onPipelineProgress?.({ type: "failed", stage: "llm_scaffold", message: "Failed to parse scaffold" });
+    runLogger.stageEnd("spec_scaffold", "failed", undefined, err?.message);
+    onPipelineProgress?.({ type: "failed", stage: "spec_scaffold", message: "Failed to parse scaffold" });
     throw new Error(`Scaffold parse failed: ${err?.message}`);
   }
 
@@ -411,14 +411,14 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     executionOrder = buildExecutionOrder(scaffold.workflows);
   }
 
-  runLogger.stageEnd("llm_scaffold", "succeeded", {
+  runLogger.stageEnd("spec_scaffold", "succeeded", {
     workflowCount: scaffold.workflows.length,
     projectName: scaffold.projectName,
     executionOrder,
   });
   onPipelineProgress?.({
     type: "completed",
-    stage: "llm_scaffold",
+    stage: "spec_scaffold",
     message: `Scaffold ready: ${scaffold.workflows.length} workflow(s)`,
     context: { workflowCount: scaffold.workflows.length, projectName: scaffold.projectName },
   });
@@ -442,7 +442,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     }
   }
 
-  onPipelineProgress?.({ type: "started", stage: "llm_workflow_details", message: `Generating ${orderedWorkflows.length} workflow detail(s)` });
+  onPipelineProgress?.({ type: "started", stage: "spec_workflow_detail", message: `Generating ${orderedWorkflows.length} workflow detail(s)` });
 
   for (let i = 0; i < orderedWorkflows.length; i++) {
     const entry = orderedWorkflows[i];
@@ -453,8 +453,9 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     onProgress?.(`Generating workflow ${i + 1}/${orderedWorkflows.length}: ${entry.name}...`);
     onPipelineProgress?.({
       type: "heartbeat",
-      stage: "llm_workflow_details",
+      stage: "spec_workflow_detail",
       message: `Generating workflow ${i + 1}/${orderedWorkflows.length}: ${entry.name}`,
+      context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length },
     });
 
     const detailPrompt = buildDetailPrompt(entry, scaffold);
@@ -494,7 +495,13 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
         break;
       } catch (err: any) {
         console.warn(`[SpecDecomposer] Run ${runId}: Detail call for "${entry.name}" attempt ${attempt + 1} failed: ${err?.message}`);
-        runLogger.recordRetry(`llm_detail_${entry.name}`, attempt + 1, err?.message);
+        runLogger.recordRetry(`spec_workflow_detail_${entry.name}`, attempt + 1, err?.message);
+        onPipelineProgress?.({
+          type: "warning",
+          stage: "spec_workflow_detail",
+          message: `Workflow "${entry.name}" attempt ${attempt + 1} failed, retrying`,
+          context: { workflowName: entry.name, attempt: attempt + 1, total: orderedWorkflows.length },
+        });
 
         if (attempt === DETAIL_RETRY_LIMIT) {
           console.error(`[SpecDecomposer] Run ${runId}: Stubbing workflow "${entry.name}" after ${attempts} attempts`);
@@ -502,6 +509,12 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
           workflowDetails.set(entry.name, stub);
           metrics.stubCount++;
           mergeWarnings.push(`Workflow "${entry.name}" was stubbed after ${attempts} failed attempts`);
+          onPipelineProgress?.({
+            type: "warning",
+            stage: "spec_workflow_detail",
+            message: `Workflow "${entry.name}" stubbed after ${attempts} failed attempts`,
+            context: { workflowName: entry.name, attempts, outcome: "stubbed", reason: err?.message },
+          });
 
           try {
             const partialWorkflows = Array.from(workflowDetails.values());
@@ -533,19 +546,19 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   onPipelineProgress?.({
     type: "completed",
-    stage: "llm_workflow_details",
+    stage: "spec_workflow_detail",
     message: `All ${orderedWorkflows.length} workflow details generated (${metrics.stubCount} stubbed)`,
     context: { totalWorkflows: orderedWorkflows.length, stubCount: metrics.stubCount },
   });
 
-  onPipelineProgress?.({ type: "started", stage: "llm_merge", message: "Merging workflow specifications" });
+  onPipelineProgress?.({ type: "started", stage: "spec_merge", message: "Merging workflow specifications" });
   onProgress?.("Merging and validating package specification...");
 
   let mergedSpec: UiPathPackageSpec;
   try {
     mergedSpec = mergeSpec(scaffold, workflowDetails, mergeWarnings);
   } catch (err: any) {
-    onPipelineProgress?.({ type: "failed", stage: "llm_merge", message: "Merge/validation failed" });
+    onPipelineProgress?.({ type: "failed", stage: "spec_merge", message: "Merge/validation failed" });
     throw new Error(`Spec merge/validation failed: ${err?.message}`);
   }
 
@@ -557,7 +570,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   onPipelineProgress?.({
     type: "completed",
-    stage: "llm_merge",
+    stage: "spec_merge",
     message: `Package spec merged: ${mergedSpec.workflows.length} workflows`,
     context: { workflowCount: mergedSpec.workflows.length, warnings: mergeWarnings },
   });
