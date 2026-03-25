@@ -3089,9 +3089,6 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "documents", "versions", "SDD"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "approval-summary"] });
       onApproved?.();
     },
   });
@@ -3771,7 +3768,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {activeView === "sdd" ? (
-        <SDDInlineViewer ideaId={ideaId} onApproved={onApproved} />
+        <SDDInlineViewer ideaId={ideaId} onApproved={() => onApproved?.("sdd")} />
       ) : (
         <ReactFlowErrorBoundary>
           <ReactFlowProvider>

@@ -148,6 +148,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         toast({ title: `${docType} Already Approved`, description: "This document has already been approved." });
         queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
         queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "documents", "versions", docType] });
+        onApproved?.();
       } else {
         toast({ title: "Approval failed", description: error.message, variant: "destructive" });
       }

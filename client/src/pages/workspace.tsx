@@ -2102,6 +2102,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     }
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "versions", docType] });
+    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "SDD"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "approval-summary"] });
     if (docType === "PDD" && !sddTriggeredRef.current) {
       sddTriggeredRef.current = true;
       setTimeout(() => generateDocRef.current?.("SDD"), 500);
@@ -2184,8 +2187,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       });
       if (!res.ok) throw new Error(await res.text());
       handleDocApproved(pendingApprovalDoc.docType as "PDD" | "SDD", pendingApprovalDoc.docId);
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "SDD"] });
     } catch (err: any) {
       toast({ title: "Approval failed", description: err.message, variant: "destructive" });
     } finally {
@@ -3074,9 +3075,14 @@ export default function Workspace() {
     <ProcessMapPanel
       ideaId={idea.id}
       onApproved={(approvedView?: string, isReapproval?: boolean) => {
-        queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-        if (approvedView) {
-          mapApprovalHandlerRef.current?.(approvedView, isReapproval);
+        if (approvedView === "sdd") {
+          const sddMsg = [...displayMessages].reverse().find(m => m.docType === "SDD" && m.docId);
+          handleDocApproved("SDD", sddMsg?.docId);
+        } else {
+          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+          if (approvedView) {
+            mapApprovalHandlerRef.current?.(approvedView, isReapproval);
+          }
         }
       }}
       onCompletenessChange={(pct) => {
