@@ -165,879 +165,879 @@
       "min": "4.0.5",
       "max": "4.99.0",
       "preferred": "4.0.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.ActiveDirectoryDomainServices.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.7.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Adobe.AdobeSign.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AdobePdfServices.IntegrationService.Activities": {
       "min": "4.0.8",
       "max": "4.99.0",
       "preferred": "4.0.8",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Alteryx.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Amazon.Comprehend.Activities": {
       "min": "1.0.3",
       "max": "1.99.0",
       "preferred": "1.1.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Amazon.Rekognition.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Amazon.Scope.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Amazon.Textract.Activities": {
       "min": "4.0.0",
       "max": "4.99.0",
       "preferred": "4.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AmazonConnect.Activities": {
       "min": "2.0.1",
       "max": "2.99.0",
       "preferred": "2.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AmazonWebServices.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.9.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AmazonWorkSpaces.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.5.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AppleMail.Activities": {
       "min": "1.0.2",
       "max": "1.99.0",
       "preferred": "1.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AppleNumbers.Activities": {
       "min": "1.0.2",
       "max": "1.99.0",
       "preferred": "1.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AppleScripting.Activities": {
       "min": "1.0.2",
       "max": "1.99.0",
       "preferred": "1.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Azure.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.7.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AzureActiveDirectory.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.6.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AzureFormRecognizerV3.Activities": {
       "min": "1.0.1",
       "max": "1.99.0",
       "preferred": "1.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.AzureWindowsVirtualDesktop.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.5.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.BambooHR.IntegrationService.Activities": {
       "min": "4.0.7",
       "max": "4.99.0",
       "preferred": "4.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Box.Activities": {
       "min": "2.0.1",
       "max": "2.99.0",
       "preferred": "2.0.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Box.IntegrationService.Activities": {
       "min": "4.0.5",
       "max": "4.99.0",
       "preferred": "4.0.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Callout.Activities": {
       "min": "25.10.0",
       "max": "25.10.99",
       "preferred": "25.10.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.CampaignMonitor.IntegrationService.Activities": {
       "min": "5.0.4",
       "max": "5.99.0",
       "preferred": "5.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.CiscoWebexTeams.IntegrationService.Activities": {
       "min": "4.0.6",
       "max": "4.99.0",
       "preferred": "4.0.6",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Citrix.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.5.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Cognitive.Activities": {
       "min": "2.0.6716.19435",
       "max": "2.99.0",
       "preferred": "2.2.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.CommunicationsMining.Activities": {
       "min": "1.0.4",
       "max": "1.99.0",
       "preferred": "1.6.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.ConfluenceCloud.IntegrationService.Activities": {
       "min": "5.0.2",
       "max": "5.99.0",
       "preferred": "5.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Coupa.IntegrationService.Activities": {
       "min": "4.0.6",
       "max": "4.99.0",
       "preferred": "4.0.6",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Credentials.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.0.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.DesktopTriggers.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.DocumentUnderstanding.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.17.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.DocumentUnderstanding.ML.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.36.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.DocuSign.Activities": {
       "min": "1.1.1",
       "max": "1.99.0",
       "preferred": "1.3.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Docusign.IntegrationService.Activities": {
       "min": "5.2.2",
       "max": "5.99.0",
       "preferred": "5.2.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Dropbox.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.DropboxBusiness.IntegrationService.Activities": {
       "min": "5.0.2",
       "max": "5.99.0",
       "preferred": "5.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.ExchangeServer.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.4.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Expensify.IntegrationService.Activities": {
       "min": "5.0.4",
       "max": "5.99.0",
       "preferred": "5.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.FlowchartBuilder.Activities": {
       "min": "1.0.2",
       "max": "1.99.0",
       "preferred": "1.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Freshservice.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.FTP.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.0.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.GitHub.IntegrationService.Activities": {
       "min": "5.0.9",
       "max": "5.99.0",
       "preferred": "5.0.9",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.GoogleCloud.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.5.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.GoogleVertex.IntegrationService.Activities": {
       "min": "5.1.2",
       "max": "5.99.0",
       "preferred": "5.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.GoogleVision.Activities": {
       "min": "1.1.0",
       "max": "1.99.0",
       "preferred": "1.4.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.GoToWebinar.IntegrationService.Activities": {
       "min": "4.0.5",
       "max": "4.99.0",
       "preferred": "4.0.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.HyperV.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.4.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Java.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.0.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Jira.Activities": {
       "min": "2.1.2",
       "max": "2.99.0",
       "preferred": "2.4.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Jira.IntegrationService.Activities": {
       "min": "6.1.2",
       "max": "6.99.0",
       "preferred": "6.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Mailchimp.IntegrationService.Activities": {
       "min": "4.0.2",
       "max": "4.99.0",
       "preferred": "4.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Marketo.Activities": {
       "min": "1.0.3",
       "max": "1.99.0",
       "preferred": "1.1.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Marketo.IntegrationService.Activities": {
       "min": "5.0.2",
       "max": "5.99.0",
       "preferred": "5.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities": {
       "min": "7.1.2",
       "max": "7.99.0",
       "preferred": "7.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MicrosoftDynamics.Activities": {
       "min": "1.0.5",
       "max": "1.99.0",
       "preferred": "1.0.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MicrosoftTeams.Activities": {
       "min": "1.0.1",
       "max": "1.99.0",
       "preferred": "1.0.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MicrosoftTranslator.Activities": {
       "min": "1.1.1",
       "max": "1.99.0",
       "preferred": "1.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MicrosoftVision.Activities": {
       "min": "3.0.1",
       "max": "3.99.0",
       "preferred": "3.2.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MLServices.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.MobileAutomation.Activities": {
       "min": "25.10.0",
       "max": "25.10.99",
       "preferred": "25.10.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.NetIQeDirectory.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.6.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.OCR.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.24.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.OmniPage.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.22.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.OpenAI.IntegrationService.Activities": {
       "min": "6.1.2",
       "max": "6.99.0",
       "preferred": "6.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Oracle.IntegrationCloud.Process.Activities": {
       "min": "1.1.1",
       "max": "1.99.0",
       "preferred": "1.1.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.OracleEloqua.IntegrationService.Activities": {
       "min": "3.0.2",
       "max": "3.99.0",
       "preferred": "3.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.OracleNetSuite.Activities": {
       "min": "1.1.2",
       "max": "1.99.0",
       "preferred": "1.3.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.OracleNetSuite.IntegrationService.Activities": {
       "min": "5.2.2",
       "max": "5.99.0",
       "preferred": "5.2.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Pipelines.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Presentations.Activities": {
       "min": "2.0.1",
       "max": "2.99.0",
       "preferred": "2.4.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Python.Activities": {
       "min": "2.1.0",
       "max": "2.99.0",
       "preferred": "2.1.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.QuickBooksOnline.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Salesforce.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.9.8",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Salesforce.IntegrationService.Activities": {
       "min": "6.1.2",
       "max": "6.99.0",
       "preferred": "6.1.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SalesforceMarketingCloud.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SAP.BAPI.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SAPCloudForCustomer.IntegrationService.Activities": {
       "min": "4.0.3",
       "max": "4.99.0",
       "preferred": "4.0.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SendGrid.IntegrationService.Activities": {
       "min": "5.0.11",
       "max": "5.99.0",
       "preferred": "5.0.11",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.ServiceNow.Activities": {
       "min": "2.0.1",
       "max": "2.99.0",
       "preferred": "2.0.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.ServiceNow.IntegrationService.Activities": {
       "min": "5.2.2",
       "max": "5.99.0",
       "preferred": "5.2.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Slack.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.0.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Smartsheet.Activities": {
       "min": "1.0.1",
       "max": "1.99.0",
       "preferred": "1.1.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Smartsheet.IntegrationService.Activities": {
       "min": "5.0.2",
       "max": "5.99.0",
       "preferred": "5.0.2",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Snowflake.IntegrationService.Activities": {
       "min": "5.0.3",
       "max": "5.99.0",
       "preferred": "5.0.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SuccessFactors.Activities": {
       "min": "1.2.0",
       "max": "1.99.0",
       "preferred": "1.4.4",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SugarEnterprise.IntegrationService.Activities": {
       "min": "5.0.9",
       "max": "5.99.0",
       "preferred": "5.0.9",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SugarProfessional.IntegrationService.Activities": {
       "min": "4.0.3",
       "max": "4.99.0",
       "preferred": "4.0.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SugarSell.IntegrationService.Activities": {
       "min": "5.0.9",
       "max": "5.99.0",
       "preferred": "5.0.9",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SugarServe.IntegrationService.Activities": {
       "min": "5.0.9",
       "max": "5.99.0",
       "preferred": "5.0.9",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.System.Activities.Runtime.Legacy": {
       "min": "24.3.0",
       "max": "24.99.0",
       "preferred": "24.10.8",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.System.Activities.Runtime.Portable": {
       "min": "25.10.0",
       "max": "25.10.99",
       "preferred": "25.10.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.System.Activities.Runtime.Windows": {
       "min": "25.10.0",
       "max": "25.10.99",
       "preferred": "25.10.5",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.SystemCenter.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.6.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Tableau.Activities": {
       "min": "1.0.1",
       "max": "1.99.0",
       "preferred": "1.3.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Terminal.Activities": {
       "min": "2.0.1",
       "max": "2.99.0",
       "preferred": "2.9.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Twilio.Activities": {
       "min": "1.0.0",
       "max": "1.99.0",
       "preferred": "1.1.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Twilio.IntegrationService.Activities": {
       "min": "5.0.11",
       "max": "5.99.0",
       "preferred": "5.0.11",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Twitter.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.UIAutomation.Activities.Runtime.Portable": {
       "min": "25.10.1",
       "max": "25.10.99",
       "preferred": "25.10.28",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.VMware.Activities": {
       "min": "2.0.0",
       "max": "2.99.0",
       "preferred": "2.4.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Workato.Activities": {
       "min": "1.1.1",
       "max": "1.99.0",
       "preferred": "1.3.1",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Workday.Activities": {
       "min": "2.0.2",
       "max": "2.99.0",
       "preferred": "2.0.6",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Workday.IntegrationService.Activities": {
       "min": "5.3.3",
       "max": "5.99.0",
       "preferred": "5.3.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.WorkflowEvents.Activities": {
       "min": "3.0.0",
       "max": "3.99.0",
       "preferred": "3.35.0",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Zendesk.IntegrationService.Activities": {
       "min": "5.0.7",
       "max": "5.99.0",
       "preferred": "5.0.7",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     },
     "UiPath.Zoom.IntegrationService.Activities": {
       "min": "5.2.3",
       "max": "5.99.0",
       "preferred": "5.2.3",
-      "lastVerifiedAt": "2026-03-25T18:53:10.541Z",
+      "lastVerifiedAt": "2026-03-25T18:58:55.515Z",
       "verificationSource": "uipath-official-feed",
-      "discoveredAt": "2026-03-25T18:53:10.541Z"
+      "discoveredAt": "2026-03-25T18:58:55.515Z"
     }
   },
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-03-25T18:53:10.541Z",
+  "lastRefreshedAt": "2026-03-25T18:58:55.515Z",
   "lastVerifiedAt": "2026-03-21T09:00:00.000Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"

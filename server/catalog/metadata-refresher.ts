@@ -146,15 +146,7 @@ function parseMajorMinor(version: string): { major: number; minor: number } | nu
 }
 
 function isVersionInCompatibleLine(version: string, seedMin: string, seedMax: string): boolean {
-  const v = parseMajorMinor(version);
-  const minRef = parseMajorMinor(seedMin);
-  const maxRef = parseMajorMinor(seedMax);
-  if (!v || !minRef || !maxRef) return false;
-  if (v.major !== minRef.major) return false;
-  if (minRef.major === maxRef.major && minRef.minor === maxRef.minor) {
-    return v.minor === minRef.minor;
-  }
-  return true;
+  return compareVersions(version, seedMin) >= 0 && compareVersions(version, seedMax) <= 0;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -382,6 +374,101 @@ async function discoverPackagesViaSearch(
   } catch {
     return { status: "unreachable" };
   }
+}
+
+function deriveSeedRange(
+  stableVersions: string[],
+  studioLine: string | null,
+): { seedMin: string; seedMax: string } | null {
+  if (stableVersions.length === 0) return null;
+  const sorted = [...stableVersions].sort(compareVersions);
+  const lineParts = studioLine ? parseMajorMinor(studioLine) : null;
+
+  if (lineParts) {
+    const lineVersions = sorted.filter(v => {
+      const vp = parseMajorMinor(v);
+      return vp && vp.major === lineParts.major && vp.minor === lineParts.minor;
+    });
+
+    if (lineVersions.length > 0) {
+      return {
+        seedMin: lineVersions[0],
+        seedMax: `${lineParts.major}.${lineParts.minor}.99`,
+      };
+    }
+  }
+
+  const latest = sorted[sorted.length - 1];
+  const lp = parseMajorMinor(latest);
+  if (!lp) return null;
+
+  const sameMajor = sorted.filter(v => {
+    const vp = parseMajorMinor(v);
+    return vp && vp.major === lp.major;
+  });
+  const earliestInMajor = sameMajor.length > 0 ? sameMajor[0] : latest;
+
+  return {
+    seedMin: earliestInMajor,
+    seedMax: `${lp.major}.99.0`,
+  };
+}
+
+interface DiscoveryResult {
+  newEntries: Record<string, {
+    min: string;
+    max: string;
+    preferred: string;
+    lastVerifiedAt: string;
+    verificationSource: VerificationSource;
+    discoveredAt: string;
+  }>;
+  count: number;
+}
+
+async function discoverAndResolveNewPackages(
+  searchQueryServiceUrl: string,
+  existingRanges: Record<string, any>,
+  studioLine: string,
+  now: string,
+): Promise<DiscoveryResult> {
+  const result: DiscoveryResult = { newEntries: {}, count: 0 };
+
+  const discovery = await discoverPackagesViaSearch(searchQueryServiceUrl, "UiPath", 100);
+  if (discovery.status !== "ok") return result;
+
+  for (const pkgId of discovery.packageIds) {
+    if (existingRanges[pkgId]) continue;
+
+    const versionResult = await fetchVersionsViaSearchQuery(searchQueryServiceUrl, pkgId);
+    if (versionResult.status !== "ok" || versionResult.versions.length === 0) continue;
+
+    const stableVersions = versionResult.versions.filter(v => !v.includes("-"));
+    if (stableVersions.length === 0) continue;
+
+    const seedRange = deriveSeedRange(stableVersions, studioLine);
+    if (!seedRange) continue;
+
+    const compatible = stableVersions
+      .filter(v => isVersionInCompatibleLine(v, seedRange.seedMin, seedRange.seedMax))
+      .sort(compareVersions);
+
+    const bestPreferred = compatible.length > 0
+      ? compatible[compatible.length - 1]
+      : stableVersions.sort(compareVersions)[stableVersions.length - 1];
+
+    result.newEntries[pkgId] = {
+      min: seedRange.seedMin,
+      max: seedRange.seedMax,
+      preferred: bestPreferred,
+      lastVerifiedAt: now,
+      verificationSource: "uipath-official-feed" as VerificationSource,
+      discoveredAt: now,
+    };
+    result.count++;
+  }
+
+  return result;
 }
 
 async function fetchVersionsFromV3Feed(
@@ -687,64 +774,17 @@ export async function refreshGeneration(): Promise<RefreshResult> {
     try {
       const serviceIndex = await resolveServiceIndex(UIPATH_OFFICIAL_FEED_INDEX);
       if (serviceIndex?.searchQueryServiceUrl) {
-        const discovery = await discoverPackagesViaSearch(serviceIndex.searchQueryServiceUrl, "UiPath", 100);
-        if (discovery.status === "ok") {
-          const currentLine = existing.studioTarget?.line || "25.10";
-          const lineParts = parseMajorMinor(currentLine);
-
-          for (const pkgId of discovery.packageIds) {
-            if (updatedRanges[pkgId]) continue;
-
-            const versionResult = await fetchVersionsViaSearchQuery(serviceIndex.searchQueryServiceUrl, pkgId);
-            if (versionResult.status !== "ok" || versionResult.versions.length === 0) continue;
-
-            const stableVersions = versionResult.versions.filter(v => !v.includes("-"));
-            if (stableVersions.length === 0) continue;
-
-            let seedMin: string;
-            let seedMax: string;
-
-            if (lineParts) {
-              const lineVersions = stableVersions.filter(v => {
-                const vp = parseMajorMinor(v);
-                return vp && vp.major === lineParts.major && vp.minor === lineParts.minor;
-              });
-
-              if (lineVersions.length > 0) {
-                lineVersions.sort(compareVersions);
-                seedMin = lineVersions[0];
-                seedMax = `${lineParts.major}.${lineParts.minor}.99`;
-              } else {
-                stableVersions.sort(compareVersions);
-                const latest = stableVersions[stableVersions.length - 1];
-                const lp = parseMajorMinor(latest);
-                if (!lp) continue;
-                seedMin = stableVersions[0];
-                seedMax = `${lp.major}.${lp.minor}.99`;
-              }
-            } else {
-              stableVersions.sort(compareVersions);
-              seedMin = stableVersions[0];
-              seedMax = stableVersions[stableVersions.length - 1];
-            }
-
-            const range = resolveCompatibleRange(stableVersions, seedMin, seedMax);
-            if (!range) continue;
-
-            const validated = validatePreferredVersion(range.preferred, stableVersions, seedMin, seedMax);
-            if (!validated) continue;
-
-            updatedRanges[pkgId] = {
-              min: seedMin,
-              max: seedMax,
-              preferred: validated,
-              lastVerifiedAt: now,
-              verificationSource: "uipath-official-feed",
-            };
-            discoveredCount++;
-            updatedCount++;
-            console.log(`[MetadataRefresher] DISCOVERED new package: ${pkgId} → preferred ${validated} (range [${seedMin}, ${seedMax}))`);
-          }
+        const discResult = await discoverAndResolveNewPackages(
+          serviceIndex.searchQueryServiceUrl,
+          updatedRanges,
+          existing.studioTarget?.line || "25.10",
+          now,
+        );
+        for (const [pkgId, entry] of Object.entries(discResult.newEntries)) {
+          updatedRanges[pkgId] = entry;
+          discoveredCount++;
+          updatedCount++;
+          console.log(`[MetadataRefresher] DISCOVERED new package: ${pkgId} → preferred ${entry.preferred} (range [${entry.min}, ${entry.max}])`);
         }
       }
     } catch (err: any) {
@@ -1114,6 +1154,8 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
 
     if (feedResult.status !== "ok" || (feedResult.status === "ok" && feedResult.versions.length === 0)) {
       if (isCurated) {
+        const msg = `[FeedCheck] INFO: ${pkgName}@${preferred} not on public feeds (manually-curated, distributed via Studio)`;
+        details.push(msg);
         verified++;
         continue;
       }
@@ -1213,8 +1255,6 @@ export async function runStartupDiscovery(): Promise<void> {
     if (!parseResult.success) return;
     const existing = parseResult.data;
     const currentRanges = { ...existing.packageVersionRanges };
-    const currentLine = existing.studioTarget?.line || "25.10";
-    const lineParts = parseMajorMinor(currentLine);
 
     const serviceIndex = await resolveServiceIndex(UIPATH_OFFICIAL_FEED_INDEX);
     if (!serviceIndex?.searchQueryServiceUrl) {
@@ -1222,76 +1262,18 @@ export async function runStartupDiscovery(): Promise<void> {
       return;
     }
 
-    const discovery = await discoverPackagesViaSearch(serviceIndex.searchQueryServiceUrl, "UiPath", 100);
-    if (discovery.status !== "ok") {
-      console.log("[Discovery] Feed unreachable, skipping discovery");
-      return;
-    }
-
-    const newPackages: string[] = [];
     const now = new Date().toISOString();
+    const discResult = await discoverAndResolveNewPackages(
+      serviceIndex.searchQueryServiceUrl,
+      currentRanges,
+      existing.studioTarget?.line || "25.10",
+      now,
+    );
 
-    for (const pkgId of discovery.packageIds) {
-      if (currentRanges[pkgId]) continue;
-
-      const versionResult = await fetchVersionsViaSearchQuery(serviceIndex.searchQueryServiceUrl, pkgId);
-      if (versionResult.status !== "ok" || versionResult.versions.length === 0) continue;
-
-      const stableVersions = versionResult.versions.filter(v => !v.includes("-"));
-      if (stableVersions.length === 0) continue;
-
-      let seedMin: string;
-      let seedMax: string;
-
-      if (lineParts) {
-        const lineVersions = stableVersions.filter(v => {
-          const vp = parseMajorMinor(v);
-          return vp && vp.major === lineParts.major && vp.minor === lineParts.minor;
-        });
-
-        if (lineVersions.length > 0) {
-          lineVersions.sort(compareVersions);
-          seedMin = lineVersions[0];
-          seedMax = `${lineParts.major}.${lineParts.minor}.99`;
-        } else {
-          stableVersions.sort(compareVersions);
-          const latest = stableVersions[stableVersions.length - 1];
-          const lp = parseMajorMinor(latest);
-          if (!lp) continue;
-          seedMin = stableVersions.filter(v => {
-            const vp = parseMajorMinor(v);
-            return vp && vp.major === lp.major;
-          }).sort(compareVersions)[0] || latest;
-          seedMax = `${lp.major}.99.0`;
-        }
-      } else {
-        stableVersions.sort(compareVersions);
-        const latest = stableVersions[stableVersions.length - 1];
-        const lp = parseMajorMinor(latest);
-        if (!lp) continue;
-        seedMin = latest;
-        seedMax = `${lp.major}.${lp.minor}.99`;
+    if (discResult.count > 0) {
+      for (const [pkgId, entry] of Object.entries(discResult.newEntries)) {
+        currentRanges[pkgId] = entry;
       }
-
-      stableVersions.sort(compareVersions);
-      const preferred = stableVersions.filter(v =>
-        compareVersions(v, seedMin) >= 0 && isVersionInCompatibleLine(v, seedMin, seedMax)
-      ).sort(compareVersions);
-
-      const bestPreferred = preferred.length > 0 ? preferred[preferred.length - 1] : stableVersions[stableVersions.length - 1];
-
-      currentRanges[pkgId] = {
-        min: seedMin,
-        max: seedMax,
-        preferred: bestPreferred,
-        lastVerifiedAt: now,
-        verificationSource: "uipath-official-feed" as VerificationSource,
-        discoveredAt: now,
-      };
-      newPackages.push(pkgId);
-    }
-
-    if (newPackages.length > 0) {
       const updated = {
         ...existing,
         packageVersionRanges: currentRanges,
@@ -1301,9 +1283,9 @@ export async function runStartupDiscovery(): Promise<void> {
       if (validation.success) {
         atomicWrite(existingPath, JSON.stringify(updated, null, 2));
         metadataService.reload("generation");
-        console.log(`[Discovery] Expanded catalog with ${newPackages.length} new packages (total: ${Object.keys(currentRanges).length})`);
+        console.log(`[Discovery] Expanded catalog with ${discResult.count} new packages (total: ${Object.keys(currentRanges).length})`);
       } else {
-        console.warn(`[Discovery] Validation failed after adding ${newPackages.length} packages: ${validation.error.message}`);
+        console.warn(`[Discovery] Validation failed after adding ${discResult.count} packages: ${validation.error.message}`);
       }
     } else {
       console.log(`[Discovery] No new packages found (catalog already has ${Object.keys(currentRanges).length} packages)`);
