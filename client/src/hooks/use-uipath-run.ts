@@ -89,12 +89,90 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
   const finishRunRef = useRef<() => void>(() => {});
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollAfterIndexRef = useRef(0);
+  const runCompletedViaPollingRef = useRef(false);
+  const activePollingRunIdRef = useRef<string | null>(null);
+  const lastSseDataAtRef = useRef(0);
+  const pollingActiveRef = useRef(false);
+  const pollDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const clearRetryTimer = useCallback(() => {
     if (retryTimerRef.current !== null) {
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
   }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current !== null) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (pollDelayTimerRef.current !== null) {
+      clearTimeout(pollDelayTimerRef.current);
+      pollDelayTimerRef.current = null;
+    }
+    activePollingRunIdRef.current = null;
+    pollingActiveRef.current = false;
+  }, []);
+
+  const startPolling = useCallback((pollingIdeaId: string, pollingRunId: string) => {
+    stopPolling();
+    pollAfterIndexRef.current = 0;
+    runCompletedViaPollingRef.current = false;
+    activePollingRunIdRef.current = pollingRunId;
+    lastSseDataAtRef.current = Date.now();
+    pollingActiveRef.current = false;
+
+    const SSE_INACTIVITY_MS = 5000;
+    const POLL_INTERVAL_MS = 2500;
+
+    const doPoll = async () => {
+      if (activePollingRunIdRef.current !== pollingRunId) return;
+      if (runCompletedViaPollingRef.current) return;
+
+      const sseRecentlyActive = (Date.now() - lastSseDataAtRef.current) < SSE_INACTIVITY_MS;
+      if (sseRecentlyActive) return;
+
+      try {
+        const url = `/api/ideas/${pollingIdeaId}/uipath-runs/${pollingRunId}/progress?afterIndex=${pollAfterIndexRef.current}`;
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) return;
+        const result = await res.json();
+
+        if (activePollingRunIdRef.current !== pollingRunId) return;
+
+        if (result.events && result.events.length > 0) {
+          for (const event of result.events) {
+            if (event.data) {
+              processSSEDataRef.current(event.data, pollingRunId);
+            }
+          }
+          pollAfterIndexRef.current = result.totalStored;
+        }
+
+        if (result.status && result.status !== "BUILDING" && result.status !== "PENDING") {
+          runCompletedViaPollingRef.current = true;
+          stopPolling();
+        }
+      } catch (err) {
+        console.warn("[useUiPathRun] polling error:", err);
+      }
+    };
+
+    const beginInterval = () => {
+      if (activePollingRunIdRef.current !== pollingRunId) return;
+      pollingActiveRef.current = true;
+      doPoll();
+      pollIntervalRef.current = setInterval(doPoll, POLL_INTERVAL_MS);
+    };
+
+    pollDelayTimerRef.current = setTimeout(() => {
+      pollDelayTimerRef.current = null;
+      beginInterval();
+    }, SSE_INACTIVITY_MS);
+  }, [stopPolling]);
 
   const finishRun = useCallback(() => {
     setIsRunning(false);
@@ -103,8 +181,9 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     cancelRequestedRef.current = false;
     retryCountRef.current = 0;
     clearRetryTimer();
+    stopPolling();
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
-  }, [ideaId, clearRetryTimer]);
+  }, [ideaId, clearRetryTimer, stopPolling]);
 
   finishRunRef.current = finishRun;
 
@@ -272,8 +351,11 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    startPolling(ideaId, runId);
+
     const url = `/api/ideas/${ideaId}/uipath-runs/${runId}/stream${replay ? "?replay=true" : ""}`;
     console.log(`[useUiPathRun] subscribing to SSE stream: runId=${runId}, replay=${!!replay}, url=${url}`);
+    let sseEventCount = 0;
     fetch(url, { credentials: "include", signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) {
@@ -301,6 +383,17 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
             if (line.startsWith("data: ")) {
               try {
                 const data = JSON.parse(line.slice(6));
+                lastSseDataAtRef.current = Date.now();
+                if (runCompletedViaPollingRef.current) {
+                  continue;
+                }
+                sseEventCount++;
+                if (pollingActiveRef.current && pollAfterIndexRef.current > 0) {
+                  if (sseEventCount <= pollAfterIndexRef.current) {
+                    continue;
+                  }
+                }
+                pollAfterIndexRef.current = Math.max(pollAfterIndexRef.current, sseEventCount);
                 processSSEDataRef.current(data, runId);
               } catch (parseErr) {
                 console.error("[useUiPathRun] SSE parse error:", parseErr, "raw:", line.slice(6, 200));
@@ -308,6 +401,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
             }
           }
         }
+        if (runCompletedViaPollingRef.current) return;
         const finalRun = currentRunRef.current;
         if (finalRun && finalRun.runId === runId && (finalRun.status === "BUILDING" || finalRun.status === "PENDING")) {
           setCurrentRun(prev => {
@@ -356,7 +450,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
           finishRunRef.current();
         }
       });
-  }, []);
+  }, [startPolling]);
 
   const dismissProgressPanel = useCallback(() => {
     setShowProgressPanel(false);
@@ -427,8 +521,9 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
         clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
       }
+      stopPolling();
     };
-  }, [ideaId, subscribeToStream]);
+  }, [ideaId, subscribeToStream, stopPolling]);
 
   const startRun = useCallback(async (source: "chat" | "retry" | "approval" | "auto" = "auto", force?: boolean) => {
     if (isRunning) {
@@ -514,6 +609,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     setCancelState("cancelling");
     cancelRequestedRef.current = true;
     clearRetryTimer();
+    stopPolling();
     const runId = activeRunIdRef.current;
     if (runId) {
       fetch(`/api/ideas/${ideaId}/uipath-runs/${runId}/cancel`, {
@@ -577,7 +673,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
         activeRunIdRef.current = null;
       }, 1500);
     }
-  }, [ideaId, toast, cancelState, clearRetryTimer]);
+  }, [ideaId, toast, cancelState, clearRetryTimer, stopPolling]);
 
   return {
     currentRun,

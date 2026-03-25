@@ -19,6 +19,7 @@ import {
   emitObserverProgress, emitObserverPipelineEvent, emitObserverHeartbeat,
   emitObserverMetaValidation, emitObserverDone, emitObserverError,
   cancelObserverRun, isObserverRunCancelled, subscribeToObserverRun, isObserverTerminalStatus,
+  getObserverRunEvents,
   type ObserverRunState,
 } from "./uipath-run-manager";
 
@@ -2203,6 +2204,47 @@ export function registerUiPathRoutes(app: Express): void {
         isActive: !!isActive,
       },
     });
+  });
+
+  app.get("/api/ideas/:ideaId/uipath-runs/:runId/progress", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const { ideaId, runId } = req.params;
+    const idea = await storage.getIdea(ideaId);
+    if (!idea) return res.status(404).json({ message: "Idea not found" });
+    const user = await storage.getUser(req.session.userId);
+    if (!user) return res.status(401).json({ message: "User not found" });
+    const activeRole = (req.session.activeRole || user.role) as string;
+    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const afterIndex = parseInt(req.query.afterIndex as string) || 0;
+    const result = getObserverRunEvents(runId, afterIndex);
+
+    if (!result) {
+      const dbRun = await storage.getGenerationRun(runId);
+      if (!dbRun || dbRun.ideaId !== ideaId) {
+        return res.status(404).json({ message: "Run not found" });
+      }
+      const statusMap: Record<string, string> = {
+        running: "BUILDING", completed: "READY",
+        completed_with_warnings: "READY_WITH_WARNINGS",
+        failed: "FAILED", cancelled: "CANCELLED",
+      };
+      const finalStatus = statusMap[dbRun.status] || dbRun.status;
+      if (afterIndex > 0) {
+        return res.json({ events: [], totalStored: 1, status: finalStatus });
+      }
+      return res.json({
+        events: [{ type: "done", data: { done: true, status: finalStatus }, timestamp: Date.now() }],
+        totalStored: 1,
+        status: finalStatus,
+      });
+    }
+
+    return res.json(result);
   });
 
   app.get("/api/ideas/:ideaId/uipath-runs/:runId/stream", async (req: Request, res: Response) => {

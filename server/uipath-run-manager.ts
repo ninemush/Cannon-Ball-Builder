@@ -844,6 +844,15 @@ export function subscribeToObserverRun(runId: string, onEvent: (event: ObserverR
   };
 }
 
+export function getObserverRunEvents(runId: string, afterIndex: number = 0): { events: ObserverRunEvent[]; totalStored: number; status: ObserverRunStatus } | null {
+  const entry = observerRuns.get(runId);
+  if (!entry) return null;
+  const events = afterIndex >= 0 && afterIndex < entry.events.length
+    ? entry.events.slice(afterIndex)
+    : [];
+  return { events, totalStored: entry.events.length, status: entry.state.status };
+}
+
 export function isObserverTerminalStatus(status: ObserverRunStatus): boolean {
   return status === "READY" || status === "READY_WITH_WARNINGS" || status === "FALLBACK_READY" || status === "FAILED" || status === "CANCELLED";
 }
