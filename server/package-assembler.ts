@@ -103,9 +103,12 @@ const STUDIO_25_10_VERIFIED_VERSIONS_FALLBACK: Record<string, string> = {
   "UiPath.Excel.Activities": "[2.23.0, 2.99.0)",
   "UiPath.Web.Activities": "[1.17.0, 1.99.0)",
   "UiPath.Database.Activities": "[1.8.0, 1.99.0)",
-  "UiPath.Persistence.Activities": "[25.10.0, 25.10.99)",
-  "UiPath.IntelligentOCR.Activities": "[8.20.0, 8.99.0)",
-  "UiPath.MLActivities": "[25.10.0, 25.10.99)",
+  "UiPath.Persistence.Activities": "[1.6.0, 1.99.0)",
+  "UiPath.IntelligentOCR.Activities": "[6.20.0, 6.99.0)",
+  "UiPath.MLActivities": "[1.0.0, 2.99.0)",
+  "UiPath.IntegrationService.Activities": "[1.20.0, 1.99.0)",
+  "UiPath.DataService.Activities": "[25.2.0, 25.99.0)",
+  "UiPath.GenAI.Activities": "[1.0.0, 1.99.0)",
 };
 
 function getVerifiedVersionRange(pkgName: string): string | undefined {

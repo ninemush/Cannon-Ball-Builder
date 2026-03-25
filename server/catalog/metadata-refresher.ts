@@ -129,6 +129,7 @@ const SERVICE_INDEX_CACHE_TTL_MS = 30 * 60 * 1000;
 interface ServiceIndexResolution {
   packageBaseAddress: string | null;
   registrationsBaseUrl: string | null;
+  searchQueryServiceUrl: string | null;
 }
 
 let _serviceIndexDetailCache: Map<string, { resolution: ServiceIndexResolution; expiresAt: number }> = new Map();
@@ -150,6 +151,7 @@ async function resolveServiceIndex(feedIndexUrl: string): Promise<ServiceIndexRe
 
     let packageBaseAddress: string | null = null;
     let registrationsBaseUrl: string | null = null;
+    let searchQueryServiceUrl: string | null = null;
 
     for (const resource of resources) {
       const type = resource["@type"];
@@ -160,6 +162,9 @@ async function resolveServiceIndex(feedIndexUrl: string): Promise<ServiceIndexRe
       }
       if (!registrationsBaseUrl && type.startsWith("RegistrationsBaseUrl")) {
         registrationsBaseUrl = resource["@id"];
+      }
+      if (!searchQueryServiceUrl && type.startsWith("SearchQueryService")) {
+        searchQueryServiceUrl = resource["@id"];
       }
     }
 
@@ -183,6 +188,16 @@ async function resolveServiceIndex(feedIndexUrl: string): Promise<ServiceIndexRe
       }
     }
 
+    if (!searchQueryServiceUrl) {
+      for (const resource of resources) {
+        const type = resource["@type"];
+        if (typeof type === "string" && type.includes("SearchQueryService")) {
+          searchQueryServiceUrl = resource["@id"];
+          break;
+        }
+      }
+    }
+
     if (packageBaseAddress && !packageBaseAddress.endsWith("/")) {
       packageBaseAddress += "/";
     }
@@ -190,9 +205,9 @@ async function resolveServiceIndex(feedIndexUrl: string): Promise<ServiceIndexRe
       registrationsBaseUrl += "/";
     }
 
-    const resolution: ServiceIndexResolution = { packageBaseAddress, registrationsBaseUrl };
+    const resolution: ServiceIndexResolution = { packageBaseAddress, registrationsBaseUrl, searchQueryServiceUrl };
 
-    if (packageBaseAddress || registrationsBaseUrl) {
+    if (packageBaseAddress || registrationsBaseUrl || searchQueryServiceUrl) {
       _serviceIndexDetailCache.set(feedIndexUrl, {
         resolution,
         expiresAt: Date.now() + SERVICE_INDEX_CACHE_TTL_MS,
@@ -258,12 +273,95 @@ async function fetchVersionsViaRegistrations(
   }
 }
 
+async function fetchVersionsViaSearchQuery(
+  searchQueryServiceUrl: string,
+  packageId: string,
+): Promise<FeedFetchResult> {
+  try {
+    const searchUrl = `${searchQueryServiceUrl}?q=${encodeURIComponent(packageId)}&prerelease=false&take=20`;
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(searchUrl, { signal: controller.signal });
+    clearTimeout(tid);
+    if (!res.ok) return { status: "unreachable" };
+    const data: any = await res.json();
+    const results: any[] = data.data || [];
+    const match = results.find((r: any) =>
+      typeof r.id === "string" && r.id.toLowerCase() === packageId.toLowerCase()
+    );
+    if (!match) return { status: "ok", versions: [] };
+    const versionEntries: any[] = match.versions || [];
+    const versions = versionEntries
+      .map((v: any) => v.version)
+      .filter((v: string) => typeof v === "string" && !v.includes("-"));
+    return { status: "ok", versions };
+  } catch {
+    return { status: "unreachable" };
+  }
+}
+
+async function discoverPackagesViaSearch(
+  searchQueryServiceUrl: string,
+  queryPrefix: string,
+  take: number = 100,
+): Promise<{ status: "ok"; packageIds: string[] } | { status: "unreachable" }> {
+  try {
+    const allPackageIds: string[] = [];
+    let skip = 0;
+    const maxPages = 5;
+
+    for (let page = 0; page < maxPages; page++) {
+      const searchUrl = `${searchQueryServiceUrl}?q=${encodeURIComponent(queryPrefix)}&prerelease=false&take=${take}&skip=${skip}`;
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(searchUrl, { signal: controller.signal });
+      clearTimeout(tid);
+      if (!res.ok) return { status: "unreachable" };
+      const data: any = await res.json();
+      const results: any[] = data.data || [];
+      if (results.length === 0) break;
+
+      for (const result of results) {
+        if (typeof result.id === "string" && result.id.startsWith("UiPath.") && result.id.includes(".Activities")) {
+          allPackageIds.push(result.id);
+        }
+      }
+
+      if (results.length < take) break;
+      skip += take;
+    }
+
+    return { status: "ok", packageIds: allPackageIds };
+  } catch {
+    return { status: "unreachable" };
+  }
+}
+
 async function fetchVersionsFromV3Feed(
   feedIndexUrl: string,
   packageId: string,
 ): Promise<FeedFetchResult> {
   const serviceIndex = await resolveServiceIndex(feedIndexUrl);
   if (!serviceIndex) return { status: "unreachable" };
+
+  if (serviceIndex.searchQueryServiceUrl) {
+    const searchResult = await fetchVersionsViaSearchQuery(serviceIndex.searchQueryServiceUrl, packageId);
+    if (searchResult.status === "ok" && searchResult.versions.length > 0) {
+      return searchResult;
+    }
+    if (searchResult.status === "ok" && searchResult.versions.length === 0) {
+      if (serviceIndex.registrationsBaseUrl) {
+        const regResult = await fetchVersionsViaRegistrations(serviceIndex.registrationsBaseUrl, packageId);
+        if (regResult.status === "ok" && regResult.versions.length > 0) return regResult;
+      }
+      return searchResult;
+    }
+  }
+
+  if (serviceIndex.registrationsBaseUrl) {
+    const regResult = await fetchVersionsViaRegistrations(serviceIndex.registrationsBaseUrl, packageId);
+    if (regResult.status === "ok" && regResult.versions.length > 0) return regResult;
+  }
 
   if (serviceIndex.packageBaseAddress) {
     try {
@@ -284,10 +382,6 @@ async function fetchVersionsFromV3Feed(
     } catch {
       return { status: "unreachable" };
     }
-  }
-
-  if (serviceIndex.registrationsBaseUrl) {
-    return fetchVersionsViaRegistrations(serviceIndex.registrationsBaseUrl, packageId);
   }
 
   return { status: "unreachable" };
@@ -341,12 +435,12 @@ function validatePreferredVersion(
   seedMin: string,
   seedMax: string,
 ): string | null {
-  if (availableVersions.includes(preferred)) {
+  if (availableVersions.includes(preferred) && compareVersions(preferred, seedMin) >= 0) {
     return preferred;
   }
 
   const compatible = availableVersions
-    .filter(v => isVersionInCompatibleLine(v, seedMin, seedMax) && !v.includes("-"))
+    .filter(v => isVersionInCompatibleLine(v, seedMin, seedMax) && !v.includes("-") && compareVersions(v, seedMin) >= 0)
     .sort(compareVersions);
 
   if (compatible.length === 0) return null;
@@ -526,6 +620,11 @@ export async function refreshGeneration(): Promise<RefreshResult> {
       const existingRange = updatedRanges[pkgName];
       if (!existingRange) continue;
 
+      if (existingRange.verificationSource === "manually-curated") {
+        updatedCount++;
+        continue;
+      }
+
       const category = classifyPackage(pkgName);
       const resolution = await resolvePackageFromFeeds(
         pkgName,
@@ -561,6 +660,74 @@ export async function refreshGeneration(): Promise<RefreshResult> {
         failedPackages.push(pkgName);
         console.error(`[MetadataRefresher] ${pkgName}: FAILED to resolve on any authoritative feed. No compatible version found.`);
       }
+    }
+
+    let discoveredCount = 0;
+    try {
+      const serviceIndex = await resolveServiceIndex(UIPATH_OFFICIAL_FEED_INDEX);
+      if (serviceIndex?.searchQueryServiceUrl) {
+        const discovery = await discoverPackagesViaSearch(serviceIndex.searchQueryServiceUrl, "UiPath", 100);
+        if (discovery.status === "ok") {
+          const currentLine = existing.studioTarget?.line || "25.10";
+          const lineParts = parseMajorMinor(currentLine);
+
+          for (const pkgId of discovery.packageIds) {
+            if (updatedRanges[pkgId]) continue;
+
+            const versionResult = await fetchVersionsViaSearchQuery(serviceIndex.searchQueryServiceUrl, pkgId);
+            if (versionResult.status !== "ok" || versionResult.versions.length === 0) continue;
+
+            const stableVersions = versionResult.versions.filter(v => !v.includes("-"));
+            if (stableVersions.length === 0) continue;
+
+            let seedMin: string;
+            let seedMax: string;
+
+            if (lineParts) {
+              const lineVersions = stableVersions.filter(v => {
+                const vp = parseMajorMinor(v);
+                return vp && vp.major === lineParts.major && vp.minor === lineParts.minor;
+              });
+
+              if (lineVersions.length > 0) {
+                lineVersions.sort(compareVersions);
+                seedMin = lineVersions[0];
+                seedMax = `${lineParts.major}.${lineParts.minor}.99`;
+              } else {
+                stableVersions.sort(compareVersions);
+                const latest = stableVersions[stableVersions.length - 1];
+                const lp = parseMajorMinor(latest);
+                if (!lp) continue;
+                seedMin = stableVersions[0];
+                seedMax = `${lp.major}.${lp.minor}.99`;
+              }
+            } else {
+              stableVersions.sort(compareVersions);
+              seedMin = stableVersions[0];
+              seedMax = stableVersions[stableVersions.length - 1];
+            }
+
+            const range = resolveCompatibleRange(stableVersions, seedMin, seedMax);
+            if (!range) continue;
+
+            const validated = validatePreferredVersion(range.preferred, stableVersions, seedMin, seedMax);
+            if (!validated) continue;
+
+            updatedRanges[pkgId] = {
+              min: seedMin,
+              max: seedMax,
+              preferred: validated,
+              lastVerifiedAt: now,
+              verificationSource: "uipath-official-feed",
+            };
+            discoveredCount++;
+            updatedCount++;
+            console.log(`[MetadataRefresher] DISCOVERED new package: ${pkgId} → preferred ${validated} (range [${seedMin}, ${seedMax}))`);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[MetadataRefresher] Dynamic package discovery failed (non-fatal): ${err?.message || "unknown"}`);
     }
 
     const requiredPackages = existing.minimumRequiredPackages || [];
@@ -602,7 +769,10 @@ export async function refreshGeneration(): Promise<RefreshResult> {
     metadataService.recordRefreshResult("generation", true);
 
     let statusParts: string[] = [];
-    statusParts.push(`Updated ${updatedCount}/${allPackageNames.length} packages`);
+    statusParts.push(`Updated ${updatedCount}/${Object.keys(updatedRanges).length} packages`);
+    if (discoveredCount > 0) {
+      statusParts.push(`${discoveredCount} newly discovered via search API`);
+    }
     if (fallbackCount > 0) {
       statusParts.push(`${fallbackCount} via nuget.org fallback`);
     }
@@ -907,12 +1077,18 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
   for (const pkgName of Object.keys(existing.packageVersionRanges)) {
     const entry = existing.packageVersionRanges[pkgName];
     const preferred = entry.preferred;
+
+    if (entry.verificationSource === "manually-curated") {
+      verified++;
+      continue;
+    }
+
     const category = classifyPackage(pkgName);
 
     let feedResult: FeedFetchResult = { status: "unreachable" };
     if (category === "official-uipath") {
       feedResult = await fetchVersionsFromV3Feed(UIPATH_OFFICIAL_FEED_INDEX, pkgName);
-      if (feedResult.status === "unreachable") {
+      if (feedResult.status === "unreachable" || (feedResult.status === "ok" && feedResult.versions.length === 0)) {
         feedResult = await fetchVersionsFromNugetFlatContainer(pkgName);
       }
     } else if (category === "general") {
@@ -925,6 +1101,14 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
       const level = isRequired ? "ERROR" : "WARNING";
       const msg = `[FeedCheck] ${level}: Cannot verify ${pkgName}@${preferred} — feeds unreachable`;
       console.warn(msg);
+      details.push(msg);
+      continue;
+    }
+
+    if (feedResult.versions.length === 0) {
+      verified++;
+      const msg = `[FeedCheck] INFO: ${pkgName}@${preferred} — not available on public feeds (private/Studio-bundled package), accepting curated version`;
+      console.log(msg);
       details.push(msg);
       continue;
     }

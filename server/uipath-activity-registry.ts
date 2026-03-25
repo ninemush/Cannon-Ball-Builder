@@ -629,6 +629,17 @@ const TYPE_ARGUMENT_PACKAGE_MAP: Record<string, string> = {
   "UiPath.Database.Activities": "UiPath.Database.Activities",
 };
 
+const NAMESPACE_PREFIX_TO_PACKAGE: Record<string, string> = {
+  "uexcel": "UiPath.Excel.Activities",
+  "uweb": "UiPath.Web.Activities",
+  "umail": "UiPath.Mail.Activities",
+  "udb": "UiPath.Database.Activities",
+  "uml": "UiPath.MLActivities",
+  "uocr": "UiPath.IntelligentOCR.Activities",
+  "upers": "UiPath.Persistence.Activities",
+  "uds": "UiPath.DataService.Activities",
+};
+
 export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
   const packages = new Set<string>();
   packages.add("UiPath.System.Activities");
@@ -652,6 +663,13 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     }
   }
 
+  for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
+    const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
+    if (prefixPattern.test(xamlContent)) {
+      packages.add(pkgName);
+    }
+  }
+
   const typeArgPattern = /x:TypeArguments="([^"]+)"/g;
   while ((match = typeArgPattern.exec(xamlContent)) !== null) {
     const typeArgs = match[1];
@@ -667,6 +685,11 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     const assemblyName = match[2].trim();
     if (assemblyName === "Newtonsoft.Json") {
       packages.add("Newtonsoft.Json");
+    }
+    for (const [, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
+      if (assemblyName === pkgName) {
+        packages.add(pkgName);
+      }
     }
   }
 
