@@ -606,6 +606,23 @@ function getLabelSemanticSide(label: string | null | undefined): "left" | "right
   return null;
 }
 
+function computeTargetHandle(
+  sourceHandle: string,
+  srcPos: { x: number; y: number },
+  tgtPos: { x: number; y: number }
+): string {
+  if (sourceHandle === "left" || sourceHandle === "right") {
+    const dy = tgtPos.y - srcPos.y;
+    const dx = Math.abs(tgtPos.x - srcPos.x);
+    if (dy > dx * 0.5) {
+      return "top";
+    }
+    if (sourceHandle === "left") return "right";
+    return "left";
+  }
+  return "top";
+}
+
 function fixDecisionHandlesPostLayout(
   layoutNodes: Node[],
   edges: Edge[],
@@ -637,63 +654,54 @@ function fixDecisionHandlesPostLayout(
     if (!isDecision) continue;
 
     const siblings = edgesBySource[sourceId];
-    if (siblings.length !== 2) continue;
-
     const srcPos = nodePositions[sourceId];
     if (!srcPos) continue;
 
-    const edge0 = siblings[0];
-    const edge1 = siblings[1];
-    const tgt0 = nodePositions[edge0.target];
-    const tgt1 = nodePositions[edge1.target];
-    if (!tgt0 || !tgt1) continue;
-
-    const bothBelow = tgt0.y > srcPos.y && tgt1.y > srcPos.y;
-    const dx = Math.abs(tgt0.x - tgt1.x);
-    const isXAmbiguous = dx < 5;
-
-    let handle0: string;
-    let handle1: string;
-
-    if (bothBelow && isXAmbiguous) {
-      const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
-      const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
-      handle0 = sem0 === "left" ? "bottom-left" : "bottom-right";
-      handle1 = sem1 === "right" ? "bottom-right" : "bottom-left";
-      if (handle0 === handle1) {
-        handle0 = "bottom-left";
-        handle1 = "bottom-right";
+    if (siblings.length === 1) {
+      const edge = siblings[0];
+      const tgtPos = nodePositions[edge.target];
+      const currentHandle = edge.sourceHandle || "left";
+      const handle = (currentHandle === "left" || currentHandle === "right") ? currentHandle : "left";
+      const idx = updatedEdges.findIndex((e) => e.id === edge.id);
+      if (idx >= 0) {
+        const targetHandle = tgtPos ? computeTargetHandle(handle, srcPos, tgtPos) : "top";
+        updatedEdges[idx] = { ...updatedEdges[idx], sourceHandle: handle, targetHandle };
       }
-    } else if (bothBelow) {
-      if (tgt0.x < tgt1.x) {
-        handle0 = "bottom-left";
-        handle1 = "bottom-right";
-      } else {
-        handle0 = "bottom-right";
-        handle1 = "bottom-left";
-      }
-    } else if (isXAmbiguous) {
-      const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
-      const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
-      handle0 = sem0 || "left";
-      handle1 = sem1 || "right";
-      if (handle0 === handle1) {
-        handle0 = "left";
-        handle1 = "right";
-      }
-    } else {
-      if (tgt0.x < tgt1.x) {
-        handle0 = "left";
-        handle1 = "right";
-      } else {
-        handle0 = "right";
-        handle1 = "left";
-      }
+      continue;
     }
 
-    const isLeftRight0 = handle0 === "left" || handle0 === "right";
-    const isLeftRight1 = handle1 === "left" || handle1 === "right";
-    if (isLeftRight0 && isLeftRight1) {
+    if (siblings.length === 2) {
+      const edge0 = siblings[0];
+      const edge1 = siblings[1];
+      const tgt0 = nodePositions[edge0.target];
+      const tgt1 = nodePositions[edge1.target];
+      if (!tgt0 || !tgt1) continue;
+
+      const dx = Math.abs(tgt0.x - tgt1.x);
+      const isXAmbiguous = dx < 5;
+
+      let handle0: string;
+      let handle1: string;
+
+      if (isXAmbiguous) {
+        const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
+        const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
+        handle0 = sem0 || "left";
+        handle1 = sem1 || "right";
+        if (handle0 === handle1) {
+          handle0 = "left";
+          handle1 = "right";
+        }
+      } else {
+        if (tgt0.x < tgt1.x) {
+          handle0 = "left";
+          handle1 = "right";
+        } else {
+          handle0 = "right";
+          handle1 = "left";
+        }
+      }
+
       const wouldCross =
         (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
         (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
@@ -702,28 +710,42 @@ function fixDecisionHandlesPostLayout(
         handle0 = handle1;
         handle1 = tmp;
       }
-    }
 
-    const isBottom0 = handle0 === "bottom-left" || handle0 === "bottom-right";
-    const isBottom1 = handle1 === "bottom-left" || handle1 === "bottom-right";
-    if (isBottom0 && isBottom1) {
-      const wouldCross =
-        (handle0 === "bottom-left" && handle1 === "bottom-right" && tgt0.x > tgt1.x) ||
-        (handle0 === "bottom-right" && handle1 === "bottom-left" && tgt0.x < tgt1.x);
-      if (wouldCross) {
-        const tmp = handle0;
-        handle0 = handle1;
-        handle1 = tmp;
+      const idx0 = updatedEdges.findIndex((e) => e.id === edge0.id);
+      const idx1 = updatedEdges.findIndex((e) => e.id === edge1.id);
+      if (idx0 >= 0) {
+        const targetHandle0 = computeTargetHandle(handle0, srcPos, tgt0);
+        updatedEdges[idx0] = { ...updatedEdges[idx0], sourceHandle: handle0, targetHandle: targetHandle0 };
       }
+      if (idx1 >= 0) {
+        const targetHandle1 = computeTargetHandle(handle1, srcPos, tgt1);
+        updatedEdges[idx1] = { ...updatedEdges[idx1], sourceHandle: handle1, targetHandle: targetHandle1 };
+      }
+      continue;
     }
 
-    const idx0 = updatedEdges.findIndex((e) => e.id === edge0.id);
-    const idx1 = updatedEdges.findIndex((e) => e.id === edge1.id);
-    if (idx0 >= 0) {
-      updatedEdges[idx0] = { ...updatedEdges[idx0], sourceHandle: handle0 };
-    }
-    if (idx1 >= 0) {
-      updatedEdges[idx1] = { ...updatedEdges[idx1], sourceHandle: handle1 };
+    for (let i = 0; i < siblings.length; i++) {
+      const edge = siblings[i];
+      const tgtPos = nodePositions[edge.target];
+      if (!tgtPos) continue;
+
+      const sem = getLabelSemanticSide((edge.data as any)?.label);
+      let handle: string;
+      if (sem) {
+        handle = sem;
+      } else if (i === 0) {
+        handle = "left";
+      } else if (i === 1) {
+        handle = "right";
+      } else {
+        handle = "bottom";
+      }
+
+      const idx = updatedEdges.findIndex((e) => e.id === edge.id);
+      if (idx >= 0) {
+        const targetHandle = computeTargetHandle(handle, srcPos, tgtPos);
+        updatedEdges[idx] = { ...updatedEdges[idx], sourceHandle: handle, targetHandle };
+      }
     }
   }
 
@@ -1014,7 +1036,11 @@ function StartNode({ data, id }: { data: any; id: string }) {
         nodeId={id}
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
-        targetHandles={[{ position: Position.Top, id: "top" }]}
+        targetHandles={[
+          { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
+        ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
           { position: Position.Right, id: "right" },
@@ -1051,6 +1077,8 @@ function EndNode({ data, id }: { data: any; id: string }) {
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
           { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
         ]}
         sourceHandles={[{ position: Position.Bottom, id: "bottom" }]}
       />
@@ -1092,6 +1120,8 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
           { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -1099,8 +1129,6 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
           { position: Position.Left, id: "left" },
         ]}
       />
-      <Handle type="source" position={Position.Bottom} id="bottom-left" style={{ left: '35%', opacity: 0, width: 1, height: 1 }} />
-      <Handle type="source" position={Position.Bottom} id="bottom-right" style={{ left: '65%', opacity: 0, width: 1, height: 1 }} />
       <div
         className="absolute transition-all hover:brightness-110"
         style={{
@@ -1167,6 +1195,8 @@ function TaskNode({ data, id }: { data: any; id: string }) {
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
           { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -1260,6 +1290,8 @@ function AgentTaskNode({ data, id }: { data: any; id: string }) {
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
           { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -1330,6 +1362,8 @@ function AgentDecisionNode({ data, id }: { data: any; id: string }) {
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
           { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -1337,8 +1371,6 @@ function AgentDecisionNode({ data, id }: { data: any; id: string }) {
           { position: Position.Left, id: "left" },
         ]}
       />
-      <Handle type="source" position={Position.Bottom} id="bottom-left" style={{ left: '35%', opacity: 0, width: 1, height: 1 }} />
-      <Handle type="source" position={Position.Bottom} id="bottom-right" style={{ left: '65%', opacity: 0, width: 1, height: 1 }} />
       <div
         className="absolute transition-all hover:brightness-110"
         style={{
@@ -1396,6 +1428,8 @@ function AgentLoopNode({ data, id }: { data: any; id: string }) {
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
           { position: Position.Top, id: "top" },
+          { position: Position.Left, id: "left" },
+          { position: Position.Right, id: "right" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -2012,7 +2046,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       const tgtNodeType = nodeTypeMap[String(e.targetNodeId)] || "task";
       return {
         id: String(e.id), source: String(e.sourceNodeId), target: String(e.targetNodeId),
-        type: isDecision ? "smoothstep" : "custom",
+        type: "custom",
         ...(isDecision && e.label ? { label: e.label } : {}),
         sourceHandle,
         targetHandle: "top",
@@ -2100,7 +2134,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
         id: String(e.id),
         source: String(e.sourceNodeId),
         target: String(e.targetNodeId),
-        type: isDecision ? "smoothstep" : "custom",
+        type: "custom",
         ...(isDecision && e.label ? { label: e.label } : {}),
         sourceHandle,
         targetHandle: "top",
