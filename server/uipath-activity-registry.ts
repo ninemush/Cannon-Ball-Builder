@@ -670,6 +670,14 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     }
   }
 
+  const xmlnsPattern = /xmlns:\w+="clr-namespace:UiPath\.([^;]+);assembly=(UiPath\.[^"]+)"/g;
+  while ((match = xmlnsPattern.exec(xamlContent)) !== null) {
+    const assemblyName = match[2].trim();
+    if (!isFrameworkAssembly(assemblyName)) {
+      packages.add(assemblyName);
+    }
+  }
+
   const typeArgPattern = /x:TypeArguments="([^"]+)"/g;
   while ((match = typeArgPattern.exec(xamlContent)) !== null) {
     const typeArgs = match[1];

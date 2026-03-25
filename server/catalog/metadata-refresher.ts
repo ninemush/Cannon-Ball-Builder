@@ -18,13 +18,6 @@ const UIPATH_MARKETPLACE_INDEX = "https://gallery.uipath.com/api/v3/index.json";
 
 const CORE_PACKAGES = [
   "UiPath.System.Activities",
-  "UiPath.UIAutomation.Activities",
-  "UiPath.Mail.Activities",
-  "UiPath.Excel.Activities",
-  "UiPath.Web.Activities",
-  "UiPath.Database.Activities",
-  "UiPath.Persistence.Activities",
-  "UiPath.IntelligentOCR.Activities",
 ];
 
 const MARKETPLACE_PACKAGES: string[] = [];
@@ -377,27 +370,6 @@ async function fetchVersionsFromV3Feed(
   if (serviceIndex.registrationsBaseUrl) {
     const regResult = await fetchVersionsViaRegistrations(serviceIndex.registrationsBaseUrl, packageId);
     if (regResult.status === "ok" && regResult.versions.length > 0) return regResult;
-  }
-
-  if (serviceIndex.packageBaseAddress) {
-    try {
-      const indexUrl = `${serviceIndex.packageBaseAddress}${packageId.toLowerCase()}/index.json`;
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(indexUrl, { signal: controller.signal });
-      clearTimeout(tid);
-      if (!res.ok) {
-        if (res.status === 404) {
-          return { status: "ok", versions: [] };
-        }
-        return { status: "unreachable" };
-      }
-      const data: any = await res.json();
-      const versions: string[] = data.versions || [];
-      return { status: "ok", versions: versions.filter(v => !v.includes("-")) };
-    } catch {
-      return { status: "unreachable" };
-    }
   }
 
   return { status: "unreachable" };
@@ -1197,6 +1169,115 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
   }
 
   return { verified, corrected, unreachable, details };
+}
+
+export async function runStartupDiscovery(): Promise<void> {
+  try {
+    const existingPath = join(CATALOG_DIR, "generation-metadata.json");
+    if (!existsSync(existingPath)) return;
+    const existingRaw = JSON.parse(readFileSync(existingPath, "utf-8"));
+    const parseResult = generationMetadataSchema.safeParse(existingRaw);
+    if (!parseResult.success) return;
+    const existing = parseResult.data;
+    const currentRanges = { ...existing.packageVersionRanges };
+    const currentLine = existing.studioTarget?.line || "25.10";
+    const lineParts = parseMajorMinor(currentLine);
+
+    const serviceIndex = await resolveServiceIndex(UIPATH_OFFICIAL_FEED_INDEX);
+    if (!serviceIndex?.searchQueryServiceUrl) {
+      console.log("[Discovery] No SearchQueryService available, skipping discovery");
+      return;
+    }
+
+    const discovery = await discoverPackagesViaSearch(serviceIndex.searchQueryServiceUrl, "UiPath", 100);
+    if (discovery.status !== "ok") {
+      console.log("[Discovery] Feed unreachable, skipping discovery");
+      return;
+    }
+
+    const newPackages: string[] = [];
+    const now = new Date().toISOString();
+
+    for (const pkgId of discovery.packageIds) {
+      if (currentRanges[pkgId]) continue;
+
+      const versionResult = await fetchVersionsViaSearchQuery(serviceIndex.searchQueryServiceUrl, pkgId);
+      if (versionResult.status !== "ok" || versionResult.versions.length === 0) continue;
+
+      const stableVersions = versionResult.versions.filter(v => !v.includes("-"));
+      if (stableVersions.length === 0) continue;
+
+      let seedMin: string;
+      let seedMax: string;
+
+      if (lineParts) {
+        const lineVersions = stableVersions.filter(v => {
+          const vp = parseMajorMinor(v);
+          return vp && vp.major === lineParts.major && vp.minor === lineParts.minor;
+        });
+
+        if (lineVersions.length > 0) {
+          lineVersions.sort(compareVersions);
+          seedMin = lineVersions[0];
+          seedMax = `${lineParts.major}.${lineParts.minor}.99`;
+        } else {
+          stableVersions.sort(compareVersions);
+          const latest = stableVersions[stableVersions.length - 1];
+          const lp = parseMajorMinor(latest);
+          if (!lp) continue;
+          seedMin = stableVersions.filter(v => {
+            const vp = parseMajorMinor(v);
+            return vp && vp.major === lp.major;
+          }).sort(compareVersions)[0] || latest;
+          seedMax = `${lp.major}.99.0`;
+        }
+      } else {
+        stableVersions.sort(compareVersions);
+        const latest = stableVersions[stableVersions.length - 1];
+        const lp = parseMajorMinor(latest);
+        if (!lp) continue;
+        seedMin = latest;
+        seedMax = `${lp.major}.${lp.minor}.99`;
+      }
+
+      stableVersions.sort(compareVersions);
+      const preferred = stableVersions.filter(v =>
+        compareVersions(v, seedMin) >= 0 && isVersionInCompatibleLine(v, seedMin, seedMax)
+      ).sort(compareVersions);
+
+      const bestPreferred = preferred.length > 0 ? preferred[preferred.length - 1] : stableVersions[stableVersions.length - 1];
+
+      currentRanges[pkgId] = {
+        min: seedMin,
+        max: seedMax,
+        preferred: bestPreferred,
+        lastVerifiedAt: now,
+        verificationSource: "uipath-official-feed" as VerificationSource,
+        discoveredAt: now,
+      };
+      newPackages.push(pkgId);
+    }
+
+    if (newPackages.length > 0) {
+      const updated = {
+        ...existing,
+        packageVersionRanges: currentRanges,
+        lastRefreshedAt: now,
+      };
+      const validation = generationMetadataSchema.safeParse(updated);
+      if (validation.success) {
+        atomicWrite(existingPath, JSON.stringify(updated, null, 2));
+        metadataService.reload("generation");
+        console.log(`[Discovery] Expanded catalog with ${newPackages.length} new packages (total: ${Object.keys(currentRanges).length})`);
+      } else {
+        console.warn(`[Discovery] Validation failed after adding ${newPackages.length} packages: ${validation.error.message}`);
+      }
+    } else {
+      console.log(`[Discovery] No new packages found (catalog already has ${Object.keys(currentRanges).length} packages)`);
+    }
+  } catch (err: any) {
+    console.warn(`[Discovery] Startup discovery failed: ${err.message}`);
+  }
 }
 
 let refreshInterval: ReturnType<typeof setInterval> | null = null;

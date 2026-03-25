@@ -23,6 +23,7 @@ export const packageVersionRangeEntrySchema = z.object({
   preferred: z.string(),
   lastVerifiedAt: z.string().datetime(),
   verificationSource: verificationSourceSchema,
+  discoveredAt: z.string().datetime().optional(),
 });
 
 export const generationMetadataSchema = z.object({

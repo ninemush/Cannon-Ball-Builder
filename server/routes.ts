@@ -14,7 +14,7 @@ import { evaluateTransition } from "./stage-transition";
 import { SUPPORTED_MODELS, CHAT_SUPPORTED_MODELS, setDbModel, getActiveModel, getProviderName, setDbCodeModel, getActiveCodeModel, getCodeProviderName, setDbMetaValidationModel, getActiveMetaValidationModel, getMetaValidationProviderName } from "./lib/llm";
 import { getMetricsSummary, getAllMetrics, type MetaValidationMode } from "./meta-validation";
 import { metadataService } from "./catalog/metadata-service";
-import { refreshAll, refreshGeneration, refreshIntegration, startRefreshScheduler, discoverNewerLines, verifyPreferredVersionsOnStartup } from "./catalog/metadata-refresher";
+import { refreshAll, refreshGeneration, refreshIntegration, startRefreshScheduler, discoverNewerLines, verifyPreferredVersionsOnStartup, runStartupDiscovery } from "./catalog/metadata-refresher";
 
 declare module "express-session" {
   interface SessionData {
@@ -643,8 +643,9 @@ export async function registerRoutes(
         console.log(`[Startup] ${detail}`);
       }
     }
+    return runStartupDiscovery();
   }).catch(err => {
-    console.warn(`[Startup] Feed verification failed: ${err.message}`);
+    console.warn(`[Startup] Feed verification or discovery failed: ${err.message}`);
   });
 
   return httpServer;
