@@ -2991,7 +2991,8 @@ interface SDDSection {
 }
 
 function parseSddSections(content: string): SDDSection[] {
-  const lines = content.split("\n");
+  const normalized = content.replace(/^###\s+(\d+\.?\s*(?:Orchestrator|Deployment))/gim, '## $1');
+  const lines = normalized.split("\n");
   const sections: SDDSection[] = [];
   let currentTitle = "";
   let currentContent: string[] = [];

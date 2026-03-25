@@ -48,7 +48,8 @@ function parseDocumentSections(content: string): DocumentSection[] {
     .replace(/\[STEP:\s*[\d.]+\s+[^\]]*\]/g, "")
     .replace(/\[DOC:(PDD|SDD):\d+\]/g, "")
     .replace(/\[DEPLOY_UIPATH\]/g, "")
-    .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "");
+    .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
+    .replace(/^###\s+(\d+\.?\s*(?:Orchestrator|Deployment))/gim, '## $1');
   const lines = cleaned.split("\n");
   const sections: DocumentSection[] = [];
   let currentTitle = "";

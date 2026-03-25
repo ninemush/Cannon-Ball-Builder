@@ -203,10 +203,10 @@ export function parseArtifactBlockAsObject(text: string): Record<string, any> | 
 
 export function insertArtifactBlock(content: string, artifactBlock: string): string {
   const deploySpecContent = `## 9. Orchestrator & Platform Deployment Specification\n\n${artifactBlock}`;
-  const existingDeploySpec = /## (?:8|9)[\.\s].*(?:Orchestrator|Deployment)/i;
+  const existingDeploySpec = /#{2,3} (?:8|9)[\.\s].*(?:Orchestrator|Deployment)/i;
 
   if (existingDeploySpec.test(content)) {
-    return content.replace(/## (?:8|9)[\.\s].*(?:Orchestrator|Deployment)[\s\S]*$/, deploySpecContent.trim());
+    return content.replace(/#{2,3} (?:8|9)[\.\s].*(?:Orchestrator|Deployment)[\s\S]*$/, deploySpecContent.trim());
   }
 
   return content.trimEnd() + "\n\n" + deploySpecContent.trim();
