@@ -128,7 +128,7 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
   </Sequence>
 </Activity>`;
       const result = makeUiPathCompliant(xml, "Windows");
-      expect(result).toContain('Message="[&quot;Error: &quot; &amp; ex.Message &amp; &quot; at &quot; &amp; DateTime.Now.ToString]"');
+      expect(result).toContain('Message="[&quot;Error: &quot; &amp; ex.Message &amp; &quot; at &quot; &amp; DateTime.Now.ToString()]"');
     });
 
     it("quality gate flags unconverted single-quoted expressions as errors", () => {
