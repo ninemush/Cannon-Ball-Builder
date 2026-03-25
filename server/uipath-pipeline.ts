@@ -37,7 +37,7 @@ import {
   type GenerationMetrics,
   type EntryWorkflowMetadata,
 } from "./meta-validation";
-import { classifyComplexity, type ComplexityTier, type ComplexityClassification } from "./complexity-classifier";
+import { classifyComplexity, estimateComplexityFromContext, type ComplexityTier, type ComplexityClassification } from "./complexity-classifier";
 
 export type { GenerationMode };
 export type { ComplexityTier, ComplexityClassification };
@@ -1208,8 +1208,33 @@ export async function generateUiPathPackage(
       tracker.cleanup();
       return cached;
     }
+    const preComplexity = estimateComplexityFromContext(ctx.sdd?.content, ctx.mapNodes);
+    tracker.start("pre_complexity_estimation", "Estimating pre-generation complexity");
+    tracker.complete("pre_complexity_estimation", `Pre-generation complexity: ${preComplexity.tier} (${preComplexity.budget.label})`, {
+      tier: preComplexity.tier,
+      score: preComplexity.score,
+      budgetLabel: preComplexity.budget.label,
+      budgetMin: preComplexity.budget.min,
+      budgetMax: preComplexity.budget.max,
+      reasons: preComplexity.reasons,
+    });
+    console.log(`[Pipeline] Pre-generation complexity: tier=${preComplexity.tier}, score=${preComplexity.score}, budget=${preComplexity.budget.label}, reasons=${preComplexity.reasons.join("; ")}`);
+
     const workflowCount = (pkg as any).workflows?.length || 0;
     tracker.complete("decomposition", `Decomposed into ${workflowCount} workflow(s)`, { workflowCount });
+
+    const withinBudget = workflowCount >= preComplexity.budget.min && workflowCount <= preComplexity.budget.max;
+    tracker.start("workflow_budget_check", "Checking workflow count against budget");
+    tracker.complete("workflow_budget_check", withinBudget
+      ? `Workflow count (${workflowCount}) is within expected range (${preComplexity.budget.label})`
+      : `Workflow count (${workflowCount}) is outside expected range (${preComplexity.budget.label})`, {
+      actualCount: workflowCount,
+      expectedMin: preComplexity.budget.min,
+      expectedMax: preComplexity.budget.max,
+      withinBudget,
+      preGenerationTier: preComplexity.tier,
+    });
+    console.log(`[Pipeline] Workflow budget check: actual=${workflowCount}, expected=${preComplexity.budget.label}, withinBudget=${withinBudget}`);
 
     const complexity = classifyComplexity(
       pkg,

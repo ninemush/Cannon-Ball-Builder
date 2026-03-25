@@ -49,8 +49,13 @@ interface ScaffoldResult {
   executionOrder?: string[];
 }
 
-const SCAFFOLD_PROMPT = `You are a Senior Developer and Solution Architect. Apply production engineering rigor: enforce strict naming conventions (PascalCase project and workflow names, camelCase variables, PascalCase arguments), single-responsibility decomposition (each workflow does one thing well), meaningful shared arguments that cross workflow boundaries with clear direction, and realistic dependency declarations. Anticipate common runtime failures (selector timeouts, credential expiry, file locks) in the scaffold structure by ensuring error-handler and retry workflows are included where appropriate. Comply strictly with the JSON schema below — no extra fields, no missing required fields, no prose outside the JSON.
+function buildScaffoldPrompt(complexityGuidance?: string): string {
+  const budgetSection = complexityGuidance
+    ? `\nWORKFLOW DECOMPOSITION GUIDANCE:\n${complexityGuidance}\n`
+    : "";
 
+  return `You are a Senior Developer and Solution Architect. Apply production engineering rigor: enforce strict naming conventions (PascalCase project and workflow names, camelCase variables, PascalCase arguments), cohesive workflow boundaries where each workflow owns a meaningful business sub-process, meaningful shared arguments that cross workflow boundaries with clear direction, and realistic dependency declarations. Anticipate common runtime failures (selector timeouts, credential expiry, file locks) within each workflow using inline TryCatch and RetryScope — do NOT create separate error-handler or retry .xaml files. Comply strictly with the JSON schema below — no extra fields, no missing required fields, no prose outside the JSON.
+${budgetSection}
 Based on the approved SDD and any PDD/process map context provided, generate a project scaffold for a UiPath automation package. Output a JSON object with this exact shape:
 
 {
@@ -74,7 +79,9 @@ Based on the approved SDD and any PDD/process map context provided, generate a p
 }
 
 IMPORTANT RULES:
-- Include ALL workflows needed for the automation (Main, sub-workflows, error handlers, utility workflows)
+- Error handling (TryCatch, RetryScope) belongs INLINE within workflows — do NOT create separate error-handler or retry .xaml files
+- Only create a dedicated utility/helper workflow when the logic is genuinely reused by 2+ caller workflows (e.g., a shared login sequence)
+- Separate workflows ARE appropriate for: dispatcher/performer patterns, REFramework structure (Init/Process/End), Action Center / HITL boundaries, and genuinely distinct business sub-processes
 - The invokes array defines the invocation graph: which workflows call which via InvokeWorkflowFile
 - sharedArguments are input/output arguments that cross workflow boundaries
 - executionOrder should be topological: invoked (dependency) workflows should come BEFORE the workflows that call them, so dependencies are generated first
@@ -82,6 +89,7 @@ IMPORTANT RULES:
 - Keep it concise — this is the project skeleton, not full workflow details
 
 Return ONLY the JSON object, no other text.`;
+}
 
 function buildDetailPrompt(workflow: ScaffoldWorkflowEntry, scaffold: ScaffoldResult): string {
   const contextLines: string[] = [];
@@ -345,10 +353,11 @@ export interface DecomposeOptions {
   runLogger: RunLogger;
   onProgress?: (message: string) => void;
   onPipelineProgress?: (event: any) => void;
+  complexityGuidance?: string;
 }
 
 export async function generateDecomposedSpec(options: DecomposeOptions): Promise<DecomposedSpecResult> {
-  const { systemContext, runId, runLogger, onProgress, onPipelineProgress } = options;
+  const { systemContext, runId, runLogger, onProgress, onPipelineProgress, complexityGuidance } = options;
   const overallStart = Date.now();
   const metrics: DecompositionMetrics = {
     scaffoldDurationMs: 0,
@@ -369,7 +378,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     scaffoldResponse = await getCodeLLM().create({
       maxTokens: SCAFFOLD_MAX_TOKENS,
       system: systemContext,
-      messages: [{ role: "user", content: SCAFFOLD_PROMPT }],
+      messages: [{ role: "user", content: buildScaffoldPrompt(complexityGuidance) }],
       timeoutMs: SDD_LLM_TIMEOUT_MS,
     });
     metrics.totalLlmCalls++;

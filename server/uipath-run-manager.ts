@@ -14,6 +14,7 @@ import { UIPATH_PROMPT, repairTruncatedPackageJson } from "./uipath-prompts";
 import { QualityGateError } from "./uipath-integration";
 import type { MetaValidationMode } from "./meta-validation";
 import { generateDecomposedSpec } from "./uipath-spec-decomposer";
+import { estimateComplexityFromContext } from "./complexity-classifier";
 
 export type TriggerSource = "manual" | "chat" | "api";
 
@@ -360,7 +361,19 @@ async function executeRun(
 
       runLogger.stageStart("spec_prompt_assembly");
       pipelineProgressCallback({ type: "started", stage: "spec_prompt_assembly", message: "Preparing scaffold prompt" });
-      let systemCtx = `You are a Senior Developer and Solution Architect generating a production-ready UiPath package for "${idea.title}". You enforce production engineering rigor: strict variable naming conventions (camelCase locals, PascalCase arguments), meaningful logging at every decision point and exception handler (not just "Error occurred"), single-responsibility workflow decomposition (each .xaml does one thing well), realistic UI selectors with fallback strategies, and error handling beyond generic TryCatch — you anticipate specific runtime failures (selector timeouts, stale element references, API rate limits, file locks, credential expiry) and handle them deliberately. You comply strictly with the output JSON schemas — no extra fields, no missing required fields, no prose outside the JSON.\n\nApproved SDD:\n${sdd.content}`;
+
+      const preComplexity = estimateComplexityFromContext(sdd.content, mapNodes);
+      console.log(`[RunManager] Run ${runId}: Pre-generation complexity: tier=${preComplexity.tier}, score=${preComplexity.score}, budget=${preComplexity.budget.label}, reasons=${preComplexity.reasons.join("; ")}`);
+      runLogger.stageStart("pre_complexity_estimation");
+      runLogger.stageEnd("pre_complexity_estimation", "succeeded", {
+        tier: preComplexity.tier,
+        score: preComplexity.score,
+        budgetLabel: preComplexity.budget.label,
+        reasons: preComplexity.reasons,
+      });
+      pipelineProgressCallback({ type: "completed", stage: "pre_complexity_estimation", message: `Pre-generation complexity: ${preComplexity.tier} (${preComplexity.budget.label})`, context: { tier: preComplexity.tier, score: preComplexity.score, budget: preComplexity.budget.label } });
+
+      let systemCtx = `You are a Senior Developer and Solution Architect generating a production-ready UiPath package for "${idea.title}". You enforce production engineering rigor: strict variable naming conventions (camelCase locals, PascalCase arguments), meaningful logging at every decision point and exception handler (not just "Error occurred"), cohesive workflow boundaries where each .xaml owns a meaningful business sub-process, realistic UI selectors with fallback strategies, and error handling beyond generic TryCatch — you anticipate specific runtime failures (selector timeouts, stale element references, API rate limits, file locks, credential expiry) and handle them deliberately with inline TryCatch and RetryScope (not separate error-handler .xaml files). You comply strictly with the output JSON schemas — no extra fields, no missing required fields, no prose outside the JSON.\n\nComplexity Assessment: ${preComplexity.tier} — ${preComplexity.budget.label}\n${preComplexity.budget.guidance}\n\nApproved SDD:\n${sdd.content}`;
       if (pdd) systemCtx += `\n\nApproved PDD:\n${pdd.content}`;
       if (mapSummary.length > 0) systemCtx += `\n\nProcess Map Steps:\n${JSON.stringify(mapSummary)}`;
       runLogger.stageEnd("spec_prompt_assembly", "succeeded");
@@ -373,14 +386,41 @@ async function executeRun(
           runLogger,
           onProgress: (msg: string) => emitProgress(msg),
           onPipelineProgress: pipelineProgressCallback,
+          complexityGuidance: preComplexity.budget.guidance,
         });
 
         packageJson = decomposedResult.packageSpec;
 
         const decompositionMetrics = decomposedResult.metrics;
+        const actualWorkflowCount = packageJson.workflows.length;
+        const withinBudget = actualWorkflowCount >= preComplexity.budget.min && actualWorkflowCount <= preComplexity.budget.max;
+        console.log(`[RunManager] Run ${runId}: Workflow budget check: actual=${actualWorkflowCount}, expected=${preComplexity.budget.label}, withinBudget=${withinBudget}`);
+        runLogger.stageStart("workflow_budget_check");
+        runLogger.stageEnd("workflow_budget_check", "succeeded", {
+          preGenerationTier: preComplexity.tier,
+          budgetLabel: preComplexity.budget.label,
+          budgetMin: preComplexity.budget.min,
+          budgetMax: preComplexity.budget.max,
+          actualCount: actualWorkflowCount,
+          withinBudget,
+        });
+        pipelineProgressCallback({
+          type: "completed",
+          stage: "workflow_budget_check",
+          message: withinBudget
+            ? `Workflow count (${actualWorkflowCount}) is within expected range (${preComplexity.budget.label})`
+            : `Workflow count (${actualWorkflowCount}) is outside expected range (${preComplexity.budget.label})`,
+          context: {
+            preGenerationTier: preComplexity.tier,
+            budgetGuidanceApplied: preComplexity.budget.label,
+            actualCount: actualWorkflowCount,
+            withinBudget,
+          },
+        });
+
         runLogger.stageEnd("spec_generation", "succeeded", {
           decomposed: true,
-          workflowCount: packageJson.workflows.length,
+          workflowCount: actualWorkflowCount,
           stubCount: decompositionMetrics.stubCount,
           totalLlmCalls: decompositionMetrics.totalLlmCalls,
           scaffoldDurationMs: decompositionMetrics.scaffoldDurationMs,
