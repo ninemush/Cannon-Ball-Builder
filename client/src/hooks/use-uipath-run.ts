@@ -43,6 +43,7 @@ interface CompletedRunResult {
   complianceScore?: number;
   completenessLevel?: "structural" | "functional" | "incomplete";
   outcomeSummary?: UiPathOutcomeSummary;
+  dependencyMap?: Record<string, string>;
 }
 
 export interface UseUiPathRunReturn {
@@ -333,6 +334,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
             complianceScore: data.templateComplianceScore ?? cur?.complianceScore,
             completenessLevel: data.completenessLevel,
             outcomeSummary: data.outcomeSummary || cur?.outcomeSummary,
+            dependencyMap: data.dependencyMap,
           });
           return next;
         });
@@ -515,6 +517,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
             complianceScore: run.complianceScore,
             completenessLevel: run.completenessLevel,
             outcomeSummary: run.outcomeSummary,
+            dependencyMap: run.dependencyMap,
           }]]));
         }
       } catch {}

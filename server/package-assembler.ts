@@ -1816,6 +1816,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (enrichment?.decomposition?.length) {
         for (const decomp of enrichment.decomposition) {
           const wfName = decomp.name.replace(/\s+/g, "_");
+          const wfBasename = wfName.replace(/\.xaml$/i, "");
+          if (wfBasename.toLowerCase() === "main") continue;
           invokedNames.add(wfName);
           mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(decomp.name)}" WorkflowFileName="${wfName}.xaml" />`;
@@ -1824,6 +1826,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (workflows.length > 0) {
         for (const wf of workflows) {
           const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
+          const wfBasename = wfName.replace(/\.xaml$/i, "");
+          if (wfBasename.toLowerCase() === "main") continue;
           if (invokedNames.has(wfName)) continue;
           invokedNames.add(wfName);
           mainActivities += `
@@ -1845,6 +1849,57 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       const mainXaml = buildXaml("Main", `${projectName} - Main Workflow`, mainActivities);
       deferredWrites.set(`${libPath}/Main.xaml`, compliancePass(mainXaml, "Main.xaml"));
+    }
+
+    {
+      const existingFiles = new Set<string>();
+      const prefix = libPath + "/";
+      for (const [path] of deferredWrites) {
+        if (path.endsWith(".xaml")) {
+          const relPath = path.startsWith(prefix) ? path.slice(prefix.length) : (path.split("/").pop() || path);
+          existingFiles.add(relPath);
+        }
+      }
+      for (const entry of xamlEntries) {
+        const relPath = entry.name.startsWith(prefix) ? entry.name.slice(prefix.length) : (entry.name.split("/").pop() || entry.name);
+        if (relPath.endsWith(".xaml")) existingFiles.add(relPath);
+      }
+
+      const referencedFiles = new Set<string>();
+      for (const [path, content] of deferredWrites) {
+        if (!path.endsWith(".xaml")) continue;
+        const pattern = /WorkflowFileName="([^"]+)"/g;
+        let match;
+        while ((match = pattern.exec(content)) !== null) {
+          const ref = match[1].replace(/\\/g, "/").replace(/^[./]+/, "");
+          referencedFiles.add(ref);
+        }
+      }
+      for (const entry of xamlEntries) {
+        const pattern = /WorkflowFileName="([^"]+)"/g;
+        let match;
+        while ((match = pattern.exec(entry.content)) !== null) {
+          const ref = match[1].replace(/\\/g, "/").replace(/^[./]+/, "");
+          referencedFiles.add(ref);
+        }
+      }
+
+      let stubCount = 0;
+      for (const ref of referencedFiles) {
+        if (!existingFiles.has(ref)) {
+          const baseName = ref.split("/").pop() || ref;
+          const className = baseName.replace(/\.xaml$/i, "");
+          const stubXaml = buildXaml(className, `${className} - Stub Workflow`, `
+        <ui:Comment DisplayName="TODO: Implement ${escapeXml(className)}" Text="This workflow was auto-generated as a stub. Open in UiPath Studio to implement the logic." />`);
+          deferredWrites.set(`${libPath}/${ref}`, compliancePass(stubXaml, ref));
+          existingFiles.add(ref);
+          stubCount++;
+          console.log(`[Scaffold] Generated stub XAML for referenced workflow: ${ref}`);
+        }
+      }
+      if (stubCount > 0) {
+        console.log(`[Scaffold] Generated ${stubCount} stub XAML file(s) for missing referenced workflows`);
+      }
     }
 
     {
@@ -1905,6 +1960,17 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const scannedPackages = scanXamlForRequiredPackages(allXamlContent);
 
     {
+      const DEPENDENCY_SAFE_LIST = new Set([
+        "UiPath.System.Activities",
+        "UiPath.Excel.Activities",
+        "UiPath.Mail.Activities",
+        "UiPath.Testing.Activities",
+      ]);
+
+      if (tf === "Windows") {
+        DEPENDENCY_SAFE_LIST.add("UiPath.UIAutomation.Activities");
+      }
+
       const usedPackages = new Set(Array.from(scannedPackages));
       usedPackages.add("UiPath.System.Activities");
 
@@ -1913,9 +1979,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         usedPackages.add(pkg);
       }
 
+      for (const safePkg of DEPENDENCY_SAFE_LIST) {
+        usedPackages.add(safePkg);
+      }
+
       const unusedDeps: string[] = [];
       for (const pkgName of Object.keys(deps)) {
-        if (!usedPackages.has(pkgName) && pkgName !== "UiPath.System.Activities") {
+        if (!usedPackages.has(pkgName)) {
           unusedDeps.push(pkgName);
         }
       }

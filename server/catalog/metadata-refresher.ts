@@ -444,6 +444,12 @@ export function startRefreshScheduler(intervalMs: number = 24 * 60 * 60 * 1000):
         console.warn(`[MetadataRefresher] OIDC refresh failed: ${results.oidc.message}`);
       }
     }
+    if (results.newerLines?.newerLineAvailable) {
+      console.warn(`[MetadataRefresher] NEWER STUDIO LINE DETECTED: ${results.newerLines.newerLineAvailable} (latest: ${results.newerLines.latestVersion}). Current catalog targets ${metadataService.getStudioTarget()?.line || "unknown"}. Consider upgrading the catalog to match the connected tenant's Studio version.`);
+      for (const pkg of results.newerLines.packages) {
+        console.warn(`[MetadataRefresher]   - ${pkg.packageId}: current line ${pkg.currentLine} → newer line ${pkg.newerLine} (latest ${pkg.latestVersion})`);
+      }
+    }
   }, intervalMs);
   console.log(`[MetadataRefresher] Scheduler started (interval: ${Math.round(intervalMs / 3600000)}h)`);
 }

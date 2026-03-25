@@ -739,6 +739,7 @@ export interface ObserverRunState {
     fullyGenerated: number;
     totalEstimatedMinutes: number;
   };
+  dependencyMap?: Record<string, string>;
   error?: string;
 }
 
@@ -816,6 +817,7 @@ export function emitObserverDone(runId: string, payload: any): void {
   if (payload.templateComplianceScore !== undefined) entry.state.complianceScore = payload.templateComplianceScore;
   if (payload.completenessLevel) entry.state.completenessLevel = payload.completenessLevel;
   if (payload.outcomeSummary) entry.state.outcomeSummary = payload.outcomeSummary;
+  if (payload.dependencyMap) entry.state.dependencyMap = payload.dependencyMap;
   entry.state.updatedAt = Date.now();
   emitObserverEvent(runId, { type: "done", data: { done: true, ...payload }, timestamp: Date.now() });
 }

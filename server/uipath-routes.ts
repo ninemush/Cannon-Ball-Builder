@@ -2058,6 +2058,7 @@ export function registerUiPathRoutes(app: Express): void {
                 templateComplianceScore: pr?.templateComplianceScore,
                 completenessLevel: pr?.qualityGateResult?.completenessLevel,
                 outcomeSummary: buildOutcomeSummary,
+                dependencyMap: pr?.dependencyMap,
               });
             },
             onFail: (error: string) => {
@@ -2126,6 +2127,7 @@ export function registerUiPathRoutes(app: Express): void {
             complianceScore: observerRun.complianceScore,
             completenessLevel: observerRun.completenessLevel,
             outcomeSummary: observerRun.outcomeSummary,
+            dependencyMap: observerRun.dependencyMap,
             createdAt: observerRun.createdAt,
           },
         });
@@ -2339,7 +2341,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (isObserverTerminalStatus(observerRun.status) && !replay) {
         console.log(`[Observer] SSE stream: run already terminal (${observerRun.status}), sending final status for runId=${runId}`);
         clearInterval(heartbeatInterval);
-        res.write(`data: ${JSON.stringify({ done: true, status: observerRun.status, warnings: observerRun.warnings, templateComplianceScore: observerRun.complianceScore, completenessLevel: observerRun.completenessLevel, outcomeSummary: observerRun.outcomeSummary })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true, status: observerRun.status, warnings: observerRun.warnings, templateComplianceScore: observerRun.complianceScore, completenessLevel: observerRun.completenessLevel, outcomeSummary: observerRun.outcomeSummary, dependencyMap: observerRun.dependencyMap })}\n\n`);
         res.end();
         unsubscribeFn();
         return;

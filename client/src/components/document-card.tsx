@@ -500,6 +500,7 @@ interface UiPathPackageCardProps {
   templateComplianceScore?: number;
   outcomeSummary?: OutcomeSummary;
   completenessLevel?: "structural" | "functional" | "incomplete";
+  pipelineDependencyMap?: Record<string, string>;
 }
 
 const MAX_DESC_LENGTH = 300;
@@ -575,7 +576,7 @@ function WorkflowSection({ workflows, expanded, onToggle }: { workflows: any[]; 
   );
 }
 
-export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry, templateComplianceScore, outcomeSummary, completenessLevel }: UiPathPackageCardProps) {
+export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry, templateComplianceScore, outcomeSummary, completenessLevel, pipelineDependencyMap }: UiPathPackageCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [descExpanded, setDescExpanded] = useState(false);
   const [descClamped, setDescClamped] = useState(false);
@@ -821,18 +822,23 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
           </div>
         )}
 
-        {packageData.dependencies?.length > 0 && (
-          <div>
-            <h5 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Dependencies</h5>
-            <div className="flex flex-wrap gap-1">
-              {packageData.dependencies.map((dep: string, i: number) => (
-                <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                  {dep}
-                </span>
-              ))}
+        {(() => {
+          const depEntries = pipelineDependencyMap
+            ? Object.entries(pipelineDependencyMap).map(([name, version]) => `${name} ${version}`)
+            : packageData.dependencies;
+          return depEntries?.length > 0 ? (
+            <div>
+              <h5 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Dependencies</h5>
+              <div className="flex flex-wrap gap-1">
+                {depEntries.map((dep: string, i: number) => (
+                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                    {dep}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          ) : null;
+        })()}
 
         {packageData.workflows?.length > 0 && (
           <WorkflowSection

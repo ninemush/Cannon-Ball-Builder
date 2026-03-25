@@ -2442,6 +2442,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             const cardComplianceScore = completedRun?.complianceScore;
             const cardCompletenessLevel = completedRun?.completenessLevel;
             const cardOutcomeSummary = completedRun?.outcomeSummary;
+            const cardDependencyMap = completedRun?.dependencyMap;
             const isLatestUiPathMsg = displayMessages.filter(m => m.uipathData).pop()?.id === msg.id;
             rendered.push(
               <div key={msg.id} className="flex justify-start" data-testid={`chat-message-${msg.id}`}>
@@ -2457,6 +2458,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     templateComplianceScore={cardComplianceScore}
                     completenessLevel={cardCompletenessLevel}
                     outcomeSummary={cardOutcomeSummary}
+                    pipelineDependencyMap={cardDependencyMap}
                   />
                 </div>
               </div>

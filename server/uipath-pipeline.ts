@@ -649,6 +649,22 @@ export async function compilePackageFromSpecs(
   const maxDowngradeAttempts = options?.maxDowngradeAttempts ?? 1;
   const currentDowngradeAttempt = options?._downgradeAttempt ?? 0;
 
+  try {
+    const { discoverNewerLines } = await import("./catalog/metadata-refresher");
+    const { metadataService: metaSvc } = await import("./catalog/metadata-service");
+    const newerLines = await discoverNewerLines();
+    if (newerLines.newerLineAvailable) {
+      pipelineWarnings.push({
+        code: "CATALOG_VERSION_BEHIND_STUDIO",
+        message: `Catalog targets Studio line ${metaSvc.getStudioTarget()?.line || "unknown"}, but newer line ${newerLines.newerLineAvailable} (v${newerLines.latestVersion}) is available on NuGet. The generated package may need version updates when opened in a newer Studio.`,
+        stage: "version-check",
+        recoverable: true,
+      });
+    }
+  } catch (err: any) {
+    console.debug(`[Pipeline] Newer-line discovery skipped: ${err?.message || "unknown error"}`);
+  }
+
   const noop: PipelineProgressCallback = () => {};
   const tracker = new PipelineStageTracker(options?.onPipelineProgress || noop);
   const mvMode: MetaValidationMode = options?.metaValidationMode || "Auto";
