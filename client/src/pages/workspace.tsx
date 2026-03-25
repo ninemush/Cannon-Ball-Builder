@@ -1084,7 +1084,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [messageToRunId, setMessageToRunId] = useState<Map<string, string>>(new Map());
   const [deployPipelineLogEntries, setDeployPipelineLogEntries] = useState<PipelineLogEntry[]>([]);
   const [deployPipelineComplete, setDeployPipelineComplete] = useState(false);
-  const deployPipelineEntryCounter = useRef(0);
+
   const [streamingDocContent, setStreamingDocContent] = useState<string>("");
   const [streamingDocElapsed, setStreamingDocElapsed] = useState(0);
   const streamingDocElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1532,9 +1532,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         }
         if (data.pipelineEvent) {
           const evt = data.pipelineEvent;
-          deployPipelineEntryCounter.current++;
           setDeployPipelineLogEntries(prev => [...prev, {
-            id: `pe-${deployPipelineEntryCounter.current}`,
+            id: `pe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             type: evt.type,
             stage: evt.stage,
             message: evt.message,
@@ -1572,7 +1571,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               localDeployStarted = true;
               setDeployPipelineLogEntries([]);
               setDeployPipelineComplete(false);
-              deployPipelineEntryCounter.current = 0;
+
             }
             setDeployStep(data.deployStatus);
             setStreamingMsg((prev) => prev ? { ...prev } : prev);
