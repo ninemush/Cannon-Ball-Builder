@@ -1,0 +1,61 @@
+I think there are two separate but related concerns here, and I do not want them collapsed into one oversized “fix package generation quality issues” task.
+
+First: #240 contains several valid issue clusters, but it is too broad as written.
+It mixes:
+- an upstream REFramework XML well-formedness bug
+- simple Main fallback orchestration defects
+- dependency warning/cleanup issues
+- credential strategy consistency
+- InitAllSettings usability
+- a previous parity failure
+
+That is too much for one implementation task if we want safe sequencing and clear validation of what actually fixed the package-generation failures.
+
+My recommendation on #240:
+please split it into smaller linked tasks in priority order.
+
+1. Fix REFramework Main.xaml XML well-formedness bug
+- narrow upstream correctness fix
+- this appears to be a primary trigger for several downstream failures
+
+2. Fix simple Main fallback orchestration correctness
+- wire intended generated workflows into the invocation graph
+- prevent Main.xaml self-recursion
+- only generate/invoke CloseAllApplications.xaml coherently
+- keep reachability pruning strict
+
+3. Fix package quality consistency issues
+- dependency pruning/warning truthfulness
+- credential strategy consistency
+- InitAllSettings usable config population
+
+Please keep the parity/rollback issue under the existing parity task rather than folding it into #240.
+
+Second: yes, the package feed/source alignment issue should also be addressed.
+I agree this is a real dependency-authority gap.
+
+If our backend is validating/resolving package versions against `nuget.org` only, while UiPath Studio restores against:
+- UiPath Official
+- Marketplace
+- Local
+- nuget.org
+
+then we are not using the same authority model as the actual runtime/tooling environment.
+
+For UiPath packages, the primary source should be the UiPath Official feed, not plain `nuget.org`.
+Marketplace should be considered where relevant.
+`nuget.org` should remain secondary/fallback for non-UiPath/general packages.
+
+Important:
+my main concern is backend package-source/version authority alignment with real UiPath restore behavior, not just whether generated `project.json` explicitly lists package sources.
+
+So please do two things:
+
+1. Split #240 into smaller linked tasks as described above.
+2. Add the package-source authority issue either:
+- as an extension of the existing dependency authority/version alignment work
+- or as a separate linked task specifically for UiPath package source authority alignment
+
+Please return:
+- the split task set replacing #240
+- and your recommendation on whether the feed/source alignment belongs in the existing dependency authority task or should be a standalone linked task
