@@ -13,7 +13,7 @@
     "UiPath.UIAutomation.Activities": {
       "min": "25.10.0",
       "max": "25.10.99",
-      "preferred": "25.10.0"
+      "preferred": "25.10.28"
     },
     "UiPath.Mail.Activities": {
       "min": "1.20.0",

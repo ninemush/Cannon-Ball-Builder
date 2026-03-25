@@ -17,8 +17,8 @@
     "UiPath.UIAutomation.Activities": {
       "min": "25.10.0",
       "max": "25.10.99",
-      "preferred": "25.10.0",
-      "lastVerifiedAt": "2026-03-21T00:00:00Z",
+      "preferred": "25.10.28",
+      "lastVerifiedAt": "2026-03-25T17:06:34.243Z",
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.Mail.Activities": {
@@ -115,8 +115,8 @@
     "UiPath.ComplexScenarios.Activities": {
       "min": "1.4.0",
       "max": "1.99.0",
-      "preferred": "1.4.6",
-      "lastVerifiedAt": "2026-03-21T00:00:00Z",
+      "preferred": "1.4.0",
+      "lastVerifiedAt": "2026-03-25T17:06:37.656Z",
       "verificationSource": "uipath-official-feed"
     },
     "Newtonsoft.Json": {
@@ -129,22 +129,22 @@
     "UiPath.GSuite.Activities": {
       "min": "1.15.0",
       "max": "1.99.0",
-      "preferred": "1.15.1",
-      "lastVerifiedAt": "2026-03-24T00:00:00Z",
+      "preferred": "1.13.2",
+      "lastVerifiedAt": "2026-03-25T17:06:37.907Z",
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.PDF.Activities": {
       "min": "3.17.0",
       "max": "3.99.0",
-      "preferred": "3.17.0",
-      "lastVerifiedAt": "2026-03-24T00:00:00Z",
+      "preferred": "3.16.0",
+      "lastVerifiedAt": "2026-03-25T17:06:38.106Z",
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.Word.Activities": {
       "min": "1.10.0",
       "max": "1.99.0",
-      "preferred": "1.10.0",
-      "lastVerifiedAt": "2026-03-24T00:00:00Z",
+      "preferred": "1.7.3",
+      "lastVerifiedAt": "2026-03-25T17:06:38.307Z",
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.Cryptography.Activities": {
@@ -157,15 +157,15 @@
     "UiPath.MicrosoftOffice365.Activities": {
       "min": "2.5.0",
       "max": "2.99.0",
-      "preferred": "2.5.0",
-      "lastVerifiedAt": "2026-03-24T00:00:00Z",
+      "preferred": "2.4.3",
+      "lastVerifiedAt": "2026-03-25T17:06:38.740Z",
       "verificationSource": "uipath-official-feed"
     }
   },
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-03-21T09:00:00.000Z",
+  "lastRefreshedAt": "2026-03-25T17:06:38.740Z",
   "lastVerifiedAt": "2026-03-21T09:00:00.000Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"
