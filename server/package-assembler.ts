@@ -353,11 +353,33 @@ function detectCredentialStrategy(xamlContent: string): CredentialStrategy {
   return "none";
 }
 
+function determineCredentialStrategy(orchestratorArtifacts?: any): CredentialStrategy {
+  const assets = orchestratorArtifacts?.assets || [];
+  const hasCredentials = assets.some((a: any) => a.type === "Credential");
+  const hasTextAssets = assets.some((a: any) => a.type !== "Credential");
+  if (hasCredentials && !hasTextAssets) return "GetCredential";
+  if (!hasCredentials && hasTextAssets) return "GetAsset";
+  if (hasCredentials && hasTextAssets) return "mixed";
+  return "none";
+}
+
 function reconcileCredentialStrategy(
   deferredWrites: Map<string, string>,
   xamlEntries: Array<{ name: string; content: string }>,
+  predeterminedStrategy?: CredentialStrategy,
 ): { strategy: CredentialStrategy; reconciled: boolean; warnings: string[] } {
   const warnings: string[] = [];
+
+  if (predeterminedStrategy && predeterminedStrategy !== "none") {
+    if (predeterminedStrategy === "mixed") {
+      console.log(`[Credential Reconciliation] Pre-determined mixed strategy (both credential and text assets declared) — both GetCredential and GetAsset are intentional, skipping reconciliation`);
+    } else {
+      console.log(`[Credential Reconciliation] Using pre-determined strategy: ${predeterminedStrategy} — skipping reconciliation`);
+    }
+    const effectiveStrategy = predeterminedStrategy === "mixed" ? "GetCredential" : predeterminedStrategy;
+    return { strategy: effectiveStrategy, reconciled: false, warnings };
+  }
+
   let globalHasAsset = false;
   let globalHasCredential = false;
 
@@ -568,6 +590,7 @@ export function normalizePackageName(name: string): string {
 export interface DependencyResolutionResult {
   deps: Record<string, string>;
   warnings: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
+  specPredictedPackages: Set<string>;
 }
 
 function collectActivityTemplatesFromNode(node: TreeWorkflowNode): string[] {
@@ -639,6 +662,7 @@ export function resolveDependencies(
   const deps: Record<string, string> = {};
   const warnings: DependencyResolutionResult["warnings"] = [];
   const referencedPackages = new Set<string>();
+  const specPredictedPackages = new Set<string>();
   const tf = targetFramework || (studioProfile?.targetFramework) || "Windows";
 
   referencedPackages.add("UiPath.System.Activities");
@@ -648,7 +672,9 @@ export function resolveDependencies(
     for (const template of activityTemplates) {
       const pkgId = catalogService.getPackageForActivity(template);
       if (pkgId) {
-        referencedPackages.add(normalizePackageName(pkgId));
+        const normalized = normalizePackageName(pkgId);
+        referencedPackages.add(normalized);
+        specPredictedPackages.add(normalized);
       }
     }
   }
@@ -766,8 +792,8 @@ export function resolveDependencies(
 
   validateAndEnforceDependencyCompatibility(deps, warnings);
 
-  console.log(`[Dependency Resolution] Resolved ${Object.keys(deps).length} dependencies proactively from ${referencedPackages.size} referenced packages`);
-  return { deps, warnings };
+  console.log(`[Dependency Resolution] Resolved ${Object.keys(deps).length} dependencies proactively from ${referencedPackages.size} referenced packages (${specPredictedPackages.size} spec-predicted)`);
+  return { deps, warnings, specPredictedPackages };
 }
 
 type CachedStageEnrichment = {
@@ -1459,6 +1485,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const deps = depResolution.deps;
     const dependencyWarnings = depResolution.warnings;
     const proactivelyResolvedPackages = new Set(Object.keys(deps));
+    const specPredictedPackages = depResolution.specPredictedPackages;
 
     const analysisReports: { fileName: string; report: AnalysisReport }[] = [];
     const xamlEntries: { name: string; content: string }[] = [];
@@ -1761,7 +1788,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     }
 
-    const initXaml = generateInitAllSettingsXaml(orchestratorArtifacts, tf);
+    const packageCredentialStrategy = determineCredentialStrategy(orchestratorArtifacts);
+    console.log(`[UiPath] Package-level credential strategy determined: ${packageCredentialStrategy}`);
+    const initXaml = generateInitAllSettingsXaml(orchestratorArtifacts, tf, packageCredentialStrategy);
     deferredWrites.set(`${libPath}/InitAllSettings.xaml`, compliancePass(initXaml, "InitAllSettings.xaml"));
 
     if (useReFramework && !hasMain) {
@@ -1972,7 +2001,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     }
 
     {
-      const credResult = reconcileCredentialStrategy(deferredWrites, xamlEntries);
+      const credResult = reconcileCredentialStrategy(deferredWrites, xamlEntries, packageCredentialStrategy);
       if (credResult.reconciled) {
         for (const warning of credResult.warnings) {
           dependencyWarnings.push({
@@ -2021,6 +2050,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
 
       for (const safePkg of DEPENDENCY_SAFE_LIST) {
+        if (deps[safePkg] && !usedPackages.has(safePkg)) {
+          console.log(`[Dependency Alignment] Safe list preserved dependency: ${safePkg} — would have been pruned without safe list`);
+        }
         usedPackages.add(safePkg);
       }
 
@@ -2033,7 +2065,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       const proactiveRemovals: string[] = [];
       for (const pkgName of unusedDeps) {
         delete deps[pkgName];
-        if (proactivelyResolvedPackages.has(pkgName)) {
+        if (proactivelyResolvedPackages.has(pkgName) || specPredictedPackages.has(pkgName)) {
           proactiveRemovals.push(pkgName);
           console.log(`[Dependency Alignment] Silently removing proactively-resolved dependency: ${pkgName} — predicted from spec but not used in emitted XAML`);
         } else {
