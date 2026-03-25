@@ -1195,6 +1195,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   }, [stopDocStreaming]);
   const toBeTriggeredRef = useRef(false);
   const toBeGeneratingRef = useRef(false);
+  const pendingToBeGenerationRef = useRef(false);
   const pddTriggeredRef = useRef(false);
   const sddTriggeredRef = useRef(false);
   const uipathTriggeredRef = useRef(false);
@@ -1383,6 +1384,14 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       }
     }
   }, [savedMessages, isGeneratingDoc, isStreaming, completedUiPathRuns]);
+
+  useEffect(() => {
+    if (!isStreaming && !isGeneratingDoc && pendingToBeGenerationRef.current) {
+      console.log(`[ProcessMap] Streaming ended — retrying deferred To-Be generation`);
+      pendingToBeGenerationRef.current = false;
+      dispatchGenerationForApproval("as-is", false);
+    }
+  }, [isStreaming, isGeneratingDoc, dispatchGenerationForApproval]);
 
   useEffect(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -2050,7 +2059,13 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   generateDocRef.current = generateDocument;
 
   const generateToBeMap = useCallback(() => {
-    if (isStreaming || isGeneratingDoc) return;
+    if (isStreaming || isGeneratingDoc) {
+      console.log(`[ProcessMap] To-Be generation deferred — isStreaming=${isStreaming}, isGeneratingDoc=${isGeneratingDoc}`);
+      pendingToBeGenerationRef.current = true;
+      toBeTriggeredRef.current = false;
+      return;
+    }
+    pendingToBeGenerationRef.current = false;
     toBeGeneratingRef.current = true;
     sendMessageDirect(
       "First, perform the feasibility assessment: evaluate the automation type (RPA vs Agent vs Hybrid) for this process and output the [AUTOMATION_TYPE:] tag. " +
