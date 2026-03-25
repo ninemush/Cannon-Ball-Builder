@@ -3361,27 +3361,33 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
       md += `|-------|------|--------------|-----------------|\n`;
       for (const a of nonCredAssets) {
         const aResult = deploymentResults?.find(r => r.artifact === "Asset" && r.name === a.name);
-        const hasPlaceholder = (a.value || "").includes("PLACEHOLDER_");
+        const valStr = String(a.value ?? "");
+        const hasPlaceholder = valStr.includes("PLACEHOLDER_");
         const idNote = aResult?.id ? ` (ID: ${aResult.id})` : "";
-        md += `| \`${a.name}\`${idNote} | ${a.type} | \`${a.value || "(empty)"}\` | ${hasPlaceholder ? "**SET REAL VALUE** — placeholder needs replacement" : `Verify matches your environment. ${a.description || ""}`} |\n`;
+        md += `| \`${a.name}\`${idNote} | ${a.type} | \`${valStr || "(empty)"}\` | ${hasPlaceholder ? "**SET REAL VALUE** — placeholder needs replacement" : `Verify matches your environment. ${String(a.description ?? "")}`} |\n`;
       }
       md += `\n`;
     }
   } else if (assetResults.length > 0) {
-    const nonCredAssetResults = assetResults.filter(r => !(
-      r.message.includes("Type: Credential") ||
-      r.message.toLowerCase().includes("credential") ||
-      r.name.toLowerCase().includes("credential") ||
-      r.name.toLowerCase().includes("password")
-    ));
+    const nonCredAssetResults = assetResults.filter(r => {
+      const msg = String(r.message ?? "").toLowerCase();
+      const nm = String(r.name ?? "").toLowerCase();
+      return !(
+        msg.includes("type: credential") ||
+        msg.includes("credential") ||
+        nm.includes("credential") ||
+        nm.includes("password")
+      );
+    });
     if (nonCredAssetResults.length > 0) {
       md += `### Asset Values\n\n`;
       md += `| Asset | Status | ID | Action Required |\n`;
       md += `|-------|--------|----|-----------------|\n`;
       for (const ar of nonCredAssetResults) {
-        const typeMatch = ar.message.match(/Type:\s*(\w+)/);
+        const msgStr = String(ar.message ?? "");
+        const typeMatch = msgStr.match(/Type:\s*(\w+)/);
         const assetType = typeMatch ? typeMatch[1] : "Unknown";
-        md += `| \`${ar.name}\` (${assetType}) | ${ar.status} | ${ar.id || "—"} | Verify value matches your environment in Orchestrator > Assets > \`${ar.name}\` |\n`;
+        md += `| \`${String(ar.name ?? "")}\` (${assetType}) | ${ar.status} | ${ar.id || "—"} | Verify value matches your environment in Orchestrator > Assets > \`${String(ar.name ?? "")}\` |\n`;
       }
       md += `\n`;
     }
