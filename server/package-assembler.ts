@@ -97,8 +97,8 @@ export function isValidNuGetVersion(version: string): boolean {
 }
 
 const STUDIO_25_10_VERIFIED_VERSIONS_FALLBACK: Record<string, string> = {
-  "UiPath.System.Activities": "[25.10.0, 25.10.99)",
-  "UiPath.UIAutomation.Activities": "[25.10.0, 25.10.99)",
+  "UiPath.System.Activities": "[25.10.0, 26.99.0)",
+  "UiPath.UIAutomation.Activities": "[25.10.0, 26.99.0)",
   "UiPath.Mail.Activities": "[1.20.0, 1.99.0)",
   "UiPath.Excel.Activities": "[2.23.0, 2.99.0)",
   "UiPath.Web.Activities": "[1.17.0, 1.99.0)",
@@ -107,7 +107,7 @@ const STUDIO_25_10_VERIFIED_VERSIONS_FALLBACK: Record<string, string> = {
   "UiPath.IntelligentOCR.Activities": "[6.20.0, 6.99.0)",
   "UiPath.MLActivities": "[1.0.0, 2.99.0)",
   "UiPath.IntegrationService.Activities": "[1.20.0, 1.99.0)",
-  "UiPath.DataService.Activities": "[25.2.0, 25.99.0)",
+  "UiPath.DataService.Activities": "[25.2.0, 26.99.0)",
   "UiPath.GenAI.Activities": "[1.0.0, 1.99.0)",
 };
 

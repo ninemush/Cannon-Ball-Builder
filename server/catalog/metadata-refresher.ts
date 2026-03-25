@@ -379,38 +379,18 @@ async function discoverPackagesViaSearch(
 
 function deriveSeedRange(
   stableVersions: string[],
-  studioLine: string | null,
+  _studioLine: string | null,
 ): { seedMin: string; seedMax: string } | null {
   if (stableVersions.length === 0) return null;
   const sorted = [...stableVersions].sort(compareVersions);
-  const lineParts = studioLine ? parseMajorMinor(studioLine) : null;
 
-  if (lineParts) {
-    const lineVersions = sorted.filter(v => {
-      const vp = parseMajorMinor(v);
-      return vp && vp.major === lineParts.major && vp.minor === lineParts.minor;
-    });
-
-    if (lineVersions.length > 0) {
-      return {
-        seedMin: lineVersions[0],
-        seedMax: `${lineParts.major}.${lineParts.minor}.99`,
-      };
-    }
-  }
-
+  const earliest = sorted[0];
   const latest = sorted[sorted.length - 1];
   const lp = parseMajorMinor(latest);
   if (!lp) return null;
 
-  const sameMajor = sorted.filter(v => {
-    const vp = parseMajorMinor(v);
-    return vp && vp.major === lp.major;
-  });
-  const earliestInMajor = sameMajor.length > 0 ? sameMajor[0] : latest;
-
   return {
-    seedMin: earliestInMajor,
+    seedMin: earliest,
     seedMax: `${lp.major}.99.0`,
   };
 }
@@ -474,13 +454,8 @@ async function discoverAndResolveNewPackages(
     const seedRange = deriveSeedRange(stableVersions, studioLine);
     if (!seedRange) continue;
 
-    const compatible = stableVersions
-      .filter(v => isVersionInCompatibleLine(v, seedRange.seedMin, seedRange.seedMax))
-      .sort(compareVersions);
-
-    const bestPreferred = compatible.length > 0
-      ? compatible[compatible.length - 1]
-      : stableVersions.sort(compareVersions)[stableVersions.length - 1];
+    const sorted = [...stableVersions].sort(compareVersions);
+    const bestPreferred = sorted[sorted.length - 1];
 
     result.newEntries[pkgId] = {
       min: seedRange.seedMin,
@@ -551,19 +526,22 @@ async function fetchVersionsFromNugetFlatContainer(
 function resolveCompatibleRange(
   versions: string[],
   seedMin: string,
-  seedMax: string,
+  _seedMax: string,
 ): VersionRange | null {
-  const compatibleVersions = versions.filter(v =>
-    isVersionInCompatibleLine(v, seedMin, seedMax)
-  );
-  if (compatibleVersions.length === 0) return null;
+  const stableAboveMin = versions
+    .filter(v => !v.includes("-") && compareVersions(v, seedMin) >= 0)
+    .sort(compareVersions);
 
-  compatibleVersions.sort(compareVersions);
+  if (stableAboveMin.length === 0) return null;
+
+  const latestStable = stableAboveMin[stableAboveMin.length - 1];
+  const lp = parseMajorMinor(latestStable);
+  const widenedMax = lp ? `${lp.major}.99.0` : _seedMax;
 
   return {
-    min: compatibleVersions[0],
-    max: compatibleVersions[compatibleVersions.length - 1],
-    preferred: compatibleVersions[compatibleVersions.length - 1],
+    min: seedMin,
+    max: compareVersions(widenedMax, _seedMax) > 0 ? widenedMax : _seedMax,
+    preferred: latestStable,
   };
 }
 
@@ -578,7 +556,7 @@ function validatePreferredVersion(
   }
 
   const compatible = availableVersions
-    .filter(v => isVersionInCompatibleLine(v, seedMin, seedMax) && !v.includes("-") && compareVersions(v, seedMin) >= 0)
+    .filter(v => !v.includes("-") && compareVersions(v, seedMin) >= 0)
     .sort(compareVersions);
 
   if (compatible.length === 0) return null;
@@ -605,30 +583,11 @@ async function resolvePackageFromFeeds(
       if (officialResult.versions.length > 0) {
         const range = resolveCompatibleRange(officialResult.versions, seedMin, seedMax);
         if (range) {
-          const validated = validatePreferredVersion(range.preferred, officialResult.versions, seedMin, seedMax);
-          if (validated) {
-            return {
-              range: { ...range, preferred: validated },
-              source: "uipath-official-feed",
-              usedFallback: false,
-            };
-          }
-        }
-        const stableVersions = officialResult.versions.filter(v => !v.includes("-")).sort(compareVersions);
-        if (stableVersions.length > 0) {
-          const latestStable = stableVersions[stableVersions.length - 1];
-          const lp = parseMajorMinor(latestStable);
-          if (lp) {
-            return {
-              range: {
-                min: seedMin,
-                max: `${lp.major}.99.0`,
-                preferred: latestStable,
-              },
-              source: "uipath-official-feed",
-              usedFallback: false,
-            };
-          }
+          return {
+            range,
+            source: "uipath-official-feed",
+            usedFallback: false,
+          };
         }
       }
       return null;
@@ -640,14 +599,11 @@ async function resolvePackageFromFeeds(
     if (nugetResult.status === "ok" && nugetResult.versions.length > 0) {
       const range = resolveCompatibleRange(nugetResult.versions, seedMin, seedMax);
       if (range) {
-        const validated = validatePreferredVersion(range.preferred, nugetResult.versions, seedMin, seedMax);
-        if (validated) {
-          return {
-            range: { ...range, preferred: validated },
-            source: "nuget-feed",
-            usedFallback: true,
-          };
-        }
+        return {
+          range,
+          source: "nuget-feed",
+          usedFallback: true,
+        };
       }
     }
 
@@ -670,14 +626,11 @@ async function resolvePackageFromFeeds(
       if (marketplaceResult.versions.length > 0) {
         const range = resolveCompatibleRange(marketplaceResult.versions, seedMin, seedMax);
         if (range) {
-          const validated = validatePreferredVersion(range.preferred, marketplaceResult.versions, seedMin, seedMax);
-          if (validated) {
-            return {
-              range: { ...range, preferred: validated },
-              source: "uipath-marketplace",
-              usedFallback: false,
-            };
-          }
+          return {
+            range,
+            source: "uipath-marketplace",
+            usedFallback: false,
+          };
         }
       }
       return null;
@@ -688,14 +641,11 @@ async function resolvePackageFromFeeds(
     if (nugetResult.status === "ok" && nugetResult.versions.length > 0) {
       const range = resolveCompatibleRange(nugetResult.versions, seedMin, seedMax);
       if (range) {
-        const validated = validatePreferredVersion(range.preferred, nugetResult.versions, seedMin, seedMax);
-        if (validated) {
-          return {
-            range: { ...range, preferred: validated },
-            source: "nuget-feed",
-            usedFallback: true,
-          };
-        }
+        return {
+          range,
+          source: "nuget-feed",
+          usedFallback: true,
+        };
       }
     }
 
@@ -715,14 +665,11 @@ async function resolvePackageFromFeeds(
   if (nugetResult.status === "ok" && nugetResult.versions.length > 0) {
     const range = resolveCompatibleRange(nugetResult.versions, seedMin, seedMax);
     if (range) {
-      const validated = validatePreferredVersion(range.preferred, nugetResult.versions, seedMin, seedMax);
-      if (validated) {
-        return {
-          range: { ...range, preferred: validated },
-          source: "nuget-feed",
-          usedFallback: false,
-        };
-      }
+      return {
+        range,
+        source: "nuget-feed",
+        usedFallback: false,
+      };
     }
   }
 
@@ -1149,10 +1096,11 @@ export async function refreshAll(): Promise<{ generation: RefreshResult; integra
   };
 }
 
-export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: number; corrected: number; unreachable: number; details: string[] }> {
+export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: number; corrected: number; upgraded: number; unreachable: number; details: string[] }> {
   const details: string[] = [];
   let verified = 0;
   let corrected = 0;
+  let upgraded = 0;
   let unreachable = 0;
 
   const existingPath = join(CATALOG_DIR, "generation-metadata.json");
@@ -1209,29 +1157,55 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
       continue;
     }
 
-    if (feedResult.versions.includes(preferred)) {
+    const stableOnFeed = feedResult.versions
+      .filter(v => !v.includes("-") && compareVersions(v, entry.min) >= 0)
+      .sort(compareVersions);
+    const latestStable = stableOnFeed.length > 0 ? stableOnFeed[stableOnFeed.length - 1] : null;
+
+    if (!latestStable) {
+      if (feedResult.versions.includes(preferred)) {
+        verified++;
+        continue;
+      }
+      const isRequired = requiredPackages.includes(pkgName);
+      const level = isRequired ? "ERROR" : "WARNING";
+      const msg = `[FeedCheck] ${level}: ${pkgName} preferred ${preferred} — no stable version found on feed >= ${entry.min}`;
+      console.warn(msg);
+      details.push(msg);
+      continue;
+    }
+
+    if (latestStable === preferred) {
       verified++;
       continue;
     }
 
-    const validatedVersion = validatePreferredVersion(preferred, feedResult.versions, entry.min, entry.max);
-    if (validatedVersion && validatedVersion !== preferred) {
-      const msg = `[FeedCheck] CORRECTED: ${pkgName} preferred ${preferred} not found on feed — auto-corrected to ${validatedVersion}`;
+    if (compareVersions(latestStable, preferred) > 0) {
+      const lp = parseMajorMinor(latestStable);
+      const widenedMax = lp ? `${lp.major}.99.0` : entry.max;
+      const newMax = compareVersions(widenedMax, entry.max) > 0 ? widenedMax : entry.max;
+      const msg = `[FeedCheck] UPGRADED: ${pkgName} preferred ${preferred} → ${latestStable}`;
+      console.log(msg);
+      details.push(msg);
+      existing.packageVersionRanges[pkgName] = {
+        ...entry,
+        preferred: latestStable,
+        max: newMax,
+        lastVerifiedAt: new Date().toISOString(),
+      };
+      upgraded++;
+      needsWrite = true;
+    } else if (!feedResult.versions.includes(preferred)) {
+      const msg = `[FeedCheck] CORRECTED: ${pkgName} preferred ${preferred} not found on feed — auto-corrected to ${latestStable}`;
       console.warn(msg);
       details.push(msg);
       existing.packageVersionRanges[pkgName] = {
         ...entry,
-        preferred: validatedVersion,
+        preferred: latestStable,
         lastVerifiedAt: new Date().toISOString(),
       };
       corrected++;
       needsWrite = true;
-    } else if (!validatedVersion) {
-      const isRequired = requiredPackages.includes(pkgName);
-      const level = isRequired ? "ERROR" : "WARNING";
-      const msg = `[FeedCheck] ${level}: ${pkgName} preferred ${preferred} not found and no compatible version available in range [${entry.min}, ${entry.max}]`;
-      console.warn(msg);
-      details.push(msg);
     } else {
       verified++;
     }
@@ -1244,7 +1218,7 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
       if (validation.success) {
         atomicWrite(existingPath, JSON.stringify(updated, null, 2));
         metadataService.reload("generation");
-        details.push(`[FeedCheck] Updated generation-metadata.json with ${corrected} corrected version(s)`);
+        details.push(`[FeedCheck] Updated generation-metadata.json with ${upgraded} upgraded and ${corrected} corrected version(s)`);
 
         const profilePath = join(CATALOG_DIR, "studio-profile.json");
         if (existsSync(profilePath)) {
@@ -1272,11 +1246,11 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
     }
   }
 
-  if (verified > 0 || corrected > 0) {
-    console.log(`[FeedCheck] Startup verification complete: ${verified} verified, ${corrected} corrected, ${unreachable} unreachable`);
+  if (verified > 0 || corrected > 0 || upgraded > 0) {
+    console.log(`[FeedCheck] Startup verification complete: ${verified} verified, ${upgraded} upgraded, ${corrected} corrected, ${unreachable} unreachable`);
   }
 
-  return { verified, corrected, unreachable, details };
+  return { verified, corrected, upgraded, unreachable, details };
 }
 
 export async function runStartupDiscovery(): Promise<void> {

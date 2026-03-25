@@ -637,8 +637,8 @@ export async function registerRoutes(
   startRefreshScheduler(schedulerIntervalMs);
 
   verifyPreferredVersionsOnStartup().then(result => {
-    if (result.corrected > 0 || result.unreachable > 0) {
-      console.log(`[Startup] Feed verification: ${result.verified} verified, ${result.corrected} corrected, ${result.unreachable} unreachable`);
+    if (result.corrected > 0 || result.upgraded > 0 || result.unreachable > 0) {
+      console.log(`[Startup] Feed verification: ${result.verified} verified, ${result.upgraded} upgraded, ${result.corrected} corrected, ${result.unreachable} unreachable`);
       for (const detail of result.details) {
         console.log(`[Startup] ${detail}`);
       }
