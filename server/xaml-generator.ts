@@ -2620,8 +2620,16 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
                 </ActivityAction.Argument>
                 <Sequence DisplayName="Handle Exception">
                   <Sequence.Variables>
-                    <Variable x:TypeArguments="x:String" Name="str_ErrorScreenshotPath" Default="[&quot;screenshots/error_tx_&quot;${concat}int_TransactionNumber.ToString${isCSharp ? "()" : ""}${concat}&quot;_&quot;${concat}DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;)${concat}&quot;.png&quot;]" />
+                    <Variable x:TypeArguments="x:String" Name="str_ErrorScreenshotPath" />
                   </Sequence.Variables>
+                  <Assign DisplayName="Set Error Screenshot Path">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[str_ErrorScreenshotPath]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[${isCSharp ? `"screenshots/error_tx_"${concat}int_TransactionNumber.ToString()${concat}"_"${concat}DateTime.Now.ToString("yyyyMMdd_HHmmss")${concat}".png"` : `"screenshots/error_tx_"${concat}int_TransactionNumber.ToString${concat}"_"${concat}DateTime.Now.ToString("yyyyMMdd_HHmmss")${concat}".png"`}]</InArgument>
+                    </Assign.Value>
+                  </Assign>
                   <TryCatch DisplayName="Safe Screenshot Capture">
                     <TryCatch.Try>
                       <ui:TakeScreenshot DisplayName="Screenshot on Transaction Error" />
