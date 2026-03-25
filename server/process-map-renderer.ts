@@ -1,6 +1,7 @@
 import dagreImport from "@dagrejs/dagre";
 import sharp from "sharp";
 import { escapeXml } from "./lib/xml-utils";
+import { computeProcessAwareLayout, type LayoutInput, type LayoutEdgeInput } from "../shared/process-layout";
 
 const dagre = (dagreImport as any).default || dagreImport;
 
@@ -14,6 +15,7 @@ interface MapNode {
   isPainPoint?: boolean | null;
   positionX?: number | null;
   positionY?: number | null;
+  orderIndex?: number;
 }
 
 interface MapEdge {
@@ -116,72 +118,87 @@ function fixDecisionHandlesPostLayout(
     const tgt1 = nodePositions[edge1.target];
     if (!tgt0 || !tgt1) continue;
 
-    const bothBelow = tgt0.y > srcPos.y && tgt1.y > srcPos.y;
-    const dx = Math.abs(tgt0.x - tgt1.x);
-    const isXAmbiguous = dx < 5;
+    const dx0 = Math.abs(tgt0.x - srcPos.x);
+    const dx1 = Math.abs(tgt1.x - srcPos.x);
+    const dy0 = tgt0.y - srcPos.y;
+    const dy1 = tgt1.y - srcPos.y;
+    const directlyBelow0 = dx0 < 30 && dy0 > 0;
+    const directlyBelow1 = dx1 < 30 && dy1 > 0;
 
     let handle0: string;
     let handle1: string;
 
-    if (bothBelow && isXAmbiguous) {
-      const sem0 = getLabelSemanticSide(edge0.label);
-      const sem1 = getLabelSemanticSide(edge1.label);
-      handle0 = sem0 === "left" ? "bottom-left" : "bottom-right";
-      handle1 = sem1 === "right" ? "bottom-right" : "bottom-left";
-      if (handle0 === handle1) {
-        handle0 = "bottom-left";
-        handle1 = "bottom-right";
-      }
-    } else if (bothBelow) {
-      if (tgt0.x < tgt1.x) {
-        handle0 = "bottom-left";
-        handle1 = "bottom-right";
-      } else {
-        handle0 = "bottom-right";
-        handle1 = "bottom-left";
-      }
-    } else if (isXAmbiguous) {
-      const sem0 = getLabelSemanticSide(edge0.label);
-      const sem1 = getLabelSemanticSide(edge1.label);
-      handle0 = sem0 || "left";
-      handle1 = sem1 || "right";
-      if (handle0 === handle1) {
-        handle0 = "left";
-        handle1 = "right";
-      }
+    if (directlyBelow0 && !directlyBelow1) {
+      handle0 = "bottom";
+      handle1 = tgt1.x > srcPos.x ? "right" : "left";
+    } else if (directlyBelow1 && !directlyBelow0) {
+      handle1 = "bottom";
+      handle0 = tgt0.x > srcPos.x ? "right" : "left";
     } else {
-      if (tgt0.x < tgt1.x) {
-        handle0 = "left";
-        handle1 = "right";
+      const bothBelow = tgt0.y > srcPos.y && tgt1.y > srcPos.y;
+      const dx = Math.abs(tgt0.x - tgt1.x);
+      const isXAmbiguous = dx < 5;
+
+      if (bothBelow && isXAmbiguous) {
+        const sem0 = getLabelSemanticSide(edge0.label);
+        const sem1 = getLabelSemanticSide(edge1.label);
+        handle0 = sem0 === "left" ? "bottom-left" : "bottom-right";
+        handle1 = sem1 === "right" ? "bottom-right" : "bottom-left";
+        if (handle0 === handle1) {
+          handle0 = "bottom-left";
+          handle1 = "bottom-right";
+        }
+      } else if (bothBelow) {
+        if (tgt0.x < tgt1.x) {
+          handle0 = "bottom-left";
+          handle1 = "bottom-right";
+        } else {
+          handle0 = "bottom-right";
+          handle1 = "bottom-left";
+        }
+      } else if (isXAmbiguous) {
+        const sem0 = getLabelSemanticSide(edge0.label);
+        const sem1 = getLabelSemanticSide(edge1.label);
+        handle0 = sem0 || "left";
+        handle1 = sem1 || "right";
+        if (handle0 === handle1) {
+          handle0 = "left";
+          handle1 = "right";
+        }
       } else {
-        handle0 = "right";
-        handle1 = "left";
+        if (tgt0.x < tgt1.x) {
+          handle0 = "left";
+          handle1 = "right";
+        } else {
+          handle0 = "right";
+          handle1 = "left";
+        }
       }
-    }
 
-    const isLeftRight0 = handle0 === "left" || handle0 === "right";
-    const isLeftRight1 = handle1 === "left" || handle1 === "right";
-    if (isLeftRight0 && isLeftRight1) {
-      const wouldCross =
-        (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
-        (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
-      if (wouldCross) {
-        const tmp = handle0;
-        handle0 = handle1;
-        handle1 = tmp;
+      const isLeftRight0 = handle0 === "left" || handle0 === "right";
+      const isLeftRight1 = handle1 === "left" || handle1 === "right";
+      if (isLeftRight0 && isLeftRight1) {
+        const wouldCross =
+          (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
+          (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
+        if (wouldCross) {
+          const tmp = handle0;
+          handle0 = handle1;
+          handle1 = tmp;
+        }
       }
-    }
 
-    const isBottom0 = handle0 === "bottom-left" || handle0 === "bottom-right";
-    const isBottom1 = handle1 === "bottom-left" || handle1 === "bottom-right";
-    if (isBottom0 && isBottom1) {
-      const wouldCross =
-        (handle0 === "bottom-left" && handle1 === "bottom-right" && tgt0.x > tgt1.x) ||
-        (handle0 === "bottom-right" && handle1 === "bottom-left" && tgt0.x < tgt1.x);
-      if (wouldCross) {
-        const tmp = handle0;
-        handle0 = handle1;
-        handle1 = tmp;
+      const isBottom0 = handle0 === "bottom-left" || handle0 === "bottom-right";
+      const isBottom1 = handle1 === "bottom-left" || handle1 === "bottom-right";
+      if (isBottom0 && isBottom1) {
+        const wouldCross =
+          (handle0 === "bottom-left" && handle1 === "bottom-right" && tgt0.x > tgt1.x) ||
+          (handle0 === "bottom-right" && handle1 === "bottom-left" && tgt0.x < tgt1.x);
+        if (wouldCross) {
+          const tmp = handle0;
+          handle0 = handle1;
+          handle1 = tmp;
+        }
       }
     }
 
@@ -190,7 +207,7 @@ function fixDecisionHandlesPostLayout(
   }
 }
 
-function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
+function computeDagreLayoutNodes(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; dagreGraph: any } {
   const g = new dagre.graphlib.Graph({ multigraph: true });
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
@@ -226,8 +243,68 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
     };
   });
 
+  return { layoutNodes, dagreGraph: g };
+}
+
+function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode): { x: number; y: number }[] {
+  const sx = srcNode.x + srcNode.width / 2;
+  const sy = srcNode.y + srcNode.height;
+  const tx = tgtNode.x + tgtNode.width / 2;
+  const ty = tgtNode.y;
+  if (Math.abs(sx - tx) < 5) {
+    return [{ x: sx, y: sy }, { x: tx, y: ty }];
+  }
+  const midY = (sy + ty) / 2;
+  return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }];
+}
+
+function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
+  const hasOrderIndex = nodes.some((n) => n.orderIndex !== undefined && n.orderIndex > 0);
+
+  let layoutNodes: LayoutNode[];
+  let dagreGraph: any = null;
+
+  if (hasOrderIndex && nodes.length > 0) {
+    const layoutInputs: LayoutInput[] = nodes.map((n) => ({
+      id: String(n.id),
+      nodeType: n.nodeType || "task",
+      orderIndex: n.orderIndex || 0,
+    }));
+    const layoutEdgeInputs: LayoutEdgeInput[] = edges.map((e) => ({
+      source: String(e.sourceNodeId),
+      target: String(e.targetNodeId),
+      label: e.label || null,
+    }));
+    const positions = computeProcessAwareLayout(layoutInputs, layoutEdgeInputs, (nodeType) => getNodeDimensions(nodeType));
+    if (positions.size === nodes.length) {
+      layoutNodes = nodes.map((node) => {
+        const dims = getNodeDimensions(node.nodeType);
+        const pos = positions.get(String(node.id));
+        return {
+          id: String(node.id),
+          x: pos ? pos.x : 0,
+          y: pos ? pos.y : 0,
+          width: dims.width,
+          height: dims.height,
+          data: node,
+        };
+      });
+    } else {
+      const result = computeDagreLayoutNodes(nodes, edges);
+      layoutNodes = result.layoutNodes;
+      dagreGraph = result.dagreGraph;
+    }
+  } else {
+    const result = computeDagreLayoutNodes(nodes, edges);
+    layoutNodes = result.layoutNodes;
+    dagreGraph = result.dagreGraph;
+  }
+
   const nodeTypeMap: Record<string, string> = {};
   nodes.forEach(n => { nodeTypeMap[String(n.id)] = n.nodeType || "task"; });
+
+  const nodeById: Record<string, LayoutNode> = {};
+  layoutNodes.forEach(n => { nodeById[n.id] = n; });
 
   const edgesBySource: Record<string, MapEdge[]> = {};
   for (const edge of edges) {
@@ -237,8 +314,15 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
   }
 
   const layoutEdges: LayoutEdge[] = edges.map((edge) => {
-    const edgeData = g.edge(String(edge.sourceNodeId), String(edge.targetNodeId), String(edge.id));
-    const points = edgeData?.points || [];
+    let points: { x: number; y: number }[];
+    if (dagreGraph) {
+      const edgeData = dagreGraph.edge(String(edge.sourceNodeId), String(edge.targetNodeId), String(edge.id));
+      points = edgeData?.points || [];
+    } else {
+      const srcNode = nodeById[String(edge.sourceNodeId)];
+      const tgtNode = nodeById[String(edge.targetNodeId)];
+      points = (srcNode && tgtNode) ? computeEdgePoints(srcNode, tgtNode) : [];
+    }
     const srcType = nodeTypeMap[String(edge.sourceNodeId)] || "task";
     const isDecision = srcType === "decision" || srcType === "agent-decision";
     const siblings = edgesBySource[String(edge.sourceNodeId)] || [edge];

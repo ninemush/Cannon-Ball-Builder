@@ -28,6 +28,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
+import { computeProcessAwareLayout, type LayoutInput, type LayoutEdgeInput } from "@shared/process-layout";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import type { ProcessNode, ProcessApproval } from "@shared/schema";
@@ -677,38 +678,53 @@ function fixDecisionHandlesPostLayout(
       const tgt1 = nodePositions[edge1.target];
       if (!tgt0 || !tgt1) continue;
 
-      const dx = Math.abs(tgt0.x - tgt1.x);
-      const isXAmbiguous = dx < 5;
+      const dx0 = Math.abs(tgt0.x - srcPos.x);
+      const dx1 = Math.abs(tgt1.x - srcPos.x);
+      const dy0 = tgt0.y - srcPos.y;
+      const dy1 = tgt1.y - srcPos.y;
+      const directlyBelow0 = dx0 < 30 && dy0 > 0;
+      const directlyBelow1 = dx1 < 30 && dy1 > 0;
 
       let handle0: string;
       let handle1: string;
 
-      if (isXAmbiguous) {
-        const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
-        const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
-        handle0 = sem0 || "left";
-        handle1 = sem1 || "right";
-        if (handle0 === handle1) {
-          handle0 = "left";
-          handle1 = "right";
-        }
+      if (directlyBelow0 && !directlyBelow1) {
+        handle0 = "bottom";
+        handle1 = tgt1.x > srcPos.x ? "right" : "left";
+      } else if (directlyBelow1 && !directlyBelow0) {
+        handle1 = "bottom";
+        handle0 = tgt0.x > srcPos.x ? "right" : "left";
       } else {
-        if (tgt0.x < tgt1.x) {
-          handle0 = "left";
-          handle1 = "right";
-        } else {
-          handle0 = "right";
-          handle1 = "left";
-        }
-      }
+        const dx = Math.abs(tgt0.x - tgt1.x);
+        const isXAmbiguous = dx < 5;
 
-      const wouldCross =
-        (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
-        (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
-      if (wouldCross) {
-        const tmp = handle0;
-        handle0 = handle1;
-        handle1 = tmp;
+        if (isXAmbiguous) {
+          const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
+          const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
+          handle0 = sem0 || "left";
+          handle1 = sem1 || "right";
+          if (handle0 === handle1) {
+            handle0 = "left";
+            handle1 = "right";
+          }
+        } else {
+          if (tgt0.x < tgt1.x) {
+            handle0 = "left";
+            handle1 = "right";
+          } else {
+            handle0 = "right";
+            handle1 = "left";
+          }
+        }
+
+        const wouldCross =
+          (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
+          (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
+        if (wouldCross) {
+          const tmp = handle0;
+          handle0 = handle1;
+          handle1 = tmp;
+        }
       }
 
       const idx0 = updatedEdges.findIndex((e) => e.id === edge0.id);
@@ -756,8 +772,34 @@ function applyDagreLayout(
   nodes: Node[],
   edges: Edge[],
   direction: "LR" | "TB" = "TB",
-  simplified: boolean = false
+  simplified: boolean = false,
+  dbNodes?: { id: number; orderIndex: number; nodeType: string }[]
 ): Node[] {
+  const hasOrderIndex = dbNodes && dbNodes.some((n) => n.orderIndex > 0);
+  if (direction === "TB" && hasOrderIndex) {
+    const layoutInputs: LayoutInput[] = dbNodes.map((n) => ({
+      id: String(n.id),
+      nodeType: n.nodeType || "task",
+      orderIndex: n.orderIndex,
+    }));
+    const layoutEdges: LayoutEdgeInput[] = edges.map((e) => {
+      const edgeData = e.data as Record<string, unknown> | undefined;
+      const dataLabel = typeof edgeData?.label === "string" ? edgeData.label : null;
+      const topLabel = typeof e.label === "string" ? e.label : null;
+      return { source: e.source, target: e.target, label: dataLabel || topLabel };
+    });
+    const positions = computeProcessAwareLayout(layoutInputs, layoutEdges, (nodeType) => getNodeDimensions(nodeType));
+    if (positions.size === nodes.length) {
+      return nodes.map((node) => {
+        const pos = positions.get(node.id);
+        return {
+          ...node,
+          position: pos ? { x: pos.x, y: pos.y } : { x: 0, y: 0 },
+        };
+      });
+    }
+  }
+
   const nodeCount = nodes.length;
   const edgeCount = edges.length;
 
@@ -770,21 +812,21 @@ function applyDagreLayout(
   let edgesep: number;
 
   if (simplified) {
-    nodesep = 180;
-    ranksep = 120;
-    edgesep = 80;
-  } else if (isVeryLarge) {
-    nodesep = Math.round(80 + density * 20);
-    ranksep = Math.round(120 + density * 15);
-    edgesep = Math.round(30 + density * 10);
-  } else if (isLarge) {
-    nodesep = Math.round(100 + density * 25);
-    ranksep = Math.round(140 + density * 20);
-    edgesep = Math.round(40 + density * 15);
-  } else {
     nodesep = 140;
-    ranksep = 200;
-    edgesep = 60;
+    ranksep = 80;
+    edgesep = 50;
+  } else if (isVeryLarge) {
+    nodesep = Math.round(60 + density * 15);
+    ranksep = Math.round(80 + density * 10);
+    edgesep = Math.round(25 + density * 8);
+  } else if (isLarge) {
+    nodesep = Math.round(80 + density * 20);
+    ranksep = Math.round(100 + density * 15);
+    edgesep = Math.round(30 + density * 10);
+  } else {
+    nodesep = 100;
+    ranksep = 120;
+    edgesep = 40;
   }
 
   const g = new dagre.graphlib.Graph();
@@ -1569,7 +1611,7 @@ function CustomEdge({
   else if (isPartial) edgeColor = "rgba(245,158,11,0.7)";
   else if (label) edgeColor = isDark ? "rgba(148,163,184,0.5)" : "rgba(100,116,139,0.6)";
 
-  const strokeWidth = simplified ? 2 : useBezier ? (label ? 1.2 : 0.8) : (label ? 1.5 : 1);
+  const strokeWidth = simplified ? 2 : useBezier ? (label ? 1.5 : 1.2) : (label ? 1.5 : 1.2);
   const edgeOpacity = simplified ? 0.85 : useBezier ? 0.7 : 1;
 
   return (
@@ -2063,7 +2105,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     });
     let layoutNodes: Node[];
     if (rawEdges.length > 0) {
-      layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", relSimplified);
+      layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", relSimplified, dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" })));
     } else {
       layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
     }
@@ -2165,7 +2207,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
 
     if (detailLevel !== "L2" || forceLayout) {
       if (rawEdges.length > 0) {
-        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified);
+        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified, dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" })));
         if (detailLevel === "L2") {
           layoutNodes.forEach((n) => {
             const d = n.data as any;
@@ -2186,7 +2228,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       if (allHaveSavedPositions) {
         layoutNodes = rawNodes;
       } else if (rawEdges.length > 0) {
-        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", false);
+        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", false, dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" })));
         layoutNodes.forEach((n) => {
           const d = n.data as any;
           if (d.dbId && d.dbId > 0) {

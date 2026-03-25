@@ -21,6 +21,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
+import { computeProcessAwareLayout, type LayoutInput, type LayoutEdgeInput } from "@shared/process-layout";
 import {
   Map,
   X,
@@ -70,6 +71,7 @@ interface DbProcessNode {
   isPainPoint: boolean;
   positionX: number;
   positionY: number;
+  orderIndex: number;
 }
 
 interface DbProcessEdge {
@@ -111,7 +113,30 @@ function getNodeDimensions(nodeType: string): { width: number; height: number } 
   return { width: 280, height: 100 };
 }
 
-function applyDagreLayout(nodes: Node<ProcessNodeData>[], edges: Edge<ProcessEdgeData>[]): Node<ProcessNodeData>[] {
+function applyDagreLayout(nodes: Node<ProcessNodeData>[], edges: Edge<ProcessEdgeData>[], dbNodes?: DbProcessNode[]): Node<ProcessNodeData>[] {
+  const hasOrderIndex = dbNodes && dbNodes.some((n) => n.orderIndex > 0);
+  if (hasOrderIndex) {
+    const layoutInputs: LayoutInput[] = dbNodes.map((n) => ({
+      id: String(n.id),
+      nodeType: n.nodeType || "task",
+      orderIndex: n.orderIndex,
+    }));
+    const layoutEdges: LayoutEdgeInput[] = edges.map((e) => {
+      const dataLabel = typeof e.data?.label === "string" ? e.data.label : null;
+      return { source: e.source, target: e.target, label: dataLabel };
+    });
+    const positions = computeProcessAwareLayout(layoutInputs, layoutEdges, (nodeType) => getNodeDimensions(nodeType));
+    if (positions.size === nodes.length) {
+      return nodes.map((node) => {
+        const pos = positions.get(node.id);
+        return {
+          ...node,
+          position: pos ? { x: pos.x, y: pos.y } : { x: 0, y: 0 },
+        };
+      });
+    }
+  }
+
   const nodeCount = nodes.length;
   const edgeCount = edges.length;
   const density = edgeCount / Math.max(nodeCount, 1);
@@ -123,17 +148,17 @@ function applyDagreLayout(nodes: Node<ProcessNodeData>[], edges: Edge<ProcessEdg
   let edgesep: number;
 
   if (isVeryLarge) {
-    nodesep = Math.round(80 + density * 20);
-    ranksep = Math.round(120 + density * 15);
-    edgesep = Math.round(30 + density * 10);
+    nodesep = Math.round(60 + density * 15);
+    ranksep = Math.round(80 + density * 10);
+    edgesep = Math.round(25 + density * 8);
   } else if (isLarge) {
-    nodesep = Math.round(100 + density * 25);
-    ranksep = Math.round(140 + density * 20);
-    edgesep = Math.round(40 + density * 15);
+    nodesep = Math.round(80 + density * 20);
+    ranksep = Math.round(100 + density * 15);
+    edgesep = Math.round(30 + density * 10);
   } else {
-    nodesep = 140;
-    ranksep = 200;
-    edgesep = 60;
+    nodesep = 100;
+    ranksep = 120;
+    edgesep = 40;
   }
 
   const g = new dagre.graphlib.Graph();
@@ -475,7 +500,7 @@ function ROCustomEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, 
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} style={{ ...(style as Record<string, string | number> | undefined), stroke: edgeColor, strokeWidth: label ? 1.5 : 1, strokeLinecap: "round" as const }} />
+      <BaseEdge id={id} path={edgePath} style={{ ...(style as Record<string, string | number> | undefined), stroke: edgeColor, strokeWidth: label ? 1.5 : 1.2, strokeLinecap: "round" as const }} />
       {label && (
         <EdgeLabelRenderer>
           <div
@@ -582,20 +607,44 @@ export function ProcessMapViewerModal({ open, onClose, ideaId, viewType }: Proce
     mapData.nodes.forEach(n => { nodeTypeMap[String(n.id)] = n.nodeType || "task"; });
     const validEdges = (mapData.edges || []).filter((e) => nodeIdSet.has(e.sourceNodeId) && nodeIdSet.has(e.targetNodeId));
     const totalNodes = rawNodes.length;
+    const srcGroups: Record<string, typeof validEdges> = {};
     const tgtGroups: Record<string, typeof validEdges> = {};
     validEdges.forEach(e => {
+      const sk = String(e.sourceNodeId);
       const tk = String(e.targetNodeId);
+      if (!srcGroups[sk]) srcGroups[sk] = [];
+      srcGroups[sk].push(e);
       if (!tgtGroups[tk]) tgtGroups[tk] = [];
       tgtGroups[tk].push(e);
     });
 
+    const getEdgeSourceHandle = (isDecision: boolean, label: string, siblings: typeof validEdges, edge: typeof validEdges[0]): string => {
+      if (!isDecision) return "bottom";
+      const lbl = (label || "").trim();
+      if (/^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl)) return "right";
+      if (/^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl)) return "left";
+      if (siblings.length > 1) {
+        const idx = siblings.indexOf(edge);
+        if (idx === 0) return "left";
+        if (idx === 1) return "right";
+        return "bottom";
+      }
+      return "left";
+    };
+
     const rawEdges: Edge<ProcessEdgeData>[] = validEdges.map((e) => {
+      const srcS = srcGroups[String(e.sourceNodeId)] || [e];
       const tgtS = tgtGroups[String(e.targetNodeId)] || [e];
+      const srcType = nodeTypeMap[String(e.sourceNodeId)] || "task";
+      const isDecision = srcType === "decision" || srcType === "agent-decision";
+      const sourceHandle = getEdgeSourceHandle(isDecision, e.label, srcS, e);
       return {
         id: String(e.id),
         source: String(e.sourceNodeId),
         target: String(e.targetNodeId),
         type: "custom" as const,
+        sourceHandle,
+        targetHandle: "top",
         data: {
           label: e.label, viewType, totalNodes,
           targetIndex: tgtS.indexOf(e), targetSiblings: tgtS.length,
@@ -605,13 +654,40 @@ export function ProcessMapViewerModal({ open, onClose, ideaId, viewType }: Proce
     });
 
     const layoutNodes = rawEdges.length > 0
-      ? applyDagreLayout(rawNodes, rawEdges)
+      ? applyDagreLayout(rawNodes, rawEdges, mapData.nodes)
       : rawNodes.map((node, i) => ({
           ...node,
           position: { x: 80 + (i % 3) * 260, y: 80 + Math.floor(i / 3) * 120 },
         }));
 
-    return { flowNodes: layoutNodes, flowEdges: rawEdges };
+    const nodePositions: Record<string, { x: number; y: number }> = {};
+    layoutNodes.forEach((n) => {
+      const dims = getNodeDimensions(n.data.nodeType || "task");
+      nodePositions[n.id] = { x: n.position.x + dims.width / 2, y: n.position.y + dims.height / 2 };
+    });
+
+    const fixedEdges = rawEdges.map((edge) => {
+      const srcType = nodeTypeMap[edge.source] || "task";
+      const isDecision = srcType === "decision" || srcType === "agent-decision";
+      if (!isDecision) return edge;
+
+      const srcPos = nodePositions[edge.source];
+      const tgtPos = nodePositions[edge.target];
+      if (!srcPos || !tgtPos) return edge;
+
+      const dxFromSrc = Math.abs(tgtPos.x - srcPos.x);
+      const dyFromSrc = tgtPos.y - srcPos.y;
+      const directlyBelow = dxFromSrc < 30 && dyFromSrc > 0;
+
+      if (directlyBelow) {
+        return { ...edge, sourceHandle: "bottom", targetHandle: "top" };
+      }
+      const sideHandle = tgtPos.x > srcPos.x ? "right" : "left";
+      const targetHandle = dyFromSrc > Math.abs(tgtPos.x - srcPos.x) * 0.5 ? "top" : (sideHandle === "left" ? "right" : "left");
+      return { ...edge, sourceHandle: sideHandle, targetHandle };
+    });
+
+    return { flowNodes: layoutNodes, flowEdges: fixedEdges };
   }, [mapData, viewType]);
 
   if (!open) return null;
