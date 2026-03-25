@@ -1,9 +1,8 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { validateCatalog } from "./catalog-validator";
-import { loadStudioProfile, type StudioProfile } from "./studio-profile";
-import { metadataService } from "./metadata-service";
-export type { StudioProfile } from "./studio-profile";
+import { metadataService, type StudioProfile } from "./metadata-service";
+export type { StudioProfile } from "./metadata-service";
 
 export type ProcessType = "api-integration" | "document-processing" | "attended-ui" | "unattended-ui" | "orchestration" | "general";
 
@@ -33,9 +32,9 @@ export interface CatalogActivity {
 
 export interface CatalogPackage {
   packageId: string;
-  version: string;
-  feedStatus: FeedStatus;
-  preferredVersion: string;
+  version?: string;
+  feedStatus?: FeedStatus;
+  preferredVersion?: string;
   activities: CatalogActivity[];
 }
 
@@ -80,12 +79,12 @@ class CatalogService {
   private activityIndex = new Map<string, ActivitySchema>();
   private packageIndex = new Map<string, CatalogPackage>();
   private loaded = false;
-  private studioProfile: StudioProfile | null = null;
+  private _studioProfile: StudioProfile | null = null;
   private loadGeneration = 0;
 
   load(catalogPath?: string): void {
     metadataService.load();
-    this.studioProfile = metadataService.getStudioProfile();
+    this._studioProfile = metadataService.getStudioProfile();
 
     let parsed: any = null;
 
@@ -143,7 +142,7 @@ class CatalogService {
   }
 
   getStudioProfile(): StudioProfile | null {
-    return metadataService.getStudioProfile() || this.studioProfile;
+    return metadataService.getStudioProfile() || this._studioProfile;
   }
 
   isLoaded(): boolean {
@@ -190,10 +189,11 @@ class CatalogService {
       }
 
       for (const act of pkg.activities) {
+        const metaVersion = metadataService.getPreferredVersion(pkg.packageId);
         const schema: ActivitySchema = {
           activity: act,
           packageId: pkg.packageId,
-          packageVersion: pkg.version,
+          packageVersion: metaVersion || pkg.version || "",
         };
 
         this.activityIndex.set(act.className, schema);
@@ -236,11 +236,12 @@ class CatalogService {
 
     const schemas: ActivitySchema[] = [];
     for (const pkg of this.catalog.packages) {
+      const metaVersion = metadataService.getPreferredVersion(pkg.packageId);
       for (const act of pkg.activities) {
         schemas.push({
           activity: act,
           packageId: pkg.packageId,
-          packageVersion: pkg.version,
+          packageVersion: metaVersion || pkg.version || "",
         });
       }
     }
@@ -307,11 +308,7 @@ class CatalogService {
   getConfirmedVersion(packageName: string): string | null {
     const metaVersion = metadataService.getPreferredVersion(packageName);
     if (metaVersion) return metaVersion;
-
-    if (!this.loaded || !this.catalog) return null;
-    const pkg = this.packageIndex.get(packageName);
-    if (!pkg) return null;
-    return pkg.preferredVersion || pkg.version || null;
+    return null;
   }
 
   getEnumValues(activityClassName: string, propertyName: string): string[] | null {
@@ -343,12 +340,7 @@ class CatalogService {
   }
 
   getPreferredVersion(packageName: string): string | null {
-    const metaVersion = metadataService.getPreferredVersion(packageName);
-    if (metaVersion) return metaVersion;
-
-    if (!this.loaded || !this.catalog) return null;
-    const pkg = this.packageIndex.get(packageName);
-    return pkg?.preferredVersion || pkg?.version || null;
+    return metadataService.getPreferredVersion(packageName);
   }
 
   getFeedStatus(packageName: string): FeedStatus | null {

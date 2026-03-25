@@ -40,13 +40,6 @@ function runQG(
 describe("Task 148 — UiPath Package Generator Correctness", () => {
 
   describe("1. Dependency version alignment", () => {
-    it("studio-profile.json has UiPath.Web.Activities preferred 1.21.0", () => {
-      const profile = JSON.parse(
-        fs.readFileSync(path.resolve(__dirname, "../../catalog/studio-profile.json"), "utf-8")
-      );
-      expect(profile.allowedPackageVersionRanges["UiPath.Web.Activities"].preferred).toBe("1.21.0");
-    });
-
     it("generation-metadata.json has UiPath.Web.Activities preferred 1.21.0", () => {
       const meta = JSON.parse(
         fs.readFileSync(path.resolve(__dirname, "../../catalog/generation-metadata.json"), "utf-8")
@@ -54,17 +47,12 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
       expect(meta.packageVersionRanges["UiPath.Web.Activities"].preferred).toBe("1.21.0");
     });
 
-    it("all three sources agree on UiPath.Web.Activities version", () => {
-      const profile = JSON.parse(
-        fs.readFileSync(path.resolve(__dirname, "../../catalog/studio-profile.json"), "utf-8")
-      );
+    it("generation-metadata.json is the single version authority", () => {
       const meta = JSON.parse(
         fs.readFileSync(path.resolve(__dirname, "../../catalog/generation-metadata.json"), "utf-8")
       );
-      const profileVersion = profile.allowedPackageVersionRanges["UiPath.Web.Activities"].preferred;
       const metaVersion = meta.packageVersionRanges["UiPath.Web.Activities"].preferred;
-      expect(profileVersion).toBe(metaVersion);
-      expect(profileVersion).toBe("1.21.0");
+      expect(metaVersion).toBe("1.21.0");
     });
 
     it("test fixtures use 'Development' (not 'Developement' typo)", () => {

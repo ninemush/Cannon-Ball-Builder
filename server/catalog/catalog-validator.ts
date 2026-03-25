@@ -85,20 +85,26 @@ export function validateCatalog(catalog: any): CatalogValidationResult {
       seenPackageIds.add(pkg.packageId);
     }
 
-    if (typeof pkg.version !== "string" || pkg.version === "") {
-      errors.push(`${pkgLabel}: missing or empty version`);
-    } else if (!isSemver(pkg.version)) {
-      errors.push(`${pkgLabel}: invalid version format "${pkg.version}"`);
+    if (pkg.version !== undefined) {
+      if (typeof pkg.version !== "string" || pkg.version === "") {
+        errors.push(`${pkgLabel}: version if present must be a non-empty string`);
+      } else if (!isSemver(pkg.version)) {
+        errors.push(`${pkgLabel}: invalid version format "${pkg.version}"`);
+      }
     }
 
-    if (!pkg.feedStatus || !VALID_FEED_STATUSES.has(pkg.feedStatus)) {
-      errors.push(`${pkgLabel}: feedStatus must be "verified" or "unverified", got "${pkg.feedStatus}"`);
+    if (pkg.feedStatus !== undefined) {
+      if (!VALID_FEED_STATUSES.has(pkg.feedStatus)) {
+        warnings.push(`${pkgLabel}: feedStatus "${pkg.feedStatus}" is not "verified" or "unverified"`);
+      }
     }
 
-    if (!pkg.preferredVersion || typeof pkg.preferredVersion !== "string" || pkg.preferredVersion === "") {
-      errors.push(`${pkgLabel}: preferredVersion is required and must be a non-empty string`);
-    } else if (!isSemver(pkg.preferredVersion)) {
-      errors.push(`${pkgLabel}: preferredVersion "${pkg.preferredVersion}" is not valid semver`);
+    if (pkg.preferredVersion !== undefined) {
+      if (typeof pkg.preferredVersion !== "string" || pkg.preferredVersion === "") {
+        errors.push(`${pkgLabel}: preferredVersion if present must be a non-empty string`);
+      } else if (!isSemver(pkg.preferredVersion)) {
+        errors.push(`${pkgLabel}: preferredVersion "${pkg.preferredVersion}" is not valid semver`);
+      }
     }
 
     if (!Array.isArray(pkg.activities) || pkg.activities.length === 0) {

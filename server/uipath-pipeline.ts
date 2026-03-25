@@ -13,7 +13,7 @@ import {
   type GenerationMode,
 } from "./uipath-integration";
 import { catalogService } from "./catalog/catalog-service";
-import type { StudioProfile } from "./catalog/studio-profile";
+import type { StudioProfile } from "./catalog/metadata-service";
 import {
   generateDeveloperHandoffGuide,
   makeUiPathCompliant,

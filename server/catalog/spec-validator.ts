@@ -1,6 +1,6 @@
 import { catalogService, type CatalogProperty } from "./catalog-service";
-import type { StudioProfile } from "./studio-profile";
-import { isVersionInRange } from "./studio-profile";
+import type { StudioProfile } from "./metadata-service";
+import { metadataService } from "./metadata-service";
 import type { WorkflowSpec, WorkflowNode, ActivityNode } from "../workflow-spec-types";
 
 export interface SpecValidationIssue {
@@ -63,11 +63,9 @@ function getDefaultForType(clrType: string): string {
   return `PLACEHOLDER_${clrType.replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
 
-function resolveTargetVersion(schema: { packageId: string; packageVersion: string }, studioProfile: StudioProfile | null): string {
-  if (studioProfile) {
-    const range = studioProfile.allowedPackageVersionRanges[schema.packageId];
-    if (range?.preferred) return range.preferred;
-  }
+function resolveTargetVersion(schema: { packageId: string; packageVersion: string }, _studioProfile: StudioProfile | null): string {
+  const preferred = metadataService.getPreferredVersion(schema.packageId);
+  if (preferred) return preferred;
   return schema.packageVersion;
 }
 
@@ -111,15 +109,18 @@ function validateActivityNode(
   if (studioProfile) {
     const packageId = schema.packageId;
     const packageVersion = schema.packageVersion;
-    if (packageId && packageVersion && !isVersionInRange(studioProfile, packageId, packageVersion)) {
-      report.issues.push({
-        severity: "warning",
-        code: "VERSION_MISMATCH",
-        activityTemplate: node.template,
-        activityDisplayName: node.displayName,
-        message: `Activity "${node.template}" is from package ${packageId}@${packageVersion} which is outside the target profile's allowed version range.`,
-        autoFixed: false,
-      });
+    if (packageId && packageVersion && !metadataService.isVersionPreferred(packageId, packageVersion)) {
+      const preferred = metadataService.getPreferredVersion(packageId);
+      if (preferred && preferred !== packageVersion) {
+        report.issues.push({
+          severity: "warning",
+          code: "VERSION_MISMATCH",
+          activityTemplate: node.template,
+          activityDisplayName: node.displayName,
+          message: `Activity "${node.template}" is from package ${packageId}@${packageVersion} which differs from preferred version ${preferred}.`,
+          autoFixed: false,
+        });
+      }
     }
   }
 

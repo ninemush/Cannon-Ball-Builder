@@ -31,14 +31,8 @@ interface RefreshResult {
   updatedAt?: string;
 }
 
-interface VersionRange {
-  min: string;
-  max: string;
-  preferred: string;
-}
-
 interface FeedResolution {
-  range: VersionRange;
+  preferred: string;
   source: VerificationSource;
   usedFallback: boolean;
 }
@@ -145,10 +139,6 @@ function parseMajorMinor(version: string): { major: number; minor: number } | nu
   const minor = parseInt(parts[1], 10);
   if (isNaN(major) || isNaN(minor)) return null;
   return { major, minor };
-}
-
-function isVersionInCompatibleLine(version: string, seedMin: string, seedMax: string): boolean {
-  return compareVersions(version, seedMin) >= 0 && compareVersions(version, seedMax) <= 0;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -378,28 +368,8 @@ async function discoverPackagesViaSearch(
   }
 }
 
-function deriveSeedRange(
-  stableVersions: string[],
-  _studioLine: string | null,
-): { seedMin: string; seedMax: string } | null {
-  if (stableVersions.length === 0) return null;
-  const sorted = [...stableVersions].sort(compareVersions);
-
-  const earliest = sorted[0];
-  const latest = sorted[sorted.length - 1];
-  const lp = parseMajorMinor(latest);
-  if (!lp) return null;
-
-  return {
-    seedMin: earliest,
-    seedMax: `${lp.major}.99.0`,
-  };
-}
-
 interface DiscoveryResult {
   newEntries: Record<string, {
-    min: string;
-    max: string;
     preferred: string;
     lastVerifiedAt: string;
     verificationSource: VerificationSource;
@@ -411,7 +381,7 @@ interface DiscoveryResult {
 async function discoverAndResolveNewPackages(
   searchQueryServiceUrl: string,
   existingRanges: Record<string, any>,
-  studioLine: string,
+  _studioLine: string,
   now: string,
 ): Promise<DiscoveryResult> {
   const result: DiscoveryResult = { newEntries: {}, count: 0 };
@@ -452,15 +422,10 @@ async function discoverAndResolveNewPackages(
     const stableVersions = versionResult.versions.filter(v => !v.includes("-"));
     if (stableVersions.length === 0) continue;
 
-    const seedRange = deriveSeedRange(stableVersions, studioLine);
-    if (!seedRange) continue;
-
     const sorted = [...stableVersions].sort(compareVersions);
     const bestPreferred = sorted[sorted.length - 1];
 
     result.newEntries[pkgId] = {
-      min: seedRange.seedMin,
-      max: seedRange.seedMax,
       preferred: bestPreferred,
       lastVerifiedAt: now,
       verificationSource: "uipath-official-feed" as VerificationSource,
@@ -524,47 +489,31 @@ async function fetchVersionsFromNugetFlatContainer(
   }
 }
 
-function resolveCompatibleRange(
+function resolveLatestStable(
   versions: string[],
-  seedMin: string,
-  _seedMax: string,
-): VersionRange | null {
-  const stableAboveMin = versions
-    .filter(v => !v.includes("-") && compareVersions(v, seedMin) >= 0)
+): string | null {
+  const stable = versions
+    .filter(v => !v.includes("-"))
     .sort(compareVersions);
 
-  if (stableAboveMin.length === 0) return null;
-
-  const latestStable = stableAboveMin[stableAboveMin.length - 1];
-  const lp = parseMajorMinor(latestStable);
-  const widenedMax = lp ? `${lp.major}.99.0` : _seedMax;
-
-  return {
-    min: seedMin,
-    max: compareVersions(widenedMax, _seedMax) > 0 ? widenedMax : _seedMax,
-    preferred: latestStable,
-  };
+  if (stable.length === 0) return null;
+  return stable[stable.length - 1];
 }
 
 async function resolvePackageFromFeeds(
   packageId: string,
-  seedMin: string,
-  seedMax: string,
   category: PackageCategory,
-  existingRange: { min: string; max: string; preferred: string; lastVerifiedAt: string; verificationSource: VerificationSource } | null,
+  existingPreferred: string | null,
+  existingSource: VerificationSource | null,
 ): Promise<FeedResolution | null> {
   if (category === "official-uipath") {
     const officialResult = await fetchVersionsFromV3Feed(UIPATH_OFFICIAL_FEED_INDEX, packageId);
 
     if (officialResult.status === "ok") {
       if (officialResult.versions.length > 0) {
-        const range = resolveCompatibleRange(officialResult.versions, seedMin, seedMax);
-        if (range) {
-          return {
-            range,
-            source: "uipath-official-feed",
-            usedFallback: false,
-          };
+        const latest = resolveLatestStable(officialResult.versions);
+        if (latest) {
+          return { preferred: latest, source: "uipath-official-feed", usedFallback: false };
         }
       }
       return null;
@@ -574,23 +523,15 @@ async function resolvePackageFromFeeds(
 
     const nugetResult = await fetchVersionsFromNugetFlatContainer(packageId);
     if (nugetResult.status === "ok" && nugetResult.versions.length > 0) {
-      const range = resolveCompatibleRange(nugetResult.versions, seedMin, seedMax);
-      if (range) {
-        return {
-          range,
-          source: "nuget-feed",
-          usedFallback: true,
-        };
+      const latest = resolveLatestStable(nugetResult.versions);
+      if (latest) {
+        return { preferred: latest, source: "nuget-feed", usedFallback: true };
       }
     }
 
-    if (existingRange) {
-      console.warn(`[MetadataRefresher] No restorable version found on fallback feeds for ${packageId}, using last-known-good cached version range`);
-      return {
-        range: { min: existingRange.min, max: existingRange.max, preferred: existingRange.preferred },
-        source: existingRange.verificationSource,
-        usedFallback: true,
-      };
+    if (existingPreferred && existingSource) {
+      console.warn(`[MetadataRefresher] No restorable version found on fallback feeds for ${packageId}, using last-known-good cached version`);
+      return { preferred: existingPreferred, source: existingSource, usedFallback: true };
     }
 
     return null;
@@ -601,13 +542,9 @@ async function resolvePackageFromFeeds(
 
     if (marketplaceResult.status === "ok") {
       if (marketplaceResult.versions.length > 0) {
-        const range = resolveCompatibleRange(marketplaceResult.versions, seedMin, seedMax);
-        if (range) {
-          return {
-            range,
-            source: "uipath-marketplace",
-            usedFallback: false,
-          };
+        const latest = resolveLatestStable(marketplaceResult.versions);
+        if (latest) {
+          return { preferred: latest, source: "uipath-marketplace", usedFallback: false };
         }
       }
       return null;
@@ -616,23 +553,15 @@ async function resolvePackageFromFeeds(
     console.warn(`[MetadataRefresher] Marketplace feed unreachable for ${packageId}, falling back to nuget.org`);
     const nugetResult = await fetchVersionsFromNugetFlatContainer(packageId);
     if (nugetResult.status === "ok" && nugetResult.versions.length > 0) {
-      const range = resolveCompatibleRange(nugetResult.versions, seedMin, seedMax);
-      if (range) {
-        return {
-          range,
-          source: "nuget-feed",
-          usedFallback: true,
-        };
+      const latest = resolveLatestStable(nugetResult.versions);
+      if (latest) {
+        return { preferred: latest, source: "nuget-feed", usedFallback: true };
       }
     }
 
-    if (existingRange) {
-      console.warn(`[MetadataRefresher] No restorable version found on fallback feeds for ${packageId}, using last-known-good cached version range`);
-      return {
-        range: { min: existingRange.min, max: existingRange.max, preferred: existingRange.preferred },
-        source: existingRange.verificationSource,
-        usedFallback: true,
-      };
+    if (existingPreferred && existingSource) {
+      console.warn(`[MetadataRefresher] No restorable version found on fallback feeds for ${packageId}, using last-known-good cached version`);
+      return { preferred: existingPreferred, source: existingSource, usedFallback: true };
     }
 
     return null;
@@ -640,24 +569,16 @@ async function resolvePackageFromFeeds(
 
   const nugetResult = await fetchVersionsFromNugetFlatContainer(packageId);
   if (nugetResult.status === "ok" && nugetResult.versions.length > 0) {
-    const range = resolveCompatibleRange(nugetResult.versions, seedMin, seedMax);
-    if (range) {
-      return {
-        range,
-        source: "nuget-feed",
-        usedFallback: false,
-      };
+    const latest = resolveLatestStable(nugetResult.versions);
+    if (latest) {
+      return { preferred: latest, source: "nuget-feed", usedFallback: false };
     }
   }
 
-  if (existingRange) {
+  if (existingPreferred && existingSource) {
     const reason = nugetResult.status === "unreachable" ? "unreachable" : "has no compatible versions";
-    console.warn(`[MetadataRefresher] nuget.org ${reason} for ${packageId}, using last-known-good cached version range`);
-    return {
-      range: { min: existingRange.min, max: existingRange.max, preferred: existingRange.preferred },
-      source: existingRange.verificationSource,
-      usedFallback: true,
-    };
+    console.warn(`[MetadataRefresher] nuget.org ${reason} for ${packageId}, using last-known-good cached version`);
+    return { preferred: existingPreferred, source: existingSource, usedFallback: true };
   }
 
   return null;
@@ -701,15 +622,14 @@ export async function refreshGeneration(): Promise<RefreshResult> {
       const category = classifyPackage(pkgName);
       const resolution = await resolvePackageFromFeeds(
         pkgName,
-        existingRange.min,
-        existingRange.max,
         category,
-        existingRange,
+        existingRange.preferred,
+        existingRange.verificationSource,
       );
 
       if (resolution) {
         const previousPreferred = existingRange.preferred;
-        const newPreferred = resolution.range.preferred;
+        const newPreferred = resolution.preferred;
 
         if (resolution.usedFallback) {
           fallbackCount++;
@@ -722,9 +642,7 @@ export async function refreshGeneration(): Promise<RefreshResult> {
 
         updatedRanges[pkgName] = {
           ...updatedRanges[pkgName],
-          min: resolution.range.min,
-          max: resolution.range.max,
-          preferred: resolution.range.preferred,
+          preferred: resolution.preferred,
           lastVerifiedAt: now,
           verificationSource: resolution.source,
         };
@@ -749,7 +667,7 @@ export async function refreshGeneration(): Promise<RefreshResult> {
           updatedRanges[pkgId] = entry;
           discoveredCount++;
           updatedCount++;
-          console.log(`[MetadataRefresher] DISCOVERED new package: ${pkgId} → preferred ${entry.preferred} (range [${entry.min}, ${entry.max}])`);
+          console.log(`[MetadataRefresher] DISCOVERED new package: ${pkgId} → preferred ${entry.preferred}`);
         }
       }
     } catch (err: any) {
@@ -1142,7 +1060,7 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
     }
 
     const stableOnFeed = feedResult.versions
-      .filter(v => !v.includes("-") && compareVersions(v, entry.min) >= 0)
+      .filter(v => !v.includes("-"))
       .sort(compareVersions);
     const latestStable = stableOnFeed.length > 0 ? stableOnFeed[stableOnFeed.length - 1] : null;
 
@@ -1153,7 +1071,7 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
       }
       const isRequired = requiredPackages.includes(pkgName);
       const level = isRequired ? "ERROR" : "WARNING";
-      const msg = `[FeedCheck] ${level}: ${pkgName} preferred ${preferred} — no stable version found on feed >= ${entry.min}`;
+      const msg = `[FeedCheck] ${level}: ${pkgName} preferred ${preferred} — no stable version found on feed`;
       console.warn(msg);
       details.push(msg);
       continue;
@@ -1165,16 +1083,12 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
     }
 
     if (compareVersions(latestStable, preferred) > 0) {
-      const lp = parseMajorMinor(latestStable);
-      const widenedMax = lp ? `${lp.major}.99.0` : entry.max;
-      const newMax = compareVersions(widenedMax, entry.max) > 0 ? widenedMax : entry.max;
       const msg = `[FeedCheck] UPGRADED: ${pkgName} preferred ${preferred} → ${latestStable}`;
       console.log(msg);
       details.push(msg);
       existing.packageVersionRanges[pkgName] = {
         ...entry,
         preferred: latestStable,
-        max: newMax,
         lastVerifiedAt: new Date().toISOString(),
       };
       upgraded++;
@@ -1215,36 +1129,6 @@ export async function verifyPreferredVersionsOnStartup(): Promise<{ verified: nu
       details.push(`[FeedCheck] Failed to write corrected metadata: ${err.message}`);
     }
   }
-
-  try {
-    const profilePath = join(CATALOG_DIR, "studio-profile.json");
-    if (existsSync(profilePath)) {
-      const metaRaw = JSON.parse(readFileSync(existingPath, "utf-8"));
-      const profileRaw = JSON.parse(readFileSync(profilePath, "utf-8"));
-      let profileSynced = false;
-      for (const [pkgName, range] of Object.entries(metaRaw.packageVersionRanges || {})) {
-        if (profileRaw.allowedPackageVersionRanges?.[pkgName]) {
-          const typedRange = range as { min: string; max: string; preferred: string };
-          const profileEntry = profileRaw.allowedPackageVersionRanges[pkgName];
-          if (profileEntry.preferred !== typedRange.preferred ||
-              profileEntry.min !== typedRange.min ||
-              profileEntry.max !== typedRange.max) {
-            profileRaw.allowedPackageVersionRanges[pkgName] = {
-              ...profileEntry,
-              min: typedRange.min,
-              max: typedRange.max,
-              preferred: typedRange.preferred,
-            };
-            profileSynced = true;
-          }
-        }
-      }
-      if (profileSynced) {
-        atomicWrite(profilePath, JSON.stringify(profileRaw, null, 2));
-        details.push("[FeedCheck] Synced studio-profile.json ranges to match generation-metadata.json");
-      }
-    }
-  } catch { }
 
   if (verified > 0 || corrected > 0 || upgraded > 0) {
     console.log(`[FeedCheck] Startup verification complete: ${verified} verified, ${upgraded} upgraded, ${corrected} corrected, ${unreachable} unreachable`);

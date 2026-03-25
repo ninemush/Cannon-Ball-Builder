@@ -6,7 +6,6 @@
   "packages": [
     {
       "packageId": "System.Activities",
-      "version": "1.0.0",
       "activities": [
         {
           "className": "Assign",
@@ -277,13 +276,10 @@
           "displayName": "Delay",
           "browsable": true
         }
-      ],
-      "feedStatus": "unverified",
-      "preferredVersion": "1.0.0"
+      ]
     },
     {
       "packageId": "UiPath.System.Activities",
-      "version": "26.2.3",
       "activities": [
         {
           "className": "AddQueueItem",
@@ -861,13 +857,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "26.2.3"
+      ]
     },
     {
       "packageId": "UiPath.UIAutomation.Activities",
-      "version": "25.10.28",
       "activities": [
         {
           "className": "Click",
@@ -1548,15 +1541,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "25.10.28"
+      ]
     },
     {
       "packageId": "UiPath.Amazon.Comprehend.Activities",
-      "version": "1.1.1",
-      "feedStatus": "verified",
-      "preferredVersion": "1.1.1",
       "activities": [
         {
           "className": "ComprehendDetectSentiment",
@@ -1727,9 +1715,6 @@
     },
     {
       "packageId": "UiPath.Amazon.Rekognition.Activities",
-      "version": "2.0.1",
-      "feedStatus": "verified",
-      "preferredVersion": "2.0.1",
       "activities": [
         {
           "className": "RekognitionDetectLabels",
@@ -1839,9 +1824,6 @@
     },
     {
       "packageId": "UiPath.Amazon.Textract.Activities",
-      "version": "4.0.1",
-      "feedStatus": "verified",
-      "preferredVersion": "4.0.1",
       "activities": [
         {
           "className": "TextractAnalyzeDocument",
@@ -1940,9 +1922,6 @@
     },
     {
       "packageId": "UiPath.AmazonWebServices.Activities",
-      "version": "2.9.1",
-      "feedStatus": "verified",
-      "preferredVersion": "2.9.1",
       "activities": [
         {
           "className": "AmazonScope",
@@ -2162,9 +2141,6 @@
     },
     {
       "packageId": "UiPath.Azure.Activities",
-      "version": "1.7.2",
-      "feedStatus": "verified",
-      "preferredVersion": "1.7.2",
       "activities": [
         {
           "className": "AzureScope",
@@ -2374,9 +2350,6 @@
     },
     {
       "packageId": "UiPath.AzureFormRecognizerV3.Activities",
-      "version": "1.0.1",
-      "feedStatus": "verified",
-      "preferredVersion": "1.0.1",
       "activities": [
         {
           "className": "FormRecognizerAnalyze",
@@ -2505,9 +2478,6 @@
     },
     {
       "packageId": "UiPath.Box.Activities",
-      "version": "2.0.1",
-      "feedStatus": "verified",
-      "preferredVersion": "2.0.1",
       "activities": [
         {
           "className": "BoxScope",
@@ -2696,9 +2666,6 @@
     },
     {
       "packageId": "UiPath.CommunicationsMining.Activities",
-      "version": "1.6.0",
-      "feedStatus": "verified",
-      "preferredVersion": "1.6.0",
       "activities": [
         {
           "className": "CommunicationsMiningScope",
@@ -2807,9 +2774,6 @@
     },
     {
       "packageId": "UiPath.ComplexScenarios.Activities",
-      "version": "1.5.1",
-      "feedStatus": "verified",
-      "preferredVersion": "1.5.1",
       "activities": [
         {
           "className": "MultipleAssign",
@@ -3241,9 +3205,6 @@
     },
     {
       "packageId": "UiPath.Credentials.Activities",
-      "version": "3.0.0",
-      "feedStatus": "verified",
-      "preferredVersion": "3.0.0",
       "activities": [
         {
           "className": "GetSecureCredential",
@@ -3436,9 +3397,6 @@
     },
     {
       "packageId": "UiPath.Cryptography.Activities",
-      "version": "2.0.0",
-      "feedStatus": "verified",
-      "preferredVersion": "2.0.0",
       "activities": [
         {
           "className": "EncryptText",
@@ -3870,7 +3828,6 @@
     },
     {
       "packageId": "UiPath.Database.Activities",
-      "version": "2.0.0",
       "activities": [
         {
           "className": "ExecuteQuery",
@@ -4033,13 +3990,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "2.0.0"
+      ]
     },
     {
       "packageId": "UiPath.DataService.Activities",
-      "version": "25.9.3",
       "activities": [
         {
           "className": "CreateEntity",
@@ -4231,15 +4185,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "25.9.3"
+      ]
     },
     {
       "packageId": "UiPath.DocumentUnderstanding.Activities",
-      "version": "2.17.4",
-      "feedStatus": "verified",
-      "preferredVersion": "2.17.4",
       "activities": [
         {
           "className": "TaxonomyManager",
@@ -4465,7 +4414,6 @@
     },
     {
       "packageId": "UiPath.Excel.Activities",
-      "version": "3.4.1",
       "activities": [
         {
           "className": "ExcelApplicationScope",
@@ -4831,15 +4779,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "3.4.1"
+      ]
     },
     {
       "packageId": "UiPath.Form.Activities",
-      "version": "25.10.1",
-      "feedStatus": "verified",
-      "preferredVersion": "25.10.1",
       "activities": [
         {
           "className": "CreateForm",
@@ -4985,9 +4928,6 @@
     },
     {
       "packageId": "UiPath.FTP.Activities",
-      "version": "3.0.0",
-      "feedStatus": "verified",
-      "preferredVersion": "3.0.0",
       "activities": [
         {
           "className": "FTPScope",
@@ -5237,9 +5177,6 @@
     },
     {
       "packageId": "UiPath.GenAI.Activities",
-      "version": "1.0.0",
-      "feedStatus": "unverified",
-      "preferredVersion": "1.0.0",
       "activities": [
         {
           "className": "UseGenAI",
@@ -5425,9 +5362,6 @@
     },
     {
       "packageId": "UiPath.GoogleCloud.Activities",
-      "version": "2.5.0",
-      "feedStatus": "verified",
-      "preferredVersion": "2.5.0",
       "activities": [
         {
           "className": "GoogleCloudScope",
@@ -5627,9 +5561,6 @@
     },
     {
       "packageId": "UiPath.GoogleVision.Activities",
-      "version": "1.4.2",
-      "feedStatus": "verified",
-      "preferredVersion": "1.4.2",
       "activities": [
         {
           "className": "GoogleVisionOCR",
@@ -5720,9 +5651,6 @@
     },
     {
       "packageId": "UiPath.GSuite.Activities",
-      "version": "3.7.11",
-      "feedStatus": "verified",
-      "preferredVersion": "3.7.11",
       "activities": [
         {
           "className": "GoogleSheetsApplicationScope",
@@ -6119,9 +6047,6 @@
     },
     {
       "packageId": "UiPath.IntegrationService.Activities",
-      "version": "1.24.0",
-      "feedStatus": "verified",
-      "preferredVersion": "1.24.0",
       "activities": [
         {
           "className": "IntegrationServiceScope",
@@ -6248,7 +6173,6 @@
     },
     {
       "packageId": "UiPath.IntelligentOCR.Activities",
-      "version": "6.27.3",
       "activities": [
         {
           "className": "DigitizeDocument",
@@ -6398,15 +6322,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "6.27.3"
+      ]
     },
     {
       "packageId": "UiPath.Jira.Activities",
-      "version": "2.4.7",
-      "feedStatus": "verified",
-      "preferredVersion": "2.4.7",
       "activities": [
         {
           "className": "JiraScope",
@@ -6701,7 +6620,6 @@
     },
     {
       "packageId": "UiPath.Mail.Activities",
-      "version": "2.7.11",
       "activities": [
         {
           "className": "SendSmtpMailMessage",
@@ -7163,15 +7081,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "2.7.11"
+      ]
     },
     {
       "packageId": "UiPath.MicrosoftOffice365.Activities",
-      "version": "3.7.10",
-      "feedStatus": "verified",
-      "preferredVersion": "3.7.10",
       "activities": [
         {
           "className": "MicrosoftOffice365Scope",
@@ -7685,9 +7598,6 @@
     },
     {
       "packageId": "UiPath.MicrosoftTeams.Activities",
-      "version": "1.0.3",
-      "feedStatus": "verified",
-      "preferredVersion": "1.0.3",
       "activities": [
         {
           "className": "TeamsScope",
@@ -7866,7 +7776,6 @@
     },
     {
       "packageId": "UiPath.MLActivities",
-      "version": "2.0.4",
       "activities": [
         {
           "className": "MLSkill",
@@ -7953,15 +7862,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "unverified",
-      "preferredVersion": "2.0.4"
+      ]
     },
     {
       "packageId": "UiPath.PDF.Activities",
-      "version": "3.25.2",
-      "feedStatus": "verified",
-      "preferredVersion": "3.25.2",
       "activities": [
         {
           "className": "ReadPDFText",
@@ -8301,7 +8205,6 @@
     },
     {
       "packageId": "UiPath.Persistence.Activities",
-      "version": "1.8.1",
       "activities": [
         {
           "className": "CreateFormTask",
@@ -8395,15 +8298,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "verified",
-      "preferredVersion": "1.8.1"
+      ]
     },
     {
       "packageId": "UiPath.Presentations.Activities",
-      "version": "2.4.1",
-      "feedStatus": "verified",
-      "preferredVersion": "2.4.1",
       "activities": [
         {
           "className": "PresentationsApplicationScope",
@@ -8585,9 +8483,6 @@
     },
     {
       "packageId": "UiPath.Salesforce.Activities",
-      "version": "1.9.8",
-      "feedStatus": "verified",
-      "preferredVersion": "1.9.8",
       "activities": [
         {
           "className": "SalesforceApplicationScope",
@@ -8854,9 +8749,6 @@
     },
     {
       "packageId": "UiPath.ServiceNow.Activities",
-      "version": "2.0.5",
-      "feedStatus": "verified",
-      "preferredVersion": "2.0.5",
       "activities": [
         {
           "className": "ServiceNowApplicationScope",
@@ -9077,9 +8969,6 @@
     },
     {
       "packageId": "UiPath.Slack.Activities",
-      "version": "2.0.4",
-      "feedStatus": "verified",
-      "preferredVersion": "2.0.4",
       "activities": [
         {
           "className": "SlackScope",
@@ -9245,9 +9134,6 @@
     },
     {
       "packageId": "UiPath.Testing.Activities",
-      "version": "25.10.1",
-      "feedStatus": "verified",
-      "preferredVersion": "25.10.1",
       "activities": [
         {
           "className": "VerifyExpression",
@@ -9499,7 +9385,6 @@
     },
     {
       "packageId": "UiPath.Web.Activities",
-      "version": "1.21.0",
       "activities": [
         {
           "className": "HttpClient",
@@ -9737,15 +9622,10 @@
             }
           ]
         }
-      ],
-      "feedStatus": "unverified",
-      "preferredVersion": "1.21.0"
+      ]
     },
     {
       "packageId": "UiPath.WebAPI.Activities",
-      "version": "2.4.0",
-      "feedStatus": "verified",
-      "preferredVersion": "2.4.0",
       "activities": [
         {
           "className": "HttpClientRequest",
@@ -9935,9 +9815,6 @@
     },
     {
       "packageId": "UiPath.Word.Activities",
-      "version": "2.4.1",
-      "feedStatus": "verified",
-      "preferredVersion": "2.4.1",
       "activities": [
         {
           "className": "ReadDocument",
@@ -10206,9 +10083,6 @@
     },
     {
       "packageId": "UiPath.WorkflowEvents.Activities",
-      "version": "3.35.0",
-      "feedStatus": "verified",
-      "preferredVersion": "3.35.0",
       "activities": [
         {
           "className": "RaiseAlert",

@@ -44,7 +44,7 @@ import archiver from "archiver";
   import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
   import { catalogService, type ProcessType } from "./catalog/catalog-service";
-  import { getPreferredVersion, isVersionInRange, type StudioProfile } from "./catalog/studio-profile";
+  import type { StudioProfile } from "./catalog/metadata-service";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
@@ -96,38 +96,11 @@ export function isValidNuGetVersion(version: string): boolean {
   return /^\[?\d+\.\d+(\.\d+){0,2}(,\s*\))?\]?$/.test(version);
 }
 
-const STUDIO_25_10_VERIFIED_VERSIONS_FALLBACK: Record<string, string> = {
-  "UiPath.System.Activities": "[25.10.0, 26.99.0)",
-  "UiPath.UIAutomation.Activities": "[25.10.0, 25.99.0)",
-  "UiPath.Mail.Activities": "[1.20.0, 2.99.0)",
-  "UiPath.Excel.Activities": "[2.23.0, 3.99.0)",
-  "UiPath.Web.Activities": "[1.17.0, 1.99.0)",
-  "UiPath.Database.Activities": "[1.8.0, 2.99.0)",
-  "UiPath.Persistence.Activities": "[1.6.0, 1.99.0)",
-  "UiPath.IntelligentOCR.Activities": "[6.20.0, 6.99.0)",
-  "UiPath.MLActivities": "[1.0.0, 2.99.0)",
-  "UiPath.IntegrationService.Activities": "[1.20.0, 1.99.0)",
-  "UiPath.DataService.Activities": "[25.2.0, 26.99.0)",
-  "UiPath.GenAI.Activities": "[1.0.0, 1.99.0)",
-};
-
-function getVerifiedVersionRange(pkgName: string): string | undefined {
-  const range = _metadataService.getPackageVersionRange(pkgName);
-  if (range) {
-    return `[${range.min}, ${range.max})`;
-  }
-  return STUDIO_25_10_VERIFIED_VERSIONS_FALLBACK[pkgName];
-}
-
 function getPreferredVersionFromMeta(pkgName: string): string | null {
   if (!_metadataService.getStudioTarget()) {
     _metadataService.load();
   }
-  const preferred = _metadataService.getPreferredVersion(pkgName);
-  if (preferred) return preferred;
-  const range = _metadataService.getPackageVersionRange(pkgName);
-  if (range) return range.min;
-  return null;
+  return _metadataService.getPreferredVersion(pkgName);
 }
 
 const KNOWN_TRANSITIVE_COLLISION_PAIRS: Array<{
@@ -154,36 +127,21 @@ function validateAndEnforceDependencyCompatibility(
   warnings: DependencyResolutionResult["warnings"],
 ): void {
   for (const [pkgName, version] of Object.entries(deps)) {
-    const range = getVerifiedVersionRange(pkgName);
-    if (!range) continue;
+    const preferredVersion = getPreferredVersionFromMeta(pkgName);
+    if (!preferredVersion) continue;
 
-    const rangeMatch = range.match(/^\[(\d+\.\d+\.\d+),\s*(\d+\.\d+\.\d+)\)$/);
-    if (!rangeMatch) continue;
-
-    const [, minVer, maxVer] = rangeMatch;
     const cleanVersion = extractExactVersion(version);
 
-    if (compareVersions(cleanVersion, minVer) < 0 || compareVersions(cleanVersion, maxVer) >= 0) {
-      const preferredVersion = getPreferredVersionFromMeta(pkgName);
-      if (preferredVersion) {
-        const oldVersion = deps[pkgName];
-        deps[pkgName] = `[${preferredVersion}]`;
-        warnings.push({
-          code: "DEPENDENCY_VERSION_PINNED_TO_VERIFIED",
-          message: `Package ${pkgName} version ${oldVersion} was outside Studio 25.10 verified range ${range} — pinned to verified version [${preferredVersion}]`,
-          stage: "dependency-compatibility",
-          recoverable: true,
-        });
-        console.log(`[Dependency Compatibility] Pinned ${pkgName} from ${oldVersion} to [${preferredVersion}] (verified for Studio 25.10)`);
-      } else {
-        warnings.push({
-          code: "DEPENDENCY_VERSION_OUTSIDE_VERIFIED_RANGE",
-          message: `Package ${pkgName} version ${version} is outside Studio 25.10 verified range ${range} — no verified fallback available`,
-          stage: "dependency-compatibility",
-          recoverable: true,
-        });
-        console.warn(`[Dependency Compatibility] ${pkgName} ${version} outside verified range, no preferred version to pin`);
-      }
+    if (cleanVersion !== preferredVersion) {
+      const oldVersion = deps[pkgName];
+      deps[pkgName] = `[${preferredVersion}]`;
+      warnings.push({
+        code: "DEPENDENCY_VERSION_PINNED_TO_VERIFIED",
+        message: `Package ${pkgName} version ${oldVersion} differs from preferred version — pinned to [${preferredVersion}]`,
+        stage: "dependency-compatibility",
+        recoverable: true,
+      });
+      console.log(`[Dependency Compatibility] Pinned ${pkgName} from ${oldVersion} to [${preferredVersion}]`);
     }
   }
 
@@ -245,14 +203,14 @@ function validateStudioVersion(version: string): boolean {
 }
 
 function isVersionFromValidatedSource(
-  studioProfile: StudioProfile | null,
+  _studioProfile: StudioProfile | null,
   metaTarget: { version: string } | null,
 ): string | null {
-  if (studioProfile?.studioVersion && validateStudioVersion(studioProfile.studioVersion)) {
-    return studioProfile.studioVersion;
-  }
   if (metaTarget?.version && validateStudioVersion(metaTarget.version)) {
     return metaTarget.version;
+  }
+  if (_studioProfile?.studioVersion && validateStudioVersion(_studioProfile.studioVersion)) {
+    return _studioProfile.studioVersion;
   }
   return null;
 }
@@ -441,24 +399,9 @@ function runPostAssemblyValidation(
   const warnings: string[] = [];
 
   for (const [pkgName, version] of Object.entries(deps)) {
-    const cleanVersion = extractExactVersion(version);
-    let isValidated = false;
-
-    if (studioProfile) {
-      const preferred = getPreferredVersion(studioProfile, pkgName);
-      if (preferred) isValidated = true;
-    }
-    if (!isValidated && catalogService.isLoaded()) {
-      const catalogVersion = catalogService.getConfirmedVersion(pkgName);
-      if (catalogVersion) isValidated = true;
-    }
-    if (!isValidated) {
-      const metaVersion = _metadataService.getPreferredVersion(pkgName);
-      if (metaVersion) isValidated = true;
-    }
-
-    if (!isValidated) {
-      errors.push(`Dependency "${pkgName}" version "${version}" is not in any validated version registry`);
+    const metaVersion = _metadataService.getPreferredVersion(pkgName);
+    if (!metaVersion) {
+      errors.push(`Dependency "${pkgName}" version "${version}" is not in the validated version registry`);
     }
   }
 
@@ -657,12 +600,6 @@ function collectActivityTypesFromWorkflows(workflows: Array<{ steps?: Array<{ ac
   return packages;
 }
 
-function getMetadataFallbackVersion(pkgName: string): string | null {
-  const range = _metadataService.getPackageVersionRange(pkgName);
-  if (range) return range.preferred;
-  return null;
-}
-
 export function resolveDependencies(
   pkg: { workflows?: Array<{ name?: string; steps?: Array<{ activityType?: string; activityPackage?: string }> }> },
   studioProfile: StudioProfile | null,
@@ -742,42 +679,17 @@ export function resolveDependencies(
     let version: string | null = null;
     let source: string = "";
 
-    if (studioProfile) {
-      const preferred = getPreferredVersion(studioProfile, pkgName);
-      if (preferred) {
-        version = preferred;
-        source = "studio-profile";
-      }
+    const preferred = getPreferredVersionFromMeta(pkgName);
+    if (preferred) {
+      version = preferred;
+      source = "generation-metadata";
     }
 
     if (!version && catalogService.isLoaded()) {
       const catalogVersion = catalogService.getConfirmedVersion(pkgName);
       if (catalogVersion) {
-        if (studioProfile && !isVersionInRange(studioProfile, pkgName, catalogVersion)) {
-          warnings.push({
-            code: "DEPENDENCY_VERSION_OUT_OF_RANGE",
-            message: `Catalog version ${catalogVersion} for ${pkgName} is outside the studio profile's allowed range — using catalog version anyway`,
-            stage: "dependency-resolution",
-            recoverable: true,
-          });
-        }
         version = catalogVersion;
         source = "catalog";
-      }
-    }
-
-    if (!version) {
-      const metaFallback = getMetadataFallbackVersion(pkgName);
-      if (metaFallback) {
-        version = metaFallback;
-        source = "metadata-service";
-        warnings.push({
-          code: "DEPENDENCY_USING_METADATA_FALLBACK",
-          message: `Package ${pkgName} not found in catalog or studio profile — using MetadataService preferred version ${metaFallback}`,
-          stage: "dependency-resolution",
-          recoverable: true,
-        });
-        console.warn(`[Dependency Resolution] Using MetadataService fallback for ${pkgName}: ${metaFallback}`);
       }
     }
 
@@ -786,14 +698,13 @@ export function resolveDependencies(
       const activityInfo = prov?.activities.length ? ` Referenced by activities: [${prov.activities.join(", ")}].` : "";
       const workflowInfo = prov?.workflows.length ? ` Found in workflows: [${prov.workflows.join(", ")}].` : "";
       const layersChecked = [
-        studioProfile ? "studio-profile (getPreferredVersion): no match" : "studio-profile: not available",
-        catalogService.isLoaded() ? "activity-catalog (getConfirmedVersion): no match" : "activity-catalog: not loaded",
         "generation-metadata (packageVersionRanges): no match",
+        catalogService.isLoaded() ? "activity-catalog (getConfirmedVersion): no match" : "activity-catalog: not loaded",
       ].join("; ");
       throw new Error(
         `[Dependency Resolution] FATAL: Package "${pkgName}" is referenced by activities but has no validated version.${activityInfo}${workflowInfo} ` +
         `Authority layers checked: [${layersChecked}]. ` +
-        `Cannot emit a fabricated version — build aborted. Add this package to the generation-metadata.json packageVersionRanges or activity catalog to resolve.`
+        `Cannot emit a fabricated version — build aborted. Add this package to the generation-metadata.json packageVersionRanges to resolve.`
       );
     }
 
@@ -2160,7 +2071,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     if (!validatedStudioVer) {
       throw new Error(
         `Cannot assemble package: Studio version "${studioVer}" is not from a validated source. ` +
-        `Ensure studio-profile.json or generation-metadata.json is properly configured with a valid studioVersion.`
+        `Ensure generation-metadata.json is properly configured with a valid studioVersion.`
       );
     }
     if (validatedStudioVer !== studioVer) {
@@ -3210,23 +3121,20 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                 continue;
               }
               if (!deps[pkg]) {
-                const profileVersion = _studioProfile ? getPreferredVersion(_studioProfile, pkg) : null;
+                const metaVersion = getPreferredVersionFromMeta(pkg);
                 const catalogVersion = catalogService.isLoaded() ? catalogService.getConfirmedVersion(pkg) : null;
-                const metaVersion = getMetadataFallbackVersion(pkg);
-                const fallbackVersion = profileVersion || catalogVersion || metaVersion;
+                const fallbackVersion = metaVersion || catalogVersion;
                 if (!fallbackVersion) {
-                  throw new Error(`Cannot resolve version for package ${pkg}: no metadata, catalog, or profile source available`);
+                  throw new Error(`Cannot resolve version for package ${pkg}: no metadata or catalog source available`);
                 }
                 deps[pkg] = fallbackVersion;
               }
             }
             if (!deps["UiPath.System.Activities"]) {
-              const sysVersion = _studioProfile ? getPreferredVersion(_studioProfile, "UiPath.System.Activities") : null;
-              const sysCatalogVersion = catalogService.isLoaded() ? catalogService.getConfirmedVersion("UiPath.System.Activities") : null;
-              const sysMetaVersion = getMetadataFallbackVersion("UiPath.System.Activities");
-              const resolvedSysVersion = sysVersion || sysCatalogVersion || sysMetaVersion;
+              const resolvedSysVersion = getPreferredVersionFromMeta("UiPath.System.Activities") ||
+                (catalogService.isLoaded() ? catalogService.getConfirmedVersion("UiPath.System.Activities") : null);
               if (!resolvedSysVersion) {
-                throw new Error("Cannot resolve version for UiPath.System.Activities: no metadata, catalog, or profile source available");
+                throw new Error("Cannot resolve version for UiPath.System.Activities: no metadata or catalog source available");
               }
               deps["UiPath.System.Activities"] = resolvedSysVersion;
             }

@@ -10,7 +10,8 @@ import {
 } from "./uipath-activity-registry";
 import { getBlockedActivities } from "./uipath-activity-policy";
 import { catalogService } from "./catalog/catalog-service";
-import { isVersionInRange, type StudioProfile } from "./catalog/studio-profile";
+import type { StudioProfile } from "./catalog/metadata-service";
+import { metadataService } from "./catalog/metadata-service";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
@@ -1261,17 +1262,15 @@ function checkVersionCompatibility(input: QualityGateInput, violations: QualityG
     if (isNaN(majorVersion)) continue;
 
     if (_studioProfile) {
-      if (!isVersionInRange(_studioProfile, pkgName, versionNum)) {
-        const range = _studioProfile.allowedPackageVersionRanges[pkgName];
-        if (range) {
-          violations.push({
-            category: "accuracy",
-            severity: "error",
-            check: "version-framework-mismatch",
-            file: "project.json",
-            detail: `Package "${pkgName}" version ${versionStr} is outside allowed range [${range.min}, ${range.max}] for Studio ${_studioProfile.studioLine} ${_studioProfile.targetFramework} profile`,
-          });
-        }
+      const preferred = metadataService.getPreferredVersion(pkgName);
+      if (preferred && !metadataService.isVersionPreferred(pkgName, versionNum)) {
+        violations.push({
+          category: "accuracy",
+          severity: "error",
+          check: "version-framework-mismatch",
+          file: "project.json",
+          detail: `Package "${pkgName}" version ${versionStr} differs from preferred version ${preferred} for Studio ${_studioProfile.studioLine} ${_studioProfile.targetFramework}`,
+        });
       }
       continue;
     }

@@ -19,7 +19,14 @@ import {
   type OidcScopeFamily,
   SCOPE_PREFIX_TO_SERVICE,
 } from "./metadata-schemas";
-import { loadStudioProfile, type StudioProfile, type PackageVersionRange } from "./studio-profile";
+export type StudioProfile = {
+  studioLine: string;
+  studioVersion: string;
+  targetFramework: "Windows" | "Portable";
+  projectType: "Process" | "Library" | "TestAutomation";
+  expressionLanguage: "VisualBasic" | "CSharp";
+  minimumRequiredPackages: string[];
+};
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -86,7 +93,6 @@ export const ORCHESTRATOR_DIAGNOSTIC_ENTITIES: Record<string, { listPath: string
 class MetadataService {
   private generationMetadata: GenerationMetadata | null = null;
   private serviceEndpoints: ServiceEndpoints | null = null;
-  private legacyProfile: StudioProfile | null = null;
   private generationLoaded = false;
   private integrationLoaded = false;
   private activityCatalogLoaded = false;
@@ -134,17 +140,13 @@ class MetadataService {
           return;
         } else {
           const errors = result.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ");
-          console.warn(`[MetadataService] generation-metadata.json validation failed: ${errors} — falling back to studio-profile.json`);
+          console.error(`[MetadataService] generation-metadata.json validation failed: ${errors}`);
         }
       } catch (err: any) {
-        console.warn(`[MetadataService] Failed to load generation-metadata.json: ${err.message} — falling back to studio-profile.json`);
+        console.error(`[MetadataService] Failed to load generation-metadata.json: ${err.message}`);
       }
-    }
-
-    this.legacyProfile = loadStudioProfile();
-    if (this.legacyProfile) {
-      this.generationLoaded = true;
-      console.log(`[MetadataService] Using legacy studio-profile.json: Studio ${this.legacyProfile.studioVersion}`);
+    } else {
+      console.error(`[MetadataService] generation-metadata.json not found at ${genPath}`);
     }
   }
 
@@ -242,7 +244,6 @@ class MetadataService {
   reload(family: "generation" | "integration" | "both"): void {
     if (family === "generation" || family === "both") {
       this.generationMetadata = null;
-      this.legacyProfile = null;
       this.generationLoaded = false;
       this.loadGeneration();
     }
@@ -293,59 +294,35 @@ class MetadataService {
     }
     const pkgCount = this.generationMetadata
       ? Object.keys(this.generationMetadata.packageVersionRanges).length
-      : (this.legacyProfile ? Object.keys(this.legacyProfile.allowedPackageVersionRanges).length : 0);
+      : 0;
     const epCount = this.serviceEndpoints ? Object.keys(this.serviceEndpoints.endpoints).length : 0;
-    console.log(`[MetadataService] Status: ${pkgCount} package ranges, ${epCount} service endpoints, activity catalog: ${this.activityCatalogLoaded ? "available" : "not found"}`);
+    console.log(`[MetadataService] Status: ${pkgCount} packages, ${epCount} service endpoints, activity catalog: ${this.activityCatalogLoaded ? "available" : "not found"}`);
   }
 
   getStudioTarget(): StudioTarget | null {
     if (this.generationMetadata) {
       return this.generationMetadata.studioTarget;
     }
-    if (this.legacyProfile) {
-      return {
-        line: this.legacyProfile.studioLine,
-        version: this.legacyProfile.studioVersion,
-        targetFramework: this.legacyProfile.targetFramework,
-        projectType: this.legacyProfile.projectType,
-        expressionLanguage: this.legacyProfile.expressionLanguage,
-      };
-    }
     return null;
   }
 
   getStudioProfile(): StudioProfile | null {
     if (this.generationMetadata) {
-      const ranges: Record<string, PackageVersionRange> = {};
-      for (const [pkg, entry] of Object.entries(this.generationMetadata.packageVersionRanges)) {
-        ranges[pkg] = { min: entry.min, max: entry.max, preferred: entry.preferred };
-      }
       return {
         studioLine: this.generationMetadata.studioTarget.line,
         studioVersion: this.generationMetadata.studioTarget.version,
         targetFramework: this.generationMetadata.studioTarget.targetFramework,
         projectType: this.generationMetadata.studioTarget.projectType,
         expressionLanguage: this.generationMetadata.studioTarget.expressionLanguage,
-        allowedPackageVersionRanges: ranges,
         minimumRequiredPackages: this.generationMetadata.minimumRequiredPackages,
       };
     }
-    return this.legacyProfile;
+    return null;
   }
 
   getPackageVersionRange(pkgName: string): PackageVersionRangeEntry | null {
     if (this.generationMetadata) {
       return this.generationMetadata.packageVersionRanges[pkgName] || null;
-    }
-    if (this.legacyProfile) {
-      const range = this.legacyProfile.allowedPackageVersionRanges[pkgName];
-      if (range) {
-        return {
-          ...range,
-          lastVerifiedAt: "unknown",
-          verificationSource: "nuget-feed",
-        };
-      }
     }
     return null;
   }
@@ -355,49 +332,17 @@ class MetadataService {
     return range?.preferred || null;
   }
 
-  isVersionInValidatedRange(pkgName: string, version: string): boolean {
-    const range = this.getPackageVersionRange(pkgName);
-    if (!range) return false;
-
+  isVersionPreferred(pkgName: string, version: string): boolean {
+    const preferred = this.getPreferredVersion(pkgName);
+    if (!preferred) return false;
     const cleanVersion = version.replace(/^\[/, "").replace(/[,)\]]/g, "").trim();
     const vMatch = cleanVersion.match(/^(\d+\.\d+(\.\d+){0,2})/);
     if (!vMatch) return false;
-    const ver = vMatch[1];
-
-    const minParts = range.min.split(".").map(Number);
-    const maxParts = range.max.split(".").map(Number);
-    const verParts = ver.split(".").map(Number);
-
-    const len = Math.max(minParts.length, maxParts.length, verParts.length);
-    for (let i = 0; i < len; i++) {
-      const v = verParts[i] || 0;
-      const mn = minParts[i] || 0;
-      if (v < mn) return false;
-      if (v > mn) break;
-    }
-
-    for (let i = 0; i < len; i++) {
-      const v = verParts[i] || 0;
-      const mx = maxParts[i] || 0;
-      if (v > mx) return false;
-      if (v < mx) break;
-    }
-
-    return true;
+    return vMatch[1] === preferred;
   }
 
   getValidatedVersion(pkgName: string): string | null {
-    const preferred = this.getPreferredVersion(pkgName);
-    if (!preferred) return null;
-    if (this.isVersionInValidatedRange(pkgName, preferred)) {
-      return preferred;
-    }
-    const range = this.getPackageVersionRange(pkgName);
-    if (range) {
-      console.warn(`[MetadataService] Preferred version ${preferred} for ${pkgName} is outside validated range [${range.min}, ${range.max}] — using preferred anyway as it is the registry authority`);
-      return preferred;
-    }
-    return preferred;
+    return this.getPreferredVersion(pkgName);
   }
 
   private resolvedServiceUrls: Partial<Record<ServiceResourceType, string>> = {};
@@ -1207,7 +1152,7 @@ class MetadataService {
   getStatus(): {
     generation: {
       loaded: boolean;
-      source: "generation-metadata" | "legacy-profile" | "none";
+      source: "generation-metadata" | "none";
       studioTarget: StudioTarget | null;
       packageCount: number;
       lastRefreshedAt: string | null;
@@ -1215,7 +1160,7 @@ class MetadataService {
       stalenessLevel: "fresh" | "stale" | "critical" | "unknown";
       lastRefreshSuccessAt: string | null;
       lastRefreshFailureAt: string | null;
-      packages: Record<string, { preferred: string; min: string; max: string; lastVerifiedAt: string; verificationSource: string }>;
+      packages: Record<string, { preferred: string; lastVerifiedAt: string; verificationSource: string }>;
     };
     integration: {
       loaded: boolean;
@@ -1233,7 +1178,7 @@ class MetadataService {
     let genStaleness: "fresh" | "stale" | "critical" | "unknown" = "unknown";
     let genLastRefreshed: string | null = null;
     let genLastVerified: string | null = null;
-    let genSource: "generation-metadata" | "legacy-profile" | "none" = "none";
+    let genSource: "generation-metadata" | "none" = "none";
 
     if (this.generationMetadata) {
       genSource = "generation-metadata";
@@ -1241,8 +1186,6 @@ class MetadataService {
       genLastVerified = this.generationMetadata.lastVerifiedAt;
       const age = now - new Date(genLastRefreshed).getTime();
       genStaleness = age > THIRTY_DAYS_MS ? "critical" : age > SEVEN_DAYS_MS ? "stale" : "fresh";
-    } else if (this.legacyProfile) {
-      genSource = "legacy-profile";
     }
 
     let intStaleness: "fresh" | "stale" | "critical" | "unknown" = "unknown";
@@ -1264,13 +1207,11 @@ class MetadataService {
       }
     }
 
-    const packageDetails: Record<string, { preferred: string; min: string; max: string; lastVerifiedAt: string; verificationSource: string }> = {};
+    const packageDetails: Record<string, { preferred: string; lastVerifiedAt: string; verificationSource: string }> = {};
     if (this.generationMetadata) {
       for (const [pkg, entry] of Object.entries(this.generationMetadata.packageVersionRanges)) {
         packageDetails[pkg] = {
           preferred: entry.preferred,
-          min: entry.min,
-          max: entry.max,
           lastVerifiedAt: entry.lastVerifiedAt,
           verificationSource: entry.verificationSource,
         };
@@ -1284,7 +1225,7 @@ class MetadataService {
         studioTarget: this.getStudioTarget(),
         packageCount: this.generationMetadata
           ? Object.keys(this.generationMetadata.packageVersionRanges).length
-          : (this.legacyProfile ? Object.keys(this.legacyProfile.allowedPackageVersionRanges).length : 0),
+          : 0,
         lastRefreshedAt: genLastRefreshed,
         lastVerifiedAt: genLastVerified,
         stalenessLevel: genStaleness,
@@ -1341,14 +1282,6 @@ class MetadataService {
           name: pkg,
           preferred: entry.preferred,
           verifiedAt: entry.lastVerifiedAt,
-        });
-      }
-    } else if (this.legacyProfile) {
-      for (const [pkg, range] of Object.entries(this.legacyProfile.allowedPackageVersionRanges)) {
-        entries.push({
-          name: pkg,
-          preferred: range.preferred,
-          verifiedAt: "unknown",
         });
       }
     }

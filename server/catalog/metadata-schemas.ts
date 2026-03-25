@@ -18,8 +18,6 @@ export const verificationSourceSchema = z.enum([
 export type VerificationSource = z.infer<typeof verificationSourceSchema>;
 
 export const packageVersionRangeEntrySchema = z.object({
-  min: z.string(),
-  max: z.string(),
   preferred: z.string(),
   lastVerifiedAt: z.string().datetime(),
   verificationSource: verificationSourceSchema,

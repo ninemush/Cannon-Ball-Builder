@@ -17,7 +17,7 @@ import type { XamlGenerationContext } from "./types/uipath-package";
 import type { PipelineOutcomeReport } from "./uipath-pipeline";
 import { XMLValidator } from "fast-xml-parser";
 import { catalogService } from "./catalog/catalog-service";
-import type { StudioProfile } from "./catalog/studio-profile";
+import type { StudioProfile } from "./catalog/metadata-service";
 
 export {
   ensureBracketWrapped,
