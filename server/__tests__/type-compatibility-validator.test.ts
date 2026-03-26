@@ -175,6 +175,31 @@ describe("validateTypeCompatibility", () => {
     }
   });
 
+  it("only wraps the mismatched activity, not a same-named property on a compatible activity", () => {
+    const xaml = `<Activity xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence>
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="str_Queue" />
+      <Variable x:TypeArguments="x:Int32" Name="int_Queue" />
+    </Sequence.Variables>
+    <ui:AddQueueItem QueueName="[str_Queue]" DisplayName="Good" />
+    <ui:AddQueueItem QueueName="[int_Queue]" DisplayName="Bad" />
+  </Sequence>
+</Activity>`;
+    const result = validateTypeCompatibility([{ name: "Main.xaml", content: xaml }]);
+    expect(result.violations.length).toBe(1);
+    expect(result.violations[0].detail).toContain("int_Queue");
+    expect(result.repairs.length).toBe(1);
+    expect(result.repairs[0].repairKind).toBe("conversion-wrap");
+    expect(result.repairs[0].boundVariable).toBe("int_Queue");
+
+    const patched = result.correctedEntries[0].content;
+    const queueMatches = [...patched.matchAll(/QueueName="\[([^\]]+)\]"/g)];
+    expect(queueMatches.length).toBe(2);
+    expect(queueMatches[0][1]).toBe("str_Queue");
+    expect(queueMatches[1][1]).toBe("CStr(int_Queue)");
+  });
+
   it("detects unrepairable DataTable→String mismatch with guidance", () => {
     const conv = getConversion("System.Data.DataTable", "System.String");
     expect(conv).not.toBeNull();

@@ -15,7 +15,7 @@ export interface TypeRepairAction {
   expectedType: string;
   actualType: string;
   repairKind: "conversion-wrap" | "variable-type-change" | "unrepairable";
-  boundVariable?: string;
+  boundVariable: string;
   detail: string;
 }
 
@@ -171,6 +171,8 @@ interface PropertyBinding {
   direction: "In" | "Out" | "InOut" | "None";
   expectedClrType: string;
   line: number;
+  matchStart: number;
+  matchEnd: number;
 }
 
 function extractVariableDeclarations(xamlContent: string): VariableInfo[] {
@@ -225,6 +227,9 @@ function extractPropertyBindings(
         if (varRef.includes("(") || varRef.includes("+") || varRef.includes("&") || varRef.includes(".") || varRef.includes(" ")) {
           continue;
         }
+        const attrBlockOffset = actMatch[0].indexOf(attrBlock);
+        const absStart = actMatch.index + attrBlockOffset + attrMatch.index;
+        const absEnd = absStart + attrMatch[0].length;
         bindings.push({
           activityTag,
           propertyName: prop.name,
@@ -232,6 +237,8 @@ function extractPropertyBindings(
           direction: prop.direction,
           expectedClrType: prop.clrType,
           line,
+          matchStart: absStart,
+          matchEnd: absEnd,
         });
       }
     }
@@ -270,6 +277,8 @@ function extractPropertyBindings(
         direction: prop.direction,
         expectedClrType: prop.clrType,
         line,
+        matchStart: childMatch.index,
+        matchEnd: childMatch.index + childMatch[0].length,
       });
     }
   }
@@ -277,31 +286,21 @@ function extractPropertyBindings(
   return bindings;
 }
 
-function applyConversionWrap(
+function applyConversionWrapAtPosition(
   xamlContent: string,
   varName: string,
   wrapper: string,
-  propertyContext: string,
-  activityTag: string,
+  matchStart: number,
+  matchEnd: number,
 ): string {
-  const varEscaped = varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const propEscaped = propertyContext.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
   const wrapExpr = wrapper.startsWith(".")
     ? `${varName}${wrapper}`
     : `${wrapper}(${varName})`;
 
-  const attrPattern = new RegExp(`(${propEscaped}=")\\[${varEscaped}\\](")`,"g");
-  xamlContent = xamlContent.replace(attrPattern, `$1[${wrapExpr}]$2`);
+  const segment = xamlContent.substring(matchStart, matchEnd);
+  const replaced = segment.replace(`[${varName}]`, `[${wrapExpr}]`);
 
-  const actTagEscaped = activityTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const childPropPattern = new RegExp(
-    `(<${actTagEscaped}\\.${propEscaped}>\\s*<(?:In|InOut)Argument[^>]*>\\s*)\\[${varEscaped}\\](\\s*<\\/(?:In|InOut)Argument>)`,
-    "g"
-  );
-  xamlContent = xamlContent.replace(childPropPattern, `$1[${wrapExpr}]$2`);
-
-  return xamlContent;
+  return xamlContent.substring(0, matchStart) + replaced + xamlContent.substring(matchEnd);
 }
 
 function changeVariableType(
@@ -398,6 +397,7 @@ export function validateTypeCompatibility(
             expectedType: binding.expectedClrType,
             actualType: oldClrType,
             repairKind: "variable-type-change",
+            boundVariable: binding.boundVariable,
             detail: `Changed variable "${binding.boundVariable}" type from ${oldType} to ${targetTypeArg} to match ${binding.activityTag}.${binding.propertyName} output type`,
           });
 
@@ -421,6 +421,13 @@ export function validateTypeCompatibility(
         ? extractPropertyBindings(patchedContent, shortName)
         : bindings;
 
+      interface PendingWrap {
+        binding: PropertyBinding;
+        conversion: ConversionInfo;
+        varInfo: VariableInfo;
+      }
+      const pendingWraps: PendingWrap[] = [];
+
       for (const binding of refreshedBindings) {
         if (binding.direction === "Out" || binding.direction === "InOut") continue;
         const varInfo = refreshedVarMap.get(binding.boundVariable);
@@ -440,35 +447,7 @@ export function validateTypeCompatibility(
         if (alreadyRepaired) continue;
 
         if (conversion.kind === "wrap" && conversion.wrapper) {
-          patchedContent = applyConversionWrap(
-            patchedContent,
-            binding.boundVariable,
-            conversion.wrapper,
-            binding.propertyName,
-            binding.activityTag,
-          );
-          changed = true;
-          madeChangesThisPass = true;
-
-          repairs.push({
-            file: shortName,
-            line: binding.line,
-            activity: binding.activityTag,
-            property: binding.propertyName,
-            expectedType: binding.expectedClrType,
-            actualType: varInfo.fullClrType,
-            repairKind: "conversion-wrap",
-            boundVariable: binding.boundVariable,
-            detail: conversion.detail.replace("[var]", binding.boundVariable),
-          });
-
-          violations.push({
-            category: "accuracy",
-            severity: "warning",
-            check: "TYPE_MISMATCH",
-            file: shortName,
-            detail: `Line ${binding.line}: Auto-repaired — ${conversion.detail.replace("[var]", binding.boundVariable)} for ${binding.activityTag}.${binding.propertyName}`,
-          });
+          pendingWraps.push({ binding, conversion, varInfo });
         } else {
           repairs.push({
             file: shortName,
@@ -490,6 +469,39 @@ export function validateTypeCompatibility(
             detail: `Line ${binding.line}: Type mismatch — variable "${binding.boundVariable}" (${varInfo.fullClrType}) bound to ${binding.activityTag}.${binding.propertyName} (expects ${binding.expectedClrType}). ${conversion.detail}`,
           });
         }
+      }
+
+      pendingWraps.sort((a, b) => b.binding.matchStart - a.binding.matchStart);
+      for (const { binding, conversion, varInfo } of pendingWraps) {
+        patchedContent = applyConversionWrapAtPosition(
+          patchedContent,
+          binding.boundVariable,
+          conversion.wrapper!,
+          binding.matchStart,
+          binding.matchEnd,
+        );
+        changed = true;
+        madeChangesThisPass = true;
+
+        repairs.push({
+          file: shortName,
+          line: binding.line,
+          activity: binding.activityTag,
+          property: binding.propertyName,
+          expectedType: binding.expectedClrType,
+          actualType: varInfo.fullClrType,
+          repairKind: "conversion-wrap",
+          boundVariable: binding.boundVariable,
+          detail: conversion.detail.replace("[var]", binding.boundVariable),
+        });
+
+        violations.push({
+          category: "accuracy",
+          severity: "warning",
+          check: "TYPE_MISMATCH",
+          file: shortName,
+          detail: `Line ${binding.line}: Auto-repaired — ${conversion.detail.replace("[var]", binding.boundVariable)} for ${binding.activityTag}.${binding.propertyName}`,
+        });
       }
 
       if (!madeChangesThisPass) break;

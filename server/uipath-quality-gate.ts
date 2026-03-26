@@ -43,11 +43,24 @@ export type PositiveEvidence = {
 
 export type CompletenessLevel = "structural" | "functional" | "incomplete";
 
+export type TypeRepairAction = {
+  file: string;
+  line: number;
+  activity: string;
+  property: string;
+  expectedType: string;
+  actualType: string;
+  repairKind: string;
+  boundVariable: string;
+  detail: string;
+};
+
 export type QualityGateResult = {
   passed: boolean;
   violations: QualityGateViolation[];
   positiveEvidence: PositiveEvidence[];
   completenessLevel: CompletenessLevel;
+  typeRepairs: TypeRepairAction[];
   summary: {
     blockedPatterns: number;
     completenessErrors: number;
@@ -1922,6 +1935,7 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     violations: allViolations,
     positiveEvidence,
     completenessLevel,
+    typeRepairs: typeCompatResult.repairs,
     summary,
   };
 }
