@@ -56,7 +56,7 @@ function parseDocumentSections(content: string): DocumentSection[] {
   let currentContent: string[] = [];
 
   for (const line of lines) {
-    const headingMatch = line.match(/^##\s+\d*\.?\s*(.*)/);
+    const headingMatch = line.match(/^##\s+(.*)/);
     if (headingMatch) {
       if (currentTitle) {
         sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
