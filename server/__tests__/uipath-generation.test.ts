@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes, applyActivityPolicy } from "../xaml-generator";
+import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes, applyActivityPolicy, generateSetTransactionStatusXaml } from "../xaml-generator";
 import { runQualityGate, classifyQualityIssues, getBlockingFiles, type QualityGateInput } from "../uipath-quality-gate";
 import { getBlockedActivities, isActivityAllowed, filterBlockedActivitiesFromXaml } from "../uipath-activity-policy";
 import { scanXamlForRequiredPackages, classifyAutomationPattern, ACTIVITY_REGISTRY, normalizeActivityName, ACTIVITY_NAME_ALIAS_MAP } from "../uipath-activity-registry";
@@ -2121,6 +2121,91 @@ describe("UiPath Generation Regression Tests", () => {
         const uniqueAttrs = new Set(attrNames);
         expect(uniqueAttrs.size).toBe(attrNames.length);
       }
+    });
+  });
+
+  describe("Task 266: dict_Config, single-quote, and expression fixes", () => {
+    it("dict_Config in InitAllSettings does not produce undeclared-variable error", () => {
+      const initXaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="InitAllSettings" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Init All Settings">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" Default="[new Dictionary(Of String, Object)]" />
+    </Sequence.Variables>
+    <ui:LogMessage Level="Info" Message="[&quot;Config loaded: &quot; &amp; dict_Config.Count.ToString()]" DisplayName="Log Config" />
+  </Sequence>
+</Activity>`;
+      const projectJson = makeProjectJson("InitTest");
+      const result = runQualityGate({
+        xamlEntries: [{ name: "InitAllSettings.xaml", content: initXaml }],
+        projectJsonContent: projectJson,
+        targetFramework: "Windows",
+      });
+      const dictConfigErrors = result.violations.filter(
+        v => v.check === "undeclared-variable" && v.detail.includes("dict_Config")
+      );
+      expect(dictConfigErrors).toHaveLength(0);
+    });
+
+    it("dict_Config in non-InitAllSettings without in_Config produces warning, not error", () => {
+      const wfXaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="ProcessData" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Process Data">
+    <Assign DisplayName="Read Config">
+      <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config]</OutArgument></Assign.To>
+      <Assign.Value><InArgument x:TypeArguments="x:Object">[Nothing]</InArgument></Assign.Value>
+    </Assign>
+  </Sequence>
+</Activity>`;
+      const projectJson = makeProjectJson("ProcessTest");
+      const result = runQualityGate({
+        xamlEntries: [{ name: "ProcessData.xaml", content: wfXaml }],
+        projectJsonContent: projectJson,
+        targetFramework: "Windows",
+      });
+      const dictConfigErrors = result.violations.filter(
+        v => v.check === "undeclared-variable" && v.detail.includes("dict_Config")
+      );
+      expect(dictConfigErrors).toHaveLength(0);
+      const dictConfigWarnings = result.violations.filter(
+        v => v.check === "dict-config-scope"
+      );
+      expect(dictConfigWarnings.length).toBeGreaterThan(0);
+      expect(dictConfigWarnings[0].severity).toBe("warning");
+    });
+
+    it("single-quote quality gate ignores natural language apostrophes", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:LogMessage Level="Info" Message="Item doesn't exist in the system" DisplayName="Log Warning" />
+  </Sequence>
+</Activity>`;
+      const projectJson = makeProjectJson("ApostropheTest");
+      const result = runQualityGate({
+        xamlEntries: [{ name: "Test.xaml", content: xaml }],
+        projectJsonContent: projectJson,
+        targetFramework: "Windows",
+      });
+      const singleQuoteErrors = result.violations.filter(
+        v => v.detail.includes("single-quoted VB expression")
+      );
+      expect(singleQuoteErrors).toHaveLength(0);
+    });
+
+    it("single-quote canonicalization converts VB string delimiters to &quot; form", () => {
+      const xaml = makeValidXaml("Test", `<ui:LogMessage Level="Info" Message="'Hello World'" DisplayName="Log" />`);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).not.toMatch(/Message="'Hello World'"/);
+      expect(compliant).toContain("&quot;Hello World&quot;");
+    });
+
+    it("SetTransactionStatus screenshotDefault uses &quot; entities in Default attribute", () => {
+      const statusXaml = generateSetTransactionStatusXaml("Windows");
+      const defaultMatch = statusXaml.match(/str_ScreenshotPath[^>]*Default="(\[[^"]*\])"/);
+      expect(defaultMatch).toBeTruthy();
+      expect(defaultMatch![1]).toContain("&quot;");
+      expect(defaultMatch![1]).not.toMatch(/\["/);
     });
   });
 });

@@ -505,8 +505,9 @@ export function lintExpression(expression: string): LintResult {
     }
   }
 
-  const openParens = (corrected.match(/\(/g) || []).length;
-  const closeParens = (corrected.match(/\)/g) || []).length;
+  const exprWithoutStrings = corrected.replace(/&quot;[^&]*&quot;/g, (m) => " ".repeat(m.length)).replace(/"[^"]*"/g, (m) => " ".repeat(m.length));
+  const openParens = (exprWithoutStrings.match(/\(/g) || []).length;
+  const closeParens = (exprWithoutStrings.match(/\)/g) || []).length;
   if (openParens !== closeParens) {
     const diff = openParens - closeParens;
     if (diff > 0 && diff <= 2) {

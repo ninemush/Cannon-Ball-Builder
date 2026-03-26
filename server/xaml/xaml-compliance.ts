@@ -1192,6 +1192,18 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     });
   }
 
+  xml = xml.replace(/(Message|Default|Value)="([^"]*'[^"]*)"(?=\s|\/|>)/g, (match, attr, val) => {
+    if (val.startsWith("[")) return match;
+    const withoutApostrophes = val.replace(/[a-zA-Z]'[a-zA-Z]/g, "xxx");
+    if (!/'[^']*'/.test(withoutApostrophes)) return match;
+    const canonical = val.replace(/(?<![a-zA-Z])'([^']*)'(?![a-zA-Z])/g, "&quot;$1&quot;");
+    if (canonical === val) return match;
+    if (!canonical.startsWith("[")) {
+      return `${attr}="[${canonical}]"`;
+    }
+    return `${attr}="${canonical}"`;
+  });
+
   xml = xml.replace(/Default="([^"[\]]+)"/g, (match, val) => {
     if (/^[0-9]+$/.test(val) || val === "True" || val === "False" || val === "Nothing" || val === "null" || val.startsWith("[") || val.startsWith("&quot;")) return match;
     if (/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*(\(.*\))?$/.test(val)) {

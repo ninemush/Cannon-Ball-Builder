@@ -644,6 +644,14 @@ function extractDeclaredSymbols(content: string): { variables: Map<string, strin
     variables.set(m[1], m[2]);
   }
 
+  const varFallbackPattern = /<Variable\s[^>]*\bName="([^"]+)"/g;
+  while ((m = varFallbackPattern.exec(content)) !== null) {
+    if (!variables.has(m[1])) {
+      const typeMatch = content.substring(m.index, m.index + m[0].length + 200).match(/x:TypeArguments="([^"]+)"/);
+      variables.set(m[1], typeMatch ? typeMatch[1] : "x:Object");
+    }
+  }
+
   const propPattern = /<x:Property\s+Name="([^"]+)"\s+Type="([^"]+)"/g;
   while ((m = propPattern.exec(content)) !== null) {
     const name = m[1];
@@ -756,8 +764,8 @@ function checkVariableArgumentDeclarations(input: QualityGateInput, violations: 
         if (/^[A-Z][a-z]/.test(ident) && expr.includes(`${ident}.`) && !allDeclared.has(ident)) continue;
         const prefixes = ["str_", "int_", "bool_", "dt_", "qi_", "obj_", "dbl_", "sec_", "io_", "in_", "out_", "list_", "arr_", "dict_"];
         if (prefixes.some(p => ident.startsWith(p)) && !allDeclared.has(ident)) {
-          if (ident === "dict_Config" && !isInitAllSettings) {
-            if (!allDeclared.has("in_Config")) {
+          if (ident === "dict_Config") {
+            if (!isInitAllSettings && !allDeclared.has("in_Config")) {
               const lineNum = content.substring(0, match.index).split("\n").length;
               violations.push({
                 category: "completeness",
@@ -1573,7 +1581,8 @@ function checkRuntimeSafety(input: QualityGateInput): QualityGateViolation[] {
         });
       }
 
-      if (/'[^']*'/.test(val) && !val.startsWith("[")) {
+      const valWithoutApostrophes = val.replace(/[a-zA-Z]'[a-zA-Z]/g, "xxx");
+      if (/'[^']*'/.test(valWithoutApostrophes) && !val.startsWith("[")) {
         const lineNum = content.substring(0, exprMatch.index).split("\n").length;
         violations.push({
           category: "runtime-safety",
