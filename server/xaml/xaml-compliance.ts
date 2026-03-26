@@ -1544,6 +1544,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
         detail: e,
       })),
       positiveEvidence: [],
+      typeRepairs: [],
       completenessLevel: "incomplete" as const,
       summary: {
         blockedPatterns: 0,

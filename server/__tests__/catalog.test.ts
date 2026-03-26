@@ -444,6 +444,7 @@ describe("Activity Catalog", () => {
           detail: "Some catalog violation",
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         summary: {
           blockedPatterns: 0,
           completenessErrors: 0,
@@ -482,6 +483,7 @@ describe("Activity Catalog", () => {
           },
         ],
         positiveEvidence: [],
+        typeRepairs: [],
         summary: {
           blockedPatterns: 0,
           completenessErrors: 0,
@@ -786,6 +788,7 @@ describe("Activity Catalog", () => {
           detail: 'ENUM_VIOLATION: Invalid value "Information" for "Level" on ui:LogMessage',
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         summary: {
           blockedPatterns: 0,
           completenessErrors: 0,
@@ -815,6 +818,7 @@ describe("Activity Catalog", () => {
           detail: 'ENUM_VIOLATION: Invalid value "Information" for "Level"',
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         summary: {
           blockedPatterns: 0,
           completenessErrors: 0,
@@ -937,6 +941,7 @@ describe("Activity Catalog", () => {
           detail: 'Property "Body" on ui:HttpClient must be a child element, not an attribute',
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         completenessLevel: "functional" as const,
         summary: {
           blockedPatterns: 0,
@@ -967,6 +972,7 @@ describe("Activity Catalog", () => {
           detail: 'Property "Body" must be a child element, not an attribute',
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         completenessLevel: "functional" as const,
         summary: {
           blockedPatterns: 0,
@@ -997,6 +1003,7 @@ describe("Activity Catalog", () => {
           detail: "Unrecognized attribute on SomeActivity",
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         completenessLevel: "functional" as const,
         summary: {
           blockedPatterns: 0,

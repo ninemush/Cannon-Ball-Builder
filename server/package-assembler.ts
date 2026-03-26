@@ -3454,6 +3454,19 @@ ${depEntries}
     });
   }
 
+  if (qualityGateResult.typeRepairs) {
+    for (const tr of qualityGateResult.typeRepairs) {
+      let repairCode = "REPAIR_TYPE_MISMATCH";
+      if (tr.repairKind === "conversion-wrap") repairCode = "REPAIR_TYPE_CONVERSION_WRAP";
+      else if (tr.repairKind === "variable-type-change") repairCode = "REPAIR_TYPE_VARIABLE_CHANGE";
+      outcomeAutoRepairs.push({
+        repairCode,
+        file: tr.file,
+        description: tr.detail,
+      });
+    }
+  }
+
   const allFiles = new Set(xamlEntries.map(e => (e.name.split("/").pop() || e.name)));
   const remediatedFiles = new Set(outcomeRemediations.map(r => r.file));
   const fullyGenerated = Array.from(allFiles).filter(f => !remediatedFiles.has(f) && !earlyStubFallbacks.includes(f));

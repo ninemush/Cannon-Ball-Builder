@@ -277,6 +277,7 @@ describe("VB.NET Expression Linter", () => {
           detail: "Line 5: C# 'null' should be VB.NET 'Nothing'",
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         completenessLevel: "functional" as const,
         summary: {
           blockedPatterns: 0, completenessErrors: 0, completenessWarnings: 0,
@@ -303,6 +304,7 @@ describe("VB.NET Expression Linter", () => {
           detail: "Line 10: Unbalanced parentheses cannot be auto-fixed",
         }],
         positiveEvidence: [],
+        typeRepairs: [],
         completenessLevel: "structural" as const,
         summary: {
           blockedPatterns: 0, completenessErrors: 0, completenessWarnings: 0,
