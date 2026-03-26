@@ -13,6 +13,7 @@ import { catalogService } from "./catalog/catalog-service";
 import type { StudioProfile } from "./catalog/metadata-service";
 import { metadataService } from "./catalog/metadata-service";
 import { lintXamlExpressions } from "./xaml/vbnet-expression-linter";
+import { validateTypeCompatibility } from "./xaml/type-compatibility-validator";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
@@ -1888,6 +1889,19 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     }
   }
 
+  const typeCompatResult = validateTypeCompatibility(input.xamlEntries);
+
+  if (typeCompatResult.correctedEntries.length > 0) {
+    for (let i = 0; i < input.xamlEntries.length; i++) {
+      const corrected = typeCompatResult.correctedEntries.find(
+        ce => ce.name === input.xamlEntries[i].name
+      );
+      if (corrected) {
+        input.xamlEntries[i] = corrected;
+      }
+    }
+  }
+
   const allViolations = [
     ...blockedViolations,
     ...completenessViolations,
@@ -1896,6 +1910,7 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     ...logicLocationViolations,
     ...archiveParityViolations,
     ...expressionLintResult.violations,
+    ...typeCompatResult.violations,
   ];
 
   const hasErrors = allViolations.some(v => v.severity === "error");
@@ -1990,6 +2005,7 @@ const WARNING_CHECKS = new Set([
   "empty-http-endpoint",
   "unassigned-decision-variable",
   "EXPRESSION_SYNTAX",
+  "TYPE_MISMATCH",
 ]);
 
 export function classifyQualityIssues(result: QualityGateResult): ClassifiedIssue[] {
