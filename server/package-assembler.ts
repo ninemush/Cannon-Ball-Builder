@@ -2295,6 +2295,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[UiPath Pre-Package Check] Archive manifest had ${mb} without validated entry — generated stub`);
       }
     }
+    const placeholderCleanupRepairs: { repairCode: "REPAIR_PLACEHOLDER_CLEANUP"; file: string; description: string; developerAction: string; estimatedEffortMinutes: number }[] = [];
     for (let i = 0; i < xamlEntries.length; i++) {
       const content = xamlEntries[i].content;
       if (content.includes("PLACEHOLDER_") || content.includes("TODO_")) {
@@ -2316,6 +2317,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         } else {
           console.warn(`[UiPath Parity] No deferredWrites key found for basename "${xamlEntries[i].name}" during placeholder cleanup — skipping deferred update`);
         }
+        const fileName = xamlEntries[i].name.split("/").pop() || xamlEntries[i].name;
+        placeholderCleanupRepairs.push({
+          repairCode: "REPAIR_PLACEHOLDER_CLEANUP" as const,
+          file: fileName,
+          description: `Stripped ${placeholderCount} placeholder token(s) from ${fileName}`,
+          developerAction: `Review ${fileName} for Comment elements marking where placeholder activities were removed`,
+          estimatedEffortMinutes: 5,
+        });
         console.log(`[UiPath Pre-Package Check] ${xamlEntries[i].name}: stripped ${placeholderCount} placeholder token(s)`);
       }
     }
@@ -2367,7 +2376,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         estimatedEffortMinutes: 15,
       });
     }
-    const outcomeAutoRepairs: AutoRepairEntry[] = [];
+    const outcomeAutoRepairs: AutoRepairEntry[] = [...placeholderCleanupRepairs];
     const structuralPreservationMetrics: StructuralPreservationMetrics[] = [];
 
     function mapCheckToRemediationCode(check: string): RemediationCode {
@@ -3527,7 +3536,12 @@ ${depEntries}
 
   const allFiles = new Set(xamlEntries.map(e => (e.name.split("/").pop() || e.name)));
   const remediatedFiles = new Set(outcomeRemediations.map(r => r.file));
-  const fullyGenerated = Array.from(allFiles).filter(f => !remediatedFiles.has(f) && !earlyStubFallbacks.includes(f));
+  const filesWithPlaceholders = new Set(
+    qualityGateResult.violations
+      .filter(v => v.check === "placeholder-value")
+      .map(v => v.file)
+  );
+  const fullyGenerated = Array.from(allFiles).filter(f => !remediatedFiles.has(f) && !earlyStubFallbacks.includes(f) && !filesWithPlaceholders.has(f));
 
   const qualityWarnings = qualityGateResult.violations
     .filter(v => v.severity === "warning")

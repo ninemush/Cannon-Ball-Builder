@@ -485,7 +485,7 @@ function autoFixMissingLogs(xaml: string): { fixed: string; fixes: AnalysisViola
     if (seqStart) {
       fixed = fixed.replace(
         seqStart[0],
-        `${seqStart[0]}\n        <ui:LogMessage Level="Info" Message="'=== Starting: ${wfName} ==='" DisplayName="Log Start" />`
+        `${seqStart[0]}\n        <ui:LogMessage Level="Info" Message="[&quot;=== Starting: ${wfName} ===&quot;]" DisplayName="Log Start" />`
       );
       fixes.push({
         ruleId: "ST-DBP-025",
@@ -501,7 +501,7 @@ function autoFixMissingLogs(xaml: string): { fixed: string; fixes: AnalysisViola
   if (!hasEndLog) {
     const lastSeqClose = fixed.lastIndexOf("</Sequence>");
     if (lastSeqClose > 0) {
-      const endLog = `\n        <ui:LogMessage Level="Info" Message="'=== Completed: ${wfName} ==='" DisplayName="Log Completion" />`;
+      const endLog = `\n        <ui:LogMessage Level="Info" Message="[&quot;=== Completed: ${wfName} ===&quot;]" DisplayName="Log Completion" />`;
       fixed = fixed.substring(0, lastSeqClose) + endLog + "\n      " + fixed.substring(lastSeqClose);
       fixes.push({
         ruleId: "ST-DBP-025",

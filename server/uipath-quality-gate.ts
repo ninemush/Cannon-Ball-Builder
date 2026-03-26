@@ -693,13 +693,14 @@ function checkActivityProperties(content: string, shortName: string, violations:
       ...Array.from(DESIGNER_PROPERTIES),
     ]);
 
+    const strippedAttrsStr = attrsStr.replace(/"[^"]*"/g, '""');
     const attrPattern = /\b([A-Za-z][A-Za-z0-9_.]*)\s*=/g;
     let attrMatch;
-    while ((attrMatch = attrPattern.exec(attrsStr)) !== null) {
+    while ((attrMatch = attrPattern.exec(strippedAttrsStr)) !== null) {
       const propName = attrMatch[1];
       if (propName.startsWith("xmlns") || propName.startsWith("sap2010:") ||
           propName.startsWith("sap:") || propName === "x:Class" ||
-          propName === "mc:Ignorable") continue;
+          propName === "mc:Ignorable" || propName === "TypeArguments") continue;
       if (!allAllowed.has(propName)) {
         const lineNum = content.substring(0, match.index).split("\n").length;
         violations.push({
@@ -1358,9 +1359,10 @@ function checkVersionCompatibility(input: QualityGateInput, violations: QualityG
       if (closingIdx === -1) continue;
       const tagStr = attrStr.substring(0, closingIdx + 1);
 
+      const strippedTagStr = tagStr.replace(/"[^"]*"/g, '""');
       const attrPattern = /\b([A-Za-z][A-Za-z0-9_]*)\s*=/g;
       let attrMatch;
-      while ((attrMatch = attrPattern.exec(tagStr)) !== null) {
+      while ((attrMatch = attrPattern.exec(strippedTagStr)) !== null) {
         const propName = attrMatch[1];
         if (propName === "DisplayName" || propName.startsWith("xmlns") ||
             propName.startsWith("sap") || propName === "x:Class" ||

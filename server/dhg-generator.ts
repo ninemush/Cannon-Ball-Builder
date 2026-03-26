@@ -73,7 +73,10 @@ export function generateDhgFromOutcomeReport(
       const hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
         r => r.file === `${wf}.xaml` || r.file === wf
       );
-      const status = isFullyGenerated ? "Fully Generated" : hasRemediation ? "Generated with Remediations" : "Generated";
+      const hasPlaceholders = report.qualityWarnings.some(
+        w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
+      );
+      const status = isFullyGenerated ? "Fully Generated" : hasPlaceholders ? "Generated with Placeholders" : hasRemediation ? "Generated with Remediations" : "Generated";
       md += `| ${i + 1} | \`${wf}.xaml\` | ${status} |\n`;
     });
     md += `\n`;

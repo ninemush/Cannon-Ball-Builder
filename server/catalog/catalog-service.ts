@@ -388,11 +388,16 @@ class CatalogService {
       "sap2010:VirtualizedContainerService.HintSize", "VirtualizedContainerService.HintSize",
       "Annotation.AnnotationText",
       "Timeout", "DelayAfter", "DelayBefore",
-      "mc:Ignorable", "x:Class", "x:TypeArguments", "x:Name",
+      "mc:Ignorable", "x:Class", "x:TypeArguments", "TypeArguments", "x:Name",
     ]);
 
     const FRAMEWORK_CHILD_ELEMENTS = new Set([
       "Variables", "VirtualizedContainerService.HintSize", "WorkflowViewState.IdRef",
+      "Try", "TryCatch.Try", "Catches", "TryCatch.Catches", "Finally", "TryCatch.Finally",
+      "Body", "ForEach.Body", "ParallelForEach.Body",
+      "Then", "If.Then", "Else", "If.Else",
+      "Cases", "Switch.Cases", "Default", "Switch.Default",
+      "Condition", "While.Condition", "DoWhile.Condition",
     ]);
 
     const knownPropertyNames = new Set(schema.activity.properties.map(p => p.name));
