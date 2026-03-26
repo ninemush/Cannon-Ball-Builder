@@ -758,6 +758,12 @@ export function lintXamlExpressions(
             `[${loc.expression}]`,
             `[${result.corrected}]`
           );
+
+          const exprAttrPattern = new RegExp(
+            `(Expression(?:Text)?=")${loc.expression.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(")`,
+            "g"
+          );
+          patchedContent = patchedContent.replace(exprAttrPattern, `$1${result.corrected}$2`);
         }
 
         for (const issue of result.issues) {
@@ -785,7 +791,9 @@ export function lintXamlExpressions(
       }
     }
 
-    correctedEntries.push({ name: entry.name, content: patchedContent });
+    if (patchedContent !== entry.content) {
+      correctedEntries.push({ name: entry.name, content: patchedContent });
+    }
   }
 
   return {
