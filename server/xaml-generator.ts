@@ -836,24 +836,32 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
 
   const useModern = isCrossPlatform || ctx.targetFramework === "Windows";
 
+  const isDesktopApp = combined.includes("desktop") || combined.includes("application") || combined.includes("erp") ||
+    combined.includes("sap") || combined.includes("mainframe") || combined.includes("citrix") ||
+    combined.includes("terminal") || combined.includes("rdp");
+  const isBrowserBased = combined.includes("browser") || combined.includes("url") || combined.includes("web") ||
+    combined.includes("portal") || combined.includes("website") || combined.includes("http");
+
   if (combined.includes("open") || combined.includes("launch") || combined.includes("navigate") || combined.includes("browser") || combined.includes("url")) {
-    const activityType = useModern ? "ui:UseBrowser" : "ui:OpenBrowser";
+    const useDesktop = useModern && isDesktopApp && !isBrowserBased;
+    const activityType = useDesktop ? "ui:UseApplication" : (useModern ? "ui:UseBrowser" : "ui:OpenBrowser");
+    const activityLabel = useDesktop ? "UseApplication" : (useModern ? "UseBrowser" : "OpenBrowser");
     gaps.push({
       category: "selector",
-      activity: useModern ? "UseBrowser" : "OpenBrowser",
-      description: `Set target URL for "${ctx.name}"`,
-      placeholder: "https://application.example.com",
+      activity: activityLabel,
+      description: useDesktop
+        ? `Set target application path for "${ctx.name}"`
+        : `Set target URL for "${ctx.name}"`,
+      placeholder: useDesktop ? "C:\\Program Files\\Application\\app.exe" : "https://application.example.com",
       estimatedMinutes: 5,
     });
+    const props: Record<string, string> = useDesktop
+      ? { ApplicationPath: "TODO: Set application executable path", ...autopilotProps, ...resilienceProps }
+      : { Url: "TODO: Set application URL", BrowserType: "Chrome", ...autopilotProps, ...resilienceProps };
     return {
       activityType,
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: {
-        Url: "TODO: Set application URL",
-        BrowserType: "Chrome",
-        ...autopilotProps,
-        ...resilienceProps,
-      },
+      properties: props,
       selectorHint: selectorBase,
       errorHandling: "retry",
       variables,

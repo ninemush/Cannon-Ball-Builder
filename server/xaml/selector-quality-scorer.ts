@@ -62,7 +62,7 @@ const PLACEHOLDER_PATTERNS = [
   /set.*selector/i,
 ];
 
-const UI_ACTIVITY_TAGS = new Set([
+const TARGET_COMPATIBLE_ACTIVITIES = new Set([
   "ui:Click",
   "ui:TypeInto",
   "ui:GetText",
@@ -81,10 +81,6 @@ const UI_ACTIVITY_TAGS = new Set([
   "ui:WaitElementVanish",
   "ui:Screenshot",
   "ui:TakeScreenshot",
-  "ui:SetClipping",
-  "ui:OpenBrowser",
-  "ui:UseBrowser",
-  "ui:UseApplication",
   "uweb:TypeInto",
   "uweb:Click",
   "uweb:GetText",
@@ -93,6 +89,13 @@ const UI_ACTIVITY_TAGS = new Set([
   "uweb:Check",
   "uweb:SelectItem",
   "uweb:Hover",
+]);
+
+const SCOPE_ACTIVITIES = new Set([
+  "ui:OpenBrowser",
+  "ui:UseBrowser",
+  "ui:UseApplication",
+  "ui:SetClipping",
 ]);
 
 export function extractUiContext(sddContent: string): UiContext {
@@ -261,6 +264,7 @@ export function scoreSelector(selector: string): ScoringBreakdown {
   const lower = selector.toLowerCase();
 
   if (/automationid\s*=/.test(lower)) breakdown.automationId = ATTR_SCORES.automationid;
+  if (/(?<!automation)\bid\s*=/.test(lower)) breakdown.specificityBonus = ATTR_SCORES.id;
   if (/\bname\s*=/.test(lower) && !/aaname/.test(lower.substring(0, lower.indexOf("name=")))) {
     breakdown.name = ATTR_SCORES.name;
   }
@@ -275,8 +279,8 @@ export function scoreSelector(selector: string): ScoringBreakdown {
 
   if (/tag\s*=\s*'?\*'?/.test(lower)) breakdown.wildcardPenalty = -1;
 
-  if (/css_selector\s*=/.test(lower) || /(?<!automation)\bid\s*=/.test(lower)) {
-    breakdown.specificityBonus = 2;
+  if (/css_selector\s*=/.test(lower) && breakdown.specificityBonus === 0) {
+    breakdown.specificityBonus = 3;
   }
 
   return breakdown;
@@ -358,7 +362,7 @@ export function injectResilienceDefaults(
     let content = entry.content;
     let changed = false;
 
-    for (const tag of UI_ACTIVITY_TAGS) {
+    for (const tag of TARGET_COMPATIBLE_ACTIVITIES) {
       const tagEscaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const pattern = new RegExp(`(<${tagEscaped}\\s)([^>]*?)(\\s*\\/?>)`, "g");
 
@@ -386,12 +390,47 @@ export function injectResilienceDefaults(
   return corrected;
 }
 
+function deriveBusinessContext(s: SelectorScore): string {
+  const parts: string[] = [];
+  const tag = s.activityTag.replace(/^(?:ui|uweb):/, "");
+
+  if (tag === "Click" || tag === "DoubleClick") {
+    parts.push(`Click action "${s.displayName}"`);
+  } else if (tag === "TypeInto" || tag === "SetText") {
+    parts.push(`Text input "${s.displayName}"`);
+  } else if (tag === "GetText" || tag === "GetFullText") {
+    parts.push(`Text extraction "${s.displayName}"`);
+  } else if (tag === "GetAttribute") {
+    parts.push(`Attribute read "${s.displayName}"`);
+  } else if (tag === "SelectItem") {
+    parts.push(`Dropdown selection "${s.displayName}"`);
+  } else if (tag === "Check") {
+    parts.push(`Checkbox toggle "${s.displayName}"`);
+  } else if (tag === "UseBrowser" || tag === "UseApplication" || tag === "OpenBrowser") {
+    parts.push(`Application scope "${s.displayName}"`);
+  } else {
+    parts.push(`UI interaction "${s.displayName}"`);
+  }
+
+  parts.push(`should target a specific UI element`);
+
+  if (s.isPlaceholder) {
+    parts.push(`but currently has a placeholder selector that must be replaced with a real element reference`);
+  } else if (s.score <= 3) {
+    parts.push(`but selector relies on fragile attributes — add automationid, name, or aaname for resilience`);
+  }
+
+  return parts.join(" ");
+}
+
 export function generateSelectorWarnings(
   scores: SelectorScore[],
-): { check: string; file: string; detail: string; severity: "warning"; category: "accuracy"; businessContext?: string }[] {
-  const warnings: { check: string; file: string; detail: string; severity: "warning"; category: "accuracy"; businessContext?: string }[] = [];
+): { check: string; file: string; detail: string; severity: "warning"; category: "accuracy"; businessContext: string }[] {
+  const warnings: { check: string; file: string; detail: string; severity: "warning"; category: "accuracy"; businessContext: string }[] = [];
 
   for (const s of scores) {
+    const businessContext = deriveBusinessContext(s);
+
     if (s.isPlaceholder) {
       warnings.push({
         check: "SELECTOR_PLACEHOLDER",
@@ -399,7 +438,7 @@ export function generateSelectorWarnings(
         detail: `Line ${s.line}: ${s.displayName} has placeholder selector — needs real UI element targeting. Selector: ${s.selector.substring(0, 80)}`,
         severity: "warning",
         category: "accuracy",
-        businessContext: s.businessContext,
+        businessContext,
       });
     } else if (s.score <= 3) {
       warnings.push({
@@ -408,6 +447,7 @@ export function generateSelectorWarnings(
         detail: `Line ${s.line}: ${s.displayName} has low-quality selector (score ${s.score}/${s.maxScore}) — consider adding automationid, name, or aaname attributes. Selector: ${s.selector.substring(0, 80)}`,
         severity: "warning",
         category: "accuracy",
+        businessContext,
       });
     }
   }

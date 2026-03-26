@@ -149,9 +149,14 @@ describe("scoreSelector", () => {
     expect(breakdown.wildcardPenalty).toBe(-1);
   });
 
-  it("gives specificity bonus for id or css_selector", () => {
+  it("gives 4 points for standalone id attribute via specificityBonus", () => {
     const breakdown = scoreSelector("<webctrl id='main-form' />");
-    expect(breakdown.specificityBonus).toBe(2);
+    expect(breakdown.specificityBonus).toBe(4);
+  });
+
+  it("gives 3 points for css_selector attribute via specificityBonus", () => {
+    const breakdown = scoreSelector("<webctrl css_selector='#main-form' />");
+    expect(breakdown.specificityBonus).toBe(3);
   });
 
   it("does not conflate aaname with name", () => {
@@ -166,9 +171,9 @@ describe("scoreSelector", () => {
     expect(breakdown.specificityBonus).toBe(0);
   });
 
-  it("gives specificity bonus for standalone id attribute", () => {
+  it("gives 4 points for standalone id attribute", () => {
     const breakdown = scoreSelector("<webctrl id='main-form' />");
-    expect(breakdown.specificityBonus).toBe(2);
+    expect(breakdown.specificityBonus).toBe(4);
   });
 });
 
@@ -293,7 +298,7 @@ describe("scoreSelectorQuality", () => {
 });
 
 describe("generateSelectorWarnings", () => {
-  it("generates placeholder warnings", () => {
+  it("generates placeholder warnings with businessContext", () => {
     const warnings = generateSelectorWarnings([
       {
         file: "Main.xaml",
@@ -310,9 +315,11 @@ describe("generateSelectorWarnings", () => {
     expect(warnings.length).toBe(1);
     expect(warnings[0].check).toBe("SELECTOR_PLACEHOLDER");
     expect(warnings[0].severity).toBe("warning");
+    expect(warnings[0].businessContext).toContain("Click action");
+    expect(warnings[0].businessContext).toContain("placeholder");
   });
 
-  it("generates low-quality warnings for score <= 3", () => {
+  it("generates low-quality warnings with businessContext for score <= 3", () => {
     const warnings = generateSelectorWarnings([
       {
         file: "Main.xaml",
@@ -328,6 +335,8 @@ describe("generateSelectorWarnings", () => {
     ]);
     expect(warnings.length).toBe(1);
     expect(warnings[0].check).toBe("SELECTOR_LOW_QUALITY");
+    expect(warnings[0].businessContext).toContain("Text input");
+    expect(warnings[0].businessContext).toContain("fragile");
   });
 
   it("does not warn for high-quality selectors", () => {

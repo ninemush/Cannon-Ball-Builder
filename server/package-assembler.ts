@@ -3478,6 +3478,7 @@ ${depEntries}
       file: v.file || "unknown",
       detail: v.detail,
       severity: v.severity as "warning",
+      businessContext: (v as any).businessContext as string | undefined,
     }));
 
   const outcomeReport: PipelineOutcomeReport = {

@@ -224,6 +224,7 @@ export interface QualityWarningEntry {
   severity: "warning" | "blocking";
   developerAction: string;
   estimatedEffortMinutes: number;
+  businessContext?: string;
 }
 
 export const PROPERTY_REMEDIATION_ESCALATION_THRESHOLD = 3;

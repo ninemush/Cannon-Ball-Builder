@@ -204,17 +204,37 @@ export function generateDhgFromOutcomeReport(
   }
 
   if (report.qualityWarnings.length > 0) {
-    md += `### Quality Warnings (${report.qualityWarnings.length})\n\n`;
-    md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|-------|--------|-----------------|-------------|\n`;
-    report.qualityWarnings.forEach((w, i) => {
-      const detail = w.detail.length > 100 ? w.detail.slice(0, 97) + "..." : w.detail;
-      const action = (w.developerAction || "").length > 80
-        ? (w.developerAction || "").slice(0, 77) + "..."
-        : (w.developerAction || "—");
-      md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${action.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes} |\n`;
-    });
-    md += `\n`;
+    const selectorWarnings = report.qualityWarnings.filter(w => w.check === "SELECTOR_PLACEHOLDER" || w.check === "SELECTOR_LOW_QUALITY");
+    const otherWarnings = report.qualityWarnings.filter(w => w.check !== "SELECTOR_PLACEHOLDER" && w.check !== "SELECTOR_LOW_QUALITY");
+
+    if (selectorWarnings.length > 0) {
+      md += `### UI Selector Warnings (${selectorWarnings.length})\n\n`;
+      md += `These selectors need attention to ensure reliable UI automation.\n\n`;
+      md += `| # | File | Check | Business Context | Detail | Est. Minutes |\n`;
+      md += `|---|------|-------|-----------------|--------|-------------|\n`;
+      selectorWarnings.forEach((w, i) => {
+        const detail = w.detail.length > 80 ? w.detail.slice(0, 77) + "..." : w.detail;
+        const context = (w.businessContext || "—").length > 80
+          ? (w.businessContext || "").slice(0, 77) + "..."
+          : (w.businessContext || "—");
+        md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${context.replace(/\|/g, "\\|")} | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 15} |\n`;
+      });
+      md += `\n`;
+    }
+
+    if (otherWarnings.length > 0) {
+      md += `### Quality Warnings (${otherWarnings.length})\n\n`;
+      md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
+      md += `|---|------|-------|--------|-----------------|-------------|\n`;
+      otherWarnings.forEach((w, i) => {
+        const detail = w.detail.length > 100 ? w.detail.slice(0, 97) + "..." : w.detail;
+        const action = (w.developerAction || "").length > 80
+          ? (w.developerAction || "").slice(0, 77) + "..."
+          : (w.developerAction || "—");
+        md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${action.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes} |\n`;
+      });
+      md += `\n`;
+    }
   }
 
   if (allRemediations.length > 0 || report.qualityWarnings.length > 0) {
