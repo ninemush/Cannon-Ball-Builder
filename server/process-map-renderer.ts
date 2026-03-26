@@ -47,14 +47,35 @@ const MAX_SVG_DIMENSION = 4000;
 
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
   const t = (nodeType || "task").toLowerCase();
-  if (t === "start" || t === "end") return { width: 44, height: 44 };
-  if (t === "decision" || t === "agent-decision") return { width: 52, height: 52 };
-  return { width: 240, height: 70 };
+  if (t === "start" || t === "end") return { width: 60, height: 60 };
+  if (t === "decision" || t === "agent-decision") return { width: 90, height: 90 };
+  return { width: 320, height: 100 };
 }
 
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 1) + "\u2026";
+}
+
+function wrapText(text: string, maxCharsPerLine: number): string[] {
+  if (text.length <= maxCharsPerLine) return [text];
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current && (current.length + 1 + word.length) > maxCharsPerLine) {
+      lines.push(current);
+      current = word;
+      if (lines.length >= 2) break;
+    } else {
+      current = current ? current + " " + word : word;
+    }
+  }
+  if (current && lines.length < 2) lines.push(current);
+  else if (current && lines.length >= 2) {
+    lines[lines.length - 1] = truncate(lines[lines.length - 1] + " " + current, maxCharsPerLine + 3);
+  }
+  return lines.length > 0 ? lines : [text];
 }
 
 function getEdgeSourceHandle(
@@ -122,8 +143,8 @@ function fixDecisionHandlesPostLayout(
     const dx1 = Math.abs(tgt1.x - srcPos.x);
     const dy0 = tgt0.y - srcPos.y;
     const dy1 = tgt1.y - srcPos.y;
-    const directlyBelow0 = dx0 < 30 && dy0 > 0;
-    const directlyBelow1 = dx1 < 30 && dy1 > 0;
+    const directlyBelow0 = dx0 < 50 && dy0 > 0;
+    const directlyBelow1 = dx1 < 50 && dy1 > 0;
 
     let handle0: string;
     let handle1: string;
@@ -212,8 +233,8 @@ function computeDagreLayoutNodes(nodes: MapNode[], edges: MapEdge[]): { layoutNo
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({
     rankdir: "TB",
-    nodesep: 60,
-    ranksep: 80,
+    nodesep: 120,
+    ranksep: 140,
     edgesep: 40,
     marginx: 40,
     marginy: 40,
@@ -251,13 +272,19 @@ function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandl
   const cy = srcNode.y + srcNode.height / 2;
   const tx = tgtNode.x + tgtNode.width / 2;
   const ty = tgtNode.y;
-  const diamondR = 24;
-  const clearance = 40;
+  const diamondR = 42;
+  const clearance = 60;
+
+  const isBackEdge = ty < cy;
 
   if (sourceHandle === "left") {
     const sx = cx - diamondR;
     const sy = cy;
     const exitX = sx - clearance;
+    if (isBackEdge) {
+      const routeX = Math.min(exitX, tgtNode.x - clearance);
+      return [{ x: sx, y: sy }, { x: routeX, y: sy }, { x: routeX, y: ty }, { x: tx, y: ty }];
+    }
     if (Math.abs(exitX - tx) < 5) {
       return [{ x: sx, y: sy }, { x: exitX, y: sy }, { x: tx, y: ty }];
     }
@@ -268,6 +295,10 @@ function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandl
     const sx = cx + diamondR;
     const sy = cy;
     const exitX = sx + clearance;
+    if (isBackEdge) {
+      const routeX = Math.max(exitX, tgtNode.x + tgtNode.width + clearance);
+      return [{ x: sx, y: sy }, { x: routeX, y: sy }, { x: routeX, y: ty }, { x: tx, y: ty }];
+    }
     if (Math.abs(exitX - tx) < 5) {
       return [{ x: sx, y: sy }, { x: exitX, y: sy }, { x: tx, y: ty }];
     }
@@ -296,6 +327,10 @@ function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandl
 
   const sx = srcNode.x + srcNode.width / 2;
   const sy = srcNode.y + srcNode.height;
+  if (isBackEdge) {
+    const routeX = Math.max(srcNode.x + srcNode.width + clearance, tgtNode.x + tgtNode.width + clearance);
+    return [{ x: sx, y: sy }, { x: sx, y: sy + clearance / 2 }, { x: routeX, y: sy + clearance / 2 }, { x: routeX, y: ty }, { x: tx, y: ty }];
+  }
   if (Math.abs(sx - tx) < 5) {
     return [{ x: sx, y: sy }, { x: tx, y: ty }];
   }
@@ -405,7 +440,7 @@ function renderEdgePath(points: { x: number; y: number }[]): string {
   if (points.length === 2) {
     return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
   }
-  const r = 8;
+  const r = 14;
   let d = `M ${points[0].x} ${points[0].y}`;
   for (let i = 1; i < points.length - 1; i++) {
     const prev = points[i - 1];
@@ -435,9 +470,9 @@ function renderEdgePath(points: { x: number; y: number }[]): string {
 
 function getEdgeColor(label: string, viewType: string): string {
   const l = label.toLowerCase();
-  if (l === "yes" || l === "true" || l === "approved") return "#22c55e";
-  if (l === "no" || l === "false" || l === "rejected") return "#ef4444";
-  return viewType === "to-be" ? "#2dd4bf" : "#6b7280";
+  if (l === "yes" || l === "true" || l === "approved") return "#4ade80";
+  if (l === "no" || l === "false" || l === "rejected") return "#f87171";
+  return viewType === "to-be" ? "#5eead4" : "#9ca3af";
 }
 
 function renderNodeSvg(node: LayoutNode, viewType: string): string {
@@ -447,69 +482,82 @@ function renderNodeSvg(node: LayoutNode, viewType: string): string {
   if (nType === "start") {
     const cx = x + width / 2;
     const cy = y + height / 2;
-    const r = 18;
+    const r = 25;
     return `
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="#059669" stroke="#34d399" stroke-width="2"/>
-      <polygon points="${cx - 5},${cy - 7} ${cx - 5},${cy + 7} ${cx + 7},${cy}" fill="white"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="#059669" stroke="#34d399" stroke-width="2.5"/>
+      <polygon points="${cx - 7},${cy - 9} ${cx - 7},${cy + 9} ${cx + 9},${cy}" fill="white"/>
     `;
   }
 
   if (nType === "end") {
     const cx = x + width / 2;
     const cy = y + height / 2;
-    const r = 18;
+    const r = 25;
     return `
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="#dc2626" stroke="#f87171" stroke-width="2"/>
-      <rect x="${cx - 6}" y="${cy - 6}" width="12" height="12" rx="2" fill="white"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="#dc2626" stroke="#f87171" stroke-width="2.5"/>
+      <rect x="${cx - 8}" y="${cy - 8}" width="16" height="16" rx="2" fill="white"/>
     `;
   }
 
   if (nType === "decision" || nType === "agent-decision") {
     const cx = x + width / 2;
     const cy = y + height / 2;
-    const s = 24;
-    const label = truncate(data.name || "?", 18);
+    const s = 42;
+    const label = truncate(data.name || "?", 30);
+    const lines = wrapText(label, 20);
+    const lineHeight = 14;
+    const startY = -(lines.length - 1) * lineHeight / 2 + 4;
+    const tspans = lines.map((line, i) =>
+      `<tspan x="0" dy="${i === 0 ? 0 : lineHeight}" text-anchor="middle">${escapeXml(line)}</tspan>`
+    ).join("");
     return `
       <g transform="translate(${cx}, ${cy})">
-        <rect x="${-s}" y="${-s}" width="${s * 2}" height="${s * 2}" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="0" y="4" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">${escapeXml(label)}</text>
+        <rect x="${-s}" y="${-s}" width="${s * 2}" height="${s * 2}" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="2.5"/>
+        <text x="0" y="${startY}" text-anchor="middle" fill="white" font-size="11" font-weight="600" font-family="system-ui, sans-serif">${tspans}</text>
       </g>
     `;
   }
 
-  const borderColor = viewType === "to-be" ? "#2dd4bf" : "#4b5563";
-  const painPointBorder = data.isPainPoint ? "#ef4444" : borderColor;
-  const nameText = truncate(data.name || "Unnamed", 30);
-  const roleText = data.role ? truncate(data.role, 22) : "";
-  const systemText = data.system ? truncate(data.system, 22) : "";
+  const borderColor = viewType === "to-be" ? "#5eead4" : "#6b7280";
+  const painPointBorder = data.isPainPoint ? "#f87171" : borderColor;
+  const nameText = truncate(data.name || "Unnamed", 60);
+  const roleText = data.role ? truncate(data.role, 30) : "";
+  const systemText = data.system ? truncate(data.system, 30) : "";
+
+  const nameLines = wrapText(nameText, 32);
+  const nameLineHeight = 17;
+  const nameStartY = y + 28;
+  const nameTspans = nameLines.map((line, i) =>
+    `<tspan x="${x + width / 2}" dy="${i === 0 ? 0 : nameLineHeight}">${escapeXml(line)}</tspan>`
+  ).join("");
 
   const maxBadgeArea = width - 16;
   let badgeSvg = "";
   let badgeX = x + 8;
-  const badgeY = y + height - 18;
+  const badgeY = y + height - 24;
 
   if (roleText) {
-    let rw = Math.min(roleText.length * 5.5 + 12, maxBadgeArea);
+    let rw = Math.min(roleText.length * 7 + 14, maxBadgeArea);
     badgeSvg += `
-      <rect x="${badgeX}" y="${badgeY}" width="${rw}" height="14" rx="3" fill="#374151"/>
-      <text x="${badgeX + rw / 2}" y="${badgeY + 10}" text-anchor="middle" fill="#9ca3af" font-size="7.5" font-family="system-ui, sans-serif">${escapeXml(roleText)}</text>
+      <rect x="${badgeX}" y="${badgeY}" width="${rw}" height="18" rx="4" fill="#374151"/>
+      <text x="${badgeX + rw / 2}" y="${badgeY + 13}" text-anchor="middle" fill="#d1d5db" font-size="11" font-family="system-ui, sans-serif">${escapeXml(roleText)}</text>
     `;
     badgeX += rw + 4;
   }
   if (systemText) {
     const remainingSpace = (x + width - 8) - badgeX;
-    if (remainingSpace > 20) {
-      let sw = Math.min(systemText.length * 5.5 + 12, remainingSpace);
+    if (remainingSpace > 24) {
+      let sw = Math.min(systemText.length * 7 + 14, remainingSpace);
       badgeSvg += `
-        <rect x="${badgeX}" y="${badgeY}" width="${sw}" height="14" rx="3" fill="#1e293b"/>
-        <text x="${badgeX + sw / 2}" y="${badgeY + 10}" text-anchor="middle" fill="#64748b" font-size="7.5" font-family="system-ui, sans-serif">${escapeXml(systemText)}</text>
+        <rect x="${badgeX}" y="${badgeY}" width="${sw}" height="18" rx="4" fill="#1e293b"/>
+        <text x="${badgeX + sw / 2}" y="${badgeY + 13}" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="system-ui, sans-serif">${escapeXml(systemText)}</text>
       `;
     }
   }
 
   return `
-    <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="8" fill="#1e1e2e" stroke="${painPointBorder}" stroke-width="1.5"/>
-    <text x="${x + width / 2}" y="${y + 22}" text-anchor="middle" fill="#e4e4e7" font-size="10" font-weight="600" font-family="system-ui, sans-serif">${escapeXml(nameText)}</text>
+    <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="14" fill="#1e1e2e" stroke="${painPointBorder}" stroke-width="2.5"/>
+    <text x="${x + width / 2}" y="${nameStartY}" text-anchor="middle" fill="#e4e4e7" font-size="14" font-weight="600" font-family="system-ui, sans-serif">${nameTspans}</text>
     ${badgeSvg}
   `;
 }
@@ -564,7 +612,7 @@ export async function renderProcessMapImage(
     const pathD = renderEdgePath(edge.points);
     if (!pathD) continue;
 
-    edgesSvg += `<path d="${pathD}" fill="none" stroke="${color}" stroke-width="1.5" marker-end="url(#arrow-${color.replace("#", "")})" stroke-linejoin="round"/>`;
+    edgesSvg += `<path d="${pathD}" fill="none" stroke="${color}" stroke-width="2.5" marker-end="url(#arrow-${color.replace("#", "")})" stroke-linejoin="round"/>`;
 
     if (edge.label) {
       let lx: number, ly: number;
@@ -572,17 +620,17 @@ export async function renderProcessMapImage(
         const srcPt = edge.points[0];
         const isBottomHandle = edge.sourceHandle === "bottom-left" || edge.sourceHandle === "bottom-right";
         const xDir = edge.sourceHandle === "left" ? -1 : edge.sourceHandle === "right" ? 1 : edge.sourceHandle === "bottom-left" ? -0.5 : edge.sourceHandle === "bottom-right" ? 0.5 : 0;
-        lx = srcPt.x + xDir * (isBottomHandle ? 30 : 35);
-        ly = srcPt.y + (isBottomHandle ? 20 : 25);
+        lx = srcPt.x + xDir * (isBottomHandle ? 40 : 45);
+        ly = srcPt.y + (isBottomHandle ? 25 : 30);
       } else {
         const midIdx = Math.floor(edge.points.length / 2);
         lx = edge.points[midIdx]?.x || 0;
         ly = edge.points[midIdx]?.y || 0;
       }
-      const labelBgW = edge.label.length * 6 + 10;
+      const labelBgW = edge.label.length * 7 + 12;
       edgesSvg += `
-        <rect x="${lx - labelBgW / 2}" y="${ly - 8}" width="${labelBgW}" height="16" rx="4" fill="#18181b" stroke="${color}" stroke-width="0.5"/>
-        <text x="${lx}" y="${ly + 4}" text-anchor="middle" fill="${color}" font-size="8" font-weight="500" font-family="system-ui, sans-serif">${escapeXml(edge.label)}</text>
+        <rect x="${lx - labelBgW / 2}" y="${ly - 10}" width="${labelBgW}" height="20" rx="4" fill="#18181b" stroke="${color}" stroke-width="0.5"/>
+        <text x="${lx}" y="${ly + 4}" text-anchor="middle" fill="${color}" font-size="10" font-weight="500" font-family="system-ui, sans-serif">${escapeXml(edge.label)}</text>
       `;
     }
   }
@@ -600,7 +648,7 @@ export async function renderProcessMapImage(
   for (const color of arrowColors) {
     const id = `arrow-${color.replace("#", "")}`;
     markerDefs += `
-      <marker id="${id}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <marker id="${id}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="${color}"/>
       </marker>
     `;
@@ -608,7 +656,7 @@ export async function renderProcessMapImage(
 
   const bgColor = "#0a0a0f";
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}" text-rendering="geometricPrecision" shape-rendering="optimizeLegibility">
   <defs>${markerDefs}</defs>
   <rect width="100%" height="100%" fill="${bgColor}"/>
   ${edgesSvg}
@@ -616,7 +664,8 @@ export async function renderProcessMapImage(
 </svg>`;
 
   try {
-    const pngBuffer = await sharp(Buffer.from(svg))
+    const pngBuffer = await sharp(Buffer.from(svg), { density: 200 })
+      .sharpen()
       .png()
       .toBuffer();
 
