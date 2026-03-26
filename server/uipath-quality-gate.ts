@@ -14,6 +14,7 @@ import type { StudioProfile } from "./catalog/metadata-service";
 import { metadataService } from "./catalog/metadata-service";
 import { lintXamlExpressions } from "./xaml/vbnet-expression-linter";
 import { validateTypeCompatibility } from "./xaml/type-compatibility-validator";
+import { scoreSelectorQuality, generateSelectorWarnings, injectResilienceDefaults } from "./xaml/selector-quality-scorer";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
@@ -1882,6 +1883,18 @@ function computeCompletenessLevel(violations: QualityGateViolation[]): Completen
 }
 
 export function runQualityGate(input: QualityGateInput): QualityGateResult {
+  const resilienceCorrected = injectResilienceDefaults(input.xamlEntries);
+  if (resilienceCorrected.length > 0) {
+    for (let i = 0; i < input.xamlEntries.length; i++) {
+      const corrected = resilienceCorrected.find(
+        ce => ce.name === input.xamlEntries[i].name
+      );
+      if (corrected) {
+        input.xamlEntries[i] = corrected;
+      }
+    }
+  }
+
   const blockedViolations = scanBlockedPatterns(input);
   const completenessViolations = checkCompleteness(input);
   const accuracyViolations = checkAccuracy(input);
@@ -1915,6 +1928,9 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     }
   }
 
+  const selectorScores = scoreSelectorQuality(input.xamlEntries);
+  const selectorWarnings = generateSelectorWarnings(selectorScores);
+
   const allViolations = [
     ...blockedViolations,
     ...completenessViolations,
@@ -1924,6 +1940,7 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     ...archiveParityViolations,
     ...expressionLintResult.violations,
     ...typeCompatResult.violations,
+    ...selectorWarnings,
   ];
 
   const hasErrors = allViolations.some(v => v.severity === "error");
@@ -2020,6 +2037,8 @@ const WARNING_CHECKS = new Set([
   "unassigned-decision-variable",
   "EXPRESSION_SYNTAX",
   "TYPE_MISMATCH",
+  "SELECTOR_PLACEHOLDER",
+  "SELECTOR_LOW_QUALITY",
 ]);
 
 export function classifyQualityIssues(result: QualityGateResult): ClassifiedIssue[] {

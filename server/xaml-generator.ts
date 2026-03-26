@@ -826,23 +826,33 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     autopilotProps["InformativeScreenshot"] = "True";
   }
 
-  const selectorBase = `<html app='${escapeXml(ctx.system || "application")}' />`;
+  const resilienceProps: Record<string, string> = {
+    "Target.WaitForReady": "INTERACTIVE",
+    "Target.Timeout": "30000",
+  };
+
+  const appName = escapeXml(ctx.system || "application");
+  const selectorBase = `<html app='${appName}' />`;
+
+  const useModern = isCrossPlatform || ctx.targetFramework === "Windows";
 
   if (combined.includes("open") || combined.includes("launch") || combined.includes("navigate") || combined.includes("browser") || combined.includes("url")) {
+    const activityType = useModern ? "ui:UseBrowser" : "ui:OpenBrowser";
     gaps.push({
       category: "selector",
-      activity: isCrossPlatform ? "UseBrowser" : "OpenBrowser",
+      activity: useModern ? "UseBrowser" : "OpenBrowser",
       description: `Set target URL for "${ctx.name}"`,
       placeholder: "https://application.example.com",
       estimatedMinutes: 5,
     });
     return {
-      activityType: isCrossPlatform ? "ui:UseBrowser" : "ui:OpenBrowser",
+      activityType,
       activityPackage: "UiPath.UIAutomation.Activities",
       properties: {
         Url: "TODO: Set application URL",
         BrowserType: "Chrome",
         ...autopilotProps,
+        ...resilienceProps,
       },
       selectorHint: selectorBase,
       errorHandling: "retry",
@@ -852,21 +862,27 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   }
 
   if (combined.includes("type") || combined.includes("enter") || combined.includes("input") || combined.includes("fill")) {
-    gaps.push({
-      category: "selector",
-      activity: isCrossPlatform ? "TypeInto (Modern)" : "TypeInto",
-      description: `Configure UI selector for input field in "${ctx.name}"`,
-      placeholder: `<webctrl tag='INPUT' name='TODO' />`,
-      estimatedMinutes: 15,
-    });
+    const fieldHint = extractFieldHint(combined);
+    const selectorAttr = fieldHint ? `name='${escapeXml(fieldHint)}'` : "name='TODO_field_name'";
+    const isPlaceholder = !fieldHint;
+    if (isPlaceholder) {
+      gaps.push({
+        category: "selector",
+        activity: useModern ? "TypeInto (Modern)" : "TypeInto",
+        description: `Configure UI selector for input field in "${ctx.name}"`,
+        placeholder: `<webctrl tag='INPUT' name='TODO' />`,
+        estimatedMinutes: 15,
+      });
+    }
     return {
       activityType: "ui:TypeInto",
       activityPackage: "UiPath.UIAutomation.Activities",
       properties: {
         Text: "TODO: Set text to type",
         ...autopilotProps,
+        ...resilienceProps,
       },
-      selectorHint: `${selectorBase}<webctrl tag='INPUT' name='TODO_field_name' />`,
+      selectorHint: `${selectorBase}<webctrl tag='INPUT' ${selectorAttr} />`,
       errorHandling: "retry",
       variables,
       gaps,
@@ -874,18 +890,23 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   }
 
   if (combined.includes("click") || combined.includes("press") || combined.includes("button") || combined.includes("submit") || combined.includes("select")) {
-    gaps.push({
-      category: "selector",
-      activity: isCrossPlatform ? "Click (Modern)" : "Click",
-      description: `Configure UI selector for clickable element in "${ctx.name}"`,
-      placeholder: `<webctrl tag='BUTTON' name='TODO' />`,
-      estimatedMinutes: 15,
-    });
+    const buttonHint = extractButtonHint(combined);
+    const selectorAttr = buttonHint ? `aaname='${escapeXml(buttonHint)}'` : "name='TODO_button_name'";
+    const isPlaceholder = !buttonHint;
+    if (isPlaceholder) {
+      gaps.push({
+        category: "selector",
+        activity: useModern ? "Click (Modern)" : "Click",
+        description: `Configure UI selector for clickable element in "${ctx.name}"`,
+        placeholder: `<webctrl tag='BUTTON' name='TODO' />`,
+        estimatedMinutes: 15,
+      });
+    }
     return {
       activityType: "ui:Click",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: { ...autopilotProps },
-      selectorHint: `${selectorBase}<webctrl tag='BUTTON' name='TODO_button_name' />`,
+      properties: { ...autopilotProps, ...resilienceProps },
+      selectorHint: `${selectorBase}<webctrl tag='BUTTON' ${selectorAttr} />`,
       errorHandling: "retry",
       variables,
       gaps,
@@ -896,7 +917,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     variables.push({ name: "str_ExtractedText", type: "String", defaultValue: '""' });
     gaps.push({
       category: "selector",
-      activity: isCrossPlatform ? "GetText (Modern)" : "GetText",
+      activity: useModern ? "GetText (Modern)" : "GetText",
       description: `Configure UI selector for text extraction in "${ctx.name}"`,
       placeholder: `<webctrl tag='SPAN' id='TODO' />`,
       estimatedMinutes: 15,
@@ -904,7 +925,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     return {
       activityType: "ui:GetText",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: { ...autopilotProps },
+      properties: { ...autopilotProps, ...resilienceProps },
       selectorHint: `${selectorBase}<webctrl tag='SPAN' id='TODO_element_id' />`,
       errorHandling: "retry",
       variables,
@@ -912,22 +933,52 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
     };
   }
 
-  gaps.push({
-    category: "selector",
-    activity: isCrossPlatform ? "Click (Modern)" : "ClickOnText",
-    description: `Configure UI selector for "${ctx.name}"`,
-    placeholder: `<webctrl tag='*' aaname='TODO' />`,
-    estimatedMinutes: 15,
-  });
+  const elementHint = extractButtonHint(combined) || extractFieldHint(combined);
+  const fallbackAttr = elementHint ? `aaname='${escapeXml(elementHint)}'` : "aaname='TODO_element'";
+  const isPlaceholder = !elementHint;
+  if (isPlaceholder) {
+    gaps.push({
+      category: "selector",
+      activity: useModern ? "Click (Modern)" : "ClickOnText",
+      description: `Configure UI selector for "${ctx.name}"`,
+      placeholder: `<webctrl tag='*' aaname='TODO' />`,
+      estimatedMinutes: 15,
+    });
+  }
   return {
     activityType: "ui:Click",
     activityPackage: "UiPath.UIAutomation.Activities",
-    properties: { ...autopilotProps },
-    selectorHint: `${selectorBase}<webctrl tag='*' aaname='TODO_element' />`,
+    properties: { ...autopilotProps, ...resilienceProps },
+    selectorHint: `${selectorBase}<webctrl tag='*' ${fallbackAttr} />`,
     errorHandling: "retry",
     variables,
     gaps,
   };
+}
+
+function extractButtonHint(text: string): string | null {
+  const patterns = [
+    /(?:clicks?|presses?|submits?|taps?)\s+(?:the\s+)?["']([A-Za-z0-9\s]+?)["']/i,
+    /(?:clicks?|presses?)\s+(?:the\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+button/i,
+    /button\s+(?:called|named|labeled)\s+["']?([A-Za-z0-9\s]+?)["']?(?:\s|$|\.)/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m && m[1] && m[1].length >= 2 && m[1].length <= 40) return m[1].trim();
+  }
+  return null;
+}
+
+function extractFieldHint(text: string): string | null {
+  const patterns = [
+    /(?:field|input|textbox)\s+(?:called|named|labeled)\s+["']?([A-Za-z0-9\s_-]+?)["']?(?:\s|$|\.)/i,
+    /(?:types?|enters?|fills?)\s+(?:.*?\s)?(?:in(?:to)?|for)\s+(?:the\s+)?["']?([A-Za-z0-9\s_-]{2,30}?)["']?\s+(?:field|input|textbox)/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m && m[1] && m[1].length >= 2 && m[1].length <= 40) return m[1].trim();
+  }
+  return null;
 }
 
 function classifyMLSkill(ctx: ActivityContext, combined: string, genCtx?: XamlGenerationContext): ReturnType<typeof classifyActivity> {

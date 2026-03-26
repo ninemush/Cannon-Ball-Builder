@@ -8,6 +8,7 @@ import { getActivityPrefixStrict } from "./xaml/xaml-compliance";
 import { buildTemplateBlock, formatTemplateBlockForPrompt, formatCompactTemplateBlockForPrompt, shouldUseCompactFormat } from "./catalog/xaml-template-builder";
 import { validateWorkflowSpec, type WorkflowSpec as TreeWorkflowSpec, type WorkflowNode, type PropertyValue } from "./workflow-spec-types";
 import { isValueIntent, type ValueIntent } from "./xaml/expression-builder";
+import { extractUiContext, formatUiContextForPrompt } from "./xaml/selector-quality-scorer";
 
 export interface EnrichedActivity {
   activityType: string;
@@ -266,7 +267,19 @@ Generate the enriched workflow specification. For each node, provide the specifi
       console.warn(`[AI XAML Enricher] Activity catalog not loaded — skipping template injection; LLM output may use incorrect XAML syntax`);
     }
 
-    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT;
+    let uiContextBlock = "";
+    try {
+      const uiCtx = extractUiContext(sddSummary);
+      const uiContextStr = formatUiContextForPrompt(uiCtx);
+      if (uiContextStr) {
+        uiContextBlock = "\n\n" + uiContextStr;
+        console.log(`[AI XAML Enricher] Injected UI context: ${uiCtx.applicationNames.length} apps, ${uiCtx.fieldLabels.length} fields, ${uiCtx.buttonTexts.length} buttons, ${uiCtx.urlPatterns.length} URLs`);
+      }
+    } catch (err: any) {
+      console.warn(`[AI XAML Enricher] UI context extraction failed: ${err.message}`);
+    }
+
+    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + uiContextBlock;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -566,7 +579,19 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
       }
     }
 
-    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT;
+    let uiContextBlock2 = "";
+    try {
+      const uiCtx2 = extractUiContext(sddSummary);
+      const uiContextStr2 = formatUiContextForPrompt(uiCtx2);
+      if (uiContextStr2) {
+        uiContextBlock2 = "\n\n" + uiContextStr2;
+        console.log(`[AI XAML Enricher Tree] Injected UI context: ${uiCtx2.applicationNames.length} apps, ${uiCtx2.fieldLabels.length} fields, ${uiCtx2.buttonTexts.length} buttons`);
+      }
+    } catch (err: any) {
+      console.warn(`[AI XAML Enricher Tree] UI context extraction failed: ${err.message}`);
+    }
+
+    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + uiContextBlock2;
 
     let lastValidationErrors: string[] = [];
     let lastParseError: string | null = null;
