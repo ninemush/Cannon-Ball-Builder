@@ -139,87 +139,31 @@ function fixDecisionHandlesPostLayout(
     const tgt1 = nodePositions[edge1.target];
     if (!tgt0 || !tgt1) continue;
 
-    const dx0 = Math.abs(tgt0.x - srcPos.x);
-    const dx1 = Math.abs(tgt1.x - srcPos.x);
-    const dy0 = tgt0.y - srcPos.y;
-    const dy1 = tgt1.y - srcPos.y;
-    const directlyBelow0 = dx0 < 50 && dy0 > 0;
-    const directlyBelow1 = dx1 < 50 && dy1 > 0;
-
     let handle0: string;
     let handle1: string;
 
-    if (directlyBelow0 && !directlyBelow1) {
-      handle0 = "bottom";
-      handle1 = tgt1.x > srcPos.x ? "right" : "left";
-    } else if (directlyBelow1 && !directlyBelow0) {
-      handle1 = "bottom";
-      handle0 = tgt0.x > srcPos.x ? "right" : "left";
+    const sem0 = getLabelSemanticSide(edge0.label);
+    const sem1 = getLabelSemanticSide(edge1.label);
+
+    if (sem0 && sem1 && sem0 !== sem1) {
+      handle0 = sem0;
+      handle1 = sem1;
+    } else if (sem0 && !sem1) {
+      handle0 = sem0;
+      handle1 = sem0 === "left" ? "right" : "left";
+    } else if (!sem0 && sem1) {
+      handle1 = sem1;
+      handle0 = sem1 === "left" ? "right" : "left";
     } else {
-      const bothBelow = tgt0.y > srcPos.y && tgt1.y > srcPos.y;
-      const dx = Math.abs(tgt0.x - tgt1.x);
-      const isXAmbiguous = dx < 5;
-
-      if (bothBelow && isXAmbiguous) {
-        const sem0 = getLabelSemanticSide(edge0.label);
-        const sem1 = getLabelSemanticSide(edge1.label);
-        handle0 = sem0 === "left" ? "bottom-left" : "bottom-right";
-        handle1 = sem1 === "right" ? "bottom-right" : "bottom-left";
-        if (handle0 === handle1) {
-          handle0 = "bottom-left";
-          handle1 = "bottom-right";
-        }
-      } else if (bothBelow) {
-        if (tgt0.x < tgt1.x) {
-          handle0 = "bottom-left";
-          handle1 = "bottom-right";
-        } else {
-          handle0 = "bottom-right";
-          handle1 = "bottom-left";
-        }
-      } else if (isXAmbiguous) {
-        const sem0 = getLabelSemanticSide(edge0.label);
-        const sem1 = getLabelSemanticSide(edge1.label);
-        handle0 = sem0 || "left";
-        handle1 = sem1 || "right";
-        if (handle0 === handle1) {
-          handle0 = "left";
-          handle1 = "right";
-        }
+      if (tgt0.x < tgt1.x) {
+        handle0 = "left";
+        handle1 = "right";
+      } else if (tgt0.x > tgt1.x) {
+        handle0 = "right";
+        handle1 = "left";
       } else {
-        if (tgt0.x < tgt1.x) {
-          handle0 = "left";
-          handle1 = "right";
-        } else {
-          handle0 = "right";
-          handle1 = "left";
-        }
-      }
-
-      const isLeftRight0 = handle0 === "left" || handle0 === "right";
-      const isLeftRight1 = handle1 === "left" || handle1 === "right";
-      if (isLeftRight0 && isLeftRight1) {
-        const wouldCross =
-          (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
-          (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
-        if (wouldCross) {
-          const tmp = handle0;
-          handle0 = handle1;
-          handle1 = tmp;
-        }
-      }
-
-      const isBottom0 = handle0 === "bottom-left" || handle0 === "bottom-right";
-      const isBottom1 = handle1 === "bottom-left" || handle1 === "bottom-right";
-      if (isBottom0 && isBottom1) {
-        const wouldCross =
-          (handle0 === "bottom-left" && handle1 === "bottom-right" && tgt0.x > tgt1.x) ||
-          (handle0 === "bottom-right" && handle1 === "bottom-left" && tgt0.x < tgt1.x);
-        if (wouldCross) {
-          const tmp = handle0;
-          handle0 = handle1;
-          handle1 = tmp;
-        }
+        handle0 = "left";
+        handle1 = "right";
       }
     }
 
@@ -267,7 +211,44 @@ function computeDagreLayoutNodes(nodes: MapNode[], edges: MapEdge[]): { layoutNo
   return { layoutNodes, dagreGraph: g };
 }
 
-function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandle?: string): { x: number; y: number }[] {
+function segmentIntersectsBox(
+  x1: number, y1: number, x2: number, y2: number,
+  bx: number, by: number, bw: number, bh: number,
+  margin: number = 10
+): boolean {
+  const left = bx - margin;
+  const right = bx + bw + margin;
+  const top = by - margin;
+  const bottom = by + bh + margin;
+
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+
+  if (maxX < left || minX > right || maxY < top || minY > bottom) return false;
+
+  if (x1 === x2) {
+    return x1 >= left && x1 <= right && !(minY >= bottom || maxY <= top);
+  }
+  if (y1 === y2) {
+    return y1 >= top && y1 <= bottom && !(minX >= right || maxX <= left);
+  }
+
+  const slope = (y2 - y1) / (x2 - x1);
+  const yAtLeft = y1 + slope * (left - x1);
+  const yAtRight = y1 + slope * (right - x1);
+  if ((yAtLeft >= top && yAtLeft <= bottom) || (yAtRight >= top && yAtRight <= bottom)) return true;
+
+  return false;
+}
+
+function computeEdgePoints(
+  srcNode: LayoutNode,
+  tgtNode: LayoutNode,
+  sourceHandle?: string,
+  allNodes?: LayoutNode[]
+): { x: number; y: number }[] {
   const cx = srcNode.x + srcNode.width / 2;
   const cy = srcNode.y + srcNode.height / 2;
   const tx = tgtNode.x + tgtNode.width / 2;
@@ -277,10 +258,30 @@ function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandl
 
   const isBackEdge = ty < cy;
 
+  const obstacleNodes = (allNodes || []).filter(n => n.id !== srcNode.id && n.id !== tgtNode.id);
+
+  function adjustClearanceForObstacles(baseX: number, baseY: number, endY: number, direction: "left" | "right"): number {
+    let adjustedX = baseX;
+    for (const obs of obstacleNodes) {
+      if (obs.y + obs.height < Math.min(baseY, endY) - 10 || obs.y > Math.max(baseY, endY) + 10) continue;
+      if (direction === "left") {
+        if (obs.x < adjustedX && obs.x + obs.width + 20 > adjustedX) {
+          adjustedX = obs.x - 20;
+        }
+      } else {
+        if (obs.x + obs.width > adjustedX && obs.x - 20 < adjustedX) {
+          adjustedX = obs.x + obs.width + 20;
+        }
+      }
+    }
+    return adjustedX;
+  }
+
   if (sourceHandle === "left") {
     const sx = cx - diamondR;
     const sy = cy;
-    const exitX = sx - clearance;
+    let exitX = sx - clearance;
+    exitX = adjustClearanceForObstacles(exitX, sy, ty, "left");
     if (isBackEdge) {
       const routeX = Math.min(exitX, tgtNode.x - clearance);
       return [{ x: sx, y: sy }, { x: routeX, y: sy }, { x: routeX, y: ty }, { x: tx, y: ty }];
@@ -294,7 +295,8 @@ function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandl
   if (sourceHandle === "right") {
     const sx = cx + diamondR;
     const sy = cy;
-    const exitX = sx + clearance;
+    let exitX = sx + clearance;
+    exitX = adjustClearanceForObstacles(exitX, sy, ty, "right");
     if (isBackEdge) {
       const routeX = Math.max(exitX, tgtNode.x + tgtNode.width + clearance);
       return [{ x: sx, y: sy }, { x: routeX, y: sy }, { x: routeX, y: ty }, { x: tx, y: ty }];
@@ -332,10 +334,29 @@ function computeEdgePoints(srcNode: LayoutNode, tgtNode: LayoutNode, sourceHandl
     return [{ x: sx, y: sy }, { x: sx, y: sy + clearance / 2 }, { x: routeX, y: sy + clearance / 2 }, { x: routeX, y: ty }, { x: tx, y: ty }];
   }
   if (Math.abs(sx - tx) < 5) {
-    return [{ x: sx, y: sy }, { x: tx, y: ty }];
+    const directPath = [{ x: sx, y: sy }, { x: tx, y: ty }];
+    const hasObstacle = obstacleNodes.some(obs =>
+      segmentIntersectsBox(sx, sy, tx, ty, obs.x, obs.y, obs.width, obs.height)
+    );
+    if (!hasObstacle) return directPath;
+    const detourX = sx + clearance;
+    return [{ x: sx, y: sy }, { x: detourX, y: sy }, { x: detourX, y: ty - 10 }, { x: tx, y: ty }];
   }
   const midY = (sy + ty) / 2;
-  return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }];
+  const path = [{ x: sx, y: sy }, { x: sx, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }];
+  const hasObstacleOnPath = obstacleNodes.some(obs => {
+    for (let i = 0; i < path.length - 1; i++) {
+      if (segmentIntersectsBox(path[i].x, path[i].y, path[i + 1].x, path[i + 1].y, obs.x, obs.y, obs.width, obs.height)) {
+        return true;
+      }
+    }
+    return false;
+  });
+  if (hasObstacleOnPath) {
+    const detourX = tx > sx ? Math.max(tx + clearance, sx + clearance) : Math.min(tx - clearance, sx - clearance);
+    return [{ x: sx, y: sy }, { x: detourX, y: sy }, { x: detourX, y: ty - 10 }, { x: tx, y: ty }];
+  }
+  return path;
 }
 
 function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
@@ -406,7 +427,7 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
     } else {
       const srcNode = nodeById[String(edge.sourceNodeId)];
       const tgtNode = nodeById[String(edge.targetNodeId)];
-      points = (srcNode && tgtNode) ? computeEdgePoints(srcNode, tgtNode, sourceHandle) : [];
+      points = (srcNode && tgtNode) ? computeEdgePoints(srcNode, tgtNode, sourceHandle, layoutNodes) : [];
     }
 
     return {
@@ -426,7 +447,7 @@ function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: Layou
       const srcNode = nodeById[le.source];
       const tgtNode = nodeById[le.target];
       if (srcNode && tgtNode) {
-        le.points = computeEdgePoints(srcNode, tgtNode, le.sourceHandle);
+        le.points = computeEdgePoints(srcNode, tgtNode, le.sourceHandle, layoutNodes);
       }
     }
     return le;

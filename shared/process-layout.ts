@@ -1,3 +1,5 @@
+export const LAYOUT_VERSION = 2;
+
 export interface LayoutInput {
   id: string;
   nodeType: string;
@@ -34,6 +36,186 @@ function isYesLabel(label: string | null | undefined): boolean {
 
 function isNoLabel(label: string | null | undefined): boolean {
   return /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test((label || "").trim());
+}
+
+interface PlacedNode {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function boxesOverlap(a: PlacedNode, b: PlacedNode, gap: number): boolean {
+  return !(
+    a.x + a.width + gap <= b.x ||
+    b.x + b.width + gap <= a.x ||
+    a.y + a.height + gap <= b.y ||
+    b.y + b.height + gap <= a.y
+  );
+}
+
+function resolveCollisions(
+  positions: Map<string, LayoutPosition>,
+  nodeMap: Map<string, LayoutInput>,
+  getDims: (nodeType: string) => NodeDims,
+  downstreamMap: Map<string, Set<string>>,
+  minGap: number = 40
+): void {
+  const placed: PlacedNode[] = [];
+  positions.forEach((pos, id) => {
+    const node = nodeMap.get(id);
+    if (!node) return;
+    const dims = getDims(node.nodeType);
+    placed.push({ id, x: pos.x, y: pos.y, width: dims.width, height: dims.height });
+  });
+
+  let changed = true;
+  let iterations = 0;
+  const maxIterations = 50;
+
+  while (changed && iterations < maxIterations) {
+    changed = false;
+    iterations++;
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) {
+        if (boxesOverlap(placed[i], placed[j], minGap)) {
+          changed = true;
+          const aCx = placed[i].x + placed[i].width / 2;
+          const bCx = placed[j].x + placed[j].width / 2;
+          const aCy = placed[i].y + placed[i].height / 2;
+          const bCy = placed[j].y + placed[j].height / 2;
+
+          const overlapX = (placed[i].width / 2 + placed[j].width / 2 + minGap) - Math.abs(aCx - bCx);
+          const overlapY = (placed[i].height / 2 + placed[j].height / 2 + minGap) - Math.abs(aCy - bCy);
+
+          if (overlapX < overlapY) {
+            const shift = Math.ceil(overlapX / 2) + 5;
+            const aLeft = aCx <= bCx;
+            const aDx = aLeft ? -shift : shift;
+            const bDx = aLeft ? shift : -shift;
+
+            placed[i].x += aDx;
+            placed[j].x += bDx;
+
+            const aDownstream = downstreamMap.get(placed[i].id);
+            if (aDownstream) {
+              for (const p of placed) {
+                if (aDownstream.has(p.id)) p.x += aDx;
+              }
+            }
+            const bDownstream = downstreamMap.get(placed[j].id);
+            if (bDownstream) {
+              for (const p of placed) {
+                if (bDownstream.has(p.id)) p.x += bDx;
+              }
+            }
+          } else {
+            const shift = Math.ceil(overlapY / 2) + 5;
+            const aUp = aCy <= bCy;
+            const aDy = aUp ? -shift : shift;
+            const bDy = aUp ? shift : -shift;
+
+            placed[i].y += aDy;
+            placed[j].y += bDy;
+
+            const aDownstream = downstreamMap.get(placed[i].id);
+            if (aDownstream) {
+              for (const p of placed) {
+                if (aDownstream.has(p.id)) p.y += aDy;
+              }
+            }
+            const bDownstream = downstreamMap.get(placed[j].id);
+            if (bDownstream) {
+              for (const p of placed) {
+                if (bDownstream.has(p.id)) p.y += bDy;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  for (const p of placed) {
+    positions.set(p.id, { x: p.x, y: p.y });
+  }
+}
+
+function findConvergenceNode(
+  decisionId: string,
+  outEdges: Map<string, LayoutEdgeInput[]>,
+  nodeMap: Map<string, LayoutInput>
+): string | null {
+  const outs = outEdges.get(decisionId) || [];
+  if (outs.length < 2) return null;
+
+  const branchDescendants: Set<string>[] = [];
+  for (const edge of outs) {
+    const descendants = new Set<string>();
+    const queue = [edge.target];
+    const visited = new Set<string>();
+    while (queue.length > 0) {
+      const nId = queue.shift()!;
+      if (visited.has(nId) || nId === decisionId) continue;
+      visited.add(nId);
+      descendants.add(nId);
+      const nOuts = outEdges.get(nId) || [];
+      for (const ne of nOuts) {
+        if (!visited.has(ne.target)) queue.push(ne.target);
+      }
+    }
+    branchDescendants.push(descendants);
+  }
+
+  if (branchDescendants.length < 2) return null;
+
+  let common: Set<string> = new Set(branchDescendants[0]);
+  for (let i = 1; i < branchDescendants.length; i++) {
+    const next = new Set<string>();
+    for (const id of common) {
+      if (branchDescendants[i].has(id)) next.add(id);
+    }
+    common = next;
+  }
+
+  if (common.size === 0) return null;
+
+  let bestNode: string | null = null;
+  let bestOrder = Infinity;
+  for (const id of common) {
+    const node = nodeMap.get(id);
+    if (node && node.orderIndex < bestOrder) {
+      bestOrder = node.orderIndex;
+      bestNode = id;
+    }
+  }
+
+  return bestNode;
+}
+
+function buildDownstreamMap(
+  outEdges: Map<string, LayoutEdgeInput[]>,
+  nodeIds: string[]
+): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const nodeId of nodeIds) {
+    const descendants = new Set<string>();
+    const queue = [...(outEdges.get(nodeId) || []).map(e => e.target)];
+    const visited = new Set<string>();
+    while (queue.length > 0) {
+      const nId = queue.shift()!;
+      if (visited.has(nId) || nId === nodeId) continue;
+      visited.add(nId);
+      descendants.add(nId);
+      const nOuts = outEdges.get(nId) || [];
+      for (const ne of nOuts) {
+        if (!visited.has(ne.target)) queue.push(ne.target);
+      }
+    }
+    if (descendants.size > 0) result.set(nodeId, descendants);
+  }
+  return result;
 }
 
 export function computeProcessAwareLayout(
@@ -80,19 +262,11 @@ export function computeProcessAwareLayout(
     const isDecision = node && (node.nodeType === "decision" || node.nodeType === "agent-decision");
 
     if (isDecision && outs.length >= 2) {
-      const yesEdge = outs.find((e) => isYesLabel(e.label));
-      const noEdge = outs.find((e) => isNoLabel(e.label));
-      if (yesEdge) {
-        current = yesEdge.target;
-      } else if (noEdge) {
-        const nonNoEdge = outs.find((e) => e !== noEdge);
-        current = nonNoEdge ? nonNoEdge.target : outs[0].target;
+      const convergence = findConvergenceNode(current, outEdges, nodeMap);
+      if (convergence) {
+        current = convergence;
       } else {
-        const targetsByOrder = outs
-          .map((e) => ({ edge: e, node: nodeMap.get(e.target) }))
-          .filter((x) => x.node)
-          .sort((a, b) => (a.node!.orderIndex - b.node!.orderIndex));
-        current = targetsByOrder.length > 0 ? targetsByOrder[0].edge.target : outs[0].target;
+        break;
       }
     } else {
       if (outs.length === 1) {
@@ -147,9 +321,10 @@ export function computeProcessAwareLayout(
   interface BranchWork {
     nodeId: string;
     parentId: string;
-    side: "right" | "left";
+    inheritedSide: "right" | "left";
     branchY: number;
     xOffset: number;
+    depth: number;
   }
   const branchQueue: BranchWork[] = [];
 
@@ -239,7 +414,7 @@ export function computeProcessAwareLayout(
       if (positions.has(edge.target)) continue;
 
       const isNo = isNoLabel(edge.label);
-      const side: "right" | "left" = isNo ? "right" : (rightBranchCount <= leftBranchCount ? "right" : "left");
+      const side: "right" | "left" = isNo ? "right" : "left";
       if (side === "right") rightBranchCount++;
       else leftBranchCount++;
 
@@ -250,9 +425,10 @@ export function computeProcessAwareLayout(
       branchQueue.push({
         nodeId: edge.target,
         parentId: trunkNodeId,
-        side,
+        inheritedSide: side,
         branchY: branchStartY,
         xOffset: xOff,
+        depth: 1,
       });
     }
 
@@ -285,27 +461,27 @@ export function computeProcessAwareLayout(
 
       const isDecision = node.nodeType === "decision" || node.nodeType === "agent-decision";
       if (isDecision && outs.length >= 2) {
+        let subBranchIdx = 0;
         for (const edge of outs) {
           if (!positions.has(edge.target) && !trunkSet.has(edge.target)) {
-            const isNo = isNoLabel(edge.label);
-            const subSide = isNo ? "right" as const : "left" as const;
-            const subOffset = work.xOffset + (subSide === "right" ? branchXOffset * 0.6 : -branchXOffset * 0.6);
+            subBranchIdx++;
+            const depthMultiplier = 0.6 + work.depth * 0.15;
+            const subOffset = work.xOffset + (
+              work.inheritedSide === "left"
+                ? -branchXOffset * depthMultiplier * subBranchIdx
+                : branchXOffset * depthMultiplier * subBranchIdx
+            );
             branchQueue.push({
               nodeId: edge.target,
               parentId: currentId,
-              side: subSide,
+              inheritedSide: work.inheritedSide,
               branchY,
               xOffset: subOffset,
+              depth: work.depth + 1,
             });
           }
         }
-
-        const yesEdge = outs.find((e) => isYesLabel(e.label));
-        if (yesEdge && !positions.has(yesEdge.target) && !trunkSet.has(yesEdge.target)) {
-          currentId = yesEdge.target;
-        } else {
-          break;
-        }
+        break;
       } else {
         const nextEdge = outs.find((e) => !positions.has(e.target) && !trunkSet.has(e.target));
         if (nextEdge) {
@@ -317,13 +493,23 @@ export function computeProcessAwareLayout(
     }
   }
 
+  let orphanX = centerX + branchXOffset * 2;
   for (const node of nodes) {
     if (!positions.has(node.id)) {
       const dims = getDims(node.nodeType);
-      positions.set(node.id, { x: centerX - dims.width / 2 + branchXOffset * 2, y });
-      y += dims.height + verticalGap;
+      const hasAnyEdge = edges.some(e => e.source === node.id || e.target === node.id);
+      if (hasAnyEdge) {
+        positions.set(node.id, { x: centerX - dims.width / 2 + branchXOffset * 2, y });
+        y += dims.height + verticalGap;
+      } else {
+        positions.set(node.id, { x: orphanX, y: 60 });
+        orphanX += dims.width + 60;
+      }
     }
   }
+
+  const downstreamMap = buildDownstreamMap(outEdges, nodes.map(n => n.id));
+  resolveCollisions(positions, nodeMap, getDims, downstreamMap, 40);
 
   let minX = Infinity, minY = Infinity;
   positions.forEach((pos) => {

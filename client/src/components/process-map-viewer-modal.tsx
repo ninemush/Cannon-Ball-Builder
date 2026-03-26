@@ -675,14 +675,20 @@ export function ProcessMapViewerModal({ open, onClose, ideaId, viewType }: Proce
       const tgtPos = nodePositions[edge.target];
       if (!srcPos || !tgtPos) return edge;
 
-      const dxFromSrc = Math.abs(tgtPos.x - srcPos.x);
-      const dyFromSrc = tgtPos.y - srcPos.y;
-      const directlyBelow = dxFromSrc < 30 && dyFromSrc > 0;
+      const lbl = (edge.data?.label || "").trim();
+      const isNoEdge = /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl);
+      const isYesEdge = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl);
 
-      if (directlyBelow) {
-        return { ...edge, sourceHandle: "bottom", targetHandle: "top" };
+      let sideHandle: string;
+      if (isNoEdge) {
+        sideHandle = "right";
+      } else if (isYesEdge) {
+        sideHandle = "left";
+      } else {
+        sideHandle = tgtPos.x > srcPos.x ? "right" : "left";
       }
-      const sideHandle = tgtPos.x > srcPos.x ? "right" : "left";
+
+      const dyFromSrc = tgtPos.y - srcPos.y;
       const targetHandle = dyFromSrc > Math.abs(tgtPos.x - srcPos.x) * 0.5 ? "top" : (sideHandle === "left" ? "right" : "left");
       return { ...edge, sourceHandle: sideHandle, targetHandle };
     });

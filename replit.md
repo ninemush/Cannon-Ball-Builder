@@ -1,61 +1,59 @@
 # CannonBall
 
 ## Overview
-CannonBall is a full-stack web application for comprehensive automation pipeline management, guiding users from idea capture to the deployment of AI-generated automation packages. It aims to streamline development and deployment through AI-first interactions, a role-based shell, Kanban boards, a three-panel workspace with live AI chat, and a visual process map engine. The platform specializes in generating deployable UiPath automation solutions, enhancing efficiency in automation development across various industries.
+CannonBall is a full-stack web application designed to manage the entire automation pipeline, from ideation to deployment of AI-generated automation packages. It aims to accelerate automation development through AI-driven interactions, a role-based shell, Kanban boards, a three-panel workspace with live AI chat, and a visual process map engine. The platform specifically focuses on generating deployable UiPath automation solutions to enhance efficiency in various industries.
 
 ## User Preferences
 The agent should prioritize an AI-first interaction style, proactively engaging users and providing guidance throughout the automation pipeline. It should facilitate an iterative development process, allowing for dynamic adjustments such as moving ideas to earlier stages if requirements change. The agent should ask for confirmation or approval before making significant changes, especially regarding document generation, process map approvals, and deployment actions. Communication should be clear and concise, with real-time feedback on progress, such as stage transitions and deployment statuses. The agent must adhere to structured outputs for documents and deployment artifacts. Reduce redundant code: Always consolidate duplicated logic into single canonical functions. When implementing shared behavior, create one source of truth and have all callers use it. Update all references across the app when consolidating — do not leave orphaned implementations that could cause discrepancies.
 
 ## System Architecture
-The application uses a modern web stack for scalability and an intuitive user experience.
+The application is built on a modern web stack to ensure scalability and a user-friendly experience.
 
 **Frontend**:
-- Built with React (Vite), Tailwind CSS, and shadcn/ui.
-- Utilizes React Flow for interactive process mapping and wouter for client-side routing.
-- Features a responsive UI, dark mode, and a distinct color palette.
+- Uses React (Vite) with Tailwind CSS and shadcn/ui for component styling.
+- Integrates React Flow for interactive process mapping and wouter for client-side routing.
+- Features a responsive design, dark mode, and a distinctive color palette.
 
 **Backend**:
-- Express.js server handles API requests and session-based authentication.
+- Powered by Express.js, handling API requests and session-based authentication.
 
 **Database**:
-- PostgreSQL integrated with Drizzle ORM.
+- PostgreSQL is used for data storage, managed with Drizzle ORM.
 
 **AI Integration**:
-- An abstraction layer supports provider-agnostic AI calls from Anthropic Claude, OpenAI, and Google Gemini via Replit AI Integrations, with configurable model selection and normalized stop reasons for consistent auto-continuation logic.
+- An abstraction layer provides provider-agnostic AI capabilities, supporting Anthropic Claude, OpenAI, and Google Gemini through Replit AI Integrations, with configurable model selection and normalized stop reasons for consistent auto-continuation logic.
 
 **Authentication**:
-- Session-based authentication supports demo users and role-switching.
+- Session-based authentication is implemented, supporting demo users and role-switching.
 
 **Key Features and Design Choices**:
-- **UI/UX**: Responsive sidebar, top navigation, and a resizable three-panel workspace displaying stage progress, a live React Flow process map, and the AI chat.
-- **UiPath Agent Awareness**: Supports the full pipeline for automation type evaluation (RPA, Agent, Hybrid), influencing process maps, PDDs, SDDs, XAML generation, and deployment.
-- **Process Map Engine**: Supports custom node types with DAG-based layout, confidence scoring, inline editing, and an approval workflow for AS-IS and TO-BE maps.
+- **UI/UX**: Features a responsive sidebar, top navigation, and a resizable three-panel workspace that displays stage progress, a live React Flow process map, and the AI chat interface.
+- **UiPath Agent Awareness**: Supports the full automation pipeline, evaluating automation types (RPA, Agent, Hybrid) to inform process maps, PDDs, SDDs, XAML generation, and deployment.
+- **Process Map Engine**: Enables custom node types, DAG-based layouts, confidence scoring, inline editing, and an approval workflow for AS-IS and TO-BE maps.
 - **Automated Stage Transitions**: An engine automatically transitions ideas across 10 pipeline stages based on predefined criteria, with audit logging and frontend auto-chaining for document generation and approvals.
-- **Document Generation**: Automates version-controlled Process Design Documents (PDD) and Solution Design Documents (SDD) post-approvals, including visual process map images, using LLM-based intent classification.
-- **AI-Enriched UiPath Package Generation & Deployment**: Generates near-production-ready UiPath packages with AI enrichment, adhering to UiPath standards, and supporting conversational deployment to UiPath Orchestrator with live status streaming.
-- **Pre-Package Quality Gate**: A mandatory validation gate (`server/uipath-quality-gate.ts`) runs before NuGet package finalization and Orchestrator upload.
-- **Centralized UiPath Pipeline**: All UiPath generation entry points delegate to a single canonical orchestration function (`generateUiPathPackage()`) in `server/uipath-pipeline.ts`, providing consistent package generation and pipeline-level caching.
-- **Generation Modes**: Supports `baseline_openable` (skips AI enrichment, forces flat scaffold, demotes quality gate errors) and `full_implementation` (default: AI enrichment, REFramework, blocking quality gate enforcement).
-- **Unified Metadata Freshness Architecture**: Three snapshot files under `catalog/` provide the single source of truth for generation metadata, service endpoints, and activity catalogs. A centralized `MetadataService` (`server/catalog/metadata-service.ts`) loads and exposes this data, serving as the single authoritative source for all UiPath endpoint URLs, scopes, confidence levels, and reachability status across 17 service types. Three distinct models: (1) OIDC scope/auth truth via live discovery from UiPath's OIDC endpoint with 4-tier resolution (live→snapshot→baseline→minimal fallback), (2) curated endpoint/API truth in `catalog/service-endpoints.json`, (3) capability taxonomy in `catalog/capability-taxonomy.json` classifying 25+ services/products with API support levels, probe strategies, and parent references. OIDC scopes are persisted to `catalog/oidc-scopes-snapshot.json` and refreshed on scheduler. Endpoint deprecation/alternate handling with sticky failover.
-- **Activity Catalog System**: A versioned activity catalog (`catalog/activity-catalog.json`, v2.0.0) serves as the single source of truth for 42 packages and 228 activities with properties, packages, and enum constraints. An activity definitions registry (`server/catalog/activity-definitions.ts`) provides structured schemas for 31 packages (152 activities) covering PDF, Word, GSuite, Office 365, Testing, Forms, Cryptography, WebAPI, ComplexScenarios (DataTable ops), AWS (S3/Textract/Comprehend/Rekognition), Azure (Blob/FormRecognizer), Google Cloud (Storage/Translate/NLP/Vision), Salesforce, ServiceNow, Slack, Jira, Teams, FTP, Presentations, Credentials, Document Understanding, GenAI, Integration Service, Communications Mining, WorkflowEvents, and Box. A catalog generator (`server/catalog/catalog-generator.ts`) merges registry definitions with existing catalog entries and metadata versions, auto-triggered on FeedCheck version upgrades.
-- **Template-Driven XAML Generation**: The template builder (`server/catalog/xaml-template-builder.ts`) provides pre-defined XAML templates with typed placeholders, structured for LLM-based generation.
-- **Hierarchical XAML Generation Architecture**: A three-pass tree-based pipeline (`server/workflow-spec-types.ts`, `server/workflow-tree-assembler.ts`) replaces flat activity list generation, assembling correctly-nested XAML.
-- **Regression Test Suite**: Server-side vitest tests cover 34+ regression scenarios for stub validity, activity policy, XAML validation, quality gate, dependency management, and hierarchical tree assembly.
-- **Automation Pattern Classification**: Classifies automation (simple-linear, API/data-driven, UI, transactional/queue-based, hybrid) to determine appropriate REFramework usage and scaffold generation.
+- **Document Generation**: Automates the creation of version-controlled Process Design Documents (PDD) and Solution Design Documents (SDD) post-approvals, including visual process map images, using LLM-based intent classification.
+- **AI-Enriched UiPath Package Generation & Deployment**: Generates near-production-ready UiPath packages with AI enrichment, adhering to UiPath standards, and supports conversational deployment to UiPath Orchestrator with live status streaming.
+- **Pre-Package Quality Gate**: A mandatory validation gate runs before NuGet package finalization and Orchestrator upload.
+- **Centralized UiPath Pipeline**: All UiPath generation entry points delegate to a single canonical orchestration function (`generateUiPathPackage()`) for consistent package generation and pipeline-level caching.
+- **Generation Modes**: Supports `baseline_openable` (skips AI enrichment) and `full_implementation` (default: AI enrichment, REFramework).
+- **Unified Metadata Freshness Architecture**: Three snapshot files under `catalog/` provide the single source of truth for generation metadata, service endpoints, and activity catalogs. A centralized `MetadataService` (`server/catalog/metadata-service.ts`) loads and exposes this data.
+- **Activity Catalog System**: A versioned activity catalog (`catalog/activity-catalog.json`) serves as the single source of truth for packages and activities, with properties, packages, and enum constraints. An activity definitions registry (`server/catalog/activity-definitions.ts`) provides structured schemas.
+- **Template-Driven XAML Generation**: The template builder (`server/catalog/xaml-template-builder.ts`) provides pre-defined XAML templates with typed placeholders for LLM-based generation.
+- **Hierarchical XAML Generation Architecture**: A three-pass tree-based pipeline (`server/workflow-spec-types.ts`, `server/workflow-tree-assembler.ts`) assembles correctly-nested XAML.
+- **Regression Test Suite**: Server-side vitest tests cover 34+ regression scenarios.
+- **Automation Pattern Classification**: Classifies automation patterns to determine appropriate REFramework usage and scaffold generation.
 - **Demand-Driven Dependencies**: Dynamically determines and includes necessary UiPath package dependencies based on emitted activities.
-- **VB.NET Expression Linter**: Deterministic linter (`server/xaml/vbnet-expression-linter.ts`) scans all bracketed VB.NET expressions in generated XAML, detecting C#→VB.NET syntax leaks (null→Nothing, !=→<>, &&→AndAlso, ||→OrElse, lambdas, string interpolation), unbalanced parentheses/quotes, and undeclared variables. Auto-corrects fixable issues (warnings) and blocks on unfixable ones (EXPRESSION_SYNTAX_UNFIXABLE). String-literal-safe replacements prevent false positives inside quoted strings. Integrated into the quality gate pipeline.
-- **Type Compatibility Validator**: (`server/xaml/type-compatibility-validator.ts`) Cross-references variable types against catalog property clrTypes after XAML generation. Auto-repairs via conversion wrapping (CInt, CStr, CDbl, CBool, etc.) for InArgument mismatches, and variable type changes for OutArgument mismatches. Unrepairable mismatches (e.g., String→DataTable) produce warnings with remediation guidance. Integrated into quality gate as TYPE_MISMATCH (non-blocking warning).
-- **Selector Quality Scorer**: (`server/xaml/selector-quality-scorer.ts`) Extracts UI context from SDD content (applications, screens, field labels, buttons, URLs) and scores generated selectors on a 14-point scale. Attributes scored: automationid=5, name/id=4, aaname=3, tag=2, css_selector=3. Penalties: idx=-2, wildcard tag=-1. Bonuses: multi-attribute fallback=+2, specificity=+2. Detects placeholder selectors (TODO/CHANGEME/example.com). Injects resilience defaults (Target.WaitForReady=INTERACTIVE, Target.Timeout=30000) into UI activities. Produces SELECTOR_PLACEHOLDER and SELECTOR_LOW_QUALITY warnings integrated into quality gate and DHG. AI enrichment prompts include extracted UI context (Section 6) for context-aware selector generation.
-- **Workflow Analyzer Compliance Engine**: Static analysis for 11+ Workflow Analyzer rules with auto-correction, reporting, and dynamic governance policy integration.
-- **UiPath Naming Convention Enforcement**: Standardized naming conventions for variables and arguments enforced during XAML generation.
-- **Argument Validation**: Automated argument validation at workflow entry points.
-- **Three-Tier Developer Handoff Guide (DHG)**: AI-first structured guide (Tier 1: AI Completed, Tier 2: Smart Defaults, Tier 3: Human Required) including readiness score, compliance report, and artifact configuration. Enhanced with production deployment sections: Environment Setup (Windows/Portable target, robot type, browser extensions, NuGet dependencies, process map target applications), Credential & Asset Inventory (scans GetCredential/GetAsset/SetCredential/SetAsset with hardcoded-name detection), SDD × XAML Artifact Reconciliation (three-way cross-referencing: aligned/SDD-only/XAML-only for assets, credentials, and queues — prevents silent runtime AssetNotFoundException), Queue Management (transactional pattern detection, queue provisioning list with SDD-specified maxRetries/uniqueReference/SLA), Exception Handling Coverage (TryCatch coverage map for high-risk activities), Trigger Configuration (SDD-derived cron expressions and queue bindings from orchestrator_artifacts override generic defaults), Business Process Overview (process steps with role/system/pain-point annotations from process map topology), Pre-Deployment Checklist (generated from detected requirements + governance items: UAT sign-off, peer code review, quality gate warning resolution, BPO validation, CoE approval, production readiness assessment), Structured Upstream Context (automation type rationale, feasibility complexity/effort estimate, process map systems/roles/pain points — replaces 500-char truncated PDD/SDD with 2000-char structured extraction), and Deployment Readiness Scoring (5-section scoring: Credentials & Assets, Exception Handling, Queue Management, Build Quality, Environment Setup — overall rating: Ready/Mostly Ready/Needs Work/Not Ready). Analyzers in `server/xaml/dhg-analyzers.ts`, wired into pipeline via `runDhgAnalysis()`. 93 tests.
+- **VB.NET Expression Linter**: Deterministic linter (`server/xaml/vbnet-expression-linter.ts`) scans VB.NET expressions in generated XAML for syntax errors and provides auto-correction for fixable issues.
+- **Type Compatibility Validator**: (`server/xaml/type-compatibility-validator.ts`) Cross-references variable types against catalog property clrTypes after XAML generation, with auto-repair via conversion wrapping.
+- **Selector Quality Scorer**: (`server/xaml/selector-quality-scorer.ts`) Extracts UI context from SDD content and scores generated selectors, detecting placeholders and low-quality selectors.
+- **Workflow Analyzer Compliance Engine**: Static analysis for 11+ Workflow Analyzer rules with auto-correction and reporting.
+- **UiPath Naming Convention Enforcement**: Standardized naming conventions for variables and arguments are enforced during XAML generation.
+- **Three-Tier Developer Handoff Guide (DHG)**: An AI-first structured guide (Tier 1: AI Completed, Tier 2: Smart Defaults, Tier 3: Human Required) including readiness score, compliance report, and artifact configuration, enhanced with production deployment sections.
 - **UiPath Integration Layer**: Manages UiPath's multi-resource token architecture, typed Orchestrator API client, robust artifact provisioning, and SSE deploy streaming.
 - **Integration Service Connector Discovery**: Queries UiPath Integration Service API to discover available connectors and active connections.
 - **Maestro Process Orchestration**: Generates BPMN-compatible Maestro process definitions and deploys via the Maestro API.
-- **Unified Probe Architecture**: Single source of truth for platform service availability with structured per-service status (available/limited/unavailable/unknown), confidence levels (official/inferred/deprecated), evidence tracking, and reachability. Discovers Automation Ops governance policies, robot landscape, and existing Studio processes.
+- **Unified Probe Architecture**: Single source of truth for platform service availability with structured status, confidence levels, and evidence tracking.
 - **Automation Ops Integration**: Discovers governance policies from UiPath Automation Ops and syncs them into the Workflow Analyzer.
-- **Attended Robot & Studio Discovery**: Probes UiPath for attended/Assistant robot sessions and existing Studio processes.
 - **Consolidated Streaming Progress Indicator**: A unified component for displaying real-time progress during AI chat, document generation, and deployment.
 - **Document Approval**: Supports approval of PDD/SDD via dedicated buttons, chat phrases, or auto-chain detection.
 - **Document Understanding — Discovery-Based Provisioning**: Manages DU project provisioning by discovering existing projects via API.
@@ -65,12 +63,12 @@ The application uses a modern web stack for scalability and an intuitive user ex
 - **Admin & Review Panels**: Dedicated interfaces for CoE review and administrative tasks.
 - **Role-Based Access**: Authorization enforced based on user ownership and roles for process maps and documents.
 - **Multi-Orchestrator Connection Management**: Supports storing and managing multiple UiPath Orchestrator connection profiles.
-- **Automation Hub & Store Integration**: Connects to UiPath Automation Hub to import ideas and automatically publish completed automations to the Automation Store.
-- **Modular Backend Architecture**: Monolithic backend files decomposed into focused sub-modules for XAML generation, UiPath integration, and deployment.
+- **Automation Hub & Store Integration**: Connects to UiPath Automation Hub to import ideas and publish completed automations to the Automation Store.
+- **Modular Backend Architecture**: Monolithic backend files decomposed into focused sub-modules for better organization.
 - **JSON Sanitization**: Robust parsing of AI-generated JSON with error recovery.
 - **Shared Utilities**: Consolidated server and client utilities for common functions and shared types.
 - **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deployment time.
-- **High Confidence Mode (Meta-Validation)**: Optional post-generation review layer in `server/meta-validation/` with deterministic confidence scoring and targeted LLM review for XAML error categories.
+- **High Confidence Mode (Meta-Validation)**: Optional post-generation review layer with deterministic confidence scoring and targeted LLM review for XAML error categories.
 
 ## External Dependencies
 - **AI Services**: Anthropic Claude, OpenAI, Google Gemini (via Replit AI Integrations)

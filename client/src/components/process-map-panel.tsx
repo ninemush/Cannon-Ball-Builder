@@ -28,7 +28,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
-import { computeProcessAwareLayout, type LayoutInput, type LayoutEdgeInput } from "@shared/process-layout";
+import { computeProcessAwareLayout, LAYOUT_VERSION, type LayoutInput, type LayoutEdgeInput } from "@shared/process-layout";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import type { ProcessNode, ProcessApproval } from "@shared/schema";
@@ -701,53 +701,45 @@ function fixDecisionHandlesPostLayout(
       const tgt1 = nodePositions[edge1.target];
       if (!tgt0 || !tgt1) continue;
 
+      let handle0: string;
+      let handle1: string;
+
+      const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
+      const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
+
+      if (sem0 && sem1 && sem0 !== sem1) {
+        handle0 = sem0;
+        handle1 = sem1;
+      } else if (sem0 && !sem1) {
+        handle0 = sem0;
+        handle1 = sem0 === "left" ? "right" : "left";
+      } else if (!sem0 && sem1) {
+        handle1 = sem1;
+        handle0 = sem1 === "left" ? "right" : "left";
+      } else {
+        if (tgt0.x < tgt1.x) {
+          handle0 = "left";
+          handle1 = "right";
+        } else if (tgt0.x > tgt1.x) {
+          handle0 = "right";
+          handle1 = "left";
+        } else {
+          handle0 = "left";
+          handle1 = "right";
+        }
+      }
+
       const dx0 = Math.abs(tgt0.x - srcPos.x);
-      const dx1 = Math.abs(tgt1.x - srcPos.x);
       const dy0 = tgt0.y - srcPos.y;
+      const dx1 = Math.abs(tgt1.x - srcPos.x);
       const dy1 = tgt1.y - srcPos.y;
       const directlyBelow0 = dx0 < 30 && dy0 > 0;
       const directlyBelow1 = dx1 < 30 && dy1 > 0;
 
-      let handle0: string;
-      let handle1: string;
-
-      if (directlyBelow0 && !directlyBelow1) {
+      if (directlyBelow0 && !directlyBelow1 && !sem0) {
         handle0 = "bottom";
-        handle1 = tgt1.x > srcPos.x ? "right" : "left";
-      } else if (directlyBelow1 && !directlyBelow0) {
+      } else if (directlyBelow1 && !directlyBelow0 && !sem1) {
         handle1 = "bottom";
-        handle0 = tgt0.x > srcPos.x ? "right" : "left";
-      } else {
-        const dx = Math.abs(tgt0.x - tgt1.x);
-        const isXAmbiguous = dx < 5;
-
-        if (isXAmbiguous) {
-          const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
-          const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
-          handle0 = sem0 || "left";
-          handle1 = sem1 || "right";
-          if (handle0 === handle1) {
-            handle0 = "left";
-            handle1 = "right";
-          }
-        } else {
-          if (tgt0.x < tgt1.x) {
-            handle0 = "left";
-            handle1 = "right";
-          } else {
-            handle0 = "right";
-            handle1 = "left";
-          }
-        }
-
-        const wouldCross =
-          (handle0 === "left" && handle1 === "right" && tgt0.x > tgt1.x) ||
-          (handle0 === "right" && handle1 === "left" && tgt0.x < tgt1.x);
-        if (wouldCross) {
-          const tmp = handle0;
-          handle0 = handle1;
-          handle1 = tmp;
-        }
       }
 
       resolvedHandles[edge0.id] = handle0;
@@ -1570,6 +1562,28 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
   return <TaskNode data={data} id={id} />;
 }
 
+function edgePathIntersectsNode(
+  sx: number, sy: number, tx: number, ty: number,
+  nx: number, ny: number, nw: number, nh: number,
+  margin: number = 8
+): boolean {
+  const left = nx - margin;
+  const right = nx + nw + margin;
+  const top = ny - margin;
+  const bottom = ny + nh + margin;
+  const minX = Math.min(sx, tx);
+  const maxX = Math.max(sx, tx);
+  const minY = Math.min(sy, ty);
+  const maxY = Math.max(sy, ty);
+  if (maxX < left || minX > right || maxY < top || minY > bottom) return false;
+  if (sx === tx) return sx >= left && sx <= right && !(minY >= bottom || maxY <= top);
+  if (sy === ty) return sy >= top && sy <= bottom && !(minX >= right || maxX <= left);
+  const slope = (ty - sy) / (tx - sx);
+  const yAtLeft = sy + slope * (left - sx);
+  const yAtRight = sy + slope * (right - sx);
+  return (yAtLeft >= top && yAtLeft <= bottom) || (yAtRight >= top && yAtRight <= bottom);
+}
+
 function CustomEdge({
   id,
   sourceX,
@@ -1580,6 +1594,8 @@ function CustomEdge({
   targetPosition,
   data,
   style,
+  source,
+  target,
 }: any) {
   const sourceIndex = data?.sourceIndex || 0;
   const sourceSiblings = data?.sourceSiblings || 1;
@@ -1588,6 +1604,7 @@ function CustomEdge({
   const totalNodes = data?.totalNodes || 0;
   const simplified = data?.simplified || false;
   const targetNodeType = data?.targetNodeType || "task";
+  const nodeBounds: { id: string; x: number; y: number; w: number; h: number }[] = data?.nodeBounds || [];
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -1600,6 +1617,8 @@ function CustomEdge({
   let edgePath: string;
   let labelX: number;
   let labelY: number;
+
+  const obstacleNodes = nodeBounds.filter((n) => n.id !== source && n.id !== target);
 
   const isConvergent = targetSiblings > 1 && !simplified;
   if (isConvergent) {
@@ -1618,25 +1637,56 @@ function CustomEdge({
     labelX = (sx + tx) / 2 + fanSpread * 0.3;
     labelY = (sy + ty) / 2;
   } else {
-    [edgePath, labelX, labelY] = useBezier
-      ? getBezierPath({
-          sourceX: sourceX + sourceOffset,
-          sourceY,
-          sourcePosition,
-          targetX: targetX + targetOffset,
-          targetY,
-          targetPosition,
-        })
-      : getSmoothStepPath({
-          sourceX: sourceX + sourceOffset,
-          sourceY,
-          sourcePosition,
-          targetX: targetX + targetOffset,
-          targetY,
-          targetPosition,
-          borderRadius: 16,
-          offset: (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0) ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) : 20,
-        });
+    const adjSourceX = sourceX + sourceOffset;
+    const adjTargetX = targetX + targetOffset;
+
+    const smoothStepOffset = (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0) ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) : 20;
+
+    const checkOrthogonalObstacle = (): boolean => {
+      if (useBezier || obstacleNodes.length === 0) return false;
+      const midY = (sourceY + targetY) / 2;
+      const segments: [number, number, number, number][] = [
+        [adjSourceX, sourceY, adjSourceX, midY],
+        [adjSourceX, midY, adjTargetX, midY],
+        [adjTargetX, midY, adjTargetX, targetY],
+      ];
+      return obstacleNodes.some((n) =>
+        segments.some(([x1, y1, x2, y2]) => edgePathIntersectsNode(x1, y1, x2, y2, n.x, n.y, n.w, n.h))
+      );
+    };
+
+    const needsDetour = checkOrthogonalObstacle();
+
+    if (needsDetour) {
+      const detourClearance = 40;
+      const detourX = adjSourceX > adjTargetX
+        ? Math.min(adjSourceX, adjTargetX) - detourClearance
+        : Math.max(adjSourceX, adjTargetX) + detourClearance;
+      const midY = (sourceY + targetY) / 2;
+      edgePath = `M ${adjSourceX},${sourceY} L ${detourX},${sourceY} L ${detourX},${midY} L ${adjTargetX},${midY} L ${adjTargetX},${targetY}`;
+      labelX = (adjSourceX + adjTargetX) / 2;
+      labelY = midY;
+    } else {
+      [edgePath, labelX, labelY] = useBezier
+        ? getBezierPath({
+            sourceX: adjSourceX,
+            sourceY,
+            sourcePosition,
+            targetX: adjTargetX,
+            targetY,
+            targetPosition,
+          })
+        : getSmoothStepPath({
+            sourceX: adjSourceX,
+            sourceY,
+            sourcePosition,
+            targetX: adjTargetX,
+            targetY,
+            targetPosition,
+            borderRadius: 16,
+            offset: smoothStepOffset,
+          });
+    }
   }
 
   const label = data?.label || "";
@@ -2153,8 +2203,19 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
     }
     const fixedEdges = fixDecisionHandlesPostLayout(layoutNodes, rawEdges, nodeTypeMap);
+
+    const relNodeBounds = layoutNodes.map((n) => {
+      const nt = (n.data as any)?.nodeType || "task";
+      const dims = getNodeDimensions(nt);
+      return { id: n.id, x: n.position.x, y: n.position.y, w: dims.width, h: dims.height };
+    });
+    const relEdgesWithBounds = fixedEdges.map((e) => ({
+      ...e,
+      data: { ...(e.data as any), nodeBounds: relNodeBounds },
+    }));
+
     setNodes(layoutNodes);
-    setEdges(fixedEdges);
+    setEdges(relEdgesWithBounds);
     layoutNodes.forEach((n) => {
       const d = n.data as any;
       if (d.dbId && d.dbId > 0) {
@@ -2172,10 +2233,14 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     if (!mapData) return;
     const { nodes: dbNodes, edges: dbEdges } = filterNodesForLevel(mapData.nodes, mapData.edges, detailLevel);
 
+    const layoutKey = `processMapLayoutVersion_${ideaId}_${activeView}`;
+    const storedVersion = parseInt(localStorage.getItem(layoutKey) || "0", 10);
+    const needsVersionUpgrade = storedVersion < LAYOUT_VERSION;
+
     const rawNodes: Node[] = dbNodes.map((n) => ({
       id: String(n.id),
       type: "processNode",
-      position: { x: n.positionX, y: n.positionY },
+      position: { x: 0, y: 0 },
       data: {
         label: n.name,
         role: n.role,
@@ -2246,49 +2311,41 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     const levelChanged = prevDetailLevelRef.current !== detailLevel;
     prevDetailLevelRef.current = detailLevel;
 
-    const forceLayout = levelChanged;
-
-    if (detailLevel !== "L2" || forceLayout) {
-      if (rawEdges.length > 0) {
-        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified, dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" })));
-        if (detailLevel === "L2") {
-          layoutNodes.forEach((n) => {
-            const d = n.data as any;
-            if (d.dbId && d.dbId > 0) {
-              updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
-            }
-          });
-        }
-      } else if (rawNodes.length > 0) {
-        layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
-      } else {
-        layoutNodes = rawNodes;
-      }
-    } else {
-      const savedCount = dbNodes.filter((n) => n.positionX !== 0 || n.positionY !== 0).length;
-      const allHaveSavedPositions = savedCount === dbNodes.length;
-
-      if (allHaveSavedPositions) {
-        layoutNodes = rawNodes;
-      } else if (rawEdges.length > 0) {
-        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", false, dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" })));
+    if (rawEdges.length > 0) {
+      layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified, dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" })));
+      if (detailLevel === "L2") {
         layoutNodes.forEach((n) => {
           const d = n.data as any;
           if (d.dbId && d.dbId > 0) {
             updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
           }
         });
-      } else if (rawNodes.length > 0) {
-        layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
-      } else {
-        layoutNodes = rawNodes;
       }
+    } else if (rawNodes.length > 0) {
+      layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
+    } else {
+      layoutNodes = rawNodes;
     }
 
     const fixedEdges2 = fixDecisionHandlesPostLayout(layoutNodes, rawEdges, nodeTypeMap2);
+
+    const nodeBounds = layoutNodes.map((n) => {
+      const nt = (n.data as any)?.nodeType || "task";
+      const dims = getNodeDimensions(nt);
+      return { id: n.id, x: n.position.x, y: n.position.y, w: dims.width, h: dims.height };
+    });
+    const edgesWithBounds = fixedEdges2.map((e) => ({
+      ...e,
+      data: { ...(e.data as any), nodeBounds },
+    }));
+
     setNodes(layoutNodes);
-    setEdges(fixedEdges2);
+    setEdges(edgesWithBounds);
     dataVersionRef.current += 1;
+
+    if (needsVersionUpgrade || detailLevel === "L2") {
+      try { localStorage.setItem(layoutKey, String(LAYOUT_VERSION)); } catch {}
+    }
 
     if (levelChanged || (!hasInitialFitRef.current && layoutNodes.length > 0)) {
       hasInitialFitRef.current = true;
