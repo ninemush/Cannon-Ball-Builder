@@ -1182,7 +1182,7 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   let prevXml = "";
   while (prevXml !== xml) {
     prevXml = xml;
-    xml = xml.replace(/(Message|Default|Value)="(\[[^"]*)'([^']*)'([^"]*\])"/g, (match, attr, pre, quoted, post) => {
+    xml = xml.replace(/(Message|Default|Value)="(\[[^"]*?)'([^']*?)'([^"]*?\])"/g, (match, attr, pre, quoted, post) => {
       return `${attr}="${pre}&quot;${quoted}&quot;${post}"`;
     });
   }

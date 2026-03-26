@@ -426,12 +426,12 @@ export function resolveActivityTemplate(
     }
     if (isMandatoryPath) {
       return `<!-- BLOCKED: Unsupported activity "${escapeXml(templateName)}" in mandatory ${emissionContext === "mandatory-catch" ? "catch" : "finally"} path — "${escapeXml(node.displayName)}" requires manual implementation -->
-<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Unsupported activity '${escapeXml(templateName)}' in mandatory path — business step '${escapeXml(node.displayName)}' requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
-<Rethrow DisplayName="Rethrow — blocked activity '${escapeXml(node.displayName)}'" />`;
+<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Unsupported activity &apos;${escapeXml(templateName)}&apos; in mandatory path — business step &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
+<Rethrow DisplayName="Rethrow — blocked activity &apos;${escapeXml(node.displayName)}&apos;" />`;
     }
     return `<!-- WARNING: Unsupported activity "${escapeXml(templateName)}" — "${escapeXml(node.displayName)}" requires manual implementation -->
 <ui:Comment Text="[BLOCKED] Unsupported activity: ${escapeXml(templateName)}. Business step &quot;${escapeXml(node.displayName)}&quot; requires manual implementation using supported UiPath activities." DisplayName="${escapeXml(node.displayName)} (unsupported — manual implementation required)" />
-<ui:LogMessage Level="Warn" Message="[&quot;WARNING: Business step '${escapeXml(node.displayName)}' uses unsupported activity '${escapeXml(templateName)}' — requires manual implementation&quot;]" DisplayName="Log Unsupported Activity Warning" />`;
+<ui:LogMessage Level="Warn" Message="[&quot;WARNING: Business step &apos;${escapeXml(node.displayName)}&apos; uses unsupported activity &apos;${escapeXml(templateName)}&apos; — requires manual implementation&quot;]" DisplayName="Log Unsupported Activity Warning" />`;
   }
 
   if (catalogService.isLoaded()) {
@@ -455,12 +455,12 @@ export function resolveActivityTemplate(
       }
       if (isMandatoryPath) {
         return `<!-- BLOCKED: Unknown activity "${escapeXml(templateName)}" in mandatory ${emissionContext === "mandatory-catch" ? "catch" : "finally"} path — "${escapeXml(node.displayName)}" -->
-<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Unknown activity '${escapeXml(templateName)}' in mandatory path — business step '${escapeXml(node.displayName)}' requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
-<Rethrow DisplayName="Rethrow — blocked activity '${escapeXml(node.displayName)}'" />`;
+<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Unknown activity &apos;${escapeXml(templateName)}&apos; in mandatory path — business step &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
+<Rethrow DisplayName="Rethrow — blocked activity &apos;${escapeXml(node.displayName)}&apos;" />`;
       }
       return `<!-- WARNING: Unknown activity template "${escapeXml(templateName)}" — "${escapeXml(node.displayName)}" not found in catalog -->
 <ui:Comment Text="[BLOCKED] Unknown activity: ${escapeXml(templateName)}. Business step &quot;${escapeXml(node.displayName)}&quot; requires manual implementation." DisplayName="${escapeXml(node.displayName)} (unknown — manual implementation required)" />
-<ui:LogMessage Level="Warn" Message="[&quot;WARNING: Business step '${escapeXml(node.displayName)}' uses unknown activity '${escapeXml(templateName)}' — requires manual implementation&quot;]" DisplayName="Log Unknown Activity Warning" />`;
+<ui:LogMessage Level="Warn" Message="[&quot;WARNING: Business step &apos;${escapeXml(node.displayName)}&apos; uses unknown activity &apos;${escapeXml(templateName)}&apos; — requires manual implementation&quot;]" DisplayName="Log Unknown Activity Warning" />`;
     }
   } else {
     const isMandatoryPath = emissionContext === "mandatory-catch" || emissionContext === "mandatory-finally";
@@ -481,8 +481,8 @@ export function resolveActivityTemplate(
     }
     if (isMandatoryPath) {
       return `<!-- BLOCKED: Catalog not loaded for "${escapeXml(templateName)}" in mandatory ${emissionContext === "mandatory-catch" ? "catch" : "finally"} path -->
-<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity '${escapeXml(templateName)}' could not be validated (catalog not loaded) in mandatory path — business step '${escapeXml(node.displayName)}' requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
-<Rethrow DisplayName="Rethrow — blocked activity '${escapeXml(node.displayName)}'" />`;
+<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity &apos;${escapeXml(templateName)}&apos; could not be validated (catalog not loaded) in mandatory path — business step &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
+<Rethrow DisplayName="Rethrow — blocked activity &apos;${escapeXml(node.displayName)}&apos;" />`;
     }
     return `<!-- CATALOG NOT LOADED: ${escapeXml(templateName)} — "${escapeXml(node.displayName)}" -->
 <ui:Comment Text="[TODO: Activity ${escapeXml(templateName)} requires catalog validation. Manual implementation required.]" DisplayName="${escapeXml(node.displayName)} (stub)" />`;
@@ -663,12 +663,12 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
     }
     if (isMandatoryPath) {
       return `<!-- BLOCKED: Unmapped namespace for "${escapeXml(templateName)}" in mandatory path -->
-<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity '${escapeXml(templateName)}' has no resolved namespace — business step '${escapeXml(node.displayName)}' requires manual implementation&quot;]" DisplayName="Log Unmapped Activity (${escapeXml(node.displayName)})" />
-<Rethrow DisplayName="Rethrow — unmapped activity '${escapeXml(node.displayName)}'" />`;
+<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity &apos;${escapeXml(templateName)}&apos; has no resolved namespace — business step &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Unmapped Activity (${escapeXml(node.displayName)})" />
+<Rethrow DisplayName="Rethrow — unmapped activity &apos;${escapeXml(node.displayName)}&apos;" />`;
     }
     return `<!-- WARNING: Unmapped namespace for "${escapeXml(templateName)}" — "${escapeXml(node.displayName)}" -->
 <ui:Comment Text="[BLOCKED] Unmapped namespace: ${escapeXml(templateName)}. Business step &quot;${escapeXml(node.displayName)}&quot; requires manual namespace resolution." DisplayName="${escapeXml(node.displayName)} (unmapped namespace — manual fix required)" />
-<ui:LogMessage Level="Warn" Message="[&quot;WARNING: Activity '${escapeXml(templateName)}' has no resolved namespace — '${escapeXml(node.displayName)}' requires manual implementation&quot;]" DisplayName="Log Unmapped Activity Warning" />`;
+<ui:LogMessage Level="Warn" Message="[&quot;WARNING: Activity &apos;${escapeXml(templateName)}&apos; has no resolved namespace — &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Unmapped Activity Warning" />`;
   }
 
   const tag = strictPrefix ? `${strictPrefix}:${templateName}` : templateName;
@@ -723,8 +723,8 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
       }
       if (isMandatoryPath) {
         return `<!-- BLOCKED: Property escalation for "${escapeXml(templateName)}" in mandatory path -->
-<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity '${escapeXml(templateName)}' failed property validation in mandatory path — business step '${escapeXml(node.displayName)}' requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
-<Rethrow DisplayName="Rethrow — blocked activity '${escapeXml(node.displayName)}'" />`;
+<ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity &apos;${escapeXml(templateName)}&apos; failed property validation in mandatory path — business step &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
+<Rethrow DisplayName="Rethrow — blocked activity &apos;${escapeXml(node.displayName)}&apos;" />`;
       }
       return `<ui:Comment Text="[TODO: Re-implement ${escapeXml(templateName)} activity — ${escapeXml(node.displayName)}. ${propertyFailures.length} properties failed validation. Original properties: ${propertyFailures.map(f => f.propertyName).join(', ')}]" DisplayName="${displayName} (stub)" />`;
     }
@@ -1189,8 +1189,19 @@ export function assembleWorkflowFromSpec(
     .map(child => assembleNode(child, allVariables, processType))
     .join("\n    ");
 
+  const isMainWorkflow = workflowName.toLowerCase() === "main" || workflowName.toLowerCase() === "main.xaml";
+  const isInitAllSettings = workflowName.toLowerCase().includes("initallsettings");
+  const wfArgs = [...(spec.arguments || [])];
+  const hasDictConfigRef = !isMainWorkflow && !isInitAllSettings && activitiesXml.includes("dict_Config");
+  if (hasDictConfigRef && !wfArgs.some(a => a.name === "in_Config")) {
+    wfArgs.push({ name: "in_Config", direction: "InArgument", type: "scg:Dictionary(x:String, x:Object)" });
+  }
+  if (hasDictConfigRef && !allVariables.find(v => v.name === "dict_Config")) {
+    allVariables.push({ name: "dict_Config", type: "scg:Dictionary(x:String, x:Object)", default: "[in_Config]" });
+  }
+
   const variablesBlock = buildVariablesBlock(allVariables);
-  const xMembersBlock = buildXMembersBlock(spec.arguments || []);
+  const xMembersBlock = buildXMembersBlock(wfArgs);
 
   const xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(workflowName)}"

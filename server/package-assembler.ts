@@ -613,6 +613,10 @@ export function resolveDependencies(
   const tf = targetFramework || (studioProfile?.targetFramework) || "Windows";
 
   referencedPackages.add("UiPath.System.Activities");
+  referencedPackages.add("UiPath.Excel.Activities");
+  if (tf !== "Portable") {
+    referencedPackages.add("UiPath.UIAutomation.Activities");
+  }
 
   if (treeSpec) {
     const activityTemplates = collectActivityTemplatesFromSpec(treeSpec);
