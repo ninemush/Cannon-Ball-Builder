@@ -86,7 +86,7 @@ export function generateDhgFromOutcomeReport(
     md += `| # | Code | File | Description | Est. Minutes |\n`;
     md += `|---|------|------|-------------|-------------|\n`;
     report.autoRepairs.forEach((r, i) => {
-      const desc = r.description.length > 100 ? r.description.slice(0, 97) + "..." : r.description;
+      const desc = (r.description || "").length > 100 ? (r.description || "").slice(0, 97) + "..." : (r.description || "—");
       md += `| ${i + 1} | \`${r.repairCode}\` | \`${r.file}\` | ${desc.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
     });
     md += `\n`;
@@ -99,7 +99,7 @@ export function generateDhgFromOutcomeReport(
     md += `| # | File | From | To | Reason | Developer Action | Est. Minutes |\n`;
     md += `|---|------|------|----|--------|-----------------|-------------|\n`;
     report.downgradeEvents.forEach((d, i) => {
-      const reason = d.triggerReason.length > 80 ? d.triggerReason.slice(0, 77) + "..." : d.triggerReason;
+      const reason = (d.triggerReason || "").length > 80 ? (d.triggerReason || "").slice(0, 77) + "..." : (d.triggerReason || "—");
       md += `| ${i + 1} | ${d.file || "—"} | \`${d.fromMode}\` | \`${d.toMode}\` | ${reason.replace(/\|/g, "\\|")} | ${d.developerAction} | ${d.estimatedEffortMinutes} |\n`;
     });
     md += `\n`;
@@ -221,7 +221,7 @@ export function generateDhgFromOutcomeReport(
       md += `| # | File | Check | Business Context | Detail | Est. Minutes |\n`;
       md += `|---|------|-------|-----------------|--------|-------------|\n`;
       selectorWarnings.forEach((w, i) => {
-        const detail = w.detail.length > 80 ? w.detail.slice(0, 77) + "..." : w.detail;
+        const detail = (w.detail || "").length > 80 ? (w.detail || "").slice(0, 77) + "..." : (w.detail || "—");
         const context = (w.businessContext || "—").length > 80
           ? (w.businessContext || "").slice(0, 77) + "..."
           : (w.businessContext || "—");
@@ -235,7 +235,7 @@ export function generateDhgFromOutcomeReport(
       md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
       md += `|---|------|-------|--------|-----------------|-------------|\n`;
       otherWarnings.forEach((w, i) => {
-        const detail = w.detail.length > 100 ? w.detail.slice(0, 97) + "..." : w.detail;
+        const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
         const action = (w.developerAction || "").length > 80
           ? (w.developerAction || "").slice(0, 77) + "..."
           : (w.developerAction || "—");
@@ -610,7 +610,7 @@ function generateUpstreamWarningsSection(analysis: DhgAnalysisResult, sectionNum
   md += `| Code | Severity | Count | Sample Message |\n`;
   md += `|------|----------|-------|----------------|\n`;
   for (const [code, items] of byCode) {
-    md += `| ${code} | ${items[0].severity} | ${items.length} | ${items[0].message.slice(0, 120)}${items[0].message.length > 120 ? "..." : ""} |\n`;
+    md += `| ${code} | ${items[0].severity} | ${items.length} | ${(items[0].message || "").slice(0, 120)}${(items[0].message || "").length > 120 ? "..." : ""} |\n`;
   }
   md += `\n`;
 

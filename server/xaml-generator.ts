@@ -3216,7 +3216,7 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
       md += `| # | Code | File | Description |\n`;
       md += `|---|------|------|-------------|\n`;
       report.autoRepairs.forEach((r, i) => {
-        const desc = r.description.length > 100 ? r.description.slice(0, 97) + "..." : r.description;
+        const desc = (r.description || "").length > 100 ? (r.description || "").slice(0, 97) + "..." : (r.description || "—");
         md += `| ${i + 1} | \`${r.repairCode}\` | \`${r.file}\` | ${desc.replace(/\|/g, "\\|")} |\n`;
       });
       md += `\n`;
