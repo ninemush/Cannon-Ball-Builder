@@ -2,7 +2,7 @@ import type {
   PipelineOutcomeReport,
   RemediationEntry,
 } from "./uipath-pipeline";
-import type { DhgAnalysisResult } from "./xaml/dhg-analyzers";
+import type { DhgAnalysisResult, SddArtifactCrossReference } from "./xaml/dhg-analyzers";
 
 export interface DhgContext {
   projectName: string;
@@ -255,9 +255,15 @@ export function generateDhgFromOutcomeReport(
   if (context.analysis) {
     if (context.analysis.upstreamContext) {
       md += generateUpstreamContextSection(context.analysis, ++sectionNum);
+      if (hasProcessMapData(context.analysis)) {
+        md += generateBusinessProcessOverviewSection(context.analysis, ++sectionNum);
+      }
     }
     md += generateEnvironmentSetupSection(context.analysis, ++sectionNum);
     md += generateCredentialAssetSection(context.analysis, ++sectionNum);
+    if (context.analysis.sddCrossReference) {
+      md += generateCrossReferenceSection(context.analysis.sddCrossReference, ++sectionNum);
+    }
     md += generateQueueManagementSection(context.analysis, ++sectionNum);
     md += generateExceptionCoverageSection(context.analysis, ++sectionNum);
     md += generateTriggerConfigSection(context.analysis, ++sectionNum);
@@ -348,6 +354,15 @@ function generateEnvironmentSetupSection(analysis: DhgAnalysisResult, sectionNum
     md += `\n`;
   }
 
+  if (analysis.upstreamContext?.systems && analysis.upstreamContext.systems.length > 0) {
+    md += `### Target Applications (from Process Map)\n\n`;
+    md += `The following applications were identified from the business process map. Ensure network connectivity and access credentials are configured on the robot machine:\n\n`;
+    for (const sys of analysis.upstreamContext.systems) {
+      md += `- ${sys}\n`;
+    }
+    md += `\n`;
+  }
+
   return md;
 }
 
@@ -418,16 +433,38 @@ function generateQueueManagementSection(analysis: DhgAnalysisResult, sectionNum:
   md += `**Pattern:** ${q.isTransactionalPattern ? "Transactional (Dispatcher/Performer)" : "Queue usage (non-transactional)"}\n\n`;
 
   if (q.uniqueQueues.length > 0) {
+    const sddQueueConfigs = analysis.sddCrossReference?.sddQueueConfigs || [];
     md += `### Queues to Provision\n\n`;
-    md += `| # | Queue Name | Activities | Unique Reference | Auto Retry | Action |\n`;
-    md += `|---|-----------|------------|-----------------|------------|--------|\n`;
+    md += `| # | Queue Name | Activities | Unique Reference | Auto Retry | SLA | Action |\n`;
+    md += `|---|-----------|------------|-----------------|------------|-----|--------|\n`;
     q.uniqueQueues.forEach((qName, i) => {
       const activities = q.entries.filter(e => e.queueName === qName).map(e => e.activityType);
       const uniqueActs = [...new Set(activities)].join(", ");
       const isHardcoded = q.entries.some(e => e.queueName === qName && e.isHardcoded);
-      const uniqueRef = q.isTransactionalPattern ? "Recommended" : "Optional";
-      const autoRetry = q.retryPolicy.autoRetryEnabled ? `Yes (${q.retryPolicy.maxRetries}x)` : "No";
-      md += `| ${i + 1} | \`${qName}\` | ${uniqueActs} | ${uniqueRef} | ${autoRetry} | ${isHardcoded ? "Create in Orchestrator" : "Verify exists"} |\n`;
+      const sddConfig = sddQueueConfigs.find(c => c.name === qName);
+      const uniqueRef = sddConfig?.uniqueReference !== undefined
+        ? (sddConfig.uniqueReference ? "Yes (SDD)" : "No (SDD)")
+        : q.isTransactionalPattern ? "Recommended" : "Optional";
+      const autoRetry = sddConfig?.maxRetries !== undefined
+        ? `Yes (${sddConfig.maxRetries}x, SDD)`
+        : q.retryPolicy.autoRetryEnabled ? `Yes (${q.retryPolicy.maxRetries}x)` : "No";
+      const sla = sddConfig?.sla || "—";
+      md += `| ${i + 1} | \`${qName}\` | ${uniqueActs} | ${uniqueRef} | ${autoRetry} | ${sla} | ${isHardcoded ? "Create in Orchestrator" : "Verify exists"} |\n`;
+    });
+    md += `\n`;
+  }
+
+  const sddOnlyQueues = (analysis.sddCrossReference?.sddQueueConfigs || [])
+    .filter(c => !q.uniqueQueues.some(qn => qn.trim() === c.name.trim()));
+  if (sddOnlyQueues.length > 0) {
+    md += `### SDD-Defined Queues (Not Yet in XAML)\n\n`;
+    md += `| # | Queue Name | Unique Reference | Max Retries | SLA | Note |\n`;
+    md += `|---|-----------|-----------------|-------------|-----|------|\n`;
+    sddOnlyQueues.forEach((c, i) => {
+      const uniqueRef = c.uniqueReference !== undefined ? (c.uniqueReference ? "Yes" : "No") : "—";
+      const retries = c.maxRetries !== undefined ? `${c.maxRetries}x` : "—";
+      const sla = c.sla || "—";
+      md += `| ${i + 1} | \`${c.name}\` | ${uniqueRef} | ${retries} | ${sla} | Defined in SDD but no matching XAML activity — verify implementation |\n`;
     });
     md += `\n`;
   }
@@ -554,6 +591,13 @@ function generatePreDeploymentChecklist(analysis: DhgAnalysisResult, sectionNum:
   items.push({ task: "Run smoke test in target environment", category: "Testing", required: true });
   items.push({ task: "Verify logging output in Orchestrator", category: "Monitoring", required: false });
 
+  items.push({ task: "UAT test execution completed and sign-off obtained", category: "Governance", required: true });
+  items.push({ task: "Peer code review completed", category: "Governance", required: true });
+  items.push({ task: "All quality gate warnings addressed or risk-accepted", category: "Governance", required: true });
+  items.push({ task: "Business process owner validation obtained", category: "Governance", required: true });
+  items.push({ task: "CoE approval obtained", category: "Governance", required: true });
+  items.push({ task: "Production readiness assessment completed (monitoring, alerting, rollback plan documented)", category: "Governance", required: true });
+
   md += `| # | Category | Task | Required |\n`;
   md += `|---|----------|------|----------|\n`;
   items.forEach((item, i) => {
@@ -586,10 +630,98 @@ function generateUpstreamContextSection(analysis: DhgAnalysisResult, sectionNum:
   if (ctx.automationType) {
     md += `**Automation Type:** ${ctx.automationType}\n`;
   }
+  if (ctx.automationTypeRationale) {
+    md += `**Rationale:** ${ctx.automationTypeRationale}\n`;
+  }
+  if (ctx.feasibilityComplexity) {
+    md += `**Feasibility Complexity:** ${ctx.feasibilityComplexity}\n`;
+  }
+  if (ctx.feasibilityEffortEstimate) {
+    md += `**Effort Estimate:** ${ctx.feasibilityEffortEstimate}\n`;
+  }
   if (ctx.feasibilityScore !== undefined) {
     md += `**Feasibility Score:** ${ctx.feasibilityScore}%\n`;
   }
   md += `\n`;
+
+  return md;
+}
+
+function hasProcessMapData(analysis: DhgAnalysisResult): boolean {
+  const ctx = analysis.upstreamContext;
+  if (!ctx) return false;
+  return !!(
+    (ctx.processSteps && ctx.processSteps.length > 0) ||
+    (ctx.painPoints && ctx.painPoints.length > 0) ||
+    (ctx.systems && ctx.systems.length > 0) ||
+    (ctx.roles && ctx.roles.length > 0)
+  );
+}
+
+function generateBusinessProcessOverviewSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const ctx = analysis.upstreamContext!;
+  let md = `## ${sectionNum}. Business Process Overview\n\n`;
+
+  if (ctx.processSteps && ctx.processSteps.length > 0) {
+    md += `### Process Steps\n\n`;
+    md += `| # | Step | Role | System | Type | Pain Point |\n`;
+    md += `|---|------|------|--------|------|------------|\n`;
+    ctx.processSteps.forEach((step, i) => {
+      md += `| ${i + 1} | ${step.name} | ${step.role || "—"} | ${step.system || "—"} | ${step.nodeType} | ${step.isPainPoint ? "Yes" : "—"} |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (ctx.painPoints && ctx.painPoints.length > 0) {
+    md += `### Pain Points\n\n`;
+    for (const pp of ctx.painPoints) {
+      md += `- ${pp}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (ctx.systems && ctx.systems.length > 0) {
+    md += `### Target Applications / Systems\n\n`;
+    md += `The following applications were identified from the process map and must be accessible from the robot machine:\n\n`;
+    for (const sys of ctx.systems) {
+      md += `- ${sys}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (ctx.roles && ctx.roles.length > 0) {
+    md += `### User Roles Involved\n\n`;
+    for (const role of ctx.roles) {
+      md += `- ${role}\n`;
+    }
+    md += `\n`;
+  }
+
+  return md;
+}
+
+function generateCrossReferenceSection(xref: SddArtifactCrossReference, sectionNum: number): string {
+  let md = `## ${sectionNum}. SDD × XAML Artifact Reconciliation\n\n`;
+
+  md += `**Summary:** ${xref.alignedCount} aligned, ${xref.sddOnlyCount} SDD-only, ${xref.xamlOnlyCount} XAML-only\n\n`;
+
+  if (xref.sddOnlyCount > 0) {
+    md += `> **Warning:** ${xref.sddOnlyCount} artifact(s) declared in the SDD were not found in the generated XAML. These must be provisioned in Orchestrator but are not referenced in code — verify the SDD spec or add the corresponding activities.\n\n`;
+  }
+  if (xref.xamlOnlyCount > 0) {
+    md += `> **Warning:** ${xref.xamlOnlyCount} artifact(s) found in XAML are not declared in the SDD. Update the SDD orchestrator_artifacts block to include these, or the deployment manifest will be incomplete.\n\n`;
+  }
+
+  if (xref.entries.length > 0) {
+    md += `| # | Name | Type | Status | SDD Config | XAML File | XAML Line |\n`;
+    md += `|---|------|------|--------|-----------|----------|----------|\n`;
+    xref.entries.forEach((e, i) => {
+      const sddConfig = e.sddConfig ? Object.entries(e.sddConfig).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${v}`).join(", ") : "—";
+      const statusLabel = e.status === "aligned" ? "Aligned" : e.status === "sdd-only" ? "SDD Only" : "XAML Only";
+      md += `| ${i + 1} | \`${e.name}\` | ${e.type} | **${statusLabel}** | ${sddConfig} | ${e.xamlFile ? `\`${e.xamlFile}\`` : "—"} | ${e.xamlLineNumber || "—"} |\n`;
+    });
+    md += `\n`;
+  }
 
   return md;
 }

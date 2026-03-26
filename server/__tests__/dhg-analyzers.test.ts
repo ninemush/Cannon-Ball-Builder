@@ -7,6 +7,7 @@ import {
   suggestTriggers,
   calculateReadiness,
   runDhgAnalysis,
+  crossReferenceArtifacts,
   type CredentialAssetInventory,
   type ExceptionCoverageResult,
   type QueueManagementResult,
@@ -855,5 +856,445 @@ describe("DHG generator with analysis context", () => {
     expect(md).not.toContain("Trigger Configuration");
     expect(md).not.toContain("Pre-Deployment Checklist");
     expect(md).not.toContain("Deployment Readiness Score");
+  });
+});
+
+describe("crossReferenceArtifacts", () => {
+  it("identifies aligned assets present in both SDD and XAML", () => {
+    const sddArtifacts = {
+      assets: [{ name: "Config_URL", type: "Text", description: "Base URL" }],
+    };
+    const credInventory: CredentialAssetInventory = {
+      entries: [{ file: "Main.xaml", activityType: "GetAsset", assetName: "Config_URL", isHardcoded: true, lineNumber: 5, assetValueType: "Text" }],
+      hardcodedCount: 1, variableCount: 0, uniqueAssetNames: ["Config_URL"], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, makeQueueResult());
+    expect(result.alignedCount).toBe(1);
+    expect(result.sddOnlyCount).toBe(0);
+    expect(result.xamlOnlyCount).toBe(0);
+    expect(result.entries[0].status).toBe("aligned");
+    expect(result.entries[0].name).toBe("Config_URL");
+  });
+
+  it("identifies SDD-only assets not in XAML", () => {
+    const sddArtifacts = {
+      assets: [{ name: "MissingAsset", type: "Text" }],
+    };
+    const credInventory: CredentialAssetInventory = {
+      entries: [], hardcodedCount: 0, variableCount: 0, uniqueAssetNames: [], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, makeQueueResult());
+    expect(result.sddOnlyCount).toBe(1);
+    expect(result.entries[0].status).toBe("sdd-only");
+  });
+
+  it("identifies XAML-only assets not in SDD", () => {
+    const credInventory: CredentialAssetInventory = {
+      entries: [{ file: "Main.xaml", activityType: "GetAsset", assetName: "ExtraAsset", isHardcoded: true, lineNumber: 10, assetValueType: "Text" }],
+      hardcodedCount: 1, variableCount: 0, uniqueAssetNames: ["ExtraAsset"], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts({}, credInventory, makeQueueResult());
+    expect(result.xamlOnlyCount).toBe(1);
+    expect(result.entries[0].status).toBe("xaml-only");
+  });
+
+  it("handles partial overlap correctly", () => {
+    const sddArtifacts = {
+      assets: [
+        { name: "SharedAsset", type: "Text" },
+        { name: "SddOnly", type: "Integer" },
+      ],
+    };
+    const credInventory: CredentialAssetInventory = {
+      entries: [
+        { file: "Main.xaml", activityType: "GetAsset", assetName: "SharedAsset", isHardcoded: true, lineNumber: 5, assetValueType: "Text" },
+        { file: "Main.xaml", activityType: "GetAsset", assetName: "XamlOnly", isHardcoded: true, lineNumber: 15, assetValueType: "Boolean" },
+      ],
+      hardcodedCount: 2, variableCount: 0, uniqueAssetNames: ["SharedAsset", "XamlOnly"], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, makeQueueResult());
+    expect(result.alignedCount).toBe(1);
+    expect(result.sddOnlyCount).toBe(1);
+    expect(result.xamlOnlyCount).toBe(1);
+  });
+
+  it("cross-references queues between SDD and XAML", () => {
+    const sddArtifacts = {
+      queues: [
+        { name: "InvoiceQueue", maxRetries: 5, uniqueReference: true, description: "Invoice processing" },
+      ],
+    };
+    const qResult = makeQueueResult({
+      entries: [{ file: "Main.xaml", activityType: "AddQueueItem", queueName: "InvoiceQueue", isHardcoded: true, lineNumber: 10 }],
+      uniqueQueues: ["InvoiceQueue"],
+    });
+    const credInventory: CredentialAssetInventory = {
+      entries: [], hardcodedCount: 0, variableCount: 0, uniqueAssetNames: [], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, qResult);
+    const qEntry = result.entries.find(e => e.type === "queue");
+    expect(qEntry).toBeDefined();
+    expect(qEntry!.status).toBe("aligned");
+    expect(result.sddQueueConfigs).toHaveLength(1);
+    expect(result.sddQueueConfigs![0].maxRetries).toBe(5);
+    expect(result.sddQueueConfigs![0].uniqueReference).toBe(true);
+  });
+
+  it("extracts SDD trigger definitions", () => {
+    const sddArtifacts = {
+      triggers: [
+        { name: "DailyRun", type: "Time", cron: "0 6 * * 1-5", description: "Weekday morning run" },
+        { name: "QueueTrigger", type: "Queue", queueName: "WorkQueue" },
+      ],
+    };
+    const credInventory: CredentialAssetInventory = {
+      entries: [], hardcodedCount: 0, variableCount: 0, uniqueAssetNames: [], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, makeQueueResult());
+    expect(result.sddTriggers).toHaveLength(2);
+    expect(result.sddTriggers![0].cron).toBe("0 6 * * 1-5");
+    expect(result.sddTriggers![1].queueName).toBe("WorkQueue");
+  });
+
+  it("handles null SDD artifacts", () => {
+    const credInventory: CredentialAssetInventory = {
+      entries: [], hardcodedCount: 0, variableCount: 0, uniqueAssetNames: [], uniqueCredentialNames: [],
+    };
+    const result = crossReferenceArtifacts(null, credInventory, makeQueueResult());
+    expect(result.entries).toHaveLength(0);
+    expect(result.alignedCount).toBe(0);
+  });
+
+  it("handles credential type assets from SDD", () => {
+    const sddArtifacts = {
+      assets: [{ name: "AppLogin", type: "Credential", description: "App credentials" }],
+    };
+    const credInventory: CredentialAssetInventory = {
+      entries: [{ file: "Main.xaml", activityType: "GetCredential", assetName: "AppLogin", isHardcoded: true, lineNumber: 3, assetValueType: "Credential" }],
+      hardcodedCount: 1, variableCount: 0, uniqueAssetNames: [], uniqueCredentialNames: ["AppLogin"],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, makeQueueResult());
+    const credEntry = result.entries.find(e => e.type === "credential");
+    expect(credEntry).toBeDefined();
+    expect(credEntry!.status).toBe("aligned");
+    expect(credEntry!.valueType).toBe("Credential");
+  });
+});
+
+describe("SDD-derived triggers in suggestTriggers", () => {
+  it("uses SDD triggers when provided", () => {
+    const sddTriggers = [
+      { name: "MorningRun", type: "Time", cron: "0 6 * * 1-5", description: "Daily at 6 AM" },
+    ];
+    const triggers = suggestTriggers(makeQueueResult(), makeEnvResult(), undefined, sddTriggers);
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].triggerType).toBe("Schedule");
+    expect(triggers[0].suggestedConfig).toContain("Cron: 0 6 * * 1-5");
+    expect(triggers[0].reason).toContain("SDD orchestrator_artifacts");
+  });
+
+  it("uses SDD queue trigger with queue name", () => {
+    const sddTriggers = [
+      { name: "QueueProcessor", type: "Queue", queueName: "InvoiceQueue" },
+    ];
+    const triggers = suggestTriggers(makeQueueResult(), makeEnvResult(), undefined, sddTriggers);
+    expect(triggers[0].triggerType).toBe("Queue");
+    expect(triggers[0].suggestedConfig).toContain("Queue: InvoiceQueue");
+  });
+
+  it("falls back to XAML analysis when no SDD triggers", () => {
+    const triggers = suggestTriggers(makeQueueResult(), makeEnvResult(), undefined, undefined);
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].triggerType).toBe("Schedule");
+    expect(triggers[0].suggestedConfig).toContain("0 8 * * 1-5");
+  });
+
+  it("falls back to XAML analysis when SDD triggers array is empty", () => {
+    const triggers = suggestTriggers(makeQueueResult(), makeEnvResult(), undefined, []);
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].triggerType).toBe("Schedule");
+  });
+});
+
+describe("runDhgAnalysis with SDD artifacts", () => {
+  it("includes sddCrossReference when SDD artifacts provided", () => {
+    const xaml = makeXaml(`<ui:GetAsset AssetName="Config_URL" />`);
+    const sddArtifacts = {
+      assets: [{ name: "Config_URL", type: "Text" }],
+      triggers: [{ name: "DailyRun", type: "Time", cron: "0 7 * * *" }],
+    };
+    const result = runDhgAnalysis(
+      [{ name: "Main.xaml", content: xaml }],
+      undefined, 0, 0, undefined, undefined,
+      sddArtifacts,
+    );
+    expect(result.sddCrossReference).toBeDefined();
+    expect(result.sddCrossReference!.alignedCount).toBe(1);
+    expect(result.triggerSuggestions[0].suggestedConfig).toContain("0 7 * * *");
+  });
+
+  it("omits sddCrossReference when no SDD artifacts", () => {
+    const result = runDhgAnalysis([]);
+    expect(result.sddCrossReference).toBeUndefined();
+  });
+});
+
+describe("DHG generator - governance checklist", () => {
+  function makeMinimalReport2(): PipelineOutcomeReport {
+    return {
+      remediations: [], propertyRemediations: [], autoRepairs: [],
+      downgradeEvents: [], qualityWarnings: [], fullyGeneratedFiles: ["Main.xaml"],
+      totalEstimatedEffortMinutes: 0,
+    };
+  }
+
+  it("includes governance items in pre-deployment checklist", () => {
+    const analysis = runDhgAnalysis([{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }]);
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport2(), context);
+    expect(md).toContain("UAT test execution completed and sign-off obtained");
+    expect(md).toContain("Peer code review completed");
+    expect(md).toContain("quality gate warnings addressed");
+    expect(md).toContain("Business process owner validation");
+    expect(md).toContain("CoE approval obtained");
+    expect(md).toContain("Production readiness assessment");
+    expect(md).toContain("Governance");
+  });
+});
+
+describe("DHG generator - process map topology", () => {
+  function makeMinimalReport3(): PipelineOutcomeReport {
+    return {
+      remediations: [], propertyRemediations: [], autoRepairs: [],
+      downgradeEvents: [], qualityWarnings: [], fullyGeneratedFiles: ["Main.xaml"],
+      totalEstimatedEffortMinutes: 0,
+    };
+  }
+
+  it("includes Business Process Overview when process steps present", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      {
+        processSteps: [
+          { name: "Login to SAP", role: "Accountant", system: "SAP", nodeType: "task", isPainPoint: false, description: "Open SAP GUI" },
+          { name: "Extract data", role: "Accountant", system: "SAP", nodeType: "task", isPainPoint: true, description: "Manual copy-paste" },
+        ],
+        painPoints: ["Extract data: Manual copy-paste"],
+        systems: ["SAP"],
+        roles: ["Accountant"],
+      },
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport3(), context);
+    expect(md).toContain("Business Process Overview");
+    expect(md).toContain("Process Steps");
+    expect(md).toContain("Login to SAP");
+    expect(md).toContain("Pain Points");
+    expect(md).toContain("Manual copy-paste");
+    expect(md).toContain("Target Applications / Systems");
+    expect(md).toContain("SAP");
+    expect(md).toContain("User Roles Involved");
+    expect(md).toContain("Accountant");
+  });
+
+  it("cross-references systems in environment setup", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      { systems: ["SAP", "Excel"] },
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport3(), context);
+    expect(md).toContain("Target Applications (from Process Map)");
+    expect(md).toContain("SAP");
+    expect(md).toContain("Excel");
+  });
+
+  it("omits Business Process Overview when no process data", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      { ideaDescription: "Some automation" },
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport3(), context);
+    expect(md).not.toContain("Business Process Overview");
+  });
+});
+
+describe("DHG generator - SDD artifact cross-reference rendering", () => {
+  function makeMinimalReport4(): PipelineOutcomeReport {
+    return {
+      remediations: [], propertyRemediations: [], autoRepairs: [],
+      downgradeEvents: [], qualityWarnings: [], fullyGeneratedFiles: ["Main.xaml"],
+      totalEstimatedEffortMinutes: 0,
+    };
+  }
+
+  it("renders SDD × XAML Artifact Reconciliation section", () => {
+    const sddArtifacts = {
+      assets: [
+        { name: "Config_URL", type: "Text" },
+        { name: "SddOnlyAsset", type: "Integer" },
+      ],
+    };
+    const xaml = makeXaml(`
+      <ui:GetAsset AssetName="Config_URL" />
+      <ui:GetAsset AssetName="XamlOnlyAsset" />
+    `);
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: xaml }],
+      undefined, 0, 0, undefined, undefined,
+      sddArtifacts,
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport4(), context);
+    expect(md).toContain("SDD × XAML Artifact Reconciliation");
+    expect(md).toContain("Aligned");
+    expect(md).toContain("SDD Only");
+    expect(md).toContain("XAML Only");
+  });
+
+  it("renders SDD queue configs in queue section", () => {
+    const sddArtifacts = {
+      queues: [{ name: "WorkQueue", maxRetries: 5, uniqueReference: true, sla: "30 minutes" }],
+    };
+    const xaml = makeXaml(`<ui:GetTransactionItem QueueName="WorkQueue" /><ui:SetTransactionStatus />`);
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: xaml }],
+      undefined, 0, 0, undefined, undefined,
+      sddArtifacts,
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport4(), context);
+    expect(md).toContain("5x, SDD");
+    expect(md).toContain("Yes (SDD)");
+    expect(md).toContain("30 minutes");
+  });
+
+  it("renders SDD triggers in trigger section", () => {
+    const sddArtifacts = {
+      triggers: [{ name: "NightlyBatch", type: "Time", cron: "0 2 * * *", description: "Run at 2 AM" }],
+    };
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined, undefined,
+      sddArtifacts,
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport4(), context);
+    expect(md).toContain("SDD-specified: NightlyBatch");
+    expect(md).toContain("Cron: 0 2 * * *");
+  });
+});
+
+describe("DHG generator - structured upstream context", () => {
+  function makeMinimalReport5(): PipelineOutcomeReport {
+    return {
+      remediations: [], propertyRemediations: [], autoRepairs: [],
+      downgradeEvents: [], qualityWarnings: [], fullyGeneratedFiles: ["Main.xaml"],
+      totalEstimatedEffortMinutes: 0,
+    };
+  }
+
+  it("includes automation type rationale", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      { automationType: "rpa", automationTypeRationale: "Structured data processing with SAP" },
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport5(), context);
+    expect(md).toContain("Rationale");
+    expect(md).toContain("Structured data processing with SAP");
+  });
+
+  it("includes feasibility complexity and effort estimate", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      { feasibilityComplexity: "Medium", feasibilityEffortEstimate: "4-6 weeks" },
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport5(), context);
+    expect(md).toContain("Feasibility Complexity");
+    expect(md).toContain("Medium");
+    expect(md).toContain("Effort Estimate");
+    expect(md).toContain("4-6 weeks");
+  });
+});
+
+describe("Edge Cases (Code Review Fixes)", () => {
+  it("normalizes SDD trigger types case-insensitively", () => {
+    const sddTriggers = [
+      { name: "T1", type: "queue", cron: "", queueName: "Q1" },
+      { name: "T2", type: "TIME", cron: "0 8 * * *" },
+      { name: "T3", type: "Api" },
+      { name: "T4", type: "EVENT" },
+      { name: "T5", type: "  Schedule  " },
+      { name: "T6", type: "webhook" },
+      { name: "T7", type: "cron", cron: "0 6 * * 1" },
+    ];
+    const result = suggestTriggers(makeXaml(`<ui:LogMessage Text="Hi" />`), false, [], sddTriggers);
+    expect(result[0].triggerType).toBe("Queue");
+    expect(result[1].triggerType).toBe("Schedule");
+    expect(result[2].triggerType).toBe("API/Webhook");
+    expect(result[3].triggerType).toBe("EventBased");
+    expect(result[4].triggerType).toBe("Schedule");
+    expect(result[5].triggerType).toBe("API/Webhook");
+    expect(result[6].triggerType).toBe("Schedule");
+  });
+
+  it("trims artifact names in cross-referencing to avoid false gaps", () => {
+    const credInventory: CredentialAssetInventory = {
+      entries: [
+        { activityType: "GetAsset", assetName: "  MyAsset  ", isHardcoded: true, file: "Main.xaml", lineNumber: 5 },
+        { activityType: "GetCredential", assetName: "MyCred ", isHardcoded: true, file: "Main.xaml", lineNumber: 10 },
+      ],
+      hardcodedCount: 2,
+      variableCount: 0,
+      uniqueAssetNames: ["  MyAsset  "],
+      uniqueCredentialNames: ["MyCred "],
+    };
+    const queueMgmt = makeQueueResult({ uniqueQueues: [" OrderQueue "], entries: [{ queueName: " OrderQueue ", activityType: "AddQueueItem", isHardcoded: true, file: "Main.xaml", lineNumber: 15 }] });
+    const sddArtifacts = {
+      assets: [
+        { name: "MyAsset", type: "Text", value: "v" },
+        { name: "MyCred", type: "Credential", value: "" },
+      ],
+      queues: [{ name: "OrderQueue", maxRetries: 3 }],
+    };
+    const result = crossReferenceArtifacts(sddArtifacts, credInventory, queueMgmt);
+    const aligned = result.entries.filter(e => e.status === "aligned");
+    const sddOnly = result.entries.filter(e => e.status === "sdd-only");
+    const xamlOnly = result.entries.filter(e => e.status === "xaml-only");
+    expect(aligned.length).toBe(3);
+    expect(sddOnly.length).toBe(0);
+    expect(xamlOnly.length).toBe(0);
+  });
+
+  it("surfaces SDD-only queue configs in DHG output", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`
+        <ui:AddQueueItem QueueName="OrderQueue" />
+      `) }],
+      undefined, 0, 0, undefined, undefined,
+      { queues: [
+        { name: "OrderQueue", maxRetries: 3 },
+        { name: "RefundQueue", maxRetries: 5, sla: "2h", uniqueReference: true },
+      ]}
+    );
+    const context: DhgContext = { projectName: "TestProject", workflowNames: ["Main"], analysis };
+    const report: PipelineOutcomeReport = {
+      remediations: [], propertyRemediations: [], autoRepairs: [],
+      downgradeEvents: [], qualityWarnings: [], fullyGeneratedFiles: ["Main.xaml"],
+      totalEstimatedEffortMinutes: 0,
+    } as any;
+    const md = generateDhgFromOutcomeReport(report, context);
+    expect(md).toContain("SDD-Defined Queues (Not Yet in XAML)");
+    expect(md).toContain("RefundQueue");
+    expect(md).toContain("5x");
+    expect(md).toContain("2h");
   });
 });

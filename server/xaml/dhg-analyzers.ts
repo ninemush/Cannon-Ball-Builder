@@ -541,8 +541,35 @@ export function suggestTriggers(
   queueResult: QueueManagementResult,
   envResult: EnvironmentRequirements,
   automationType?: string,
+  sddTriggers?: Array<{ name: string; type: string; cron?: string; queueName?: string; enabled?: boolean; description?: string }>,
 ): TriggerSuggestion[] {
   const suggestions: TriggerSuggestion[] = [];
+
+  if (sddTriggers && sddTriggers.length > 0) {
+    for (const t of sddTriggers) {
+      const normalizedType = (t.type || "").toLowerCase().trim();
+      const triggerType: TriggerSuggestion["triggerType"] =
+        normalizedType === "queue" ? "Queue"
+        : normalizedType === "time" || normalizedType === "schedule" || normalizedType === "cron" ? "Schedule"
+        : normalizedType === "api" || normalizedType === "webhook" || normalizedType === "api/webhook" ? "API/Webhook"
+        : normalizedType === "event" || normalizedType === "eventbased" || normalizedType === "event-based" ? "EventBased"
+        : normalizedType === "attended" ? "Attended"
+        : "Schedule";
+
+      let config = `SDD-specified: ${t.name}`;
+      if (t.cron) config += ` | Cron: ${t.cron}`;
+      if (t.queueName) config += ` | Queue: ${t.queueName}`;
+      if (t.enabled === false) config += ` | Disabled by default`;
+      if (t.description) config += ` | ${t.description}`;
+
+      suggestions.push({
+        triggerType,
+        reason: `Defined in SDD orchestrator_artifacts: ${t.name}`,
+        suggestedConfig: config,
+      });
+    }
+    return suggestions;
+  }
 
   if (queueResult.isTransactionalPattern) {
     suggestions.push({
@@ -721,13 +748,201 @@ export function calculateReadiness(
   return { sections, totalScore, maxTotalScore, percent, rating };
 }
 
+export interface ProcessStepSummary {
+  name: string;
+  role: string;
+  system: string;
+  nodeType: string;
+  isPainPoint: boolean;
+  description: string;
+}
+
 export interface UpstreamContext {
   ideaDescription?: string;
   pddSummary?: string;
   sddSummary?: string;
   automationType?: string;
+  automationTypeRationale?: string;
   feasibilityScore?: number;
+  feasibilityComplexity?: string;
+  feasibilityEffortEstimate?: string;
   qualityWarnings?: Array<{ code: string; message: string; severity: string }>;
+  processSteps?: ProcessStepSummary[];
+  painPoints?: string[];
+  systems?: string[];
+  roles?: string[];
+}
+
+export type ArtifactReconciliationStatus = "aligned" | "sdd-only" | "xaml-only";
+
+export interface ArtifactReconciliationEntry {
+  name: string;
+  type: "asset" | "credential" | "queue";
+  status: ArtifactReconciliationStatus;
+  sddConfig?: Record<string, any>;
+  xamlFile?: string;
+  xamlLineNumber?: number;
+  valueType?: string;
+}
+
+export interface SddArtifactCrossReference {
+  entries: ArtifactReconciliationEntry[];
+  alignedCount: number;
+  sddOnlyCount: number;
+  xamlOnlyCount: number;
+  sddTriggers?: Array<{ name: string; type: string; cron?: string; queueName?: string; enabled?: boolean; description?: string }>;
+  sddQueueConfigs?: Array<{ name: string; maxRetries?: number; uniqueReference?: boolean; sla?: string; description?: string }>;
+}
+
+export function crossReferenceArtifacts(
+  sddArtifacts: Record<string, any> | null,
+  credentialInventory: CredentialAssetInventory,
+  queueManagement: QueueManagementResult,
+): SddArtifactCrossReference {
+  const entries: ArtifactReconciliationEntry[] = [];
+
+  const sddAssets: Array<{ name: string; type?: string; value?: string; description?: string }> = [];
+  const sddCredentials: Array<{ name: string; description?: string }> = [];
+  const sddQueues: Array<{ name: string; maxRetries?: number; uniqueReference?: boolean; description?: string }> = [];
+  const sddTriggers: SddArtifactCrossReference["sddTriggers"] = [];
+  const sddQueueConfigs: SddArtifactCrossReference["sddQueueConfigs"] = [];
+
+  if (sddArtifacts) {
+    if (Array.isArray(sddArtifacts.assets)) {
+      for (const a of sddArtifacts.assets) {
+        if (a && typeof a === "object" && a.name) {
+          sddAssets.push(a);
+        }
+      }
+    }
+    if (Array.isArray(sddArtifacts.queues)) {
+      for (const q of sddArtifacts.queues) {
+        if (q && typeof q === "object" && q.name) {
+          sddQueues.push(q);
+          sddQueueConfigs.push({
+            name: q.name,
+            maxRetries: q.maxRetries,
+            uniqueReference: q.uniqueReference,
+            sla: q.sla,
+            description: q.description,
+          });
+        }
+      }
+    }
+    if (Array.isArray(sddArtifacts.triggers)) {
+      for (const t of sddArtifacts.triggers) {
+        if (t && typeof t === "object" && t.name) {
+          sddTriggers.push({
+            name: t.name,
+            type: t.type || "Unknown",
+            cron: t.cron,
+            queueName: t.queueName,
+            enabled: t.enabled,
+            description: t.description,
+          });
+        }
+      }
+    }
+  }
+
+  const sddAssetNames = new Set(sddAssets.map(a => a.name.trim()));
+  const xamlAssetNames = new Set(credentialInventory.uniqueAssetNames.map(n => n.trim()));
+  const xamlCredNames = new Set(credentialInventory.uniqueCredentialNames.map(n => n.trim()));
+  const sddQueueNames = new Set(sddQueues.map(q => q.name.trim()));
+  const xamlQueueNames = new Set(queueManagement.uniqueQueues.map(n => n.trim()));
+
+  for (const asset of sddAssets) {
+    const assetType = (asset.type || "").toLowerCase();
+    const isCredential = assetType === "credential";
+
+    if (isCredential) {
+      sddCredentials.push(asset);
+      const inXaml = xamlCredNames.has(asset.name.trim());
+      const xamlEntry = inXaml ? credentialInventory.entries.find(e => e.assetName.trim() === asset.name.trim()) : undefined;
+      entries.push({
+        name: asset.name,
+        type: "credential",
+        status: inXaml ? "aligned" : "sdd-only",
+        sddConfig: { type: asset.type, description: asset.description },
+        xamlFile: xamlEntry?.file,
+        xamlLineNumber: xamlEntry?.lineNumber,
+        valueType: "Credential",
+      });
+    } else {
+      const inXaml = xamlAssetNames.has(asset.name.trim());
+      const xamlEntry = inXaml ? credentialInventory.entries.find(e => e.assetName.trim() === asset.name.trim()) : undefined;
+      entries.push({
+        name: asset.name,
+        type: "asset",
+        status: inXaml ? "aligned" : "sdd-only",
+        sddConfig: { type: asset.type, value: asset.value, description: asset.description },
+        xamlFile: xamlEntry?.file,
+        xamlLineNumber: xamlEntry?.lineNumber,
+        valueType: asset.type || xamlEntry?.assetValueType || "Unknown",
+      });
+    }
+  }
+
+  for (const name of credentialInventory.uniqueAssetNames) {
+    if (!sddAssetNames.has(name.trim())) {
+      const xamlEntry = credentialInventory.entries.find(e => e.assetName === name);
+      entries.push({
+        name,
+        type: "asset",
+        status: "xaml-only",
+        xamlFile: xamlEntry?.file,
+        xamlLineNumber: xamlEntry?.lineNumber,
+        valueType: xamlEntry?.assetValueType || "Unknown",
+      });
+    }
+  }
+
+  for (const name of credentialInventory.uniqueCredentialNames) {
+    const alreadyFromSdd = entries.some(e => e.name.trim() === name.trim() && e.type === "credential");
+    if (!alreadyFromSdd) {
+      const xamlEntry = credentialInventory.entries.find(e => e.assetName === name);
+      entries.push({
+        name,
+        type: "credential",
+        status: "xaml-only",
+        xamlFile: xamlEntry?.file,
+        xamlLineNumber: xamlEntry?.lineNumber,
+        valueType: "Credential",
+      });
+    }
+  }
+
+  for (const q of sddQueues) {
+    const inXaml = xamlQueueNames.has(q.name.trim());
+    const xamlEntry = inXaml ? queueManagement.entries.find(e => e.queueName.trim() === q.name.trim()) : undefined;
+    entries.push({
+      name: q.name,
+      type: "queue",
+      status: inXaml ? "aligned" : "sdd-only",
+      sddConfig: { maxRetries: q.maxRetries, uniqueReference: q.uniqueReference, description: q.description },
+      xamlFile: xamlEntry?.file,
+      xamlLineNumber: xamlEntry?.lineNumber,
+    });
+  }
+
+  for (const name of queueManagement.uniqueQueues) {
+    if (!sddQueueNames.has(name.trim())) {
+      const xamlEntry = queueManagement.entries.find(e => e.queueName === name);
+      entries.push({
+        name,
+        type: "queue",
+        status: "xaml-only",
+        xamlFile: xamlEntry?.file,
+        xamlLineNumber: xamlEntry?.lineNumber,
+      });
+    }
+  }
+
+  const alignedCount = entries.filter(e => e.status === "aligned").length;
+  const sddOnlyCount = entries.filter(e => e.status === "sdd-only").length;
+  const xamlOnlyCount = entries.filter(e => e.status === "xaml-only").length;
+
+  return { entries, alignedCount, sddOnlyCount, xamlOnlyCount, sddTriggers, sddQueueConfigs };
 }
 
 export interface DhgAnalysisResult {
@@ -738,6 +953,7 @@ export interface DhgAnalysisResult {
   triggerSuggestions: TriggerSuggestion[];
   readiness: OverallReadiness;
   upstreamContext?: UpstreamContext;
+  sddCrossReference?: SddArtifactCrossReference;
 }
 
 export function runDhgAnalysis(
@@ -747,13 +963,25 @@ export function runDhgAnalysis(
   remediationCount?: number,
   automationType?: string,
   upstreamContext?: UpstreamContext,
+  sddArtifacts?: Record<string, any> | null,
 ): DhgAnalysisResult {
   const credentialInventory = scanCredentialAssets(xamlEntries);
   const exceptionCoverage = analyzeExceptionCoverage(xamlEntries);
   const queueManagement = extractQueueManagement(xamlEntries);
   const environmentRequirements = detectEnvironmentRequirements(xamlEntries, projectJsonContent);
   const effectiveAutomationType = automationType || upstreamContext?.automationType;
-  const triggerSuggestions = suggestTriggers(queueManagement, environmentRequirements, effectiveAutomationType);
+
+  const sddCrossReference = sddArtifacts
+    ? crossReferenceArtifacts(sddArtifacts, credentialInventory, queueManagement)
+    : undefined;
+
+  const triggerSuggestions = suggestTriggers(
+    queueManagement,
+    environmentRequirements,
+    effectiveAutomationType,
+    sddCrossReference?.sddTriggers,
+  );
+
   const readiness = calculateReadiness(
     credentialInventory,
     exceptionCoverage,
@@ -771,5 +999,6 @@ export function runDhgAnalysis(
     triggerSuggestions,
     readiness,
     upstreamContext,
+    sddCrossReference,
   };
 }

@@ -21,7 +21,8 @@ import {
   type XamlGap,
 } from "./xaml-generator";
 import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
-import { runDhgAnalysis, type UpstreamContext } from "./xaml/dhg-analyzers";
+import { runDhgAnalysis, type UpstreamContext, type ProcessStepSummary } from "./xaml/dhg-analyzers";
+import { parseArtifactBlockAsObject } from "./lib/artifact-parser";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import { runQualityGate, type QualityGateResult } from "./uipath-quality-gate";
@@ -499,6 +500,9 @@ function buildDhgFromBuildResult(
     const upstreamContext: UpstreamContext = {
       ideaDescription: ctx.idea.description || undefined,
       automationType: ctx.idea.automationType || undefined,
+      automationTypeRationale: ctx.idea.automationTypeRationale || undefined,
+      feasibilityComplexity: ctx.idea.feasibilityComplexity || undefined,
+      feasibilityEffortEstimate: ctx.idea.feasibilityEffortEstimate || undefined,
       qualityWarnings: buildResult.outcomeReport.qualityWarnings.map(w => ({
         code: w.code,
         message: w.message,
@@ -507,11 +511,46 @@ function buildDhgFromBuildResult(
     };
     if (ctx.pdd?.content) {
       const pddContent = typeof ctx.pdd.content === "string" ? ctx.pdd.content : "";
-      upstreamContext.pddSummary = pddContent.slice(0, 500) + (pddContent.length > 500 ? "..." : "");
+      upstreamContext.pddSummary = pddContent.slice(0, 2000) + (pddContent.length > 2000 ? "..." : "");
     }
     if (ctx.sdd?.content) {
-      const sddContent = typeof ctx.sdd.content === "string" ? ctx.sdd.content : "";
-      upstreamContext.sddSummary = sddContent.slice(0, 500) + (sddContent.length > 500 ? "..." : "");
+      const sddContentStr = typeof ctx.sdd.content === "string" ? ctx.sdd.content : "";
+      upstreamContext.sddSummary = sddContentStr.slice(0, 2000) + (sddContentStr.length > 2000 ? "..." : "");
+    }
+
+    if (ctx.mapNodes && ctx.mapNodes.length > 0) {
+      const toBeNodes = ctx.mapNodes.filter((n: any) => n.viewType === "to-be" || !n.viewType || n.viewType === "as-is");
+      upstreamContext.processSteps = toBeNodes.map((n: any): ProcessStepSummary => ({
+        name: n.name || "",
+        role: n.role || "",
+        system: n.system || "",
+        nodeType: n.nodeType || "task",
+        isPainPoint: !!n.isPainPoint,
+        description: n.description || "",
+      }));
+
+      upstreamContext.painPoints = ctx.mapNodes
+        .filter((n: any) => n.isPainPoint)
+        .map((n: any) => `${n.name || "Unnamed step"}${n.description ? ": " + n.description : ""}`);
+
+      const uniqueSystems = [...new Set(
+        ctx.mapNodes
+          .map((n: any) => (n.system || "").trim())
+          .filter((s: string) => s.length > 0),
+      )] as string[];
+      if (uniqueSystems.length > 0) upstreamContext.systems = uniqueSystems;
+
+      const uniqueRoles = [...new Set(
+        ctx.mapNodes
+          .map((n: any) => (n.role || "").trim())
+          .filter((r: string) => r.length > 0),
+      )] as string[];
+      if (uniqueRoles.length > 0) upstreamContext.roles = uniqueRoles;
+    }
+
+    let sddArtifacts: Record<string, any> | null = null;
+    if (ctx.sdd?.content && typeof ctx.sdd.content === "string") {
+      sddArtifacts = parseArtifactBlockAsObject(ctx.sdd.content);
     }
 
     const analysis = runDhgAnalysis(
@@ -521,6 +560,7 @@ function buildDhgFromBuildResult(
       remediationCount,
       ctx.idea.automationType || undefined,
       upstreamContext,
+      sddArtifacts,
     );
     const dhgContext: DhgContext = {
       projectName,
