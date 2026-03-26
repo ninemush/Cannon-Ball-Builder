@@ -544,7 +544,7 @@ export function lintExpression(expression: string): LintResult {
   }
 
   {
-    const strippedForAngle = replaceOutsideStrings(corrected, /"[^"]*"/g, '""');
+    const strippedForAngle = corrected.replace(/"(?:[^"\\]|\\.)*"/g, (m) => '"' + " ".repeat(Math.max(0, m.length - 2)) + '"');
     const withoutEscaped = strippedForAngle.replace(/&lt;/g, "  ").replace(/&gt;/g, "  ");
     const withoutVbOps = withoutEscaped.replace(/<>/g, "  ").replace(/<=/g, "  ").replace(/>=/g, "  ");
     if (/</.test(withoutVbOps)) {

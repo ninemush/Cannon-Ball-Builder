@@ -395,6 +395,21 @@ describe("VB.NET Expression Linter", () => {
       const result = lintExpression("int_count &lt; 10");
       expect(result.issues.filter(i => i.code === "BARE_ANGLE_BRACKET")).toHaveLength(0);
     });
+
+    it("does not flag angle brackets inside string literals", () => {
+      const result = lintExpression('str_xml.Contains("<tag>")');
+      expect(result.issues.filter(i => i.code === "BARE_ANGLE_BRACKET")).toHaveLength(0);
+    });
+
+    it("does not flag > inside string literals", () => {
+      const result = lintExpression('str_val.Replace(">", "")');
+      expect(result.issues.filter(i => i.code === "BARE_ANGLE_BRACKET")).toHaveLength(0);
+    });
+
+    it("still flags bare < outside string even when string has angles", () => {
+      const result = lintExpression('int_x < CInt("5")');
+      expect(result.issues.some(i => i.code === "BARE_ANGLE_BRACKET")).toBe(true);
+    });
   });
 
   describe("function-call validation", () => {
