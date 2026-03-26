@@ -2370,6 +2370,7 @@ async function provisionTestCases(
         label: "TM Create Project (camelCase)",
         redirect: "manual" as any,
       });
+      console.log(`[UiPath Deploy] TM Create (camelCase) -> ${createProjResult.status}: ${createProjResult.text.slice(0, 500)}`);
       if (createProjResult.status === 400 && createProjResult.text.includes("ProjectPrefix")) {
         const pascalBody = { Name: projName, ProjectPrefix: prefix, Description: truncDesc(`Test project for ${processName}`) };
         createProjResult = await uipathFetch(`${activeTmBase}/api/v2/Projects`, {
@@ -2379,10 +2380,11 @@ async function provisionTestCases(
           label: "TM Create Project (PascalCase)",
           redirect: "manual" as any,
         });
+        console.log(`[UiPath Deploy] TM Create (PascalCase retry) -> ${createProjResult.status}: ${createProjResult.text.slice(0, 500)}`);
       }
-      console.log(`[UiPath Deploy] Test project create -> ${createProjResult.status}: ${createProjResult.text.slice(0, 300)}`);
       if (createProjResult.status === 200 || createProjResult.status === 201) {
         const creation = isValidCreation(createProjResult.text);
+        console.log(`[UiPath Deploy] TM Create isValidCreation result: valid=${creation.valid}, hasId=${!!(creation.data?.Id || creation.data?.id)}, error=${creation.error || "none"}`);
         if (creation.valid && (creation.data?.Id || creation.data?.id)) {
           projectId = creation.data.Id || creation.data.id;
           projectPrefix = creation.data.Prefix || creation.data.prefix || creation.data.ProjectPrefix || creation.data.projectPrefix || prefix;
@@ -2433,16 +2435,18 @@ async function provisionTestCases(
               method: "POST", headers: tmHdrs, body: JSON.stringify(retryBody),
               label: "TM Create Project (prefix retry)", redirect: "manual" as any,
             });
+            console.log(`[UiPath Deploy] Prefix retry (camelCase) -> ${retryResult.status}: ${retryResult.text.slice(0, 500)}`);
             if (retryResult.status === 400 && retryResult.text.includes("ProjectPrefix")) {
               const retryBodyPascal = { Name: projName, ProjectPrefix: retryPrefix, Description: truncDesc(`Test project for ${processName}`) };
               retryResult = await uipathFetch(`${activeTmBase}/api/v2/Projects`, {
                 method: "POST", headers: tmHdrs, body: JSON.stringify(retryBodyPascal),
                 label: "TM Create Project (prefix retry PascalCase)", redirect: "manual" as any,
               });
+              console.log(`[UiPath Deploy] Prefix retry (PascalCase) -> ${retryResult.status}: ${retryResult.text.slice(0, 500)}`);
             }
-            console.log(`[UiPath Deploy] Prefix retry create -> ${retryResult.status}: ${retryResult.text.slice(0, 300)}`);
             if (retryResult.status === 200 || retryResult.status === 201) {
               const retryCreation = isValidCreation(retryResult.text);
+              console.log(`[UiPath Deploy] TM Prefix retry isValidCreation result: valid=${retryCreation.valid}, hasId=${!!(retryCreation.data?.Id || retryCreation.data?.id)}, error=${retryCreation.error || "none"}`);
               if (retryCreation.valid && (retryCreation.data?.Id || retryCreation.data?.id)) {
                 projectId = retryCreation.data.Id || retryCreation.data.id;
                 projectPrefix = retryCreation.data.Prefix || retryCreation.data.prefix || retryCreation.data.ProjectPrefix || retryCreation.data.projectPrefix || retryPrefix;
@@ -2457,6 +2461,7 @@ async function provisionTestCases(
         if (!projectId) {
           try {
             const reListResult = await uipathFetch(`${activeTmBase}/api/v2/Projects?$top=200`, { headers: tmHdrs, label: "TM Re-list Projects", maxRetries: 1, redirect: "manual" as any });
+            console.log(`[UiPath Deploy] 409 recovery re-list -> ${reListResult.status}: ${reListResult.text.slice(0, 500)}`);
             if (reListResult.ok) {
               const projects = reListResult.data?.data || reListResult.data?.value || [];
               const searchName = processName.replace(/_/g, " ").toLowerCase().trim();
@@ -2499,14 +2504,39 @@ async function provisionTestCases(
           } catch (e: any) { console.warn(`[UiPath Deploy] TM 409 recovery parse failed: ${e.message}`); }
         }
       } else if (createProjResult.status === 403 || createProjResult.status === 401) {
-        console.log(`[UiPath Deploy] Test project creation failed with ${createProjResult.status} — insufficient permissions`);
+        const responseExcerpt = createProjResult.text.slice(0, 500);
+        const statusLabel = createProjResult.status === 403 ? "Insufficient permissions" : "Authentication failed";
+        console.log(`[UiPath Deploy] Test project creation failed with ${createProjResult.status} — ${statusLabel}. Response: ${responseExcerpt}`);
+        results.push({
+          artifact: "Test Project",
+          name: projName,
+          status: "failed" as const,
+          message: `${statusLabel} (HTTP ${createProjResult.status}). Ensure TM.Projects scope family is granted in the External Application. Response: ${responseExcerpt}`,
+        });
+      } else {
+        const responseExcerpt = createProjResult.text.slice(0, 500);
+        console.log(`[UiPath Deploy] Test project creation returned unexpected status ${createProjResult.status}. Response: ${responseExcerpt}`);
+        results.push({
+          artifact: "Test Project",
+          name: projName,
+          status: "failed" as const,
+          message: `Project creation failed (HTTP ${createProjResult.status}). Response: ${responseExcerpt}`,
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(`[UiPath Deploy] Test project creation error:`, err);
+      results.push({
+        artifact: "Test Project",
+        name: processName.replace(/_/g, " "),
+        status: "failed" as const,
+        message: `Project creation threw an error: ${err.message || String(err)}`,
+      });
     }
   }
 
   if (!projectId) {
+    const projectFailureReason = results.find(r => r.artifact === "Test Project" && r.status === "failed")?.message
+      || "Unknown reason — no project creation result was recorded";
     return {
       results: [
         ...results,
@@ -2514,7 +2544,7 @@ async function provisionTestCases(
           artifact: "Test Case" as const,
           name: tc.name,
           status: "failed" as const,
-          message: `Could not find or create test project in Test Manager. Check API permissions.`,
+          message: `Could not find or create test project: ${projectFailureReason}`,
         })),
       ],
       testCaseMap: {},
