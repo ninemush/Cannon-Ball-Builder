@@ -253,11 +253,17 @@ export function generateDhgFromOutcomeReport(
   }
 
   if (context.analysis) {
+    if (context.analysis.upstreamContext) {
+      md += generateUpstreamContextSection(context.analysis, ++sectionNum);
+    }
     md += generateEnvironmentSetupSection(context.analysis, ++sectionNum);
     md += generateCredentialAssetSection(context.analysis, ++sectionNum);
     md += generateQueueManagementSection(context.analysis, ++sectionNum);
     md += generateExceptionCoverageSection(context.analysis, ++sectionNum);
     md += generateTriggerConfigSection(context.analysis, ++sectionNum);
+    if (context.analysis.upstreamContext?.qualityWarnings && context.analysis.upstreamContext.qualityWarnings.length > 0) {
+      md += generateUpstreamWarningsSection(context.analysis, ++sectionNum);
+    }
     md += generatePreDeploymentChecklist(context.analysis, ++sectionNum);
     md += generateReadinessScoreSection(context.analysis, ++sectionNum);
   }
@@ -306,13 +312,22 @@ function generateEnvironmentSetupSection(analysis: DhgAnalysisResult, sectionNum
   md += `| Target Framework | ${env.needsWindowsTarget ? "Windows (required)" : "Windows or Portable"} |\n`;
   md += `| Robot Type | ${env.needsAttendedRobot ? "Attended (user interaction required)" : "Unattended"} |\n`;
   md += `| Modern Activities | ${env.usesModernActivities ? "Yes" : "No"} |\n`;
+  md += `| Studio Version | ${env.studioVersion} |\n`;
   md += `| Orchestrator Connection | ${env.usesOrchestrator ? "Required" : "Not required"} |\n`;
+  md += `| Machine Template | ${env.machineTemplate.recommendedType} |\n`;
 
   if (env.usesActionCenter) md += `| Action Center | Required |\n`;
   if (env.usesAICenter) md += `| AI Center | Required |\n`;
   if (env.usesDocumentUnderstanding) md += `| Document Understanding | Required |\n`;
   if (env.usesDataService) md += `| Data Service | Required |\n`;
   md += `\n`;
+
+  md += `### Machine Template\n\n`;
+  md += `**Recommended:** ${env.machineTemplate.recommendedType}\n`;
+  md += `${env.machineTemplate.note}\n\n`;
+
+  md += `### Orchestrator Folder Structure\n\n`;
+  md += `${env.orchestratorFolderGuidance}\n\n`;
 
   if (env.browserExtensions.length > 0) {
     md += `### Browser Extensions\n\n`;
@@ -349,25 +364,40 @@ function generateCredentialAssetSection(analysis: DhgAnalysisResult, sectionNum:
 
   if (inv.uniqueCredentialNames.length > 0) {
     md += `### Orchestrator Credentials to Provision\n\n`;
-    md += `| # | Credential Name | Action |\n`;
-    md += `|---|----------------|--------|\n`;
+    md += `| # | Credential Name | Type | Consuming Activity | File | Action |\n`;
+    md += `|---|----------------|------|-------------------|------|--------|\n`;
     inv.uniqueCredentialNames.forEach((name, i) => {
-      const isHardcoded = inv.entries.some(e => e.assetName === name && e.isHardcoded);
-      md += `| ${i + 1} | \`${name}\` | ${isHardcoded ? "Create in Orchestrator before deployment" : "Verify exists in target environment"} |\n`;
+      const entry = inv.entries.find(e => e.assetName === name && (e.activityType === "GetCredential" || e.activityType === "SetCredential"));
+      const consumer = entry?.consumingActivity || "—";
+      const file = entry?.file || "—";
+      const action = entry?.isHardcoded ? "Create in Orchestrator before deployment" : "Verify exists in target environment";
+      md += `| ${i + 1} | \`${name}\` | Credential | ${consumer} | \`${file}\` | ${action} |\n`;
     });
     md += `\n`;
   }
 
   if (inv.uniqueAssetNames.length > 0) {
     md += `### Orchestrator Assets to Provision\n\n`;
-    md += `| # | Asset Name | Action |\n`;
-    md += `|---|-----------|--------|\n`;
+    md += `| # | Asset Name | Value Type | Consuming Activity | File | Action |\n`;
+    md += `|---|-----------|-----------|-------------------|------|--------|\n`;
     inv.uniqueAssetNames.forEach((name, i) => {
-      const isHardcoded = inv.entries.some(e => e.assetName === name && e.isHardcoded);
-      md += `| ${i + 1} | \`${name}\` | ${isHardcoded ? "Create in Orchestrator before deployment" : "Verify exists in target environment"} |\n`;
+      const entry = inv.entries.find(e => e.assetName === name && (e.activityType === "GetAsset" || e.activityType === "SetAsset"));
+      const valueType = entry?.assetValueType || "Unknown";
+      const consumer = entry?.consumingActivity || "—";
+      const file = entry?.file || "—";
+      const action = entry?.isHardcoded ? "Create in Orchestrator before deployment" : "Verify exists in target environment";
+      md += `| ${i + 1} | \`${name}\` | ${valueType} | ${consumer} | \`${file}\` | ${action} |\n`;
     });
     md += `\n`;
   }
+
+  md += `### Detailed Usage Map\n\n`;
+  md += `| File | Line | Activity | Asset/Credential | Type | Variable | Hardcoded |\n`;
+  md += `|------|------|----------|-----------------|------|----------|----------|\n`;
+  for (const e of inv.entries) {
+    md += `| \`${e.file}\` | ${e.lineNumber} | ${e.activityType} | \`${e.assetName}\` | ${e.assetValueType} | ${e.variableName || "—"} | ${e.isHardcoded ? "Yes" : "No"} |\n`;
+  }
+  md += `\n`;
 
   if (inv.hardcodedCount > 0) {
     md += `> **Warning:** ${inv.hardcodedCount} asset/credential name(s) are hardcoded. Consider externalizing to Orchestrator Config assets for environment portability.\n\n`;
@@ -389,13 +419,15 @@ function generateQueueManagementSection(analysis: DhgAnalysisResult, sectionNum:
 
   if (q.uniqueQueues.length > 0) {
     md += `### Queues to Provision\n\n`;
-    md += `| # | Queue Name | Activities | Action |\n`;
-    md += `|---|-----------|------------|--------|\n`;
+    md += `| # | Queue Name | Activities | Unique Reference | Auto Retry | Action |\n`;
+    md += `|---|-----------|------------|-----------------|------------|--------|\n`;
     q.uniqueQueues.forEach((qName, i) => {
       const activities = q.entries.filter(e => e.queueName === qName).map(e => e.activityType);
       const uniqueActs = [...new Set(activities)].join(", ");
       const isHardcoded = q.entries.some(e => e.queueName === qName && e.isHardcoded);
-      md += `| ${i + 1} | \`${qName}\` | ${uniqueActs} | ${isHardcoded ? "Create in Orchestrator" : "Verify exists"} |\n`;
+      const uniqueRef = q.isTransactionalPattern ? "Recommended" : "Optional";
+      const autoRetry = q.retryPolicy.autoRetryEnabled ? `Yes (${q.retryPolicy.maxRetries}x)` : "No";
+      md += `| ${i + 1} | \`${qName}\` | ${uniqueActs} | ${uniqueRef} | ${autoRetry} | ${isHardcoded ? "Create in Orchestrator" : "Verify exists"} |\n`;
     });
     md += `\n`;
   }
@@ -407,6 +439,15 @@ function generateQueueManagementSection(analysis: DhgAnalysisResult, sectionNum:
   md += `| Get Transaction Item | ${q.hasGetTransaction ? "Yes" : "No"} |\n`;
   md += `| Set Transaction Status | ${q.hasSetTransactionStatus ? "Yes" : "No"} |\n`;
   md += `\n`;
+
+  md += `### Retry Policy\n\n`;
+  md += `${q.retryPolicy.note}\n\n`;
+
+  md += `### SLA Guidance\n\n`;
+  md += `${q.slaGuidance}\n\n`;
+
+  md += `### Dead-Letter / Failed Items Handling\n\n`;
+  md += `${q.deadLetterHandling}\n\n`;
 
   if (q.isTransactionalPattern && !q.hasAddQueueItem) {
     md += `> **Note:** This is a Performer process — a separate Dispatcher process is needed to populate the queue.\n\n`;
@@ -518,6 +559,59 @@ function generatePreDeploymentChecklist(analysis: DhgAnalysisResult, sectionNum:
   items.forEach((item, i) => {
     md += `| ${i + 1} | ${item.category} | ${item.task} | ${item.required ? "Yes" : "Recommended"} |\n`;
   });
+  md += `\n`;
+
+  return md;
+}
+
+function generateUpstreamContextSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const ctx = analysis.upstreamContext!;
+  let md = `## ${sectionNum}. Process Context (from Pipeline)\n\n`;
+
+  if (ctx.ideaDescription) {
+    md += `### Idea Description\n\n`;
+    md += `${ctx.ideaDescription}\n\n`;
+  }
+
+  if (ctx.pddSummary) {
+    md += `### PDD Summary\n\n`;
+    md += `${ctx.pddSummary}\n\n`;
+  }
+
+  if (ctx.sddSummary) {
+    md += `### SDD Summary\n\n`;
+    md += `${ctx.sddSummary}\n\n`;
+  }
+
+  if (ctx.automationType) {
+    md += `**Automation Type:** ${ctx.automationType}\n`;
+  }
+  if (ctx.feasibilityScore !== undefined) {
+    md += `**Feasibility Score:** ${ctx.feasibilityScore}%\n`;
+  }
+  md += `\n`;
+
+  return md;
+}
+
+function generateUpstreamWarningsSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const warnings = analysis.upstreamContext!.qualityWarnings!;
+  let md = `## ${sectionNum}. Upstream Quality Findings\n\n`;
+
+  md += `The following quality warnings were produced by upstream pipeline stages (selector scoring, type validation, expression linting, etc.) and should be addressed during development:\n\n`;
+
+  const byCode = new Map<string, typeof warnings>();
+  for (const w of warnings) {
+    const existing = byCode.get(w.code) || [];
+    existing.push(w);
+    byCode.set(w.code, existing);
+  }
+
+  md += `| Code | Severity | Count | Sample Message |\n`;
+  md += `|------|----------|-------|----------------|\n`;
+  for (const [code, items] of byCode) {
+    md += `| ${code} | ${items[0].severity} | ${items.length} | ${items[0].message.slice(0, 120)}${items[0].message.length > 120 ? "..." : ""} |\n`;
+  }
   md += `\n`;
 
   return md;

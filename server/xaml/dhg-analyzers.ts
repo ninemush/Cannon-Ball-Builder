@@ -5,6 +5,8 @@ export interface CredentialAssetEntry {
   isHardcoded: boolean;
   variableName?: string;
   lineNumber: number;
+  assetValueType: "Text" | "Integer" | "Boolean" | "Credential" | "Unknown";
+  consumingActivity?: string;
 }
 
 export interface CredentialAssetInventory {
@@ -47,6 +49,13 @@ export interface QueueManagementResult {
   hasGetTransaction: boolean;
   hasSetTransactionStatus: boolean;
   isTransactionalPattern: boolean;
+  retryPolicy: {
+    maxRetries: number;
+    autoRetryEnabled: boolean;
+    note: string;
+  };
+  slaGuidance: string;
+  deadLetterHandling: string;
 }
 
 export interface EnvironmentRequirements {
@@ -60,6 +69,12 @@ export interface EnvironmentRequirements {
   usesAICenter: boolean;
   usesDocumentUnderstanding: boolean;
   usesDataService: boolean;
+  machineTemplate: {
+    recommendedType: "Standard" | "Server" | "Serverless";
+    note: string;
+  };
+  orchestratorFolderGuidance: string;
+  studioVersion: string;
 }
 
 export interface TriggerSuggestion {
@@ -72,6 +87,8 @@ const ASSET_ACTIVITY_PATTERN = /<ui:(GetCredential|GetAsset|SetCredential|SetAss
 const ASSET_NAME_ATTR = /\bAssetName\s*=\s*"([^"]*)"/;
 const CREDENTIAL_NAME_ATTR = /\bCredentialName\s*=\s*"([^"]*)"/;
 const RESULT_ATTR = /\bResult\s*=\s*"\[([^\]]+)\]"/;
+const ASSET_TYPE_ATTR = /\bAssetType\s*=\s*"([^"]*)"/;
+const DISPLAY_NAME_ATTR = /DisplayName="([^"]*)"/;
 
 const HIGH_RISK_ACTIVITIES = new Set([
   "ui:HttpClient", "uweb:HttpClient",
@@ -127,6 +144,34 @@ export function scanCredentialAssets(
       const resultMatch = contextBlock.match(RESULT_ATTR);
       const variableName = resultMatch ? resultMatch[1] : undefined;
 
+      let assetValueType: CredentialAssetEntry["assetValueType"] = "Unknown";
+      if (isCredential) {
+        assetValueType = "Credential";
+      } else {
+        const typeMatch = contextBlock.match(ASSET_TYPE_ATTR);
+        if (typeMatch) {
+          const raw = typeMatch[1];
+          if (raw === "Text" || raw === "Integer" || raw === "Boolean") assetValueType = raw;
+        } else if (variableName) {
+          if (/int|count|num/i.test(variableName)) assetValueType = "Integer";
+          else if (/bool|flag|is[A-Z]/i.test(variableName)) assetValueType = "Boolean";
+          else assetValueType = "Text";
+        }
+      }
+
+      let consumingActivity: string | undefined;
+      if (variableName) {
+        for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+          if (lines[j].includes(`[${variableName}]`) || lines[j].includes(`${variableName}`)) {
+            const consumerMatch = lines[j].match(DISPLAY_NAME_ATTR);
+            if (consumerMatch) {
+              consumingActivity = consumerMatch[1];
+              break;
+            }
+          }
+        }
+      }
+
       entries.push({
         file: shortName,
         activityType,
@@ -134,6 +179,8 @@ export function scanCredentialAssets(
         isHardcoded,
         variableName,
         lineNumber: i + 1,
+        assetValueType,
+        consumingActivity,
       });
     }
   }
@@ -339,6 +386,34 @@ export function extractQueueManagement(
   const hasSetTransactionStatus = entries.some(e => e.activityType === "SetTransactionStatus");
   const isTransactionalPattern = hasGetTransaction && hasSetTransactionStatus;
 
+  const hasPostpone = entries.some(e => e.activityType === "PostponeTransactionItem");
+
+  const retryPolicy = isTransactionalPattern
+    ? {
+        maxRetries: 3,
+        autoRetryEnabled: true,
+        note: hasPostpone
+          ? "Transactional pattern with postpone detected — configure Auto Retry with postpone-aware retry delay"
+          : "Transactional pattern detected — configure Auto Retry (recommended: 3 retries) in Orchestrator Queue settings",
+      }
+    : {
+        maxRetries: 0,
+        autoRetryEnabled: false,
+        note: hasAddQueueItem
+          ? "Dispatcher pattern only — retry policies apply to the consumer process, not the dispatcher"
+          : "No queue usage detected — retry policy not applicable",
+      };
+
+  const slaGuidance = isTransactionalPattern
+    ? "Configure SLA in Orchestrator: set Maximum Execution Time per transaction item and monitor Queue SLA reports. Recommended: base SLA on observed P95 processing time + 20% buffer."
+    : hasAddQueueItem
+      ? "Monitor queue growth rate and dispatcher throughput. Set alerts for queue item age exceeding business SLA."
+      : "No queue-based SLA applicable.";
+
+  const deadLetterHandling = isTransactionalPattern
+    ? "Items exceeding max retries are marked as Failed. Review failed items in Orchestrator Queues dashboard. Consider: (1) Create a separate cleanup/reprocessing workflow for DLQ items, (2) Set up email alerts for failed transaction counts exceeding threshold, (3) Log detailed failure context in SetTransactionStatus output for troubleshooting."
+    : "No dead-letter handling applicable — process does not consume queue items.";
+
   return {
     entries,
     uniqueQueues,
@@ -346,6 +421,9 @@ export function extractQueueManagement(
     hasGetTransaction,
     hasSetTransactionStatus,
     isTransactionalPattern,
+    retryPolicy,
+    slaGuidance,
+    deadLetterHandling,
   };
 }
 
@@ -379,10 +457,13 @@ export function detectEnvironmentRequirements(
   }
 
   let requiredPackages: string[] = [];
+  let studioVersion = "25.10.0";
   if (projectJsonContent) {
     try {
       const pj = JSON.parse(projectJsonContent);
       requiredPackages = Object.keys(pj.dependencies || {});
+      if (pj.studioVersion) studioVersion = pj.studioVersion;
+      if (pj.toolVersion) studioVersion = pj.toolVersion;
     } catch {}
   }
 
@@ -417,6 +498,24 @@ export function detectEnvironmentRequirements(
     allContent.includes("UpdateEntity") ||
     allContent.includes("DeleteEntity");
 
+  let machineType: EnvironmentRequirements["machineTemplate"]["recommendedType"] = "Standard";
+  let machineNote = "Standard unattended machine template";
+  if (usesAICenter || usesDocumentUnderstanding) {
+    machineType = "Server";
+    machineNote = "Server machine recommended for AI/DU workloads — allocate GPU resources if using local ML models";
+  } else if (!needsWindowsTarget && usesModernActivities && !needsAttendedRobot) {
+    machineType = "Serverless";
+    machineNote = "Cross-platform modern activities — eligible for Serverless Cloud Robot execution";
+  } else if (needsAttendedRobot) {
+    machineNote = "Standard machine with interactive session — user must be logged in for attended robot";
+  }
+
+  const orchestratorFolderGuidance = needsAttendedRobot
+    ? "Create a Modern Folder with attended robot assignments. Ensure user accounts are mapped to the folder with appropriate permissions."
+    : isTransactional(allContent)
+      ? "Create a Modern Folder with unattended robot pool (2+ robots recommended for queue-based processing). Enable Auto-scaling if available."
+      : "Create a Modern Folder with at least one unattended robot assignment. Use folder-level credential stores for asset isolation.";
+
   return {
     needsWindowsTarget,
     needsAttendedRobot,
@@ -428,7 +527,14 @@ export function detectEnvironmentRequirements(
     usesAICenter,
     usesDocumentUnderstanding,
     usesDataService,
+    machineTemplate: { recommendedType: machineType, note: machineNote },
+    orchestratorFolderGuidance,
+    studioVersion,
   };
+}
+
+function isTransactional(content: string): boolean {
+  return content.includes("GetTransactionItem") && content.includes("SetTransactionStatus");
 }
 
 export function suggestTriggers(
@@ -443,8 +549,8 @@ export function suggestTriggers(
       triggerType: "Queue",
       reason: "Process uses GetTransactionItem/SetTransactionStatus — configure a queue trigger in Orchestrator",
       suggestedConfig: queueResult.uniqueQueues.length > 0
-        ? `Queue: ${queueResult.uniqueQueues[0]}`
-        : "Configure queue name in Orchestrator",
+        ? `Queue: ${queueResult.uniqueQueues[0]} | Min items to trigger: 1 | Max concurrent jobs: 2 | Unique Reference: Optional`
+        : "Configure queue name in Orchestrator | Min items to trigger: 1",
     });
   }
 
@@ -452,6 +558,7 @@ export function suggestTriggers(
     suggestions.push({
       triggerType: "Attended",
       reason: "Process uses UI dialogs (InputDialog/MessageBox) — requires attended robot with user interaction",
+      suggestedConfig: "Trigger from UiPath Assistant or Action Center task completion",
     });
   }
 
@@ -459,6 +566,15 @@ export function suggestTriggers(
     suggestions.push({
       triggerType: "API/Webhook",
       reason: "Agent/hybrid automation — consider API trigger or webhook for on-demand invocation",
+      suggestedConfig: "POST /odata/Jobs/UiPath.Server.Configuration.OData.StartJobs | Include InputArguments in request body",
+    });
+  }
+
+  if (envResult.usesActionCenter) {
+    suggestions.push({
+      triggerType: "EventBased",
+      reason: "Process uses Action Center tasks — configure event trigger on task completion",
+      suggestedConfig: "Event type: FormTaskCompleted | Source: Action Center",
     });
   }
 
@@ -466,7 +582,7 @@ export function suggestTriggers(
     suggestions.push({
       triggerType: "Schedule",
       reason: "Standard unattended process — configure a time-based schedule trigger in Orchestrator",
-      suggestedConfig: "Suggested: Daily or per business requirement",
+      suggestedConfig: "Cron: 0 8 * * 1-5 (weekdays at 8am) — adjust per business requirement | Timezone: UTC or local business timezone | Non-working days: Exclude via Orchestrator calendar",
     });
   }
 
@@ -605,6 +721,15 @@ export function calculateReadiness(
   return { sections, totalScore, maxTotalScore, percent, rating };
 }
 
+export interface UpstreamContext {
+  ideaDescription?: string;
+  pddSummary?: string;
+  sddSummary?: string;
+  automationType?: string;
+  feasibilityScore?: number;
+  qualityWarnings?: Array<{ code: string; message: string; severity: string }>;
+}
+
 export interface DhgAnalysisResult {
   credentialInventory: CredentialAssetInventory;
   exceptionCoverage: ExceptionCoverageResult;
@@ -612,6 +737,7 @@ export interface DhgAnalysisResult {
   environmentRequirements: EnvironmentRequirements;
   triggerSuggestions: TriggerSuggestion[];
   readiness: OverallReadiness;
+  upstreamContext?: UpstreamContext;
 }
 
 export function runDhgAnalysis(
@@ -620,12 +746,14 @@ export function runDhgAnalysis(
   qualityWarningCount?: number,
   remediationCount?: number,
   automationType?: string,
+  upstreamContext?: UpstreamContext,
 ): DhgAnalysisResult {
   const credentialInventory = scanCredentialAssets(xamlEntries);
   const exceptionCoverage = analyzeExceptionCoverage(xamlEntries);
   const queueManagement = extractQueueManagement(xamlEntries);
   const environmentRequirements = detectEnvironmentRequirements(xamlEntries, projectJsonContent);
-  const triggerSuggestions = suggestTriggers(queueManagement, environmentRequirements, automationType);
+  const effectiveAutomationType = automationType || upstreamContext?.automationType;
+  const triggerSuggestions = suggestTriggers(queueManagement, environmentRequirements, effectiveAutomationType);
   const readiness = calculateReadiness(
     credentialInventory,
     exceptionCoverage,
@@ -642,5 +770,6 @@ export function runDhgAnalysis(
     environmentRequirements,
     triggerSuggestions,
     readiness,
+    upstreamContext,
   };
 }

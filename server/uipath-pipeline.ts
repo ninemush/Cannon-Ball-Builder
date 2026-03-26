@@ -21,7 +21,7 @@ import {
   type XamlGap,
 } from "./xaml-generator";
 import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
-import { runDhgAnalysis } from "./xaml/dhg-analyzers";
+import { runDhgAnalysis, type UpstreamContext } from "./xaml/dhg-analyzers";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import { runQualityGate, type QualityGateResult } from "./uipath-quality-gate";
@@ -496,12 +496,31 @@ function buildDhgFromBuildResult(
   if (buildResult.outcomeReport) {
     const qualityWarningCount = buildResult.outcomeReport.qualityWarnings.length;
     const remediationCount = buildResult.outcomeReport.remediations.length + buildResult.outcomeReport.propertyRemediations.length;
+    const upstreamContext: UpstreamContext = {
+      ideaDescription: ctx.idea.description || undefined,
+      automationType: ctx.idea.automationType || undefined,
+      qualityWarnings: buildResult.outcomeReport.qualityWarnings.map(w => ({
+        code: w.code,
+        message: w.message,
+        severity: w.severity,
+      })),
+    };
+    if (ctx.pdd?.content) {
+      const pddContent = typeof ctx.pdd.content === "string" ? ctx.pdd.content : "";
+      upstreamContext.pddSummary = pddContent.slice(0, 500) + (pddContent.length > 500 ? "..." : "");
+    }
+    if (ctx.sdd?.content) {
+      const sddContent = typeof ctx.sdd.content === "string" ? ctx.sdd.content : "";
+      upstreamContext.sddSummary = sddContent.slice(0, 500) + (sddContent.length > 500 ? "..." : "");
+    }
+
     const analysis = runDhgAnalysis(
       xamlEntries,
       buildResult.projectJsonContent || undefined,
       qualityWarningCount,
       remediationCount,
       ctx.idea.automationType || undefined,
+      upstreamContext,
     );
     const dhgContext: DhgContext = {
       projectName,

@@ -15,6 +15,40 @@ import {
 import { generateDhgFromOutcomeReport, type DhgContext } from "../dhg-generator";
 import type { PipelineOutcomeReport } from "../uipath-pipeline";
 
+function makeQueueResult(overrides: Partial<QueueManagementResult> = {}): QueueManagementResult {
+  return {
+    entries: [],
+    uniqueQueues: [],
+    hasAddQueueItem: false,
+    hasGetTransaction: false,
+    hasSetTransactionStatus: false,
+    isTransactionalPattern: false,
+    retryPolicy: { maxRetries: 0, autoRetryEnabled: false, note: "N/A" },
+    slaGuidance: "No queue-based SLA applicable.",
+    deadLetterHandling: "No dead-letter handling applicable — process does not consume queue items.",
+    ...overrides,
+  };
+}
+
+function makeEnvResult(overrides: Partial<EnvironmentRequirements> = {}): EnvironmentRequirements {
+  return {
+    needsWindowsTarget: false,
+    needsAttendedRobot: false,
+    usesModernActivities: true,
+    browserExtensions: [],
+    requiredPackages: [],
+    usesOrchestrator: false,
+    usesActionCenter: false,
+    usesAICenter: false,
+    usesDocumentUnderstanding: false,
+    usesDataService: false,
+    machineTemplate: { recommendedType: "Standard", note: "Standard unattended machine template" },
+    orchestratorFolderGuidance: "Create a Modern Folder with at least one unattended robot assignment.",
+    studioVersion: "25.10.0",
+    ...overrides,
+  };
+}
+
 function makeXaml(body: string): string {
   return `<Activity xmlns:ui="http://schemas.uipath.com/workflow/activities"
     xmlns:uweb="http://schemas.uipath.com/workflow/activities/web"
@@ -90,6 +124,24 @@ describe("scanCredentialAssets", () => {
     expect(result.uniqueCredentialNames).toEqual(["Cred1"]);
     expect(result.uniqueAssetNames).toContain("Asset1");
     expect(result.uniqueAssetNames).toContain("Asset2");
+  });
+
+  it("infers Credential assetValueType for GetCredential", () => {
+    const xaml = makeXaml(`<ui:GetCredential CredentialName="MyLogin" Result="[cred_Out]" />`);
+    const result = scanCredentialAssets([{ name: "Main.xaml", content: xaml }]);
+    expect(result.entries[0].assetValueType).toBe("Credential");
+  });
+
+  it("reads explicit AssetType attribute", () => {
+    const xaml = makeXaml(`<ui:GetAsset AssetName="MaxRetry" AssetType="Integer" Result="[int_Retry]" />`);
+    const result = scanCredentialAssets([{ name: "Main.xaml", content: xaml }]);
+    expect(result.entries[0].assetValueType).toBe("Integer");
+  });
+
+  it("infers asset type from variable name heuristics", () => {
+    const xaml = makeXaml(`<ui:GetAsset AssetName="SomeFlag" Result="[bool_Flag]" />`);
+    const result = scanCredentialAssets([{ name: "Main.xaml", content: xaml }]);
+    expect(result.entries[0].assetValueType).toBe("Boolean");
   });
 });
 
@@ -215,6 +267,32 @@ describe("extractQueueManagement", () => {
     expect(result.hasAddQueueItem).toBe(true);
     expect(result.entries[0].activityType).toBe("BulkAddQueueItems");
   });
+
+  it("provides retry policy for transactional pattern", () => {
+    const xaml = makeXaml(`
+      <ui:GetTransactionItem QueueName="Q1" />
+      <ui:SetTransactionStatus />
+    `);
+    const result = extractQueueManagement([{ name: "Main.xaml", content: xaml }]);
+    expect(result.retryPolicy.autoRetryEnabled).toBe(true);
+    expect(result.retryPolicy.maxRetries).toBe(3);
+    expect(result.slaGuidance).toContain("SLA");
+    expect(result.deadLetterHandling).toContain("Failed");
+  });
+
+  it("provides no retry for dispatcher-only", () => {
+    const xaml = makeXaml(`<ui:AddQueueItem QueueName="Q1" />`);
+    const result = extractQueueManagement([{ name: "Main.xaml", content: xaml }]);
+    expect(result.retryPolicy.autoRetryEnabled).toBe(false);
+    expect(result.retryPolicy.note).toContain("Dispatcher");
+  });
+
+  it("sets no-queue guidance when no queue activities", () => {
+    const xaml = makeXaml(`<ui:LogMessage Text="Hello" />`);
+    const result = extractQueueManagement([{ name: "Main.xaml", content: xaml }]);
+    expect(result.slaGuidance).toContain("No queue-based SLA applicable");
+    expect(result.deadLetterHandling).toContain("does not consume queue items");
+  });
 });
 
 describe("detectEnvironmentRequirements", () => {
@@ -288,107 +366,82 @@ describe("detectEnvironmentRequirements", () => {
     const result = detectEnvironmentRequirements([]);
     expect(result.requiredPackages).toEqual([]);
   });
+
+  it("provides machine template for AI Center workloads", () => {
+    const xaml = makeXaml(`<ui:MLSkill />`);
+    const result = detectEnvironmentRequirements([{ name: "Main.xaml", content: xaml }]);
+    expect(result.machineTemplate.recommendedType).toBe("Server");
+  });
+
+  it("provides Serverless for modern cross-platform", () => {
+    const xaml = makeXaml(`<ui:UseApplication />`);
+    const result = detectEnvironmentRequirements([{ name: "Main.xaml", content: xaml }]);
+    expect(result.machineTemplate.recommendedType).toBe("Serverless");
+  });
+
+  it("provides Standard for attended robot", () => {
+    const xaml = makeXaml(`<ui:InputDialog />`);
+    const result = detectEnvironmentRequirements([{ name: "Main.xaml", content: xaml }]);
+    expect(result.machineTemplate.recommendedType).toBe("Standard");
+    expect(result.machineTemplate.note).toContain("interactive session");
+  });
+
+  it("provides orchestrator folder guidance", () => {
+    const xaml = makeXaml(`<ui:GetCredential CredentialName="Test" />`);
+    const result = detectEnvironmentRequirements([{ name: "Main.xaml", content: xaml }]);
+    expect(result.orchestratorFolderGuidance).toContain("Modern Folder");
+  });
+
+  it("defaults studioVersion to 25.10.0", () => {
+    const result = detectEnvironmentRequirements([]);
+    expect(result.studioVersion).toBe("25.10.0");
+  });
+
+  it("extracts studioVersion from project.json", () => {
+    const pj = JSON.stringify({ studioVersion: "24.10.6" });
+    const result = detectEnvironmentRequirements([], pj);
+    expect(result.studioVersion).toBe("24.10.6");
+  });
 });
 
 describe("suggestTriggers", () => {
   it("suggests queue trigger for transactional pattern", () => {
-    const qResult: QueueManagementResult = {
-      entries: [],
-      uniqueQueues: ["WorkQueue"],
-      hasAddQueueItem: false,
-      hasGetTransaction: true,
-      hasSetTransactionStatus: true,
-      isTransactionalPattern: true,
-    };
-    const envResult: EnvironmentRequirements = {
-      needsWindowsTarget: false,
-      needsAttendedRobot: false,
-      usesModernActivities: true,
-      browserExtensions: [],
-      requiredPackages: [],
-      usesOrchestrator: true,
-      usesActionCenter: false,
-      usesAICenter: false,
-      usesDocumentUnderstanding: false,
-      usesDataService: false,
-    };
+    const qResult = makeQueueResult({ uniqueQueues: ["WorkQueue"], hasGetTransaction: true, hasSetTransactionStatus: true, isTransactionalPattern: true });
+    const envResult = makeEnvResult({ usesOrchestrator: true });
     const triggers = suggestTriggers(qResult, envResult);
     expect(triggers.some(t => t.triggerType === "Queue")).toBe(true);
+    expect(triggers[0].suggestedConfig).toContain("WorkQueue");
   });
 
   it("suggests attended trigger for attended robot", () => {
-    const qResult: QueueManagementResult = {
-      entries: [],
-      uniqueQueues: [],
-      hasAddQueueItem: false,
-      hasGetTransaction: false,
-      hasSetTransactionStatus: false,
-      isTransactionalPattern: false,
-    };
-    const envResult: EnvironmentRequirements = {
-      needsWindowsTarget: false,
-      needsAttendedRobot: true,
-      usesModernActivities: true,
-      browserExtensions: [],
-      requiredPackages: [],
-      usesOrchestrator: false,
-      usesActionCenter: false,
-      usesAICenter: false,
-      usesDocumentUnderstanding: false,
-      usesDataService: false,
-    };
+    const qResult = makeQueueResult();
+    const envResult = makeEnvResult({ needsAttendedRobot: true });
     const triggers = suggestTriggers(qResult, envResult);
     expect(triggers.some(t => t.triggerType === "Attended")).toBe(true);
+    expect(triggers[0].suggestedConfig).toContain("Assistant");
   });
 
-  it("suggests schedule trigger as default", () => {
-    const qResult: QueueManagementResult = {
-      entries: [],
-      uniqueQueues: [],
-      hasAddQueueItem: false,
-      hasGetTransaction: false,
-      hasSetTransactionStatus: false,
-      isTransactionalPattern: false,
-    };
-    const envResult: EnvironmentRequirements = {
-      needsWindowsTarget: false,
-      needsAttendedRobot: false,
-      usesModernActivities: true,
-      browserExtensions: [],
-      requiredPackages: [],
-      usesOrchestrator: false,
-      usesActionCenter: false,
-      usesAICenter: false,
-      usesDocumentUnderstanding: false,
-      usesDataService: false,
-    };
+  it("suggests schedule trigger as default with cron expression", () => {
+    const qResult = makeQueueResult();
+    const envResult = makeEnvResult();
     const triggers = suggestTriggers(qResult, envResult);
     expect(triggers.some(t => t.triggerType === "Schedule")).toBe(true);
+    expect(triggers[0].suggestedConfig).toContain("Cron:");
   });
 
   it("suggests API trigger for agent automation", () => {
-    const qResult: QueueManagementResult = {
-      entries: [],
-      uniqueQueues: [],
-      hasAddQueueItem: false,
-      hasGetTransaction: false,
-      hasSetTransactionStatus: false,
-      isTransactionalPattern: false,
-    };
-    const envResult: EnvironmentRequirements = {
-      needsWindowsTarget: false,
-      needsAttendedRobot: false,
-      usesModernActivities: true,
-      browserExtensions: [],
-      requiredPackages: [],
-      usesOrchestrator: false,
-      usesActionCenter: false,
-      usesAICenter: false,
-      usesDocumentUnderstanding: false,
-      usesDataService: false,
-    };
+    const qResult = makeQueueResult();
+    const envResult = makeEnvResult();
     const triggers = suggestTriggers(qResult, envResult, "agent");
     expect(triggers.some(t => t.triggerType === "API/Webhook")).toBe(true);
+    expect(triggers[0].suggestedConfig).toContain("StartJobs");
+  });
+
+  it("suggests event trigger for Action Center usage", () => {
+    const qResult = makeQueueResult();
+    const envResult = makeEnvResult({ usesActionCenter: true });
+    const triggers = suggestTriggers(qResult, envResult);
+    expect(triggers.some(t => t.triggerType === "EventBased")).toBe(true);
   });
 });
 
@@ -408,26 +461,8 @@ describe("calculateReadiness", () => {
     uncoveredHighRiskActivities: [],
     filesWithoutTryCatch: [],
   };
-  const emptyQueue: QueueManagementResult = {
-    entries: [],
-    uniqueQueues: [],
-    hasAddQueueItem: false,
-    hasGetTransaction: false,
-    hasSetTransactionStatus: false,
-    isTransactionalPattern: false,
-  };
-  const simpleEnv: EnvironmentRequirements = {
-    needsWindowsTarget: false,
-    needsAttendedRobot: false,
-    usesModernActivities: true,
-    browserExtensions: [],
-    requiredPackages: ["UiPath.System.Activities"],
-    usesOrchestrator: false,
-    usesActionCenter: false,
-    usesAICenter: false,
-    usesDocumentUnderstanding: false,
-    usesDataService: false,
-  };
+  const emptyQueue = makeQueueResult();
+  const simpleEnv = makeEnvResult({ requiredPackages: ["UiPath.System.Activities"] });
 
   it("returns Ready for clean package", () => {
     const result = calculateReadiness(emptyCred, emptyExc, emptyQueue, simpleEnv, 0, 0);
@@ -437,7 +472,7 @@ describe("calculateReadiness", () => {
 
   it("penalizes hardcoded credentials", () => {
     const cred: CredentialAssetInventory = {
-      entries: [{ file: "Main.xaml", activityType: "GetAsset", assetName: "Test", isHardcoded: true, lineNumber: 1 }],
+      entries: [{ file: "Main.xaml", activityType: "GetAsset", assetName: "Test", isHardcoded: true, lineNumber: 1, assetValueType: "Unknown" as const }],
       hardcodedCount: 1,
       variableCount: 0,
       uniqueAssetNames: ["Test"],
@@ -486,14 +521,11 @@ describe("calculateReadiness", () => {
   });
 
   it("penalizes GetTransactionItem without SetTransactionStatus", () => {
-    const queue: QueueManagementResult = {
+    const queue = makeQueueResult({
       entries: [{ file: "Main.xaml", activityType: "GetTransactionItem", queueName: "Q1", isHardcoded: true, lineNumber: 1 }],
       uniqueQueues: ["Q1"],
-      hasAddQueueItem: false,
       hasGetTransaction: true,
-      hasSetTransactionStatus: false,
-      isTransactionalPattern: false,
-    };
+    });
     const result = calculateReadiness(emptyCred, emptyExc, queue, simpleEnv, 0, 0);
     const queueSection = result.sections.find(s => s.section === "Queue Management");
     expect(queueSection!.score).toBeLessThan(queueSection!.maxScore);
@@ -699,6 +731,115 @@ describe("DHG generator with analysis context", () => {
     };
     const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
     expect(md).toContain("**Deployment Readiness:**");
+  });
+
+  it("includes Retry Policy and SLA Guidance in queue section", () => {
+    const analysis = runDhgAnalysis([{
+      name: "lib/Main.xaml",
+      content: makeXaml(`
+        <ui:GetTransactionItem QueueName="WorkQueue" />
+        <ui:SetTransactionStatus />
+      `),
+    }]);
+    const context: DhgContext = {
+      projectName: "TestProject",
+      workflowNames: ["Main"],
+      analysis,
+    };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
+    expect(md).toContain("Retry Policy");
+    expect(md).toContain("SLA Guidance");
+    expect(md).toContain("Dead-Letter / Failed Items Handling");
+    expect(md).toContain("Auto Retry");
+  });
+
+  it("includes Machine Template and Folder Guidance in environment section", () => {
+    const analysis = runDhgAnalysis([{
+      name: "lib/Main.xaml",
+      content: makeXaml(`<ui:UseApplication />`),
+    }]);
+    const context: DhgContext = {
+      projectName: "TestProject",
+      workflowNames: ["Main"],
+      analysis,
+    };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
+    expect(md).toContain("Machine Template");
+    expect(md).toContain("Orchestrator Folder Structure");
+    expect(md).toContain("Studio Version");
+  });
+
+  it("includes Detailed Usage Map in credential section", () => {
+    const analysis = runDhgAnalysis([{
+      name: "lib/Main.xaml",
+      content: makeXaml(`<ui:GetAsset AssetName="Config_URL" Result="[str_URL]" />`),
+    }]);
+    const context: DhgContext = {
+      projectName: "TestProject",
+      workflowNames: ["Main"],
+      analysis,
+    };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
+    expect(md).toContain("Detailed Usage Map");
+    expect(md).toContain("Config_URL");
+  });
+
+  it("includes upstream context section when provided", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      { ideaDescription: "Invoice processing automation", automationType: "rpa", feasibilityScore: 85 },
+    );
+    const context: DhgContext = {
+      projectName: "TestProject",
+      workflowNames: ["Main"],
+      analysis,
+    };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
+    expect(md).toContain("Process Context (from Pipeline)");
+    expect(md).toContain("Invoice processing automation");
+    expect(md).toContain("Automation Type");
+    expect(md).toContain("Feasibility Score");
+  });
+
+  it("includes upstream quality warnings section", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 2, 0, undefined,
+      {
+        qualityWarnings: [
+          { code: "SELECTOR_LOW_QUALITY", message: "Selector score 4/20 in Main.xaml", severity: "warning" },
+          { code: "TYPE_MISMATCH", message: "Int32 expected but got String", severity: "warning" },
+        ],
+      },
+    );
+    const context: DhgContext = {
+      projectName: "TestProject",
+      workflowNames: ["Main"],
+      analysis,
+    };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
+    expect(md).toContain("Upstream Quality Findings");
+    expect(md).toContain("SELECTOR_LOW_QUALITY");
+    expect(md).toContain("TYPE_MISMATCH");
+  });
+
+  it("includes PDD and SDD summaries in upstream context", () => {
+    const analysis = runDhgAnalysis(
+      [{ name: "Main.xaml", content: makeXaml(`<ui:LogMessage Text="Hi" />`) }],
+      undefined, 0, 0, undefined,
+      { pddSummary: "Process Design for invoice handling", sddSummary: "Solution using REFramework with SAP" },
+    );
+    const context: DhgContext = {
+      projectName: "TestProject",
+      workflowNames: ["Main"],
+      analysis,
+    };
+    const md = generateDhgFromOutcomeReport(makeMinimalReport(), context);
+    expect(md).toContain("PDD Summary");
+    expect(md).toContain("invoice handling");
+    expect(md).toContain("SDD Summary");
+    expect(md).toContain("REFramework with SAP");
   });
 
   it("omits analysis sections when no analysis context", () => {
