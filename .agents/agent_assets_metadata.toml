@@ -11,10 +11,10 @@ title = "Cannonball Full Codebase"
 id = "NbsU6VSaDHk-KORNIiAn2"
 uri = "file://scripts/renderer-comparison/current.png"
 type = "image"
-title = "CURRENT renderer (before)"
+title = "CURRENT renderer"
 
 [[outputs]]
 id = "bfDmc5D_I7ebE4P1ZwB07"
 uri = "file://scripts/renderer-comparison/improved.png"
 type = "image"
-title = "IMPROVED renderer (clean routing)"
+title = "IMPROVED renderer (clean routing v2)"

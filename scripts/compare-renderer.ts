@@ -102,13 +102,13 @@ const IMPROVED: RenderConfig = {
   decisionFontSize: 11,
   nameMaxChars: 40,
   nameMaxLines: 2,
-  nodesep: 100,
-  ranksep: 130,
+  nodesep: 120,
+  ranksep: 140,
   density: 144,
   edgeCornerRadius: 12,
   badgeHeight: 18,
   nameTruncate: 40,
-  edgesep: 60,
+  edgesep: 80,
   strokeWidth: 2,
   arrowSize: 10,
 };
@@ -303,7 +303,7 @@ function assignDecisionHandles(
   layoutEdges: LayoutEdge[],
   nodeTypeMap: Record<string, string>,
   _edgesBySource: Record<string, MapEdge[]>,
-  _cfg: RenderConfig,
+  cfg: RenderConfig,
 ): void {
   const nodeCenter: Record<string, { x: number; y: number }> = {};
   layoutNodes.forEach((n) => {
@@ -331,13 +331,22 @@ function assignDecisionHandles(
     const tgt1 = nodeCenter[siblings[1].target];
     if (!tgt0 || !tgt1) continue;
 
-    const sem0 = getLabelSemanticSide(siblings[0].label);
-    const sem1 = getLabelSemanticSide(siblings[1].label);
+    const halfDiamond = cfg.decisionSize / 2;
+    const tgt0IsBelow = tgt0.y > srcPos.y + halfDiamond;
+    const tgt1IsBelow = tgt1.y > srcPos.y + halfDiamond;
+    const tgt0DirectlyBelow = Math.abs(tgt0.x - srcPos.x) < halfDiamond * 0.8 && tgt0IsBelow;
+    const tgt1DirectlyBelow = Math.abs(tgt1.x - srcPos.x) < halfDiamond * 0.8 && tgt1IsBelow;
 
-    if (tgt0.x < srcPos.x && tgt1.x > srcPos.x) {
+    if (tgt0DirectlyBelow && !tgt1DirectlyBelow) {
+      siblings[0].sourceHandle = "bottom";
+      siblings[1].sourceHandle = tgt1.x <= srcPos.x ? "left" : "right";
+    } else if (tgt1DirectlyBelow && !tgt0DirectlyBelow) {
+      siblings[1].sourceHandle = "bottom";
+      siblings[0].sourceHandle = tgt0.x <= srcPos.x ? "left" : "right";
+    } else if (tgt0.x < srcPos.x && tgt1.x >= srcPos.x) {
       siblings[0].sourceHandle = "left";
       siblings[1].sourceHandle = "right";
-    } else if (tgt1.x < srcPos.x && tgt0.x > srcPos.x) {
+    } else if (tgt1.x < srcPos.x && tgt0.x >= srcPos.x) {
       siblings[0].sourceHandle = "right";
       siblings[1].sourceHandle = "left";
     } else if (tgt0.x < tgt1.x) {
@@ -347,17 +356,18 @@ function assignDecisionHandles(
       siblings[0].sourceHandle = "right";
       siblings[1].sourceHandle = "left";
     } else {
-      siblings[0].sourceHandle = sem0 === "right" ? "right" : "left";
-      siblings[1].sourceHandle = sem1 === "left" ? "left" : "right";
-      if (siblings[0].sourceHandle === siblings[1].sourceHandle) {
+      const sem0 = getLabelSemanticSide(siblings[0].label);
+      const sem1 = getLabelSemanticSide(siblings[1].label);
+      if (sem0 === "left" && sem1 !== "left") {
+        siblings[0].sourceHandle = "left";
+        siblings[1].sourceHandle = "right";
+      } else if (sem1 === "left" && sem0 !== "left") {
+        siblings[1].sourceHandle = "left";
+        siblings[0].sourceHandle = "right";
+      } else {
         siblings[0].sourceHandle = "left";
         siblings[1].sourceHandle = "right";
       }
-    }
-
-    if (sem0 && sem1 && sem0 !== sem1) {
-      siblings[0].sourceHandle = sem0;
-      siblings[1].sourceHandle = sem1;
     }
   }
 }
@@ -369,13 +379,12 @@ function computeEdgePoints(
   isDecisionSource: boolean,
   cfg: RenderConfig,
   _nodeById: Record<string, LayoutNode>,
-  _allNodes: LayoutNode[],
+  allNodes: LayoutNode[],
 ): { x: number; y: number }[] {
   const cx = srcNode.x + srcNode.width / 2;
   const cy = srcNode.y + srcNode.height / 2;
   const tx = tgtNode.x + tgtNode.width / 2;
   const ty = tgtNode.y;
-  const tBottom = tgtNode.y + tgtNode.height;
 
   if (!isDecisionSource) {
     const sx = cx;
@@ -383,15 +392,21 @@ function computeEdgePoints(
 
     if (ty < sy) {
       const goRight = tx > cx;
+      const allEdges = allNodes.map(n => ({
+        left: n.x,
+        right: n.x + n.width,
+      }));
+      const maxRight = Math.max(...allEdges.map(e => e.right));
+      const minLeft = Math.min(...allEdges.map(e => e.left));
       const routeX = goRight
-        ? Math.max(srcNode.x + srcNode.width + 30, tgtNode.x + tgtNode.width + 30)
-        : Math.min(srcNode.x - 30, tgtNode.x - 30);
+        ? maxRight + 40
+        : minLeft - 40;
       return [
         { x: sx, y: sy },
-        { x: sx, y: sy + 15 },
-        { x: routeX, y: sy + 15 },
-        { x: routeX, y: ty - 15 },
-        { x: tx, y: ty - 15 },
+        { x: sx, y: sy + 20 },
+        { x: routeX, y: sy + 20 },
+        { x: routeX, y: ty - 20 },
+        { x: tx, y: ty - 20 },
         { x: tx, y: ty },
       ];
     }
@@ -409,76 +424,66 @@ function computeEdgePoints(
     ];
   }
 
-  const diamondR = cfg.decisionSize * 0.5 * Math.SQRT2 * 0.5;
+  const halfDiamond = cfg.decisionSize / 2;
 
   if (sourceHandle === "left") {
-    const sx = cx - diamondR;
+    const sx = cx - halfDiamond;
     const sy = cy;
-    const targetIsBelow = ty > cy;
-    const targetIsLeft = tx < cx;
 
-    if (targetIsBelow && targetIsLeft) {
-      return [
-        { x: sx, y: sy },
-        { x: tx, y: sy },
-        { x: tx, y: ty },
-      ];
-    }
-    if (targetIsBelow) {
-      const routeX = Math.min(sx - 25, tgtNode.x - 15);
+    const targetLeftEdge = tgtNode.x;
+    const routeX = Math.min(sx - 30, targetLeftEdge - 20);
+
+    const midY = sy + (ty - sy) * 0.4;
+
+    if (ty <= cy) {
       return [
         { x: sx, y: sy },
         { x: routeX, y: sy },
-        { x: routeX, y: ty - 15 },
-        { x: tx, y: ty - 15 },
+        { x: routeX, y: ty - 20 },
+        { x: tx, y: ty - 20 },
         { x: tx, y: ty },
       ];
     }
-    const routeX = Math.min(sx - 25, tgtNode.x - 15);
+
     return [
       { x: sx, y: sy },
       { x: routeX, y: sy },
-      { x: routeX, y: ty - 15 },
-      { x: tx, y: ty - 15 },
+      { x: routeX, y: midY },
+      { x: tx, y: midY },
       { x: tx, y: ty },
     ];
   }
 
   if (sourceHandle === "right") {
-    const sx = cx + diamondR;
+    const sx = cx + halfDiamond;
     const sy = cy;
-    const targetIsBelow = ty > cy;
-    const targetIsRight = tx > cx;
 
-    if (targetIsBelow && targetIsRight) {
-      return [
-        { x: sx, y: sy },
-        { x: tx, y: sy },
-        { x: tx, y: ty },
-      ];
-    }
-    if (targetIsBelow) {
-      const routeX = Math.max(sx + 25, tgtNode.x + tgtNode.width + 15);
+    const targetRightEdge = tgtNode.x + tgtNode.width;
+    const routeX = Math.max(sx + 30, targetRightEdge + 20);
+
+    const midY = sy + (ty - sy) * 0.4;
+
+    if (ty <= cy) {
       return [
         { x: sx, y: sy },
         { x: routeX, y: sy },
-        { x: routeX, y: ty - 15 },
-        { x: tx, y: ty - 15 },
+        { x: routeX, y: ty - 20 },
+        { x: tx, y: ty - 20 },
         { x: tx, y: ty },
       ];
     }
-    const routeX = Math.max(sx + 25, tgtNode.x + tgtNode.width + 15);
+
     return [
       { x: sx, y: sy },
       { x: routeX, y: sy },
-      { x: routeX, y: ty - 15 },
-      { x: tx, y: ty - 15 },
+      { x: routeX, y: midY },
+      { x: tx, y: midY },
       { x: tx, y: ty },
     ];
   }
 
   const sx = cx;
-  const sy = cy + diamondR;
+  const sy = cy + halfDiamond;
   if (Math.abs(sx - tx) < 8) {
     return [{ x: sx, y: sy }, { x: tx, y: ty }];
   }
