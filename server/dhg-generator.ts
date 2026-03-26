@@ -2,6 +2,7 @@ import type {
   PipelineOutcomeReport,
   RemediationEntry,
 } from "./uipath-pipeline";
+import type { DhgAnalysisResult } from "./xaml/dhg-analyzers";
 
 export interface DhgContext {
   projectName: string;
@@ -9,6 +10,7 @@ export interface DhgContext {
   generationMode?: "full_implementation" | "baseline_openable";
   generationModeReason?: string;
   generatedDate?: string;
+  analysis?: DhgAnalysisResult;
 }
 
 export function generateDhgFromOutcomeReport(
@@ -29,6 +31,12 @@ export function generateDhgFromOutcomeReport(
     md += `**Generation Mode:** ${modeLabel}\n`;
     if (context.generationModeReason) md += `**Mode Reason:** ${context.generationModeReason}\n`;
   }
+
+  if (context.analysis) {
+    const r = context.analysis.readiness;
+    md += `**Deployment Readiness:** ${r.rating} (${r.percent}%)\n`;
+  }
+
   md += `\n`;
 
   const totalPropertyRemediations = report.propertyRemediations.length;
@@ -244,6 +252,16 @@ export function generateDhgFromOutcomeReport(
     md += `**Total manual remediation effort: ~${totalEffort} minutes (${(totalEffort / 60).toFixed(1)} hours)**\n\n`;
   }
 
+  if (context.analysis) {
+    md += generateEnvironmentSetupSection(context.analysis, ++sectionNum);
+    md += generateCredentialAssetSection(context.analysis, ++sectionNum);
+    md += generateQueueManagementSection(context.analysis, ++sectionNum);
+    md += generateExceptionCoverageSection(context.analysis, ++sectionNum);
+    md += generateTriggerConfigSection(context.analysis, ++sectionNum);
+    md += generatePreDeploymentChecklist(context.analysis, ++sectionNum);
+    md += generateReadinessScoreSection(context.analysis, ++sectionNum);
+  }
+
   if (report.preEmissionValidation) {
     const pev = report.preEmissionValidation;
     sectionNum++;
@@ -275,6 +293,257 @@ export function generateDhgFromOutcomeReport(
   md += "```json\n";
   md += JSON.stringify(report, null, 2);
   md += "\n```\n";
+
+  return md;
+}
+
+function generateEnvironmentSetupSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const env = analysis.environmentRequirements;
+  let md = `## ${sectionNum}. Environment Setup\n\n`;
+
+  md += `| Requirement | Value |\n`;
+  md += `|---|---|\n`;
+  md += `| Target Framework | ${env.needsWindowsTarget ? "Windows (required)" : "Windows or Portable"} |\n`;
+  md += `| Robot Type | ${env.needsAttendedRobot ? "Attended (user interaction required)" : "Unattended"} |\n`;
+  md += `| Modern Activities | ${env.usesModernActivities ? "Yes" : "No"} |\n`;
+  md += `| Orchestrator Connection | ${env.usesOrchestrator ? "Required" : "Not required"} |\n`;
+
+  if (env.usesActionCenter) md += `| Action Center | Required |\n`;
+  if (env.usesAICenter) md += `| AI Center | Required |\n`;
+  if (env.usesDocumentUnderstanding) md += `| Document Understanding | Required |\n`;
+  if (env.usesDataService) md += `| Data Service | Required |\n`;
+  md += `\n`;
+
+  if (env.browserExtensions.length > 0) {
+    md += `### Browser Extensions\n\n`;
+    md += `The following extensions must be installed on the robot machine:\n\n`;
+    for (const ext of env.browserExtensions) {
+      md += `- ${ext}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (env.requiredPackages.length > 0) {
+    md += `### NuGet Dependencies\n\n`;
+    md += `| # | Package |\n`;
+    md += `|---|--------|\n`;
+    env.requiredPackages.forEach((pkg, i) => {
+      md += `| ${i + 1} | \`${pkg}\` |\n`;
+    });
+    md += `\n`;
+  }
+
+  return md;
+}
+
+function generateCredentialAssetSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const inv = analysis.credentialInventory;
+  let md = `## ${sectionNum}. Credential & Asset Inventory\n\n`;
+
+  if (inv.entries.length === 0) {
+    md += `No GetCredential/GetAsset/SetCredential/SetAsset activities detected.\n\n`;
+    return md;
+  }
+
+  md += `**Total:** ${inv.entries.length} activities (${inv.hardcodedCount} hardcoded, ${inv.variableCount} variable-driven)\n\n`;
+
+  if (inv.uniqueCredentialNames.length > 0) {
+    md += `### Orchestrator Credentials to Provision\n\n`;
+    md += `| # | Credential Name | Action |\n`;
+    md += `|---|----------------|--------|\n`;
+    inv.uniqueCredentialNames.forEach((name, i) => {
+      const isHardcoded = inv.entries.some(e => e.assetName === name && e.isHardcoded);
+      md += `| ${i + 1} | \`${name}\` | ${isHardcoded ? "Create in Orchestrator before deployment" : "Verify exists in target environment"} |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (inv.uniqueAssetNames.length > 0) {
+    md += `### Orchestrator Assets to Provision\n\n`;
+    md += `| # | Asset Name | Action |\n`;
+    md += `|---|-----------|--------|\n`;
+    inv.uniqueAssetNames.forEach((name, i) => {
+      const isHardcoded = inv.entries.some(e => e.assetName === name && e.isHardcoded);
+      md += `| ${i + 1} | \`${name}\` | ${isHardcoded ? "Create in Orchestrator before deployment" : "Verify exists in target environment"} |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (inv.hardcodedCount > 0) {
+    md += `> **Warning:** ${inv.hardcodedCount} asset/credential name(s) are hardcoded. Consider externalizing to Orchestrator Config assets for environment portability.\n\n`;
+  }
+
+  return md;
+}
+
+function generateQueueManagementSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const q = analysis.queueManagement;
+  let md = `## ${sectionNum}. Queue Management\n\n`;
+
+  if (q.entries.length === 0) {
+    md += `No queue activities detected in the package.\n\n`;
+    return md;
+  }
+
+  md += `**Pattern:** ${q.isTransactionalPattern ? "Transactional (Dispatcher/Performer)" : "Queue usage (non-transactional)"}\n\n`;
+
+  if (q.uniqueQueues.length > 0) {
+    md += `### Queues to Provision\n\n`;
+    md += `| # | Queue Name | Activities | Action |\n`;
+    md += `|---|-----------|------------|--------|\n`;
+    q.uniqueQueues.forEach((qName, i) => {
+      const activities = q.entries.filter(e => e.queueName === qName).map(e => e.activityType);
+      const uniqueActs = [...new Set(activities)].join(", ");
+      const isHardcoded = q.entries.some(e => e.queueName === qName && e.isHardcoded);
+      md += `| ${i + 1} | \`${qName}\` | ${uniqueActs} | ${isHardcoded ? "Create in Orchestrator" : "Verify exists"} |\n`;
+    });
+    md += `\n`;
+  }
+
+  md += `### Queue Activity Summary\n\n`;
+  md += `| Capability | Present |\n`;
+  md += `|---|---|\n`;
+  md += `| Add Queue Item | ${q.hasAddQueueItem ? "Yes" : "No"} |\n`;
+  md += `| Get Transaction Item | ${q.hasGetTransaction ? "Yes" : "No"} |\n`;
+  md += `| Set Transaction Status | ${q.hasSetTransactionStatus ? "Yes" : "No"} |\n`;
+  md += `\n`;
+
+  if (q.isTransactionalPattern && !q.hasAddQueueItem) {
+    md += `> **Note:** This is a Performer process — a separate Dispatcher process is needed to populate the queue.\n\n`;
+  }
+
+  return md;
+}
+
+function generateExceptionCoverageSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const exc = analysis.exceptionCoverage;
+  let md = `## ${sectionNum}. Exception Handling Coverage\n\n`;
+
+  if (exc.totalActivities === 0) {
+    md += `No high-risk activities detected to evaluate exception coverage.\n\n`;
+    return md;
+  }
+
+  md += `**Coverage:** ${exc.coveredActivities}/${exc.totalActivities} high-risk activities inside TryCatch (${exc.coveragePercent}%)\n\n`;
+
+  if (exc.filesWithoutTryCatch.length > 0) {
+    md += `### Files Without TryCatch\n\n`;
+    for (const f of exc.filesWithoutTryCatch) {
+      md += `- \`${f}\`\n`;
+    }
+    md += `\n`;
+  }
+
+  if (exc.uncoveredHighRiskActivities.length > 0) {
+    md += `### Uncovered High-Risk Activities\n\n`;
+    md += `| # | Location | Activity |\n`;
+    md += `|---|----------|----------|\n`;
+    exc.uncoveredHighRiskActivities.forEach((desc, i) => {
+      const parts = desc.split(" ");
+      const location = parts[0];
+      const activity = parts.slice(1).join(" ");
+      md += `| ${i + 1} | \`${location}\` | ${activity} |\n`;
+    });
+    md += `\n`;
+    md += `> **Recommendation:** Wrap these activities in TryCatch blocks with appropriate exception types (BusinessRuleException for data errors, System.Exception for general failures).\n\n`;
+  }
+
+  return md;
+}
+
+function generateTriggerConfigSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const triggers = analysis.triggerSuggestions;
+  let md = `## ${sectionNum}. Trigger Configuration\n\n`;
+
+  md += `Based on the process analysis, the following trigger configuration is recommended:\n\n`;
+  md += `| # | Trigger Type | Reason | Configuration |\n`;
+  md += `|---|-------------|--------|---------------|\n`;
+  triggers.forEach((t, i) => {
+    md += `| ${i + 1} | **${t.triggerType}** | ${t.reason} | ${t.suggestedConfig || "Configure in Orchestrator"} |\n`;
+  });
+  md += `\n`;
+
+  return md;
+}
+
+function generatePreDeploymentChecklist(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const env = analysis.environmentRequirements;
+  const cred = analysis.credentialInventory;
+  const q = analysis.queueManagement;
+  let md = `## ${sectionNum}. Pre-Deployment Checklist\n\n`;
+
+  const items: Array<{ task: string; category: string; required: boolean }> = [];
+
+  items.push({ task: "Publish package to Orchestrator feed", category: "Deployment", required: true });
+  items.push({ task: "Create Process in target folder", category: "Deployment", required: true });
+
+  if (env.usesOrchestrator) {
+    items.push({ task: "Verify Orchestrator connection from robot", category: "Environment", required: true });
+  }
+
+  if (cred.uniqueCredentialNames.length > 0) {
+    for (const name of cred.uniqueCredentialNames) {
+      items.push({ task: `Provision credential: \`${name}\``, category: "Credentials", required: true });
+    }
+  }
+
+  if (cred.uniqueAssetNames.length > 0) {
+    for (const name of cred.uniqueAssetNames) {
+      items.push({ task: `Provision asset: \`${name}\``, category: "Assets", required: true });
+    }
+  }
+
+  if (q.uniqueQueues.length > 0) {
+    for (const qName of q.uniqueQueues) {
+      items.push({ task: `Create queue: \`${qName}\``, category: "Queues", required: true });
+    }
+  }
+
+  if (env.browserExtensions.length > 0) {
+    for (const ext of env.browserExtensions) {
+      items.push({ task: `Install ${ext}`, category: "Extensions", required: true });
+    }
+  }
+
+  if (env.needsAttendedRobot) {
+    items.push({ task: "Configure attended robot with user session", category: "Robot", required: true });
+  }
+
+  items.push({ task: "Configure trigger (schedule/queue/API)", category: "Trigger", required: true });
+  items.push({ task: "Run smoke test in target environment", category: "Testing", required: true });
+  items.push({ task: "Verify logging output in Orchestrator", category: "Monitoring", required: false });
+
+  md += `| # | Category | Task | Required |\n`;
+  md += `|---|----------|------|----------|\n`;
+  items.forEach((item, i) => {
+    md += `| ${i + 1} | ${item.category} | ${item.task} | ${item.required ? "Yes" : "Recommended"} |\n`;
+  });
+  md += `\n`;
+
+  return md;
+}
+
+function generateReadinessScoreSection(analysis: DhgAnalysisResult, sectionNum: number): string {
+  const r = analysis.readiness;
+  let md = `## ${sectionNum}. Deployment Readiness Score\n\n`;
+
+  md += `**Overall: ${r.rating} — ${r.totalScore}/${r.maxTotalScore} (${r.percent}%)**\n\n`;
+
+  md += `| Section | Score | Notes |\n`;
+  md += `|---------|-------|-------|\n`;
+  for (const sec of r.sections) {
+    const notes = sec.notes.join("; ");
+    md += `| ${sec.section} | ${sec.score}/${sec.maxScore} | ${notes} |\n`;
+  }
+  md += `\n`;
+
+  if (r.rating === "Not Ready" || r.rating === "Needs Work") {
+    md += `> **Action Required:** Address the items above before deploying to production. Focus on sections with the lowest scores first.\n\n`;
+  } else if (r.rating === "Mostly Ready") {
+    md += `> **Almost There:** A few items need attention before production deployment.\n\n`;
+  } else {
+    md += `> **Good to Go:** The package meets deployment readiness criteria.\n\n`;
+  }
 
   return md;
 }

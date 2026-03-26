@@ -21,6 +21,7 @@ import {
   type XamlGap,
 } from "./xaml-generator";
 import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
+import { runDhgAnalysis } from "./xaml/dhg-analyzers";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import { runQualityGate, type QualityGateResult } from "./uipath-quality-gate";
@@ -493,10 +494,20 @@ function buildDhgFromBuildResult(
   let dhgContent = legacyDhgContent;
 
   if (buildResult.outcomeReport) {
+    const qualityWarningCount = buildResult.outcomeReport.qualityWarnings.length;
+    const remediationCount = buildResult.outcomeReport.remediations.length + buildResult.outcomeReport.propertyRemediations.length;
+    const analysis = runDhgAnalysis(
+      xamlEntries,
+      buildResult.projectJsonContent || undefined,
+      qualityWarningCount,
+      remediationCount,
+      ctx.idea.automationType || undefined,
+    );
     const dhgContext: DhgContext = {
       projectName,
       workflowNames: effectiveWfNames,
       generationMode: generationMode || undefined,
+      analysis,
     };
     const structuredDhg = generateDhgFromOutcomeReport(buildResult.outcomeReport, dhgContext);
     dhgContent = legacyDhgContent + "\n\n---\n\n" + structuredDhg;
