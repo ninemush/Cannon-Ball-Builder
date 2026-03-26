@@ -91,12 +91,6 @@ const TARGET_COMPATIBLE_ACTIVITIES = new Set([
   "uweb:Hover",
 ]);
 
-const SCOPE_ACTIVITIES = new Set([
-  "ui:OpenBrowser",
-  "ui:UseBrowser",
-  "ui:UseApplication",
-  "ui:SetClipping",
-]);
 
 export function extractUiContext(sddContent: string): UiContext {
   const ctx: UiContext = {
@@ -337,7 +331,7 @@ export function scoreSelectorQuality(
         displayName,
         selector,
         score,
-        maxScore: 14,
+        maxScore: 20,
         breakdown,
         isPlaceholder: placeholder,
       });
