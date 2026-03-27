@@ -119,7 +119,13 @@
     "scopeFamily": "TM",
     "minimalScopes": [
       "TM.Projects.Read",
-      "TM.TestCases.Read"
+      "TM.Projects.Write",
+      "TM.TestCases.Read",
+      "TM.TestCases.Write",
+      "TM.Requirements.Read",
+      "TM.Requirements.Write",
+      "TM.TestSets.Read",
+      "TM.TestSets.Write"
     ],
     "uiSection": "primary",
     "defaultRemediationTemplate": {

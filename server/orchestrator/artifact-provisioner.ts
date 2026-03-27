@@ -1,6 +1,6 @@
 import { getUiPathConfig, probeServiceAvailability, type UiPathConfig, type ServiceAvailabilityMap, type AICenterSkill } from "../uipath-integration";
 import { uipathFetch, isGenuineApiResponse, isValidCreation } from "../uipath-fetch";
-import { getAccessToken, getToken as getSharedToken, getTmToken, type UiPathAuthConfig } from "../uipath-auth";
+import { getAccessToken, getToken as getSharedToken, getTmToken, invalidateTmToken, type UiPathAuthConfig } from "../uipath-auth";
 import { metadataService } from "../catalog/metadata-service";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { OrchestratorArtifacts, AgentDef, AgentToolDef, AgentEscalationRule, AgentContextGrounding, KnowledgeBaseDef, PromptTemplateDef, MaestroProcessDef } from "./manifest-manager";
@@ -2254,6 +2254,7 @@ async function provisionTestCases(
   const results: DeploymentResult[] = [];
   const testCaseMap: Record<string, string | number> = {};
 
+  invalidateTmToken();
   let tmToken: string;
   try {
     tmToken = await getTmToken();
