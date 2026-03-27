@@ -719,7 +719,7 @@ function inferPackageFromNamespace(ns: string): string | null {
   return null;
 }
 
-const NAMESPACE_PREFIX_TO_PACKAGE: Record<string, string> = {
+export const NAMESPACE_PREFIX_TO_PACKAGE: Record<string, string> = {
   "uexcel": "UiPath.Excel.Activities",
   "uweb": "UiPath.Web.Activities",
   "umail": "UiPath.Mail.Activities",

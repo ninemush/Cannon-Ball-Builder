@@ -129,19 +129,31 @@ function validateActivityNode(
     knownProps.set(p.name, p);
   }
 
+  const INHERITED_BASE_PROPERTIES = new Set([
+    "ContinueOnError",
+    "Timeout",
+    "DisplayName",
+    "Private",
+    "DelayBefore",
+    "DelayAfter",
+    "TimeoutMS",
+    "Annotation",
+    "AnnotationText",
+  ]);
+
   const filteredProperties: Record<string, any> = {};
   const strippedNames: string[] = [];
 
   for (const [key, value] of Object.entries(node.properties || {})) {
-    if (!knownProps.has(key)) {
+    if (!knownProps.has(key) && !INHERITED_BASE_PROPERTIES.has(key)) {
       strippedNames.push(key);
       report.strippedProperties++;
       continue;
     }
 
-    const propSchema = knownProps.get(key)!;
+    const propSchema = knownProps.get(key);
 
-    if (propSchema.validValues && propSchema.validValues.length > 0) {
+    if (propSchema && propSchema.validValues && propSchema.validValues.length > 0) {
       const strValue = typeof value === "object" ? null : String(value);
       if (strValue && !propSchema.validValues.includes(strValue)) {
         const corrected = ENUM_AUTO_CORRECTION_MAP[strValue];

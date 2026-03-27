@@ -782,10 +782,13 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
 }
 
 function wrapInTryCatch(innerXml: string, displayName: string): string {
+  const effectiveInnerXml = innerXml.trim()
+    ? innerXml
+    : `<ui:Comment DisplayName="TODO: Implement try block logic" Text="This TryCatch was generated without try content — add activities here." />`;
   return `<TryCatch DisplayName="Try: ${escapeXml(displayName)}">
   <TryCatch.Try>
     <Sequence DisplayName="Try Block">
-      ${innerXml}
+      ${effectiveInnerXml}
     </Sequence>
   </TryCatch.Try>
   <TryCatch.Catches>
@@ -898,9 +901,13 @@ function assembleTryCatchNode(
   _parentEmissionContext: EmissionContext = "normal",
 ): string {
   const displayName = escapeXml(node.displayName);
-  const tryXml = node.tryChildren
+  let tryXml = node.tryChildren
     .map(child => assembleNode(child, allVariables, processType, depthLevel + 1))
     .join("\n");
+
+  if (!tryXml.trim()) {
+    tryXml = `<ui:Comment DisplayName="TODO: Implement try block logic" Text="This TryCatch was generated without try content — add activities here." />`;
+  }
 
   const catchXml = node.catchChildren.length > 0
     ? node.catchChildren

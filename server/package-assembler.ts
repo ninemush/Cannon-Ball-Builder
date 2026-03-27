@@ -41,7 +41,7 @@ import archiver from "archiver";
   import { runQualityGate, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue } from "./uipath-quality-gate";
   import { escapeXml } from "./lib/xml-utils";
   import { computePackageFingerprint, computeEnrichmentFingerprint, computeXamlFingerprint, computeQualityGateFingerprint } from "./lib/utils";
-  import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName } from "./uipath-activity-registry";
+  import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName, NAMESPACE_PREFIX_TO_PACKAGE } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
   import { catalogService, type ProcessType } from "./catalog/catalog-service";
   import type { StudioProfile } from "./catalog/metadata-service";
@@ -264,9 +264,15 @@ function buildReachabilityGraph(
     }
   }
 
+  const INFRASTRUCTURE_FILES = new Set([
+    "InitAllSettings.xaml",
+    "CloseAllApplications.xaml",
+    "KillAllProcesses.xaml",
+  ]);
+
   const unreachable = new Set<string>();
   Array.from(allFiles.keys()).forEach(file => {
-    if (!reachable.has(file)) {
+    if (!reachable.has(file) && !INFRASTRUCTURE_FILES.has(file)) {
       unreachable.add(file);
     }
   });
@@ -1838,7 +1844,17 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
         deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
         generatedWorkflowNames.add(wfName);
-        if (wfName === "Main" || wfName === "Process") hasMain = true;
+        if (wfName === "Main" || wfName === "Process") {
+          hasMain = true;
+          const initInvokeRef = `<InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`;
+          const rootSeqMatch = compliant.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
+          if (rootSeqMatch && !compliant.includes('WorkflowFileName="InitAllSettings.xaml"')) {
+            const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
+            compliant = compliant.slice(0, insertPos) + `      ${initInvokeRef}\n` + compliant.slice(insertPos);
+            deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
+            console.log(`[UiPath] Injected InitAllSettings.xaml reference into tree-assembled ${wfName}.xaml`);
+          }
+        }
         xamlResults.push({
           xaml: compliant,
           gaps: [],
@@ -2245,6 +2261,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       if (tf === "Windows") {
         DEPENDENCY_SAFE_LIST.add("UiPath.UIAutomation.Activities");
+      }
+
+      for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
+        const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
+        if (prefixPattern.test(allXamlContent)) {
+          DEPENDENCY_SAFE_LIST.add(pkgName);
+          console.log(`[Dependency Alignment] Dynamically added ${pkgName} to safe list — namespace prefix "${prefix}:" detected in XAML`);
+        }
       }
 
       const usedPackages = new Set(Array.from(scannedPackages));
