@@ -1980,6 +1980,38 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
   const selectorScores = scoreSelectorQuality(input.xamlEntries);
   const selectorWarnings = generateSelectorWarnings(selectorScores);
 
+  const doubleEncodingViolations: QualityGateViolation[] = [];
+  const doubleEncodePatterns = [
+    { pattern: /&amp;quot;/g, label: "&amp;quot;" },
+    { pattern: /&amp;amp;/g, label: "&amp;amp;" },
+    { pattern: /&amp;lt;/g, label: "&amp;lt;" },
+    { pattern: /&amp;gt;/g, label: "&amp;gt;" },
+  ];
+  for (const entry of input.xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const lines = entry.content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const bracketExprMatch = /="\[([^\]]*)\]"/g;
+      let bm;
+      while ((bm = bracketExprMatch.exec(line)) !== null) {
+        const exprContent = bm[1];
+        for (const dp of doubleEncodePatterns) {
+          if (dp.pattern.test(exprContent)) {
+            dp.pattern.lastIndex = 0;
+            doubleEncodingViolations.push({
+              category: "accuracy",
+              severity: "error",
+              check: "DOUBLE_ENCODED_EXPRESSION",
+              file: shortName,
+              detail: `Line ${i + 1}: Double-encoded ${dp.label} found in expression: ${exprContent.substring(0, 80)}`,
+            });
+          }
+        }
+      }
+    }
+  }
+
   const allViolations = [
     ...blockedViolations,
     ...completenessViolations,
@@ -1990,6 +2022,7 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     ...expressionLintResult.violations,
     ...typeCompatResult.violations,
     ...selectorWarnings,
+    ...doubleEncodingViolations,
   ];
 
   const hasErrors = allViolations.some(v => v.severity === "error");

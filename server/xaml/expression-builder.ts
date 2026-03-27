@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { escapeXml } from "../lib/xml-utils";
+import { escapeXml, escapeXmlExpression } from "../lib/xml-utils";
 
 function escapeXmlInner(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -118,7 +118,7 @@ function buildComparisonExpression(left: string, operator: string, right: string
   }
 
   const rawExpression = `${left.trim()} ${normalizedOp} ${right.trim()}`;
-  return `[${escapeXml(rawExpression)}]`;
+  return `[${escapeXmlExpression(rawExpression)}]`;
 }
 
 const ALLOWED_OPERATOR_SET = new Set<string>(ALLOWED_OPERATORS);

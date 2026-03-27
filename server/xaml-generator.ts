@@ -7,7 +7,7 @@ import {
   enforceDisplayName,
   type AnalysisReport,
 } from "./workflow-analyzer";
-import { escapeXml } from "./lib/xml-utils";
+import { escapeXml, escapeXmlExpression, normalizeXmlExpression } from "./lib/xml-utils";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { AICenterSkill } from "./uipath-integration";
 import { isActivityAllowed } from "./uipath-activity-policy";
@@ -1217,7 +1217,7 @@ function renderVariablesBlock(variables: VariableDecl[], targetFramework?: Targe
     if (emittedNames.has(safeName)) return;
     emittedNames.add(safeName);
     if (v.defaultValue) {
-      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" Default="${escapeXml(v.defaultValue)}" />\n`;
+      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" Default="${escapeXmlExpression(v.defaultValue)}" />\n`;
     } else {
       xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" />\n`;
     }
@@ -1415,7 +1415,7 @@ function renderControlFlowActivity(
     }
 
     return `${needsConditionReview ? `\n          <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(enforced)}" DisplayName="Review Condition" />` : ""}
-          <If DisplayName="${escapeXml(enforced)}" Condition="[${escapeXml(String(condition))}]">
+          <If DisplayName="${escapeXml(enforced)}" Condition="[${escapeXmlExpression(String(condition))}]">
             <If.Then>
               <Sequence DisplayName="Then: ${escapeXml(enforced)}">${thenContent}
               </Sequence>
@@ -1455,7 +1455,7 @@ function renderControlFlowActivity(
     }
 
     return `${needsExpressionReview ? `\n          <ui:Comment Text="TODO: Replace default Nothing expression with actual value for: ${escapeXml(enforced)}" DisplayName="Review Expression" />` : ""}
-          <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="[${escapeXml(String(expression))}]">
+          <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="[${escapeXmlExpression(String(expression))}]">
             <Switch.Cases>${caseElements}
             </Switch.Cases>
             <Switch.Default>
@@ -1493,7 +1493,7 @@ function renderControlFlowActivity(
     }
 
     return `${needsValuesReview ? `\n          <ui:Comment Text="TODO: Replace default empty collection with actual data source for: ${escapeXml(enforced)}" DisplayName="Review Collection" />` : ""}
-          <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="[${escapeXml(String(values))}]">
+          <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="[${escapeXmlExpression(String(values))}]">
             <ForEach.Body>
               <ActivityAction x:TypeArguments="${escapeXml(String(itemType))}">
                 <ActivityAction.Argument>
@@ -1665,9 +1665,11 @@ export function renderActivity(
     const toType = properties["TypeArgument"] || "x:String";
     const toValue = ensureBracketWrapped(rawToValue);
     const assignValue = smartBracketWrap(rawAssignValue);
+    const safeToValue = normalizeXmlExpression(toValue);
+    const safeAssignValue = normalizeXmlExpression(assignValue);
     innerActivity = `<Assign DisplayName="${escapeXml(enforced)}"${propAttrs.replace(/\s+(To|Value|to|value|TypeArgument)="[^"]*"/g, "")}>
-              <Assign.To><OutArgument x:TypeArguments="${toType}">${escapeXml(toValue)}</OutArgument></Assign.To>
-              <Assign.Value><InArgument x:TypeArguments="${toType}">${assignValue}</InArgument></Assign.Value>
+              <Assign.To><OutArgument x:TypeArguments="${toType}">${safeToValue}</OutArgument></Assign.To>
+              <Assign.Value><InArgument x:TypeArguments="${toType}">${safeAssignValue}</InArgument></Assign.Value>
             </Assign>`;
   } else if (hasConvertedArgs) {
     let argsContent = "";

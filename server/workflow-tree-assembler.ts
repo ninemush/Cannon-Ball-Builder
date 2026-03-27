@@ -15,7 +15,7 @@ import { catalogService } from "./catalog/catalog-service";
 import type { ActivityValidationResult, ValidationCorrection } from "./catalog/catalog-service";
 import { buildTemplateBlock } from "./catalog/xaml-template-builder";
 import type { ProcessType } from "./catalog/catalog-service";
-import { escapeXml } from "./lib/xml-utils";
+import { escapeXml, escapeXmlExpression, normalizeXmlExpression } from "./lib/xml-utils";
 import { buildExpression, isValueIntent, type ValueIntent } from "./xaml/expression-builder";
 import { getActivityTag, getActivityPrefixStrict } from "./xaml/xaml-compliance";
 import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
@@ -548,12 +548,15 @@ function resolveAssignTemplate(node: ActivityNode, allVariables: VariableDeclara
   const wrappedTo = ensureBracketWrapped(toVarName);
   const wrappedVal = resolvePropertyValue(valRaw as PropertyValue);
 
+  const safeToExpr = normalizeXmlExpression(wrappedTo);
+  const safeValExpr = normalizeXmlExpression(wrappedVal);
+
   return `<Assign DisplayName="${displayName}">\n` +
     `  <Assign.To>\n` +
-    `    <OutArgument x:TypeArguments="${typeArg}">${wrappedTo}</OutArgument>\n` +
+    `    <OutArgument x:TypeArguments="${typeArg}">${safeToExpr}</OutArgument>\n` +
     `  </Assign.To>\n` +
     `  <Assign.Value>\n` +
-    `    <InArgument x:TypeArguments="${typeArg}">${wrappedVal}</InArgument>\n` +
+    `    <InArgument x:TypeArguments="${typeArg}">${safeValExpr}</InArgument>\n` +
     `  </Assign.Value>\n` +
     `</Assign>`;
 }
@@ -997,16 +1000,19 @@ function assembleTryCatchNode(
 function resolveConditionValue(condition: string | ValueIntent): string {
   if (isValueIntent(condition)) {
     const built = buildExpression(condition as ValueIntent);
-    return built.replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return escapeXmlExpression(built);
   }
   const trimmed = (condition as string).trim();
   if (!trimmed) return trimmed;
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return escapeXml(trimmed);
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const inner = trimmed.slice(1, -1);
+    return `[${escapeXmlExpression(inner)}]`;
+  }
   if (trimmed === "True" || trimmed === "False") return trimmed;
   if (/[<>=]/.test(trimmed) || /\b(And|Or|Not|AndAlso|OrElse|Is|IsNot|Like)\b/.test(trimmed)) {
-    return escapeXml(`[${trimmed}]`);
+    return `[${escapeXmlExpression(trimmed)}]`;
   }
-  return escapeXml(trimmed);
+  return escapeXmlExpression(trimmed);
 }
 
 function assembleIfNode(
@@ -1125,7 +1131,10 @@ function assembleForEachNode(
     .map(child => assembleNode(child, allVariables, processType, depthLevel + 1, emissionContext))
     .join("\n");
 
-  return `<ForEach x:TypeArguments="${itemType}" Values="${escapeXml(wrappedValues)}" DisplayName="${displayName}">\n` +
+  const valuesInner = wrappedValues.startsWith("[") && wrappedValues.endsWith("]")
+    ? `[${escapeXmlExpression(wrappedValues.slice(1, -1))}]`
+    : escapeXmlExpression(wrappedValues);
+  return `<ForEach x:TypeArguments="${itemType}" Values="${valuesInner}" DisplayName="${displayName}">\n` +
     `  <ActivityAction x:TypeArguments="${itemType}">\n` +
     `    <ActivityAction.Argument>\n` +
     `      <DelegateInArgument x:TypeArguments="${itemType}" Name="${escapeXml(node.iteratorName || "item")}" />\n` +

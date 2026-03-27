@@ -401,6 +401,42 @@ export function lintExpression(expression: string): LintResult {
     issues.push({ code, message, autoFixed: false });
   };
 
+  if (/&amp;quot;/.test(corrected)) {
+    const before = corrected;
+    corrected = corrected.replace(/&amp;quot;/g, "&quot;");
+    if (corrected !== before) {
+      issues.push({ code: "DOUBLE_ENCODED_QUOT", message: "Double-encoded '&amp;quot;' corrected to '&quot;'", autoFixed: true });
+      wasModified = true;
+    }
+  }
+
+  if (/&amp;amp;/.test(corrected)) {
+    const before = corrected;
+    corrected = corrected.replace(/&amp;amp;/g, "&amp;");
+    if (corrected !== before) {
+      issues.push({ code: "DOUBLE_ENCODED_AMP", message: "Double-encoded '&amp;amp;' corrected to '&amp;'", autoFixed: true });
+      wasModified = true;
+    }
+  }
+
+  if (/&amp;lt;/.test(corrected)) {
+    const before = corrected;
+    corrected = corrected.replace(/&amp;lt;/g, "&lt;");
+    if (corrected !== before) {
+      issues.push({ code: "DOUBLE_ENCODED_LT", message: "Double-encoded '&amp;lt;' corrected to '&lt;'", autoFixed: true });
+      wasModified = true;
+    }
+  }
+
+  if (/&amp;gt;/.test(corrected)) {
+    const before = corrected;
+    corrected = corrected.replace(/&amp;gt;/g, "&gt;");
+    if (corrected !== before) {
+      issues.push({ code: "DOUBLE_ENCODED_GT", message: "Double-encoded '&amp;gt;' corrected to '&gt;'", autoFixed: true });
+      wasModified = true;
+    }
+  }
+
   applyFix(
     "CSHARP_NULL",
     "C# 'null' should be VB.NET 'Nothing'",
@@ -629,7 +665,7 @@ export function lintExpression(expression: string): LintResult {
     reportOnly("CSHARP_VAR", "C# 'var' keyword detected — VB.NET uses 'Dim' for variable declarations");
   }
 
-  if (/;\s*$/.test(corrected)) {
+  if (/;\s*$/.test(corrected) && !/&(?:quot|amp|lt|gt|apos);\s*$/.test(corrected)) {
     applyFix("CSHARP_SEMICOLON", "C# trailing semicolon removed", /;\s*$/, "");
   }
 
