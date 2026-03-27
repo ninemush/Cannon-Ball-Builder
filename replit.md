@@ -68,6 +68,9 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **JSON Sanitization**: Robust parsing of AI-generated JSON with error recovery.
 - **Shared Utilities**: Consolidated server and client utilities for common functions and shared types.
 - **Deploy Parallelization**: Groups independent UiPath API calls into parallel batches to reduce deployment time.
+- **Spec Decomposer Parallelism & Retry Hardening**: Up to 3 workflow details generate concurrently with exponential backoff (2s→16s + jitter) for 429/rate-limit errors. Aggregate timeout is maintained across parallel workers.
+- **Proactive Registry-Based Dependency Resolution**: Activity registry fallback resolves packages proactively when the catalog service misses, reducing dependency crosscheck gaps.
+- **Non-Catalog Property Stripping Threshold**: Activities with 3+ unknown properties stripped are flagged as blocking errors (`EXCESSIVE_PROPERTIES_STRIPPED`) indicating generation hallucination.
 - **High Confidence Mode (Meta-Validation)**: Optional post-generation review layer with deterministic confidence scoring and targeted LLM review for XAML error categories.
 
 ## External Dependencies

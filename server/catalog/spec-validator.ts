@@ -18,6 +18,7 @@ export interface SpecValidationReport {
   validActivities: number;
   unknownActivities: number;
   strippedProperties: number;
+  excessiveStrippingCount: number;
   enumCorrections: number;
   missingRequiredFilled: number;
   commentConversions: number;
@@ -49,6 +50,7 @@ function createEmptyReport(): SpecValidationReport {
     validActivities: 0,
     unknownActivities: 0,
     strippedProperties: 0,
+    excessiveStrippingCount: 0,
     enumCorrections: 0,
     missingRequiredFilled: 0,
     commentConversions: 0,
@@ -190,16 +192,23 @@ function validateActivityNode(
     filteredProperties[key] = value;
   }
 
+  const EXCESSIVE_STRIP_THRESHOLD = 3;
   if (strippedNames.length > 0) {
+    const isExcessive = strippedNames.length >= EXCESSIVE_STRIP_THRESHOLD;
+    if (isExcessive) {
+      report.excessiveStrippingCount++;
+    }
     report.issues.push({
-      severity: "warning",
-      code: "UNKNOWN_PROPERTIES_STRIPPED",
+      severity: isExcessive ? "error" : "warning",
+      code: isExcessive ? "EXCESSIVE_PROPERTIES_STRIPPED" : "UNKNOWN_PROPERTIES_STRIPPED",
       activityTemplate: node.template,
       activityDisplayName: node.displayName,
-      message: `Stripped ${strippedNames.length} non-catalog property(ies) from ${node.template} "${node.displayName}": ${strippedNames.join(", ")}`,
-      autoFixed: true,
+      message: isExcessive
+        ? `Stripped ${strippedNames.length} non-catalog properties from ${node.template} "${node.displayName}" (threshold: ${EXCESSIVE_STRIP_THRESHOLD}): ${strippedNames.join(", ")} — indicates generation hallucination, should regenerate`
+        : `Stripped ${strippedNames.length} non-catalog property(ies) from ${node.template} "${node.displayName}": ${strippedNames.join(", ")}`,
+      autoFixed: !isExcessive,
     });
-    console.log(`[SpecValidator] Stripped properties from ${node.template} "${node.displayName}": ${strippedNames.join(", ")}`);
+    console.log(`[SpecValidator] ${isExcessive ? "EXCESSIVE stripping" : "Stripped properties"} from ${node.template} "${node.displayName}": ${strippedNames.join(", ")}${isExcessive ? ` — exceeds threshold of ${EXCESSIVE_STRIP_THRESHOLD}, flagged as blocking error` : ""}`);
   }
 
   const targetVersion = resolveTargetVersion(schema, studioProfile);
@@ -358,7 +367,7 @@ export function validateWorkflowSpec(
   console.log(
     `[SpecValidator] Validation complete: ${report.totalActivities} activities, ` +
     `${report.validActivities} valid, ${report.unknownActivities} unknown→comment, ` +
-    `${report.strippedProperties} props stripped, ${report.enumCorrections} enum corrections, ` +
+    `${report.strippedProperties} props stripped (${report.excessiveStrippingCount} excessive), ${report.enumCorrections} enum corrections, ` +
     `${report.missingRequiredFilled} required filled, ${report.issues.length} issues total`
   );
 
@@ -376,6 +385,7 @@ export function formatValidationReportForDhg(report: SpecValidationReport): stri
   md += `| Valid activities | ${report.validActivities} |\n`;
   md += `| Unknown → Comment stubs | ${report.unknownActivities} |\n`;
   md += `| Non-catalog properties stripped | ${report.strippedProperties} |\n`;
+  md += `| Activities with excessive stripping | ${report.excessiveStrippingCount} |\n`;
   md += `| Enum values auto-corrected | ${report.enumCorrections} |\n`;
   md += `| Missing required props filled | ${report.missingRequiredFilled} |\n\n`;
 

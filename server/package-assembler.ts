@@ -39,7 +39,7 @@ import archiver from "archiver";
   import { runQualityGate, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue } from "./uipath-quality-gate";
   import { escapeXml } from "./lib/xml-utils";
   import { computePackageFingerprint, computeEnrichmentFingerprint, computeXamlFingerprint, computeQualityGateFingerprint } from "./lib/utils";
-  import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName, NAMESPACE_PREFIX_TO_PACKAGE } from "./uipath-activity-registry";
+  import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName, NAMESPACE_PREFIX_TO_PACKAGE, getActivityPackage } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
   import { catalogService, type ProcessType } from "./catalog/catalog-service";
   import type { StudioProfile } from "./catalog/metadata-service";
@@ -599,7 +599,15 @@ function collectActivityTypesFromWorkflows(workflows: Array<{ steps?: Array<{ ac
       }
       if (step.activityType) {
         const pkg = catalogService.getPackageForActivity(step.activityType);
-        if (pkg) packages.add(pkg);
+        if (pkg) {
+          packages.add(pkg);
+        } else {
+          const registryPkg = getActivityPackage(step.activityType);
+          if (registryPkg) {
+            packages.add(registryPkg);
+            console.log(`[Dependency Resolution] Proactively resolved ${step.activityType} → ${registryPkg} via activity registry (catalog miss)`);
+          }
+        }
       }
     }
   }
@@ -627,7 +635,13 @@ export function resolveDependencies(
   if (treeSpec) {
     const activityTemplates = collectActivityTemplatesFromSpec(treeSpec);
     for (const template of activityTemplates) {
-      const pkgId = catalogService.getPackageForActivity(template);
+      let pkgId = catalogService.getPackageForActivity(template);
+      if (!pkgId) {
+        pkgId = getActivityPackage(template) || null;
+        if (pkgId) {
+          console.log(`[Dependency Resolution] Proactively resolved tree spec activity ${template} → ${pkgId} via registry fallback`);
+        }
+      }
       if (pkgId) {
         const normalized = normalizePackageName(pkgId);
         referencedPackages.add(normalized);
@@ -1833,6 +1847,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           stage: "spec-validation",
           recoverable: true,
         });
+      }
+
+      if (specValidationReport.excessiveStrippingCount > 0) {
+        dependencyWarnings.push({
+          code: "EXCESSIVE_PROPERTY_STRIPPING",
+          message: `${specValidationReport.excessiveStrippingCount} activit(ies) had 3+ non-catalog properties stripped — indicates generation hallucination. Consider regenerating these activities.`,
+          stage: "spec-validation",
+          recoverable: false,
+        });
+        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${specValidationReport.excessiveStrippingCount} activities exceeded the stripping threshold — generation quality may be degraded`);
       }
 
       const specJson = JSON.stringify(spec, null, 2);

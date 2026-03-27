@@ -870,6 +870,36 @@ export async function compilePackageFromSpecs(
       for (const w of buildResult.dependencyWarnings) {
         tracker.warn("compiling", w.message);
       }
+
+      const excessiveStrippingWarning = buildResult.dependencyWarnings.find(
+        w => w.code === "EXCESSIVE_PROPERTY_STRIPPING" && !w.recoverable
+      );
+      if (excessiveStrippingWarning && mode !== "baseline_openable" && currentDowngradeAttempt < maxDowngradeAttempts) {
+        const downgradeEvent: DowngradeEvent = {
+          fromMode: mode,
+          toMode: "baseline_openable",
+          reason: `Excessive non-catalog property stripping detected: ${excessiveStrippingWarning.message}`,
+          triggerStage: "compiling",
+          timestamp: new Date(),
+        };
+        downgrades.push(downgradeEvent);
+        pipelineWarnings.push({
+          code: "AUTO_DOWNGRADE_EXCESSIVE_STRIPPING",
+          message: `Auto-downgraded to baseline_openable: excessive non-catalog property stripping indicates generation hallucination`,
+          stage: "compiling",
+          recoverable: true,
+        });
+        tracker.warn("compiling", `Excessive property stripping detected — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
+        tracker.cleanup();
+        console.log(`[Pipeline] Auto-downgrade: ${mode} → baseline_openable due to excessive property stripping`);
+        return compilePackageFromSpecs(ideaId, specResult, pkg, {
+          ...options,
+          generationMode: "baseline_openable",
+          _downgradeAttempt: currentDowngradeAttempt + 1,
+          _accumulatedDowngrades: downgrades,
+          _accumulatedWarnings: pipelineWarnings,
+        });
+      }
     }
 
     if (options?.runId) {

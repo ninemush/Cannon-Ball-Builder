@@ -7,11 +7,30 @@ import { RunLogger } from "./lib/run-logger";
 
 const SCAFFOLD_MAX_TOKENS = 4096;
 const DETAIL_MAX_TOKENS = 8192;
-const DETAIL_RETRY_LIMIT = 2;
+const DETAIL_RETRY_LIMIT = 3;
 const DETAIL_LLM_TIMEOUT_MS = 150_000;
 const DETAIL_TIMEOUT_ESCALATION_MS = 50_000;
 const DECOMPOSITION_AGGREGATE_TIMEOUT_BASE_MS = 5 * 60 * 1000;
 const HEARTBEAT_INTERVAL_MS = 4_000;
+const PARALLEL_CONCURRENCY = 3;
+const BACKOFF_BASE_MS = 2_000;
+const BACKOFF_MAX_MS = 16_000;
+
+function isRateLimitError(err: any): boolean {
+  const msg = (err?.message ?? "").toLowerCase();
+  const status = err?.status ?? err?.statusCode ?? 0;
+  return status === 429 || msg.includes("429") || msg.includes("rate limit") || msg.includes("resource_exhausted") || msg.includes("too many requests");
+}
+
+function backoffWithJitter(attempt: number): number {
+  const exponential = Math.min(BACKOFF_BASE_MS * Math.pow(2, attempt), BACKOFF_MAX_MS);
+  const jitter = Math.random() * exponential * 0.5;
+  return exponential + jitter;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 export interface DecompositionMetrics {
   scaffoldDurationMs: number;
@@ -161,6 +180,15 @@ IMPORTANT RULES:
 - Map decision points to If/Switch activities
 - Map loops to ForEach/While activities
 - Be as specific and production-ready as possible
+
+ACTIVITY TREE DEPTH & INLINE ERROR HANDLING:
+- Build DEEP nested activity trees — do NOT flatten everything to a single-level sequence. Group related steps into nested Sequence activities (3-4 levels deep when appropriate).
+- Wrap error-prone operations (UI interactions, API calls, DB queries, file I/O) in inline TryCatch blocks directly at the point of use — NOT at the top level of the workflow. Each TryCatch catch block must contain a LogMessage activity with the exception details.
+- Use RetryScope around flaky operations (selector-dependent UI steps, network calls) with NumberOfRetries=3 and RetryInterval=00:00:05. Nest the target activity inside the RetryScope body.
+- Wire arguments explicitly: every InvokeWorkflowFile must specify all required in/out/in_out arguments in its properties with correct variable references.
+- For multi-step business transactions, nest related activities inside a parent TryCatch so the catch block can perform cleanup/rollback of the entire sub-transaction.
+- Example deep structure: Sequence → TryCatch → Try: Sequence → RetryScope → target activity; Catch: Sequence → LogMessage + compensating action.
+- Do NOT create separate error-handler .xaml files — all error handling must be inline within the workflow using TryCatch/RetryScope activities.
 
 Return ONLY the JSON object, no other text.`;
 }
@@ -478,51 +506,37 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   try {
   const aggregateTimeoutMs = Math.max(DECOMPOSITION_AGGREGATE_TIMEOUT_BASE_MS, orderedWorkflows.length * 120_000);
-  for (let i = 0; i < orderedWorkflows.length; i++) {
-    const entry = orderedWorkflows[i];
-    heartbeatState = { index: i, name: entry.name, total: orderedWorkflows.length };
+
+  async function generateSingleWorkflow(entry: ScaffoldWorkflowEntry, i: number): Promise<void> {
+    if (aggregateTimedOut) {
+      const stub = makeStubWorkflow(entry);
+      workflowDetails.set(entry.name, stub);
+      metrics.stubCount++;
+      mergeWarnings.push(`Workflow "${entry.name}" was stubbed due to aggregate timeout`);
+      metrics.perWorkflow.push({ name: entry.name, status: "stubbed", attempts: 0, durationMs: 0 });
+      onPipelineProgress?.({
+        type: "warning",
+        stage: "spec_workflow_detail",
+        message: `Workflow "${entry.name}" stubbed due to aggregate timeout`,
+        context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length, outcome: "stubbed", reason: "aggregate_timeout" },
+      });
+      return;
+    }
+
     if (Date.now() - detailPhaseStart > aggregateTimeoutMs) {
       aggregateTimedOut = true;
-      const remainingNames = orderedWorkflows.slice(i).map(w => w.name);
-      console.warn(`[SpecDecomposer] Run ${runId}: Aggregate timeout (${aggregateTimeoutMs}ms) exceeded — stubbing ${remainingNames.length} remaining workflow(s): ${remainingNames.join(", ")}`);
-
-      for (let j = i; j < orderedWorkflows.length; j++) {
-        const remaining = orderedWorkflows[j];
-        const stub = makeStubWorkflow(remaining);
-        workflowDetails.set(remaining.name, stub);
-        metrics.stubCount++;
-        mergeWarnings.push(`Workflow "${remaining.name}" was stubbed due to aggregate timeout`);
-        metrics.perWorkflow.push({
-          name: remaining.name,
-          status: "stubbed",
-          attempts: 0,
-          durationMs: 0,
-        });
-        onPipelineProgress?.({
-          type: "warning",
-          stage: "spec_workflow_detail",
-          message: `Workflow "${remaining.name}" stubbed due to aggregate timeout`,
-          context: { workflowName: remaining.name, index: j + 1, total: orderedWorkflows.length, outcome: "stubbed", reason: "aggregate_timeout" },
-        });
-      }
-
-      try {
-        const partialWorkflows = Array.from(workflowDetails.values());
-        const partialSpec = {
-          projectName: scaffold.projectName,
-          description: scaffold.description,
-          dependencies: scaffold.dependencies,
-          workflows: partialWorkflows,
-        };
-        await storage.updateGenerationRunSpecSnapshot(runId, {
-          partialSpec,
-          completedWorkflows: partialWorkflows.map(w => w.name),
-          stubbedWorkflows: remainingNames,
-          totalWorkflows: scaffold.workflows.length,
-          timestamp: new Date().toISOString(),
-        });
-      } catch {}
-      break;
+      const stub = makeStubWorkflow(entry);
+      workflowDetails.set(entry.name, stub);
+      metrics.stubCount++;
+      mergeWarnings.push(`Workflow "${entry.name}" was stubbed due to aggregate timeout`);
+      metrics.perWorkflow.push({ name: entry.name, status: "stubbed", attempts: 0, durationMs: 0 });
+      onPipelineProgress?.({
+        type: "warning",
+        stage: "spec_workflow_detail",
+        message: `Workflow "${entry.name}" stubbed due to aggregate timeout`,
+        context: { workflowName: entry.name, index: i + 1, total: orderedWorkflows.length, outcome: "stubbed", reason: "aggregate_timeout" },
+      });
+      return;
     }
 
     const wfStart = Date.now();
@@ -530,6 +544,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     let succeeded = false;
     let timeoutEscalations = 0;
 
+    heartbeatState = { index: i, name: entry.name, total: orderedWorkflows.length };
     console.log(`[SpecDecomposer] Run ${runId}: Starting workflow ${i + 1}/${orderedWorkflows.length}: "${entry.name}"`);
     onProgress?.(`Generating workflow ${i + 1}/${orderedWorkflows.length}: ${entry.name}...`);
     onPipelineProgress?.({
@@ -624,15 +639,29 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
           const nextAggregateRemaining = aggregateTimeoutMs - (Date.now() - detailPhaseStart);
           const nextEffectiveTimeout = Math.min(nextEscalatedTimeout, Math.max(0, nextAggregateRemaining));
           const nextTimeoutSec = Math.round(nextEffectiveTimeout / 1000);
+
+          const isRateLimit = isRateLimitError(err);
+          let backoffMs = 0;
+          if (isRateLimit) {
+            backoffMs = backoffWithJitter(attempt);
+            console.log(`[SpecDecomposer] Run ${runId}: Rate limit hit for "${entry.name}", backing off ${Math.round(backoffMs)}ms before retry`);
+          }
+
           const retryMessage = isTimeout
             ? `Workflow "${entry.name}" attempt ${attempt + 1} timed out after ${timeoutSec}s, retrying with ${nextTimeoutSec}s timeout`
-            : `Workflow "${entry.name}" attempt ${attempt + 1} failed (${err?.message}), retrying with ${nextTimeoutSec}s timeout`;
+            : isRateLimit
+              ? `Workflow "${entry.name}" attempt ${attempt + 1} rate-limited, backing off ${Math.round(backoffMs)}ms before retry with ${nextTimeoutSec}s timeout`
+              : `Workflow "${entry.name}" attempt ${attempt + 1} failed (${err?.message}), retrying with ${nextTimeoutSec}s timeout`;
           onPipelineProgress?.({
             type: "warning",
             stage: "spec_workflow_detail",
             message: retryMessage,
-            context: { workflowName: entry.name, attempt: attempt + 1, total: orderedWorkflows.length, failureKind, timeoutUsed: timeoutSec, nextTimeout: nextTimeoutSec },
+            context: { workflowName: entry.name, attempt: attempt + 1, total: orderedWorkflows.length, failureKind: isRateLimit ? "rate_limit" : failureKind, timeoutUsed: timeoutSec, nextTimeout: nextTimeoutSec, backoffMs: isRateLimit ? Math.round(backoffMs) : undefined },
           });
+
+          if (backoffMs > 0) {
+            await sleep(backoffMs);
+          }
         }
 
         if (attempt === DETAIL_RETRY_LIMIT) {
@@ -682,6 +711,25 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
       durationMs: Date.now() - wfStart,
     });
   }
+
+  const concurrency = Math.min(PARALLEL_CONCURRENCY, orderedWorkflows.length);
+  console.log(`[SpecDecomposer] Run ${runId}: Generating ${orderedWorkflows.length} workflow(s) with concurrency ${concurrency}`);
+
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < orderedWorkflows.length) {
+      const i = nextIndex++;
+      if (i >= orderedWorkflows.length) break;
+      const entry = orderedWorkflows[i];
+      await generateSingleWorkflow(entry, i);
+    }
+  }
+
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < concurrency; w++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
   } finally {
     clearInterval(heartbeatInterval);
   }
