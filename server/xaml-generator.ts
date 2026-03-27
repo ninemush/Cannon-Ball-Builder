@@ -1158,6 +1158,42 @@ function classifyAgent(ctx: ActivityContext, _combined: string): ReturnType<type
   };
 }
 
+const VBNET_RESERVED_WORDS_SET = new Set([
+  "addhandler", "addressof", "alias", "and", "andalso", "as", "boolean", "byref",
+  "byte", "byval", "call", "case", "catch", "cbool", "cbyte", "cchar", "cdate",
+  "cdbl", "cdec", "char", "cint", "class", "clng", "cobj", "const", "continue",
+  "csbyte", "cshort", "csng", "cstr", "ctype", "cuint", "culng", "cushort",
+  "date", "decimal", "declare", "default", "delegate", "dim", "directcast", "do",
+  "double", "each", "else", "elseif", "end", "endif", "enum", "erase", "error",
+  "event", "exit", "false", "finally", "for", "friend", "function", "get",
+  "gettype", "getxmlnamespace", "global", "gosub", "goto", "handles", "if",
+  "implements", "imports", "in", "inherits", "integer", "interface", "is", "isnot",
+  "let", "lib", "like", "long", "loop", "me", "mod", "module", "mustinherit",
+  "mustoverride", "mybase", "myclass", "namespace", "narrowing", "new", "next",
+  "not", "nothing", "notinheritable", "notoverridable", "object", "of", "on",
+  "operator", "option", "optional", "or", "orelse", "overloads", "overridable",
+  "overrides", "paramarray", "partial", "private", "property", "protected", "public",
+  "raiseevent", "readonly", "redim", "rem", "removehandler", "resume", "return",
+  "sbyte", "select", "set", "shadows", "shared", "short", "single", "static",
+  "step", "stop", "string", "structure", "sub", "synclock", "then", "throw", "to",
+  "true", "try", "trycast", "typeof", "uinteger", "ulong", "ushort", "using",
+  "variant", "wend", "when", "while", "widening", "with", "withevents", "writeonly",
+  "xor",
+]);
+
+function sanitizeVarName(name: string): string {
+  let sanitized = name.replace(/\./g, "_");
+  sanitized = sanitized.replace(/[^a-zA-Z0-9_]/g, "_");
+  sanitized = sanitized.replace(/^[0-9]+/, "");
+  sanitized = sanitized.replace(/_+/g, "_");
+  sanitized = sanitized.replace(/^_|_$/g, "");
+  if (!sanitized) sanitized = "var1";
+  if (VBNET_RESERVED_WORDS_SET.has(sanitized.toLowerCase())) {
+    sanitized = `_${sanitized}`;
+  }
+  return sanitized;
+}
+
 function renderVariablesBlock(variables: VariableDecl[], targetFramework?: TargetFramework): string {
   const isCSharp = targetFramework === "Portable";
   const screenshotDefault = isCSharp
@@ -1174,12 +1210,16 @@ function renderVariablesBlock(variables: VariableDecl[], targetFramework?: Targe
   }
 
   let xml = "<Sequence.Variables>\n";
+  const emittedNames = new Set<string>();
   uniqueVars.forEach((v) => {
     const typeAttr = mapClrType(v.type);
+    const safeName = sanitizeVarName(v.name);
+    if (emittedNames.has(safeName)) return;
+    emittedNames.add(safeName);
     if (v.defaultValue) {
-      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" Default="${escapeXml(v.defaultValue)}" />\n`;
+      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" Default="${escapeXml(v.defaultValue)}" />\n`;
     } else {
-      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" />\n`;
+      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" />\n`;
     }
   });
   xml += "      </Sequence.Variables>";
@@ -1435,8 +1475,13 @@ function renderControlFlowActivity(
       const valExpr = String(values).replace(/^\[|\]$/g, "");
       if (/\bdt_\w*\.Rows\b/i.test(valExpr) || /\.AsEnumerable\(\)/i.test(valExpr) || /\bDataTable\b.*\.Rows\b/i.test(valExpr)) {
         itemType = "scg2:DataRow";
+      } else if (/\.Rows\b/i.test(valExpr)) {
+        itemType = "scg2:DataRow";
       }
     }
+
+    const rawIteratorName = String(properties["IteratorVariable"] || rawProperties["IteratorVariable"] || "item");
+    const iteratorName = sanitizeVarName(rawIteratorName);
 
     let bodyContent = "";
     const bodyProp = rawProperties["Body"];
@@ -1452,7 +1497,7 @@ function renderControlFlowActivity(
             <ForEach.Body>
               <ActivityAction x:TypeArguments="${escapeXml(String(itemType))}">
                 <ActivityAction.Argument>
-                  <DelegateInArgument x:TypeArguments="${escapeXml(String(itemType))}" Name="item" />
+                  <DelegateInArgument x:TypeArguments="${escapeXml(String(itemType))}" Name="${escapeXml(iteratorName)}" />
                 </ActivityAction.Argument>
                 <Sequence DisplayName="Body: ${escapeXml(enforced)}">${bodyContent}
                 </Sequence>

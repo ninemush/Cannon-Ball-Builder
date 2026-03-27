@@ -133,6 +133,51 @@ function getSafeDefaultForProperty(key: string, code: RemediationCode): string {
   return `[TODO: Fix ${key}]`;
 }
 
+const VBNET_RESERVED_WORDS = new Set([
+  "addhandler", "addressof", "alias", "and", "andalso", "as", "boolean", "byref",
+  "byte", "byval", "call", "case", "catch", "cbool", "cbyte", "cchar", "cdate",
+  "cdbl", "cdec", "char", "cint", "class", "clng", "cobj", "const", "continue",
+  "csbyte", "cshort", "csng", "cstr", "ctype", "cuint", "culng", "cushort",
+  "date", "decimal", "declare", "default", "delegate", "dim", "directcast", "do",
+  "double", "each", "else", "elseif", "end", "endif", "enum", "erase", "error",
+  "event", "exit", "false", "finally", "for", "friend", "function", "get",
+  "gettype", "getxmlnamespace", "global", "gosub", "goto", "handles", "if",
+  "implements", "imports", "in", "inherits", "integer", "interface", "is", "isnot",
+  "let", "lib", "like", "long", "loop", "me", "mod", "module", "mustinherit",
+  "mustoverride", "mybase", "myclass", "namespace", "narrowing", "new", "next",
+  "not", "nothing", "notinheritable", "notoverridable", "object", "of", "on",
+  "operator", "option", "optional", "or", "orelse", "overloads", "overridable",
+  "overrides", "paramarray", "partial", "private", "property", "protected", "public",
+  "raiseevent", "readonly", "redim", "rem", "removehandler", "resume", "return",
+  "sbyte", "select", "set", "shadows", "shared", "short", "single", "static",
+  "step", "stop", "string", "structure", "sub", "synclock", "then", "throw", "to",
+  "true", "try", "trycast", "typeof", "uinteger", "ulong", "ushort", "using",
+  "variant", "wend", "when", "while", "widening", "with", "withevents", "writeonly",
+  "xor",
+]);
+
+export function sanitizeVariableName(name: string): string {
+  let sanitized = name.replace(/\./g, "_");
+  sanitized = sanitized.replace(/[^a-zA-Z0-9_]/g, "_");
+  sanitized = sanitized.replace(/^[0-9]+/, "");
+  sanitized = sanitized.replace(/_+/g, "_");
+  sanitized = sanitized.replace(/^_|_$/g, "");
+  if (!sanitized) sanitized = "var1";
+  if (VBNET_RESERVED_WORDS.has(sanitized.toLowerCase())) {
+    sanitized = `_${sanitized}`;
+  }
+  return sanitized;
+}
+
+export function isUnsafeVariableName(name: string): string | null {
+  if (/\./.test(name)) return `contains dot(s)`;
+  if (/\s/.test(name)) return `contains whitespace`;
+  if (/^[0-9]/.test(name)) return `starts with a digit`;
+  if (/[^a-zA-Z0-9_]/.test(name)) return `contains invalid character(s)`;
+  if (VBNET_RESERVED_WORDS.has(name.toLowerCase())) return `is a VB.NET reserved word`;
+  return null;
+}
+
 function mapClrType(type: string): string {
   const lower = type.toLowerCase();
   if (lower === "string" || lower === "system.string" || lower === "x:string") return "x:String";
@@ -1023,11 +1068,44 @@ function assembleWhileNode(
     `</While>`;
 }
 
-function inferForEachItemType(itemType: string, valuesExpression: string): string {
+function inferForEachItemType(itemType: string, valuesExpression: string, allVariables: VariableDeclaration[]): string {
   if (itemType && itemType !== "x:Object" && itemType !== "x:String") return itemType;
   const expr = valuesExpression.trim().replace(/^\[|\]$/g, "");
   if (/\bdt_\w*\.Rows\b/i.test(expr) || /\.AsEnumerable\(\)/i.test(expr) || /\bDataTable\b.*\.Rows\b/i.test(expr)) {
     return "scg2:DataRow";
+  }
+  const rowsMatch = expr.match(/^(\w+)\.Rows$/i);
+  if (rowsMatch) {
+    const varName = rowsMatch[1];
+    const decl = allVariables.find(v => v.name === varName);
+    if (decl) {
+      const mappedType = mapClrType(decl.type).toLowerCase();
+      if (mappedType.includes("datatable")) {
+        return "scg2:DataRow";
+      }
+    }
+  }
+  const asEnumMatch = expr.match(/^(\w+)\.AsEnumerable\(\)$/i);
+  if (asEnumMatch) {
+    const varName = asEnumMatch[1];
+    const decl = allVariables.find(v => v.name === varName);
+    if (decl) {
+      const mappedType = mapClrType(decl.type).toLowerCase();
+      if (mappedType.includes("datatable")) {
+        return "scg2:DataRow";
+      }
+    }
+  }
+  const simpleVarMatch = expr.match(/^(\w+)$/);
+  if (simpleVarMatch) {
+    const varName = simpleVarMatch[1];
+    const decl = allVariables.find(v => v.name === varName);
+    if (decl) {
+      const mappedType = mapClrType(decl.type).toLowerCase();
+      if (mappedType.includes("datatable")) {
+        return "scg2:DataRow";
+      }
+    }
   }
   return itemType || "x:Object";
 }
@@ -1040,7 +1118,7 @@ function assembleForEachNode(
   emissionContext: EmissionContext = "normal",
 ): string {
   const displayName = escapeXml(node.displayName);
-  const itemType = inferForEachItemType(node.itemType || "x:Object", node.valuesExpression);
+  const itemType = inferForEachItemType(node.itemType || "x:Object", node.valuesExpression, allVariables);
   const wrappedValues = ensureBracketWrapped(node.valuesExpression);
 
   const bodyXml = node.bodyChildren
@@ -1050,7 +1128,7 @@ function assembleForEachNode(
   return `<ForEach x:TypeArguments="${itemType}" Values="${escapeXml(wrappedValues)}" DisplayName="${displayName}">\n` +
     `  <ActivityAction x:TypeArguments="${itemType}">\n` +
     `    <ActivityAction.Argument>\n` +
-    `      <DelegateInArgument x:TypeArguments="${itemType}" Name="${escapeXml(node.iteratorName)}" />\n` +
+    `      <DelegateInArgument x:TypeArguments="${itemType}" Name="${escapeXml(node.iteratorName || "item")}" />\n` +
     `    </ActivityAction.Argument>\n` +
     `    <Sequence DisplayName="Body">\n` +
     `      ${bodyXml}\n` +
@@ -1167,15 +1245,133 @@ function crossCheckGetCredentialVariableTypes(
   }
 }
 
+function replaceVariableRefsInString(str: string, renameMap: Map<string, string>): string {
+  let result = str;
+  renameMap.forEach((newName, oldName) => {
+    if (oldName === newName) return;
+    const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    result = result.replace(new RegExp(`\\b${escaped}\\b`, "g"), newName);
+  });
+  return result;
+}
+
+function sanitizeVariableDeclarations(
+  vars: VariableDeclaration[],
+  renameMap: Map<string, string>,
+): VariableDeclaration[] {
+  const seen = new Set<string>();
+  return vars.map(v => {
+    const safeName = sanitizeVariableName(v.name);
+    if (safeName !== v.name) {
+      renameMap.set(v.name, safeName);
+    }
+    let finalName = safeName;
+    let counter = 2;
+    while (seen.has(finalName)) {
+      finalName = `${safeName}_${counter}`;
+      counter++;
+    }
+    if (finalName !== safeName && safeName !== v.name) {
+      renameMap.set(v.name, finalName);
+    }
+    seen.add(finalName);
+    return { ...v, name: finalName };
+  });
+}
+
+function sanitizeNodeVariableRefs(node: WorkflowNode, renameMap: Map<string, string>): WorkflowNode {
+  if (renameMap.size === 0) return node;
+
+  if (node.kind === "activity") {
+    const newProps: Record<string, PropertyValue> = {};
+    for (const [k, v] of Object.entries(node.properties)) {
+      if (typeof v === "string") {
+        newProps[k] = replaceVariableRefsInString(v, renameMap);
+      } else {
+        newProps[k] = v;
+      }
+    }
+    const newOutputVar = node.outputVar ? replaceVariableRefsInString(node.outputVar, renameMap) : node.outputVar;
+    return { ...node, properties: newProps, outputVar: newOutputVar };
+  }
+
+  if (node.kind === "sequence") {
+    const localVars = node.variables ? sanitizeVariableDeclarations(node.variables, renameMap) : node.variables;
+    return {
+      ...node,
+      variables: localVars,
+      children: node.children.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+    };
+  }
+
+  if (node.kind === "tryCatch") {
+    return {
+      ...node,
+      tryChildren: node.tryChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+      catchChildren: node.catchChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+      finallyChildren: node.finallyChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+    };
+  }
+
+  if (node.kind === "if") {
+    const newCond = typeof node.condition === "string"
+      ? replaceVariableRefsInString(node.condition, renameMap)
+      : node.condition;
+    return {
+      ...node,
+      condition: newCond,
+      thenChildren: node.thenChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+      elseChildren: node.elseChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+    };
+  }
+
+  if (node.kind === "while") {
+    const newCond = typeof node.condition === "string"
+      ? replaceVariableRefsInString(node.condition, renameMap)
+      : node.condition;
+    return {
+      ...node,
+      condition: newCond,
+      bodyChildren: node.bodyChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+    };
+  }
+
+  if (node.kind === "forEach") {
+    return {
+      ...node,
+      valuesExpression: replaceVariableRefsInString(node.valuesExpression, renameMap),
+      iteratorName: sanitizeVariableName(node.iteratorName || "item"),
+      bodyChildren: node.bodyChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+    };
+  }
+
+  if (node.kind === "retryScope") {
+    return {
+      ...node,
+      bodyChildren: node.bodyChildren.map(c => sanitizeNodeVariableRefs(c, renameMap)),
+    };
+  }
+
+  return node;
+}
+
 export function assembleWorkflowFromSpec(
   spec: WorkflowSpec,
   processType: ProcessType = "general",
 ): { xaml: string; variables: VariableDeclaration[] } {
   const workflowName = (spec.name || "Workflow").replace(/\s+/g, "_");
-  const allVariables = [...(spec.variables || [])];
 
-  if (spec.rootSequence.variables) {
-    for (const v of spec.rootSequence.variables) {
+  const renameMap = new Map<string, string>();
+  const sanitizedTopVars = sanitizeVariableDeclarations(spec.variables || [], renameMap);
+  const sanitizedRootVars = spec.rootSequence.variables
+    ? sanitizeVariableDeclarations(spec.rootSequence.variables, renameMap)
+    : undefined;
+  const sanitizedRootChildren = spec.rootSequence.children.map(c => sanitizeNodeVariableRefs(c, renameMap));
+
+  const allVariables = [...sanitizedTopVars];
+
+  if (sanitizedRootVars) {
+    for (const v of sanitizedRootVars) {
       if (!allVariables.find(av => av.name === v.name)) {
         allVariables.push(v);
       }
@@ -1190,9 +1386,14 @@ export function assembleWorkflowFromSpec(
     });
   }
 
-  crossCheckGetCredentialVariableTypes(spec.rootSequence, allVariables);
+  const sanitizedRootSequence = {
+    ...spec.rootSequence,
+    variables: sanitizedRootVars,
+    children: sanitizedRootChildren,
+  };
+  crossCheckGetCredentialVariableTypes(sanitizedRootSequence, allVariables);
 
-  const activitiesXml = spec.rootSequence.children
+  const activitiesXml = sanitizedRootChildren
     .map(child => assembleNode(child, allVariables, processType))
     .join("\n    ");
 

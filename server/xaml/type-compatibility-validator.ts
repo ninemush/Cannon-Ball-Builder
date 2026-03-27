@@ -347,6 +347,29 @@ function clrTypeToXamlTypeArg(clrType: string): string {
   return reverseMap[clrType] || clrType;
 }
 
+const VBNET_RESERVED = new Set([
+  "addhandler", "addressof", "alias", "and", "andalso", "as", "boolean", "byref",
+  "byte", "byval", "call", "case", "catch", "cbool", "cbyte", "cchar", "cdate",
+  "cdbl", "cdec", "char", "cint", "class", "clng", "cobj", "const", "continue",
+  "csbyte", "cshort", "csng", "cstr", "ctype", "cuint", "culng", "cushort",
+  "date", "decimal", "declare", "default", "delegate", "dim", "directcast", "do",
+  "double", "each", "else", "elseif", "end", "endif", "enum", "erase", "error",
+  "event", "exit", "false", "finally", "for", "friend", "function", "get",
+  "gettype", "getxmlnamespace", "global", "gosub", "goto", "handles", "if",
+  "implements", "imports", "in", "inherits", "integer", "interface", "is", "isnot",
+  "let", "lib", "like", "long", "loop", "me", "mod", "module", "mustinherit",
+  "mustoverride", "mybase", "myclass", "namespace", "narrowing", "new", "next",
+  "not", "nothing", "notinheritable", "notoverridable", "object", "of", "on",
+  "operator", "option", "optional", "or", "orelse", "overloads", "overridable",
+  "overrides", "paramarray", "partial", "private", "property", "protected", "public",
+  "raiseevent", "readonly", "redim", "rem", "removehandler", "resume", "return",
+  "sbyte", "select", "set", "shadows", "shared", "short", "single", "static",
+  "step", "stop", "string", "structure", "sub", "synclock", "then", "throw", "to",
+  "true", "try", "trycast", "typeof", "uinteger", "ulong", "ushort", "using",
+  "variant", "wend", "when", "while", "widening", "with", "withevents", "writeonly",
+  "xor",
+]);
+
 export function validateTypeCompatibility(
   xamlEntries: { name: string; content: string }[],
 ): TypeMismatchResult {
@@ -549,6 +572,87 @@ export function validateTypeCompatibility(
       }
 
       if (!madeChangesThisPass) break;
+    }
+
+    const forEachTagPattern = /<ForEach\s[^>]*>/g;
+    let feMatch;
+    while ((feMatch = forEachTagPattern.exec(patchedContent)) !== null) {
+      const feTag = feMatch[0];
+      const typeArgMatch = feTag.match(/x:TypeArguments="([^"]+)"/);
+      const valuesMatch = feTag.match(/Values="\[([^\]]*)\]"/);
+      if (!typeArgMatch || !valuesMatch) continue;
+      const feTypeArg = typeArgMatch[1];
+      const feValues = valuesMatch[1];
+      const feLine = patchedContent.substring(0, feMatch.index).split("\n").length;
+
+      const rowsMatch = feValues.match(/^(\w+)\.Rows$/i);
+      const asEnumMatch = feValues.match(/^(\w+)\.AsEnumerable\(\)$/i);
+      const varRef = rowsMatch?.[1] || asEnumMatch?.[1];
+
+      let shouldBeDataRow = false;
+      if (varRef) {
+        const varInfo = extractVariableDeclarations(patchedContent).find(v => v.name === varRef);
+        if (varInfo && normalizeClrType(varInfo.type) === "System.Data.DataTable") {
+          shouldBeDataRow = true;
+        }
+      }
+
+      if (!shouldBeDataRow) {
+        if (/\bdt_\w*\.Rows\b/i.test(feValues) || /\.AsEnumerable\(\)/i.test(feValues) || /\bDataTable\b.*\.Rows\b/i.test(feValues)) {
+          shouldBeDataRow = true;
+        }
+      }
+
+      if (shouldBeDataRow && normalizeClrType(feTypeArg) !== "System.Data.DataRow") {
+        const newTag = feTag.replace(
+          `x:TypeArguments="${feTypeArg}"`,
+          `x:TypeArguments="scg2:DataRow"`
+        );
+        patchedContent = patchedContent.substring(0, feMatch.index) + newTag + patchedContent.substring(feMatch.index + feTag.length);
+
+        const actActionPattern = new RegExp(
+          `<ActivityAction\\s+x:TypeArguments="${feTypeArg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+          "g"
+        );
+        patchedContent = patchedContent.replace(actActionPattern, `<ActivityAction x:TypeArguments="scg2:DataRow"`);
+
+        const delegatePattern = new RegExp(
+          `<DelegateInArgument\\s+x:TypeArguments="${feTypeArg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+          "g"
+        );
+        patchedContent = patchedContent.replace(delegatePattern, `<DelegateInArgument x:TypeArguments="scg2:DataRow"`);
+
+        changed = true;
+
+        violations.push({
+          category: "accuracy",
+          severity: "warning",
+          check: "FOREACH_TYPE_MISMATCH",
+          file: shortName,
+          detail: `Line ${feLine}: Auto-repaired — ForEach TypeArguments changed from "${feTypeArg}" to "scg2:DataRow" because Values expression "${feValues}" iterates over DataTable rows`,
+        });
+      }
+    }
+
+    const varNamePattern = /<Variable\s+[^>]*Name="([^"]+)"/g;
+    let vnMatch;
+    while ((vnMatch = varNamePattern.exec(patchedContent)) !== null) {
+      const vName = vnMatch[1];
+      const reasons: string[] = [];
+      if (/\./.test(vName)) reasons.push("contains dot(s)");
+      if (/\s/.test(vName)) reasons.push("contains whitespace");
+      if (/^[0-9]/.test(vName)) reasons.push("starts with a digit");
+      if (/[^a-zA-Z0-9_]/.test(vName)) reasons.push("contains invalid character(s)");
+      if (VBNET_RESERVED.has(vName.toLowerCase())) reasons.push("is a VB.NET reserved word");
+      if (reasons.length > 0) {
+        violations.push({
+          category: "accuracy",
+          severity: "error",
+          check: "UNSAFE_VARIABLE_NAME",
+          file: shortName,
+          detail: `Variable "${vName}" has an invalid name — ${reasons.join(", ")}. This will cause Studio load failures.`,
+        });
+      }
     }
 
     if (changed) {
