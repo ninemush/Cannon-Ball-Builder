@@ -38,9 +38,7 @@
           "className": "FlowDecision",
           "namespace": "System.Activities.Statements",
           "processTypes": [
-            "attended",
-            "unattended",
-            "reframework"
+            "general"
           ],
           "properties": [
             {
@@ -60,9 +58,7 @@
           "className": "FlowSwitch",
           "namespace": "System.Activities.Statements",
           "processTypes": [
-            "attended",
-            "unattended",
-            "reframework"
+            "general"
           ],
           "properties": [
             {
@@ -82,9 +78,7 @@
           "className": "While",
           "namespace": "System.Activities.Statements",
           "processTypes": [
-            "attended",
-            "unattended",
-            "reframework"
+            "general"
           ],
           "properties": [
             {
@@ -104,9 +98,7 @@
           "className": "DoWhile",
           "namespace": "System.Activities.Statements",
           "processTypes": [
-            "attended",
-            "unattended",
-            "reframework"
+            "general"
           ],
           "properties": [
             {
@@ -126,9 +118,7 @@
           "className": "Switch",
           "namespace": "System.Activities.Statements",
           "processTypes": [
-            "attended",
-            "unattended",
-            "reframework"
+            "general"
           ],
           "properties": [
             {
@@ -148,9 +138,7 @@
           "className": "Delay",
           "namespace": "System.Activities.Statements",
           "processTypes": [
-            "attended",
-            "unattended",
-            "reframework"
+            "general"
           ],
           "properties": [
             {

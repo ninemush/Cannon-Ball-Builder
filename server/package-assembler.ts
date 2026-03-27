@@ -1699,7 +1699,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               const wrappedVal = ensureBracketWrapped(propVal);
-              const childElement = `<${className}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${className}.${propName}>`;
+              const childElement = `<${fullTag}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${fullTag}.${propName}>`;
 
               const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
               const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?>)`);
@@ -2819,14 +2819,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                   const propName = correction.property;
                   const propVal = attrs[propName];
                   if (propVal !== undefined) {
-                    const className = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
                     const wrapper = correction.argumentWrapper || "InArgument";
                     const xType = correction.typeArguments || clrToXamlType("System.String");
 
                     const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const wrappedVal = ensureBracketWrapped(propVal);
-                    const childElement = `<${className}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${className}.${propName}>`;
+                    const childElement = `<${fullTag}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${fullTag}.${propName}>`;
 
                     const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
                     const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?>)`);

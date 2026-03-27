@@ -52,11 +52,55 @@ function findActivityScope(xaml: string, displayName: string): { start: number; 
   return { start, end: closingIdx + closingTag.length };
 }
 
+function looksLikeNaturalLanguage(text: string): boolean {
+  if (/[;.]\s+[a-z]/.test(text)) return true;
+
+  if (/\b[A-Z][a-z]+\s+[a-z]+\s+[a-z]+\s+[a-z]+/.test(text)) return true;
+
+  const hasXmlSyntax = /[<>\[\]"=&]/.test(text);
+  if (!hasXmlSyntax && text.length > 20 && /\s{1,}\w+\s{1,}\w+/.test(text)) return true;
+
+  return false;
+}
+
+function wouldBreakAttributeQuoting(xaml: string, original: string, corrected: string): boolean {
+  const idx = xaml.indexOf(original);
+  if (idx === -1) return false;
+
+  const before = xaml.substring(Math.max(0, idx - 50), idx);
+  const after = xaml.substring(idx + original.length, Math.min(xaml.length, idx + original.length + 50));
+
+  const inAttribute = /=\s*"[^"]*$/.test(before) && /^[^"]*"/.test(after);
+  if (inAttribute && corrected.includes('"') && !corrected.includes('&quot;')) {
+    return true;
+  }
+
+  return false;
+}
+
+function isCorrectedValueValid(corrected: string): boolean {
+  if (looksLikeNaturalLanguage(corrected)) return false;
+
+  if (corrected.length > 30 && !/[<>\[\]"=&{}()]/.test(corrected)) return false;
+
+  return true;
+}
+
 function scopedReplace(
   xaml: string,
   correction: Correction,
 ): { result: string; success: boolean } {
   if (!correction.original || !correction.corrected) {
+    return { result: xaml, success: false };
+  }
+
+  if (!isCorrectedValueValid(correction.corrected)) {
+    console.warn(`[Meta-Validation] Rejected correction as invalid (natural-language commentary detected): "${correction.corrected.substring(0, 80)}..."`);
+    return { result: xaml, success: false };
+  }
+
+  if (wouldBreakAttributeQuoting(xaml, correction.original, correction.corrected)) {
+    console.warn(`[Meta-Validation] Rejected correction that would break attribute quoting: "${correction.corrected.substring(0, 80)}..."`);
     return { result: xaml, success: false };
   }
 

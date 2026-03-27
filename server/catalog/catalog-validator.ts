@@ -8,6 +8,7 @@ const VALID_DIRECTIONS = new Set(["In", "Out", "InOut", "None"]);
 const VALID_XAML_SYNTAX = new Set(["child-element", "attribute"]);
 const VALID_ARGUMENT_WRAPPERS = new Set(["InArgument", "OutArgument", "InOutArgument"]);
 const VALID_FEED_STATUSES = new Set(["verified", "unverified"]);
+const VALID_PROCESS_TYPES = new Set(["api-integration", "document-processing", "attended-ui", "unattended-ui", "orchestration", "general"]);
 
 function isIso8601(s: string): boolean {
   const d = new Date(s);
@@ -141,6 +142,12 @@ export function validateCatalog(catalog: any): CatalogValidationResult {
 
       if (!Array.isArray(act.processTypes) || act.processTypes.length === 0) {
         warnings.push(`${actLabel}: processTypes should be a non-empty array`);
+      } else {
+        for (const pt of act.processTypes) {
+          if (!VALID_PROCESS_TYPES.has(pt)) {
+            warnings.push(`${actLabel}: processType "${pt}" is not a valid ProcessType (valid: ${Array.from(VALID_PROCESS_TYPES).join(", ")})`);
+          }
+        }
       }
 
       if (!Array.isArray(act.properties)) {

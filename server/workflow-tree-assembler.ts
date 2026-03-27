@@ -280,7 +280,7 @@ function applyCatalogConformance(xml: string): string {
       const wrapper = correction.argumentWrapper || "InArgument";
       const xType = correction.typeArguments || "x:String";
       const wrappedVal = ensureBracketWrapped(propVal);
-      const childElement = `<${className}.${propName}>\n    <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n  </${className}.${propName}>`;
+      const childElement = `<${tag}.${propName}>\n    <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n  </${tag}.${propName}>`;
 
       const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
