@@ -384,6 +384,7 @@ const UIPATH_VB_SETTINGS = `
   <TextExpression.ReferencesForImplementation>
     <sco:Collection x:TypeArguments="AssemblyReference">
       <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
       <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
       <AssemblyReference>mscorlib</AssemblyReference>
       <AssemblyReference>System.Data</AssemblyReference>
@@ -415,6 +416,7 @@ const UIPATH_CSHARP_SETTINGS = `
   <TextExpression.ReferencesForImplementation>
     <sco:Collection x:TypeArguments="AssemblyReference">
       <AssemblyReference>System.Runtime</AssemblyReference>
+      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
       <AssemblyReference>System.Data.Common</AssemblyReference>
       <AssemblyReference>System.Xml.Linq</AssemblyReference>
       <AssemblyReference>UiPath.Core</AssemblyReference>
@@ -866,6 +868,9 @@ export function sanitizeXmlArtifacts(xml: string): string {
     return `"${val}"`;
   });
 
+  xml = xml.replace(/\s+[a-zA-Z_][\w]*="No auto-correction[^"]*"/g, "");
+  xml = xml.replace(/\s+[a-zA-Z_][\w]*="[^"]*;\s*(?:do not|must not|should not|cannot)[^"]*"/gi, "");
+
   return xml;
 }
 
@@ -1312,6 +1317,33 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     }
   }
 
+  const openingTagPrefixes = new Map<string, string>();
+  const openTagPrefixPattern = /<([a-zA-Z]+):([A-Za-z]+(?:\.[A-Za-z]+)*)[\s>\/]/g;
+  let otm;
+  while ((otm = openTagPrefixPattern.exec(xml)) !== null) {
+    const prefix = otm[1];
+    const localName = otm[2];
+    if (!openingTagPrefixes.has(localName)) {
+      openingTagPrefixes.set(localName, prefix);
+    }
+  }
+  xml = xml.replace(/<\/([A-Za-z]+(?:\.[A-Za-z]+)+)>/g, (match, localName) => {
+    const expectedPrefix = openingTagPrefixes.get(localName);
+    if (expectedPrefix) {
+      return `</${expectedPrefix}:${localName}>`;
+    }
+    const baseName = localName.split(".")[0];
+    const basePrefix = openingTagPrefixes.get(baseName);
+    if (basePrefix) {
+      return `</${basePrefix}:${localName}>`;
+    }
+    const strictPrefix = getActivityPrefixStrict(baseName);
+    if (strictPrefix) {
+      return `</${strictPrefix}:${localName}>`;
+    }
+    return match;
+  });
+
   xml = injectDynamicNamespaceDeclarations(xml, isCrossPlatform);
 
   xml = xml.replace(/<(ui:(?:While|RetryScope))\s+([^>]*?)\/>/g, (match, tag, attrs) => {
@@ -1397,6 +1429,10 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   });
 
   xml = xml.replace(/<ui:TakeScreenshot\s+([^>]*?)OutputPath="([^"]*)"([^>]*?)\/>/g, (_match, before, _outputPathVal, after) => {
+    const attrs = (before + after).trim();
+    return `<ui:TakeScreenshot ${attrs} />`;
+  });
+  xml = xml.replace(/<ui:TakeScreenshot\s+([^>]*?)FileName="([^"]*)"([^>]*?)\/>/g, (_match, before, _fileNameVal, after) => {
     const attrs = (before + after).trim();
     return `<ui:TakeScreenshot ${attrs} />`;
   });

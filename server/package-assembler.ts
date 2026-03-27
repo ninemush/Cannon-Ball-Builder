@@ -48,7 +48,7 @@ import archiver from "archiver";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
-  import { PACKAGE_NAMESPACE_MAP } from "./xaml/xaml-compliance";
+  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
 
 async function getProbeCache() {
@@ -2998,6 +2998,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         autoFixSummary.push(`Stripped TakeScreenshot OutputPath in ${xamlEntries[i].name}`);
         return `<ui:TakeScreenshot ${attrs} />`;
       });
+      content = content.replace(/<ui:TakeScreenshot\s+([^>]*?)FileName="([^"]*)"([^>]*?)\/>/g, (_match, before, _fileNameVal, after) => {
+        const attrs = (before + after).trim();
+        autoFixSummary.push(`Stripped TakeScreenshot FileName in ${xamlEntries[i].name}`);
+        return `<ui:TakeScreenshot ${attrs} />`;
+      });
 
       const continueOnErrorWhitelist = new Set([
         "ui:Click", "ui:TypeInto", "ui:GetText", "ui:ElementExists",
@@ -3774,7 +3779,40 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     }
 
     for (const [path, content] of deferredWrites.entries()) {
-      archive.append(content, { name: path });
+      if (path.endsWith(".xaml")) {
+        let sanitized = content;
+
+        sanitized = sanitized.replace(/\s+[a-zA-Z_][\w]*="No auto-correction[^"]*"/g, "");
+        sanitized = sanitized.replace(/\s+[a-zA-Z_][\w]*="[^"]*;\s*(?:do not|must not|should not|cannot)[^"]*"/gi, "");
+
+        const wellFormed = validateXmlWellFormedness(sanitized);
+        if (!wellFormed.valid) {
+          const fileName = path.split("/").pop() || path;
+          console.error(`[XML Well-Formedness Gate] ${fileName}: ${wellFormed.errors.join("; ")}`);
+
+          let prevSanitized = "";
+          while (prevSanitized !== sanitized) {
+            prevSanitized = sanitized;
+            sanitized = sanitized.replace(/<ui:TakeScreenshot\s+([^>]*?)(?:FileName|OutputPath)="([^"]*)"([^>]*?)\/>/g, (_m, before, _val, after) => {
+              return `<ui:TakeScreenshot ${(before + after).trim()} />`;
+            });
+          }
+
+          const recheck = validateXmlWellFormedness(sanitized);
+          if (!recheck.valid) {
+            console.error(`[XML Well-Formedness Gate] ${fileName}: still invalid after targeted fix — replacing with Studio-openable stub`);
+            const stubName = fileName.replace(/\.xaml$/i, "");
+            const stubXaml = generateStubWorkflow(stubName, { reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}` });
+            sanitized = stubXaml;
+            autoFixSummary.push(`Replaced ${fileName} with Studio-openable stub due to XML well-formedness failure`);
+          } else {
+            autoFixSummary.push(`Fixed XML well-formedness issues in ${fileName} via targeted repair`);
+          }
+        }
+        archive.append(sanitized, { name: path });
+      } else {
+        archive.append(content, { name: path });
+      }
     }
 
     sanitizeDeps(deps);
@@ -3871,7 +3909,7 @@ ${depEntries}
     else if (fix.includes("Escaped raw ampersand")) repairCode = "REPAIR_AMPERSAND_ESCAPE";
     else if (fix.includes("Escaped bare <")) repairCode = "REPAIR_BARE_ANGLE_ESCAPE";
     else if (fix.includes("Removed duplicate attr")) repairCode = "REPAIR_DUPLICATE_ATTRIBUTE";
-    else if (fix.includes("TakeScreenshot OutputPath")) repairCode = "REPAIR_TAKESCREENSHOT_STRIP";
+    else if (fix.includes("TakeScreenshot OutputPath") || fix.includes("TakeScreenshot FileName")) repairCode = "REPAIR_TAKESCREENSHOT_STRIP";
     else if (fix.includes("Per-activity stub") || fix.includes("Per-sequence stub") || fix.includes("per-workflow")) continue;
 
     const fileMatch = fix.match(/in\s+([\w/.-]+\.xaml)/);

@@ -379,6 +379,7 @@ Generate the enriched workflow specification. For each node, provide the specifi
           }
           if (act.activityType === "ui:TakeScreenshot") {
             delete act.properties["OutputPath"];
+            delete act.properties["FileName"];
           }
           if (act.activityType === "ui:HttpClient") {
             delete act.properties["ResponseType"];

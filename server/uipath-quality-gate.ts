@@ -176,7 +176,7 @@ function scanBlockedPatterns(input: QualityGateInput): QualityGateViolation[] {
     const shortName = entry.name.split("/").pop() || entry.name;
     const content = entry.content;
 
-    if (content.includes("TakeScreenshot.Result") || content.includes("TakeScreenshot.OutputPath") || /TakeScreenshot[^>]*OutputPath=/.test(content)) {
+    if (content.includes("TakeScreenshot.Result") || content.includes("TakeScreenshot.OutputPath") || /TakeScreenshot[^>]*OutputPath=/.test(content) || content.includes("TakeScreenshot.FileName") || /TakeScreenshot[^>]*FileName=/.test(content)) {
       const lines = content.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].includes("TakeScreenshot.Result")) {
@@ -204,6 +204,24 @@ function scanBlockedPatterns(input: QualityGateInput): QualityGateViolation[] {
             check: "invalid-takescreenshot-outputpath-attr",
             file: shortName,
             detail: `Line ${i + 1}: TakeScreenshot has invalid OutputPath attribute — this attribute is not supported`,
+          });
+        }
+        if (lines[i].includes("TakeScreenshot.FileName")) {
+          violations.push({
+            category: "blocked-pattern",
+            severity: "error",
+            check: "invalid-takescreenshot-filename",
+            file: shortName,
+            detail: `Line ${i + 1}: TakeScreenshot.FileName is not a valid property — strip FileName entirely`,
+          });
+        }
+        if (/TakeScreenshot[^>]*FileName="/.test(lines[i])) {
+          violations.push({
+            category: "blocked-pattern",
+            severity: "error",
+            check: "invalid-takescreenshot-filename-attr",
+            file: shortName,
+            detail: `Line ${i + 1}: TakeScreenshot has invalid FileName attribute — this attribute is not supported`,
           });
         }
       }
