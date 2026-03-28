@@ -1142,9 +1142,81 @@ export function registerUiPathRoutes(app: Express): void {
           }
         }
 
+        // ── Cloud AC Service Probe ──
+        if (!acCreated) {
+          const cloudBase = metadataService.getCloudBaseUrl(config);
+          const cloudAcUrl = `${cloudBase}/actions_/api/v1/task-catalogs`;
+          const cloudAcGet = await safeCall("cloud_ac_get", cloudAcUrl, { headers: hdrs });
+          sec.steps.push({ step: "cloud_ac_get", url: cloudAcUrl, method: "GET", ...cloudAcGet });
+
+          const cloudAcBody = { name: `CB_Diag_Catalog_CloudAC_${ts}`, description: "CannonBall diagnostic (Cloud AC)" };
+          const cloudAcPost = await safeCall("cloud_ac_post", cloudAcUrl, { method: "POST", headers: hdrs, body: JSON.stringify(cloudAcBody) });
+          sec.steps.push({ step: "cloud_ac_post", url: cloudAcUrl, method: "POST", requestBody: cloudAcBody, ...cloudAcPost });
+
+          if (cloudAcPost.ok || cloudAcPost.status === 201) {
+            acCreated = true;
+            sec.overallStatus = "working (cloud_ac_service)";
+            const createdId = cloudAcPost.data?.Id || cloudAcPost.data?.id;
+            if (createdId) {
+              const cleanup = await safeCall("cloud_ac_cleanup", `${cloudAcUrl}/${createdId}`, { method: "DELETE", headers: hdrs });
+              sec.steps.push({ step: "cloud_ac_cleanup", url: `${cloudAcUrl}/${createdId}`, method: "DELETE", ...cleanup });
+            } else {
+              sec.steps.push({ step: "cloud_ac_cleanup", ok: false, note: "Creation succeeded but no ID found in response for cleanup" });
+            }
+          }
+        }
+
+        // ── Maestro Task Catalog Probe ──
+        if (!acCreated) {
+          const cloudBase = metadataService.getCloudBaseUrl(config);
+          const maestroUrl = `${cloudBase}/maestro_/api/v1/task-catalogs`;
+
+          let pimsTokenOk = false;
+          let maestroHdrs = hdrs;
+          try {
+            const { tryAcquireResourceToken, getMaestroToken } = await import("./uipath-auth");
+            const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[], error: "Token request failed" }));
+            sec.steps.push({ step: "pims_token_acquisition", ok: pimsResult.ok, scopes: pimsResult.scopes, error: (pimsResult as any).error || null });
+            if (pimsResult.ok) {
+              const pimsToken = await getMaestroToken();
+              maestroHdrs = { "Authorization": `Bearer ${pimsToken}`, "Content-Type": "application/json" };
+              if (config.folderId) maestroHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
+              pimsTokenOk = true;
+            }
+          } catch (pimsErr: any) {
+            sec.steps.push({ step: "pims_token_acquisition", ok: false, error: pimsErr.message });
+          }
+
+          const maestroGet = await safeCall("maestro_get", maestroUrl, { headers: maestroHdrs });
+          sec.steps.push({ step: "maestro_get", url: maestroUrl, method: "GET", pimsToken: pimsTokenOk, ...maestroGet });
+
+          const maestroBody = { name: `CB_Diag_Catalog_Maestro_${ts}`, description: "CannonBall diagnostic (Maestro)" };
+          const maestroPost = await safeCall("maestro_post", maestroUrl, { method: "POST", headers: maestroHdrs, body: JSON.stringify(maestroBody) });
+          sec.steps.push({ step: "maestro_post", url: maestroUrl, method: "POST", pimsToken: pimsTokenOk, requestBody: maestroBody, ...maestroPost });
+
+          if (maestroPost.ok || maestroPost.status === 201) {
+            acCreated = true;
+            sec.overallStatus = "working (maestro)";
+            const createdId = maestroPost.data?.Id || maestroPost.data?.id;
+            if (createdId) {
+              const cleanup = await safeCall("maestro_cleanup", `${maestroUrl}/${createdId}`, { method: "DELETE", headers: maestroHdrs });
+              sec.steps.push({ step: "maestro_cleanup", url: `${maestroUrl}/${createdId}`, method: "DELETE", ...cleanup });
+            } else {
+              sec.steps.push({ step: "maestro_cleanup", ok: false, note: "Creation succeeded but no ID found in response for cleanup" });
+            }
+          }
+        }
+
         if (!acCreated) {
           sec.overallStatus = `all_approaches_failed`;
         }
+
+        // ── Summary of all endpoints tried ──
+        const endpointSummary = sec.steps
+          .filter((s: any) => s.url)
+          .map((s: any) => ({ step: s.step, url: s.url, method: s.method || "GET", status: s.status, ok: s.ok }));
+        sec.steps.push({ step: "endpoint_summary", endpoints: endpointSummary, overallStatus: sec.overallStatus });
+
         results.actionCenter = sec;
       }
 
