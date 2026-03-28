@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes, applyActivityPolicy, generateSetTransactionStatusXaml } from "../xaml-generator";
+import { generateStubWorkflow, validateXamlContent, makeUiPathCompliant, generateRichXamlFromSpec, generateReframeworkMainXaml, generateRichXamlFromNodes, applyActivityPolicy, generateSetTransactionStatusXaml, generateInitAllSettingsXaml } from "../xaml-generator";
 import { runQualityGate, classifyQualityIssues, getBlockingFiles, type QualityGateInput } from "../uipath-quality-gate";
 import { getBlockedActivities, isActivityAllowed, filterBlockedActivitiesFromXaml } from "../uipath-activity-policy";
 import { scanXamlForRequiredPackages, classifyAutomationPattern, ACTIVITY_REGISTRY, normalizeActivityName, ACTIVITY_NAME_ALIAS_MAP } from "../uipath-activity-registry";
@@ -2206,6 +2206,67 @@ describe("UiPath Generation Regression Tests", () => {
       expect(defaultMatch).toBeTruthy();
       expect(defaultMatch![1]).toContain("&quot;");
       expect(defaultMatch![1]).not.toMatch(/\["/);
+    });
+  });
+
+  describe("regression: studio-blocking fixes", () => {
+    it("generateInitAllSettingsXaml uses capital New for VB dict_Config default", () => {
+      const xaml = generateInitAllSettingsXaml(undefined, "Windows");
+      const dictMatch = xaml.match(/Name="dict_Config"[^>]*Default="([^"]*)"/);
+      expect(dictMatch).toBeTruthy();
+      expect(dictMatch![1]).toContain("New Dictionary(Of String, Object)");
+      expect(dictMatch![1]).not.toContain("new Dictionary(Of String, Object)");
+    });
+
+    it("generateInitAllSettingsXaml uses DelegateInArgument instead of bare Argument", () => {
+      const xaml = generateInitAllSettingsXaml(undefined, "Windows");
+      expect(xaml).not.toMatch(/<Argument\s+x:TypeArguments="scg2:DataRow"\s+x:Name="/);
+      expect(xaml).toContain("<ActivityAction.Argument>");
+      expect(xaml).toContain("<DelegateInArgument x:TypeArguments=\"scg2:DataRow\" Name=\"row\" />");
+      expect(xaml).toContain("<DelegateInArgument x:TypeArguments=\"scg2:DataRow\" Name=\"constRow\" />");
+    });
+
+    it("quality gate detects unprefixed activity tags as blocking errors", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="[&quot;test&quot;]" DisplayName="Log" />`);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      const injected = compliant.replace(
+        /<ui:LogMessage/,
+        `<InvokeWorkflowFile DisplayName="Init" WorkflowFileName="Init.xaml" />\n      <ui:LogMessage`
+      );
+      const required = scanXamlForRequiredPackages(injected);
+      const deps: Record<string, string> = {};
+      for (const pkg of required) deps[pkg] = "25.10.0";
+      if (!deps["UiPath.System.Activities"]) deps["UiPath.System.Activities"] = "25.10.0";
+      const result = runQG(
+        [{ name: "Main.xaml", content: injected }],
+        deps,
+      );
+      const unprefixedErrors = result.violations.filter(v => v.check === "unprefixed-activity");
+      expect(unprefixedErrors.length).toBeGreaterThan(0);
+      expect(unprefixedErrors[0].severity).toBe("error");
+      expect(unprefixedErrors[0].detail).toContain("InvokeWorkflowFile");
+    });
+
+    it("generateInitAllSettingsXaml preserves WorkbookPath and DataTable on Excel activities", () => {
+      const xaml = generateInitAllSettingsXaml(undefined, "Windows");
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      expect(compliant).toMatch(/WorkbookPath=/);
+      expect(compliant).toMatch(/DataTable=/);
+    });
+
+    it("quality gate does NOT flag prefixed activities as unprefixed", () => {
+      const xaml = makeValidXaml("Main", `<ui:InvokeWorkflowFile DisplayName="Init" WorkflowFileName="Init.xaml" />`);
+      const compliant = makeUiPathCompliant(xaml, "Windows");
+      const required = scanXamlForRequiredPackages(compliant);
+      const deps: Record<string, string> = {};
+      for (const pkg of required) deps[pkg] = "25.10.0";
+      if (!deps["UiPath.System.Activities"]) deps["UiPath.System.Activities"] = "25.10.0";
+      const result = runQG(
+        [{ name: "Main.xaml", content: compliant }],
+        deps,
+      );
+      const unprefixedErrors = result.violations.filter(v => v.check === "unprefixed-activity");
+      expect(unprefixedErrors).toHaveLength(0);
     });
   });
 });

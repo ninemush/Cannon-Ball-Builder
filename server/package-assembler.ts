@@ -1904,6 +1904,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
             compliant = compliant.slice(0, insertPos) + `      ${initInvokeRef}\n` + compliant.slice(insertPos);
             deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
+            const existingIdx = xamlEntries.findIndex(e => {
+              const bn = e.name.split("/").pop() || e.name;
+              return bn === `${wfName}.xaml`;
+            });
+            if (existingIdx >= 0) {
+              xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: compliant };
+            }
             console.log(`[UiPath] Injected InitAllSettings.xaml reference into tree-assembled ${wfName}.xaml`);
           }
         }
@@ -2883,6 +2890,17 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               for (const correction of validation.corrections) {
                 if (correction.type === "move-to-child-element") {
                   const propName = correction.property;
+                  const className2 = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
+                  if (className2 === "Assign" && (propName === "To" || propName === "Value")) {
+                    continue;
+                  }
+                  if ((className2 === "ExcelApplicationScope" && propName === "WorkbookPath") ||
+                      (className2 === "ExcelReadRange" && propName === "DataTable") ||
+                      (className2 === "ExcelWriteRange" && propName === "DataTable") ||
+                      (className2 === "ExcelReadRange" && propName === "SheetName") ||
+                      (className2 === "ExcelWriteRange" && propName === "SheetName")) {
+                    continue;
+                  }
                   const propVal = attrs[propName];
                   if (propVal !== undefined) {
                     const wrapper = correction.argumentWrapper || "InArgument";

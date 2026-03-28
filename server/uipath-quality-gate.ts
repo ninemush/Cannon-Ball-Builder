@@ -1065,6 +1065,32 @@ function checkAccuracy(input: QualityGateInput): QualityGateViolation[] {
       }
     }
 
+    const BUILTIN_XAML_ELEMENTS = new Set([
+      "Activity", "Sequence", "If", "Assign", "TryCatch", "Catch", "ForEach", "While", "DoWhile",
+      "Switch", "Throw", "Rethrow", "Delay", "Flowchart", "FlowStep", "FlowDecision", "FlowSwitch",
+      "StateMachine", "State", "Transition", "ParallelForEach", "TransactionScope",
+      "Variable", "Argument", "ActivityAction", "DelegateInArgument", "DelegateOutArgument",
+      "InArgument", "OutArgument", "InOutArgument", "Literal",
+      "VisualBasicValue", "VisualBasicReference", "CSharpValue", "CSharpReference",
+      "TextExpression", "ExpressionServices",
+    ]);
+    const unprefixedActivityPattern = /<([A-Z][a-zA-Z]+)\s+[^>]*(?:DisplayName|WorkflowFileName)="[^"]*"/g;
+    let unprefixedMatch;
+    while ((unprefixedMatch = unprefixedActivityPattern.exec(content)) !== null) {
+      const tagName = unprefixedMatch[1];
+      if (tagName.includes(":") || tagName.includes(".")) continue;
+      if (BUILTIN_XAML_ELEMENTS.has(tagName)) continue;
+      if (/^(Sequence|Variable|Argument|Activity)/.test(tagName)) continue;
+      const lineNum = content.substring(0, unprefixedMatch.index).split("\n").length;
+      violations.push({
+        category: "accuracy",
+        severity: "error",
+        check: "unprefixed-activity",
+        file: shortName,
+        detail: `Line ${lineNum}: Activity "${tagName}" has no namespace prefix — Studio will fail to resolve it. Expected a prefix like "ui:${tagName}"`,
+      });
+    }
+
     if (input.targetFramework === "Windows") {
       const csharpInterpolation = /\$"[^"]*\{[^}]+\}[^"]*"/g;
       while ((match = csharpInterpolation.exec(content)) !== null) {
@@ -2128,6 +2154,7 @@ const BLOCKING_CHECKS = new Set([
   "ENUM_VIOLATION",
   "CATALOG_STRUCTURAL_VIOLATION",
   "EXPRESSION_SYNTAX_UNFIXABLE",
+  "unprefixed-activity",
 ]);
 
 const WARNING_CHECKS = new Set([
