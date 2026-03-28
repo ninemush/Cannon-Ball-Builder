@@ -1776,6 +1776,155 @@ export function registerUiPathRoutes(app: Express): void {
     }
   });
 
+  app.post("/api/uipath/validate-action-center", async (req: Request, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+
+    try {
+      const config = await auth.getConfig();
+      if (!config) {
+        return res.status(400).json({ error: "UiPath is not configured" });
+      }
+
+      const catalogName = (req.body.catalogName as string) || "BDAY-GenAI-GuardrailReview";
+      const { getAccessToken } = await import("./uipath-integration");
+      const token = await getAccessToken(config);
+      const base = metadataService.getServiceUrl("OR", config);
+      const cloudBase = metadataService.getCloudBaseUrl(config);
+      const hdrs: Record<string, string> = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Accept": "application/json" };
+      if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = String(config.folderId);
+
+      function redactHeaders(h: Record<string, string>): Record<string, string> {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(h)) {
+          out[k] = k.toLowerCase() === "authorization" ? v.slice(0, 15) + "...[REDACTED]" : v;
+        }
+        return out;
+      }
+
+      async function tryEndpoint(label: string, url: string, body: any, headers: Record<string, string>): Promise<any> {
+        const startMs = Date.now();
+        try {
+          const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
+          const text = await r.text();
+          let data = null;
+          try { data = JSON.parse(text); } catch {}
+          const httpOk = r.ok || r.status === 201;
+          let bodyValid = httpOk;
+          let bodyValidationNote: string | undefined;
+          if (httpOk && data) {
+            if (data.errorCode || data.ErrorCode || data["odata.error"]) {
+              bodyValid = false;
+              bodyValidationNote = `Response contains error payload: ${data.errorCode || data.ErrorCode || data["odata.error"]?.code || "unknown"}`;
+            } else if (typeof data.message === "string" && (data.message.includes("not onboarded") || data.message.includes("not available"))) {
+              bodyValid = false;
+              bodyValidationNote = `Service message: ${data.message}`;
+            } else if (data.error && typeof data.error === "string") {
+              bodyValid = false;
+              bodyValidationNote = `Error field: ${data.error}`;
+            }
+          }
+          return {
+            label, url, method: "POST",
+            requestHeaders: redactHeaders(headers),
+            requestBody: body,
+            status: r.status, ok: r.ok,
+            responseBody: text.slice(0, 1500),
+            parsedResponse: data,
+            latencyMs: Date.now() - startMs,
+            success: httpOk && bodyValid,
+            bodyValidationNote,
+          };
+        } catch (e: any) {
+          return {
+            label, url, method: "POST",
+            requestHeaders: redactHeaders(headers),
+            requestBody: body,
+            status: 0, ok: false,
+            responseBody: e.message,
+            parsedResponse: null,
+            latencyMs: Date.now() - startMs,
+            success: false,
+            error: e.message,
+          };
+        }
+      }
+
+      const odataBody = { Name: catalogName, Description: "Validation test catalog" };
+      const restBody = { name: catalogName, description: "Validation test catalog" };
+      const formTaskBody = {
+        task: {
+          Title: `Validate_${catalogName}_${Date.now()}`,
+          Priority: "Medium",
+          TaskCatalogName: catalogName,
+          Data: JSON.stringify({ source: "validation" }),
+        },
+      };
+
+      const attempts: any[] = [];
+
+      attempts.push(await tryEndpoint(
+        "OData TaskCatalogs", `${base}/odata/TaskCatalogs`, odataBody, hdrs
+      ));
+
+      attempts.push(await tryEndpoint(
+        "REST API TaskCatalogs", `${base}/api/TaskCatalogs`, restBody, hdrs
+      ));
+
+      const genericTypes = [
+        { label: "GenericTasks/CreateTask (ExternalTask)", body: { Title: `Validate_Task_${Date.now()}`, Priority: "Medium", TaskCatalogName: catalogName, Type: "ExternalTask" } },
+        { label: "GenericTasks/CreateTask (ExternalAction)", body: { Title: `Validate_Task2_${Date.now()}`, Priority: "Medium", TaskCatalogName: catalogName, Type: "ExternalAction" } },
+        { label: "GenericTasks/CreateTask (no Type)", body: { Title: `Validate_Task3_${Date.now()}`, Priority: "Medium", TaskCatalogName: catalogName } },
+      ];
+      for (const gt of genericTypes) {
+        attempts.push(await tryEndpoint(gt.label, `${base}/tasks/GenericTasks/CreateTask`, gt.body, hdrs));
+      }
+
+      attempts.push(await tryEndpoint(
+        "CreateFormTask OData",
+        `${base}/odata/Tasks/UiPath.Server.Configuration.OData.CreateFormTask`,
+        formTaskBody,
+        hdrs
+      ));
+
+      attempts.push(await tryEndpoint(
+        "Cloud AC Service", `${cloudBase}/actions_/api/v1/task-catalogs`, restBody, hdrs
+      ));
+
+      let maestroHdrs = { ...hdrs };
+      let pimsTokenOk = false;
+      try {
+        const pimsResult = await auth.tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[], error: "Token request failed" }));
+        if (pimsResult.ok) {
+          const pimsToken = await auth.getMaestroToken();
+          maestroHdrs = { "Authorization": `Bearer ${pimsToken}`, "Content-Type": "application/json", "Accept": "application/json" };
+          if (config.folderId) maestroHdrs["X-UIPATH-OrganizationUnitId"] = String(config.folderId);
+          pimsTokenOk = true;
+        }
+      } catch {}
+
+      attempts.push(await tryEndpoint(
+        "Maestro Service (PIMS token)", `${cloudBase}/maestro_/api/v1/task-catalogs`, restBody,
+        pimsTokenOk ? maestroHdrs : hdrs
+      ));
+
+      const successful = attempts.filter(a => a.success);
+      const failed = attempts.filter(a => !a.success);
+
+      return res.json({
+        catalogName,
+        pimsTokenAcquired: pimsTokenOk,
+        totalAttempts: attempts.length,
+        successCount: successful.length,
+        failCount: failed.length,
+        successfulEndpoints: successful.map(a => ({ label: a.label, url: a.url, status: a.status })),
+        failedEndpoints: failed.map(a => ({ label: a.label, url: a.url, status: a.status, error: a.responseBody?.slice(0, 300) })),
+        details: attempts,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/action-center/tasks", async (req: Request, res: Response) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });

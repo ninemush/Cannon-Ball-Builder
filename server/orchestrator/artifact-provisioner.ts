@@ -1643,44 +1643,113 @@ async function provisionActionCenter(
       let createdViaCloud = false;
       let pendingResult: DeploymentResult | null = null;
 
-      const catalogCreateAttempts = serviceAvailable
+      let maestroHdrs: Record<string, string> | null = null;
+      const maestroUrl = `${cloudBase}/maestro_/api/v1/task-catalogs`;
+      try {
+        const { tryAcquireResourceToken, getMaestroToken } = await import("../uipath-auth");
+        const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[], error: "Token request failed" }));
+        if (pimsResult.ok) {
+          const pimsToken = await getMaestroToken();
+          maestroHdrs = { "Authorization": `Bearer ${pimsToken}`, "Content-Type": "application/json", "Accept": "application/json" };
+          if (config.folderId) maestroHdrs["X-UIPATH-OrganizationUnitId"] = String(config.folderId);
+          console.log(`[UiPath Deploy] AC PIMS token acquired for Maestro endpoint`);
+        } else {
+          console.log(`[UiPath Deploy] AC PIMS token not available: ${(pimsResult as any).error || "unknown"}`);
+        }
+      } catch (pimsErr: any) {
+        console.log(`[UiPath Deploy] AC PIMS token acquisition error: ${pimsErr.message}`);
+      }
+
+      const formTaskBody: Record<string, any> = {
+        task: {
+          Title: `AutoCreate_${ac.taskCatalog}_${Date.now()}`,
+          Priority: "Medium",
+          TaskCatalogName: ac.taskCatalog,
+          Data: JSON.stringify({ source: "provisioner", catalog: ac.taskCatalog }),
+        },
+      };
+
+      const genericTaskBody: Record<string, any> = {
+        Title: `AutoCreate_${ac.taskCatalog}_${Date.now()}`,
+        Priority: "Medium",
+        TaskCatalogName: ac.taskCatalog,
+        Type: "ExternalTask",
+      };
+
+      type CatalogAttempt = { url: string; body: Record<string, any>; label: string; isCloud: boolean; headers?: Record<string, string>; isFallbackTaskCreate?: boolean };
+
+      const catalogCreateAttempts: CatalogAttempt[] = serviceAvailable
         ? [
             { url: catalogUrl, body: odataBody, label: "AC OData Catalog Create", isCloud: false },
             { url: `${base}/api/TaskCatalogs`, body: odataBody, label: "AC REST API Catalog Create", isCloud: false },
             { url: acServiceUrl, body: restBody, label: "AC Cloud Service Catalog Create", isCloud: true },
+            ...(maestroHdrs ? [{ url: maestroUrl, body: restBody, label: "AC Maestro Catalog Create (PIMS)", isCloud: true, headers: maestroHdrs }] : []),
+            { url: `${base}/odata/Tasks/UiPath.Server.Configuration.OData.CreateFormTask`, body: formTaskBody, label: "AC CreateFormTask (auto-create catalog)", isCloud: false, isFallbackTaskCreate: true },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: genericTaskBody, label: "AC GenericTasks/CreateTask (auto-create catalog)", isCloud: false, isFallbackTaskCreate: true },
           ]
         : [
             { url: acServiceUrl, body: restBody, label: "AC Cloud Service Catalog Create", isCloud: true },
+            ...(maestroHdrs ? [{ url: maestroUrl, body: restBody, label: "AC Maestro Catalog Create (PIMS)", isCloud: true, headers: maestroHdrs }] : []),
+            { url: catalogUrl, body: odataBody, label: "AC OData Catalog Create (fallback)", isCloud: false },
+            { url: `${base}/odata/Tasks/UiPath.Server.Configuration.OData.CreateFormTask`, body: formTaskBody, label: "AC CreateFormTask (auto-create catalog)", isCloud: false, isFallbackTaskCreate: true },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: genericTaskBody, label: "AC GenericTasks/CreateTask (auto-create catalog)", isCloud: false, isFallbackTaskCreate: true },
           ];
 
       for (const attempt of catalogCreateAttempts) {
         if (created) break;
+        const attemptHdrs = attempt.headers || acHdrs;
         const createResult = await uipathFetch(attempt.url, {
-          method: "POST", headers: acHdrs,
+          method: "POST", headers: attemptHdrs,
           body: JSON.stringify(attempt.body),
           label: attempt.label, maxRetries: 1,
         });
         console.log(`[UiPath Deploy] ${attempt.label} "${ac.taskCatalog}" -> ${createResult.status}: ${createResult.text.slice(0, 300)}`);
         if (createResult.ok || createResult.status === 201) {
-          const creation = isValidCreation(createResult.text);
-          if (creation.valid) {
-            const createdId = creation.data?.Id || creation.data?.id;
-            let msg = `Created (ID: ${createdId || "unknown"})`;
-            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: createdId };
-            created = true;
-            createdViaCloud = attempt.isCloud;
-          } else if (!attempt.isCloud) {
-            console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but response body did not pass validation (${creation.error || "unknown"}) — will verify via GET`);
-            pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: "Created (pending verification)" };
-            created = true;
+          if (attempt.isFallbackTaskCreate) {
+            console.log(`[UiPath Deploy] ${attempt.label} succeeded — task created, verifying catalog "${ac.taskCatalog}" was auto-created...`);
+            let catalogVerified = false;
+            for (let vi = 0; vi < 3; vi++) {
+              if (vi > 0) await new Promise(r => setTimeout(r, 1500));
+              const verifyResult = await uipathFetch(
+                `${catalogUrl}?$filter=Name eq '${odataEscape(ac.taskCatalog)}'&$top=1`,
+                { headers: acHdrs, label: "AC Fallback Task Verify", maxRetries: 1 }
+              );
+              if (verifyResult.ok && verifyResult.data?.value?.length > 0) {
+                const found = verifyResult.data.value[0];
+                const verifiedId = found.Id || found.id;
+                console.log(`[UiPath Deploy] AC catalog "${ac.taskCatalog}" confirmed via GET after ${attempt.label} (ID: ${verifiedId})`);
+                pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: `Created via ${attempt.label} (catalog auto-created, verified ID: ${verifiedId})`, id: verifiedId };
+                created = true;
+                createdViaCloud = false;
+                catalogVerified = true;
+                break;
+              }
+            }
+            if (!catalogVerified) {
+              console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but catalog "${ac.taskCatalog}" not found via GET after 3 verification attempts — task may have been created without auto-creating catalog`);
+              failureDetails.push(`${attempt.label} returned 2xx but catalog not verified via GET`);
+            }
           } else {
-            console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but sparse body — treating as created (Cloud endpoint)`);
-            let msg = "Created via Cloud Action Center service";
-            if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
-            pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg };
-            created = true;
-            createdViaCloud = true;
+            const creation = isValidCreation(createResult.text);
+            if (creation.valid) {
+              const createdId = creation.data?.Id || creation.data?.id;
+              let msg = `Created (ID: ${createdId || "unknown"})`;
+              if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+              pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg, id: createdId };
+              created = true;
+              createdViaCloud = attempt.isCloud;
+            } else if (!attempt.isCloud) {
+              console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but response body did not pass validation (${creation.error || "unknown"}) — will verify via GET`);
+              pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: "Created (pending verification)" };
+              created = true;
+            } else {
+              console.log(`[UiPath Deploy] ${attempt.label} returned 2xx but sparse body — treating as created (Cloud endpoint)`);
+              let msg = "Created via Cloud Action Center service";
+              if (ac.assignedRole) msg += `. Assigned role: ${ac.assignedRole}`;
+              pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "created", message: msg };
+              created = true;
+              createdViaCloud = true;
+            }
           }
         } else if (createResult.status === 409 || createResult.text.includes("already exists")) {
           pendingResult = { artifact: "Action Center", name: ac.taskCatalog, status: "exists", message: "Already exists (detected via 409 conflict)" };
