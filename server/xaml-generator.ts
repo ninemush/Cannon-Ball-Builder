@@ -2670,13 +2670,15 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
       <Variable x:TypeArguments="x:String" Name="str_TempUser" />
       <Variable x:TypeArguments="s:Security.SecureString" Name="sec_TempPass" />
       <Variable x:TypeArguments="scg2:DataRow" Name="row_Current" />
-      <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" Default="[${isCSharp ? "new Dictionary&lt;string, object&gt;()" : "new Dictionary(Of String, Object)"}]" />
+      <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" Default="[${isCSharp ? "new Dictionary&lt;string, object&gt;()" : "New Dictionary(Of String, Object)"}]" />
     </Sequence.Variables>
     <ui:LogMessage Level="Info" Message="[${sq}Reading configuration from Config.xlsx...${sq}]" DisplayName="Log Config Start" />
     ${excelBlock}
     <ForEach x:TypeArguments="scg2:DataRow" DisplayName="Process Settings Rows" Values="[dt_Settings.Rows]">
       <ActivityAction x:TypeArguments="scg2:DataRow">
-        <Argument x:TypeArguments="scg2:DataRow" x:Name="row" />
+        <ActivityAction.Argument>
+          <DelegateInArgument x:TypeArguments="scg2:DataRow" Name="row" />
+        </ActivityAction.Argument>
         <Sequence DisplayName="Process Setting Row">
           <Assign DisplayName="Store Setting in Config Dictionary">
             <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config(row(&quot;Name&quot;)${toStringCall})]</OutArgument></Assign.To>
@@ -2688,7 +2690,9 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
     </ForEach>${assetActivities}
     <ForEach x:TypeArguments="scg2:DataRow" DisplayName="Process Constants Rows" Values="[dt_Constants.Rows]">
       <ActivityAction x:TypeArguments="scg2:DataRow">
-        <Argument x:TypeArguments="scg2:DataRow" x:Name="constRow" />
+        <ActivityAction.Argument>
+          <DelegateInArgument x:TypeArguments="scg2:DataRow" Name="constRow" />
+        </ActivityAction.Argument>
         <Sequence DisplayName="Store Constant">
           <Assign DisplayName="Store Constant in Config Dictionary">
             <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config(constRow(&quot;Name&quot;)${toStringCall})]</OutArgument></Assign.To>

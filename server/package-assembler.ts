@@ -1708,6 +1708,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               if (className === "Assign" && (propName === "To" || propName === "Value")) {
                 continue;
               }
+              const ESSENTIAL_ACTIVITY_PROPERTIES: Record<string, Set<string>> = {
+                "ExcelApplicationScope": new Set(["WorkbookPath", "Visible"]),
+                "ExcelReadRange": new Set(["DataTable", "SheetName"]),
+                "ExcelWriteRange": new Set(["DataTable", "SheetName"]),
+                "ExcelWriteCell": new Set(["SheetName"]),
+                "ReadRange": new Set(["DataTable", "SheetName"]),
+                "WriteRange": new Set(["DataTable", "SheetName"]),
+                "UseExcel": new Set(["ExcelFile"]),
+              };
+              const essentialProps = ESSENTIAL_ACTIVITY_PROPERTIES[className];
+              if (essentialProps && essentialProps.has(propName)) {
+                continue;
+              }
               const propVal = attrs[propName];
               if (propVal === undefined) continue;
               const wrapper = correction.argumentWrapper || "InArgument";
@@ -1717,14 +1730,18 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               const wrappedVal = ensureBracketWrapped(propVal);
               const childElement = `<${fullTag}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${fullTag}.${propName}>`;
 
-              const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
-              const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?>)`);
+              const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
+              const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*${propName}="${escapedVal}"([^>]*?>)`);
 
               if (selfClosingRegex.test(result)) {
-                result = result.replace(selfClosingRegex, `$1 $2>\n          ${childElement}\n        </${fullTag}>`);
+                result = result.replace(selfClosingRegex, `$1$2>\n          ${childElement}\n        </${fullTag}>`);
                 reCorrections++;
               } else if (openTagRegex.test(result)) {
-                result = result.replace(openTagRegex, `$1 $2\n          ${childElement}`);
+                const attrRemoveRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*${propName}="${escapedVal}"([^>]*?>)`);
+                result = result.replace(attrRemoveRegex, (match, before, after) => {
+                  const cleanBefore = before.replace(/\s+$/, ' ');
+                  return `${cleanBefore}${after}\n          ${childElement}`;
+                });
                 reCorrections++;
               }
             }
@@ -1881,7 +1898,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         generatedWorkflowNames.add(wfName);
         if (wfName === "Main" || wfName === "Process") {
           hasMain = true;
-          const initInvokeRef = `<InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`;
+          const initInvokeRef = `<ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`;
           const rootSeqMatch = compliant.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
           if (rootSeqMatch && !compliant.includes('WorkflowFileName="InitAllSettings.xaml"')) {
             const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;

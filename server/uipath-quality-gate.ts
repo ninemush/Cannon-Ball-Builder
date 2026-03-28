@@ -2022,6 +2022,39 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     }
   }
 
+  const BUILTIN_XAML_ACTIVITIES = new Set([
+    "Activity", "Sequence", "If", "Assign", "Flowchart", "FlowDecision", "FlowStep",
+    "FlowSwitch", "While", "DoWhile", "ForEach", "ParallelForEach", "Switch",
+    "TryCatch", "Catch", "Throw", "Rethrow", "Delay", "WriteLine", "Persist",
+    "TerminateWorkflow", "NoPersistScope", "InvokeMethod", "AddToCollection",
+    "RemoveFromCollection", "ClearCollection", "ExistsInCollection",
+    "TransactionScope", "CompensableActivity", "Compensate", "Confirm",
+    "Variable", "Literal", "StateMachine", "State", "FinalState", "Transition",
+    "InArgument", "OutArgument", "InOutArgument", "ActivityAction",
+    "DelegateInArgument", "DelegateOutArgument",
+  ]);
+  const unprefixedActivityViolations: QualityGateViolation[] = [];
+  for (const entry of input.xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const lines = entry.content.split("\n");
+    const unprefixedTagRegex = /^(\s*)<([A-Z][A-Za-z]+)([\s>\/])/;
+    for (let i = 0; i < lines.length; i++) {
+      const match = unprefixedTagRegex.exec(lines[i]);
+      if (!match) continue;
+      const tagName = match[2];
+      if (BUILTIN_XAML_ACTIVITIES.has(tagName)) continue;
+      if (tagName.includes(".")) continue;
+      if (/^(True|False|Null)$/.test(tagName)) continue;
+      unprefixedActivityViolations.push({
+        category: "accuracy",
+        severity: "error",
+        check: "UNPREFIXED_ACTIVITY_TAG",
+        file: shortName,
+        detail: `Line ${i + 1}: Activity tag <${tagName}> is missing a namespace prefix (e.g., ui:${tagName}) and will fail namespace resolution in Studio`,
+      });
+    }
+  }
+
   const allViolations = [
     ...blockedViolations,
     ...completenessViolations,
@@ -2033,6 +2066,7 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     ...typeCompatResult.violations,
     ...selectorWarnings,
     ...doubleEncodingViolations,
+    ...unprefixedActivityViolations,
   ];
 
   const hasErrors = allViolations.some(v => v.severity === "error");
