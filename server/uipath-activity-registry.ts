@@ -707,10 +707,26 @@ const TYPE_ARGUMENT_PACKAGE_MAP: Record<string, string> = {
   "UiPath.GSuite": "UiPath.GSuite.Activities",
   "UiPath.GenAI.Activities": "UiPath.GenAI.Activities",
   "UiPath.GenAI": "UiPath.GenAI.Activities",
+  "UiPath.Persistence.Activities.Models.FormTask": "UiPath.Persistence.Activities",
+  "UiPath.Persistence.TaskObject": "UiPath.Persistence.Activities",
+  "UiPath.IntegrationService.Models.ConnectorResult": "UiPath.IntegrationService.Activities",
+  "UiPath.IntegrationService.Models.ConnectionInfo": "UiPath.IntegrationService.Activities",
+  "UiPath.IntegrationService.Models.TriggerEventArgs": "UiPath.IntegrationService.Activities",
+  "UiPath.GSuite.Models": "UiPath.GSuite.Activities",
+  "UiPath.GenAI.Models": "UiPath.GenAI.Activities",
+  "UiPath.GenAI.Activities.Models": "UiPath.GenAI.Activities",
   "UiPath.DocumentUnderstanding": "UiPath.IntelligentOCR.Activities",
+  "UiPath.DocumentProcessing.Contracts.Results.ClassificationResult": "UiPath.IntelligentOCR.Activities",
+  "UiPath.DocumentProcessing.Contracts.Results.ExtractionResult": "UiPath.IntelligentOCR.Activities",
+  "UiPath.DocumentProcessing.DOM.Document": "UiPath.IntelligentOCR.Activities",
   "UiPath.IntelligentOCR": "UiPath.IntelligentOCR.Activities",
   "UiPath.DataService": "UiPath.DataService.Activities",
   "UiPath.DataService.Activities": "UiPath.DataService.Activities",
+  "UiPath.DataService.DataServiceEntity": "UiPath.DataService.Activities",
+  "UiPath.Core.QueueItem": "UiPath.System.Activities",
+  "UiPath.CommunicationsMining": "UiPath.CommunicationsMining.Activities",
+  "UiPath.Form.Activities": "UiPath.Form.Activities",
+  "UiPath.WorkflowEvents": "UiPath.WorkflowEvents.Activities",
 };
 
 function inferPackageFromNamespace(ns: string): string | null {
@@ -746,6 +762,29 @@ export const NAMESPACE_PREFIX_TO_PACKAGE: Record<string, string> = {
   "ugsuite": "UiPath.GSuite.Activities",
   "uis": "UiPath.IntegrationService.Activities",
   "ugenai": "UiPath.GenAI.Activities",
+  "updf": "UiPath.PDF.Activities",
+  "uword": "UiPath.Word.Activities",
+  "uftp": "UiPath.FTP.Activities",
+  "ucrypto": "UiPath.Cryptography.Activities",
+  "ucred": "UiPath.Credentials.Activities",
+  "uform": "UiPath.Form.Activities",
+  "utest": "UiPath.Testing.Activities",
+  "upres": "UiPath.Presentations.Activities",
+  "udu": "UiPath.DocumentUnderstanding.Activities",
+  "ucm": "UiPath.CommunicationsMining.Activities",
+  "uwebapi": "UiPath.WebAPI.Activities",
+  "ucomplex": "UiPath.ComplexScenarios.Activities",
+  "uwfe": "UiPath.WorkflowEvents.Activities",
+  "uo365": "UiPath.MicrosoftOffice365.Activities",
+  "uteams": "UiPath.MicrosoftTeams.Activities",
+  "usfdc": "UiPath.Salesforce.Activities",
+  "usnow": "UiPath.ServiceNow.Activities",
+  "ujira": "UiPath.Jira.Activities",
+  "uslack": "UiPath.Slack.Activities",
+  "ubox": "UiPath.Box.Activities",
+  "uaws": "UiPath.AmazonWebServices.Activities",
+  "uazure": "UiPath.Azure.Activities",
+  "ugcloud": "UiPath.GoogleCloud.Activities",
 };
 
 const UI_PREFIX_ACTIVITY_PACKAGE_MAP: Record<string, string> = {
@@ -782,21 +821,35 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
   const packages = new Set<string>();
   packages.add("UiPath.System.Activities");
 
-  const activityPattern = /<(ui:[A-Za-z]+)\s/g;
+  const FRAMEWORK_PREFIXES = new Set(["x", "s", "sap", "scg", "scg2", "sco", "mc", "mva", "mca", "this", "local", "p", "sads", "sa", "sad"]);
+  const activityPattern = /<([A-Za-z][A-Za-z0-9]*:[A-Za-z]+)\s/g;
   let match;
   while ((match = activityPattern.exec(xamlContent)) !== null) {
     const actTag = match[1];
+    const prefix = actTag.split(":")[0];
 
-    const specializedPkg = UI_PREFIX_ACTIVITY_PACKAGE_MAP[actTag];
-    if (specializedPkg) {
-      packages.add(specializedPkg);
-      continue;
+    if (FRAMEWORK_PREFIXES.has(prefix)) continue;
+
+    if (prefix === "ui") {
+      const specializedPkg = UI_PREFIX_ACTIVITY_PACKAGE_MAP[actTag];
+      if (specializedPkg) {
+        packages.add(specializedPkg);
+        continue;
+      }
     }
 
     if (catalogService.isLoaded()) {
       const pkg = catalogService.getPackageForActivity(actTag);
       if (pkg && !isFrameworkAssembly(pkg)) {
         packages.add(pkg);
+        continue;
+      }
+    }
+
+    if (prefix !== "ui") {
+      const nsPkg = NAMESPACE_PREFIX_TO_PACKAGE[prefix];
+      if (nsPkg) {
+        packages.add(nsPkg);
         continue;
       }
     }
@@ -830,6 +883,17 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
   const typeArgPattern = /x:TypeArguments="([^"]+)"/g;
   while ((match = typeArgPattern.exec(xamlContent)) !== null) {
     const typeArgs = match[1];
+
+    if (catalogService.isLoaded()) {
+      const clrTypes = typeArgs.split(",").map(t => t.trim()).filter(t => t.startsWith("UiPath.") || t.startsWith("System.Data.") || t.startsWith("Newtonsoft."));
+      for (const clrType of clrTypes) {
+        const catalogPkg = catalogService.resolveTypeToPackage(clrType);
+        if (catalogPkg && !isFrameworkAssembly(catalogPkg)) {
+          packages.add(catalogPkg);
+        }
+      }
+    }
+
     for (const [typeRef, pkg] of Object.entries(TYPE_ARGUMENT_PACKAGE_MAP)) {
       if (typeArgs.includes(typeRef) && !isFrameworkAssembly(pkg)) {
         packages.add(pkg);

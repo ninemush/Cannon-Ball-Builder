@@ -79,6 +79,7 @@ class CatalogService {
   private catalog: ActivityCatalog | null = null;
   private activityIndex = new Map<string, ActivitySchema>();
   private packageIndex = new Map<string, CatalogPackage>();
+  private clrTypeIndex = new Map<string, string>();
   private loaded = false;
   private _studioProfile: StudioProfile | null = null;
   private loadGeneration = 0;
@@ -183,6 +184,7 @@ class CatalogService {
 
     this.activityIndex.clear();
     this.packageIndex.clear();
+    this.clrTypeIndex.clear();
 
     for (const pkg of this.catalog.packages) {
       if (pkg.packageId) {
@@ -201,6 +203,12 @@ class CatalogService {
 
         if (pkg.packageId) {
           this.activityIndex.set(`${pkg.packageId}:${act.className}`, schema);
+
+          for (const prop of act.properties) {
+            if (prop.clrType && prop.clrType.startsWith("UiPath.") && !this.clrTypeIndex.has(prop.clrType)) {
+              this.clrTypeIndex.set(prop.clrType, pkg.packageId);
+            }
+          }
         }
       }
     }
@@ -224,6 +232,38 @@ class CatalogService {
   getPackageForActivity(tag: string): string | null {
     const schema = this.getActivitySchema(tag);
     return schema?.packageId || null;
+  }
+
+  resolveTypeToPackage(clrType: string): string | null {
+    if (!this.loaded || !this.catalog) return null;
+
+    const indexed = this.clrTypeIndex.get(clrType);
+    if (indexed) return indexed;
+
+    for (const pkg of this.catalog.packages) {
+      if (clrType.startsWith(pkg.packageId + ".") || clrType === pkg.packageId) {
+        return pkg.packageId;
+      }
+    }
+
+    if (clrType.startsWith("UiPath.")) {
+      const parts = clrType.replace("UiPath.", "").split(".");
+      const candidateIds: string[] = [];
+      if (parts.length >= 2 && parts.includes("Activities")) {
+        const actIdx = parts.indexOf("Activities");
+        candidateIds.push("UiPath." + parts.slice(0, actIdx + 1).join("."));
+      }
+      if (parts.length >= 1) {
+        candidateIds.push(`UiPath.${parts[0]}.Activities`);
+      }
+      for (const candidate of candidateIds) {
+        if (this.packageIndex.has(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    return null;
   }
 
   getActivitiesForPackage(packageName: string): CatalogActivity[] {
