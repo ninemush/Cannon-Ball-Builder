@@ -2,10 +2,12 @@ import type { QualityGateResult } from "./uipath-quality-gate";
 
 export class QualityGateError extends Error {
   qualityGateResult: QualityGateResult;
-  constructor(message: string, result: QualityGateResult) {
+  compliantWorkflows?: Array<{ name: string; content: string }>;
+  constructor(message: string, result: QualityGateResult, compliantWorkflows?: Array<{ name: string; content: string }>) {
     super(message);
     this.name = "QualityGateError";
     this.qualityGateResult = result;
+    this.compliantWorkflows = compliantWorkflows;
   }
 }
 

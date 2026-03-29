@@ -553,7 +553,7 @@ export function normalizePackageName(name: string): string {
 
 export interface DependencyResolutionResult {
   deps: Record<string, string>;
-  warnings: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
+  warnings: Array<{ code: string; message: string; stage: string; recoverable: boolean; affectedFiles?: string[] }>;
   specPredictedPackages: Set<string>;
 }
 
@@ -980,7 +980,7 @@ export type BuildResult = {
   usedFallbackStubs: boolean;
   generationMode: GenerationMode;
   referencedMLSkillNames: string[];
-  dependencyWarnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
+  dependencyWarnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean; affectedFiles?: string[] }>;
   usedAIFallback: boolean;
   outcomeReport?: PipelineOutcomeReport;
   projectJsonContent?: string;
@@ -1766,9 +1766,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const deferredWrites = new Map<string, string>();
     const apEnabled = !!pkg.internal?.autopilotEnabled || !!(_probeCacheSnapshot?.flags?.autopilot);
     const earlyStubFallbacks: string[] = [];
-    const complianceFallbacks: Array<{ file: string; reason: string }> = [];
+    const complianceFallbacks: Array<{ file: string; reason: string; wasFullStub: boolean }> = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
     const collectedQualityIssues: DhgQualityIssue[] = [];
+    const priorCompliantWorkflows = pkg.internal?.priorCompliantWorkflows || [];
+    const priorCompliantMap = new Map<string, string>();
+    if (priorCompliantWorkflows.length > 0) {
+      for (const pw of priorCompliantWorkflows) {
+        const shortName = pw.name.split("/").pop() || pw.name;
+        const baseName = shortName.replace(/\.xaml$/i, "");
+        priorCompliantMap.set(baseName, pw.content);
+      }
+      console.log(`[UiPath] ${priorCompliantMap.size} prior compliant workflow(s) available for reuse: ${Array.from(priorCompliantMap.keys()).join(", ")}`);
+    }
     function postComplianceCatalogConformance(content: string, fileName: string): string {
       if (!catalogService.isLoaded()) return content;
       let result = content;
@@ -1914,6 +1924,28 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       return fixed;
     }
 
+    function tryStructuralPreservationOrStub(
+      rawXaml: string,
+      wfName: string,
+      compErrMessage: string,
+    ): { content: string; wasFullStub: boolean } {
+      const spResult = preserveStructureAndStubLeaves(
+        rawXaml,
+        [{ file: `${wfName}.xaml`, check: "compliance-crash", detail: `Compliance transform failed: ${compErrMessage}` }],
+        { isMainXaml: wfName === "Main" || wfName === "Process" },
+      );
+      if (spResult.preserved || spResult.parseableXml) {
+        console.log(`[UiPath] Structural preservation succeeded for "${wfName}" after compliance failure: ${spResult.preservedActivities} preserved, ${spResult.stubbedActivities} stubbed`);
+        try {
+          const preserved = compliancePass(spResult.content, `${wfName}.xaml`, true);
+          return { content: preserved, wasFullStub: false };
+        } catch {
+          console.log(`[UiPath] Structural preservation output failed compliance for "${wfName}" — falling back to full stub`);
+        }
+      }
+      return { content: compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErrMessage}` }), `${wfName}.xaml`, true), wasFullStub: true };
+    }
+
     function tryGenerateOrStub(
       generateFn: () => XamlGeneratorResult,
       wfName: string,
@@ -1980,6 +2012,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       let totalStrippedProperties = 0;
       let totalExcessiveStripping = 0;
+      const excessiveStrippingFiles = new Set<string>();
 
       for (const enrichEntry of enrichmentsToProcess) {
         let spec = enrichEntry.spec;
@@ -1988,6 +2021,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         const report = validationResult.report;
         totalStrippedProperties += report.strippedProperties;
         totalExcessiveStripping += report.excessiveStrippingCount;
+        if (report.excessiveStrippingCount > 0) {
+          const wfFileName = ((spec.name || enrichEntry.name || "").replace(/\s+/g, "_")) + ".xaml";
+          excessiveStrippingFiles.add(wfFileName);
+        }
 
         if (!specValidationReport) {
           specValidationReport = { ...report };
@@ -2010,6 +2047,20 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[UiPath] Using tree-based assembly for "${spec.name}"`);
 
         const wfName = (spec.name || enrichEntry.name || projectName).replace(/\s+/g, "_");
+        if (priorCompliantMap.has(wfName)) {
+          const priorContent = priorCompliantMap.get(wfName)!;
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          generatedWorkflowNames.add(wfName);
+          if (wfName === "Main" || wfName === "Process") {
+            hasMain = true;
+          } else {
+            nonMainWorkflowNames.push(wfName);
+          }
+          xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
+          xamlEntries.push({ name: `${wfName}.xaml`, content: priorContent });
+          console.log(`[UiPath] Reused prior compliant workflow "${wfName}" — skipping regeneration`);
+          continue;
+        }
         try {
           const { xaml, variables } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
           let compliant: string;
@@ -2018,9 +2069,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             compliant = compliancePass(xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
             complianceFailed = true;
-            console.warn(`[UiPath] Compliance pass failed for tree-assembled "${wfName}": ${compErr.message} — replacing with stub workflow`);
-            compliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
-            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+            console.warn(`[UiPath] Compliance pass failed for tree-assembled "${wfName}": ${compErr.message} — attempting structural preservation`);
+            const spResult = tryStructuralPreservationOrStub(xaml, wfName, compErr.message);
+            compliant = spResult.content;
+            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
           generatedWorkflowNames.add(wfName);
@@ -2037,16 +2089,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           });
           console.log(`[UiPath] Tree assembly produced XAML for "${wfName}" (${variables.length} variables)`);
         } catch (err: any) {
-          console.warn(`[UiPath] Tree assembly failed for "${wfName}": ${err.message} — emitting stub workflow`);
-          const stubXaml = compliancePass(generateStubWorkflow(wfName, { reason: `Tree assembly failed — ${err.message}` }), `${wfName}.xaml`, true);
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, stubXaml);
+          console.warn(`[UiPath] Tree assembly failed for "${wfName}": ${err.message} — attempting structural preservation before stub`);
+          const spResult = tryStructuralPreservationOrStub("", wfName, `Tree assembly failed — ${err.message}`);
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, spResult.content);
           generatedWorkflowNames.add(wfName);
-          complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Tree assembly failed — ${err.message}` });
+          complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Tree assembly failed — ${err.message}`, wasFullStub: spResult.wasFullStub });
           if (wfName !== "Main" && wfName !== "Process") {
             nonMainWorkflowNames.push(wfName);
           }
           xamlResults.push({
-            xaml: stubXaml,
+            xaml: spResult.content,
             gaps: [],
             usedPackages: ["UiPath.System.Activities"],
             variables: [],
@@ -2067,13 +2119,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
 
       if (totalExcessiveStripping > 0) {
+        const affectedFileList = Array.from(excessiveStrippingFiles).join(", ");
         dependencyWarnings.push({
           code: "EXCESSIVE_PROPERTY_STRIPPING",
-          message: `${totalExcessiveStripping} activit(ies) had 3+ non-catalog properties stripped — indicates generation hallucination. Consider regenerating these activities.`,
+          message: `${totalExcessiveStripping} activit(ies) had 3+ non-catalog properties stripped in [${affectedFileList}] — indicates generation hallucination. Consider regenerating these activities.`,
           stage: "spec-validation",
           recoverable: false,
+          affectedFiles: Array.from(excessiveStrippingFiles),
         });
-        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${totalExcessiveStripping} activities exceeded the stripping threshold — generation quality may be degraded`);
+        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${totalExcessiveStripping} activities exceeded the stripping threshold in ${affectedFileList} — generation quality may be degraded`);
       }
 
       const mainWfName = generatedWorkflowNames.has("Main") ? "Main" : (generatedWorkflowNames.has("Process") ? "Process" : (enrichmentsToProcess[0]?.name || "Main").replace(/\s+/g, "_"));
@@ -2133,6 +2187,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       console.log(`[UiPath] Using AI decomposition: ${enrichment.decomposition.length} sub-workflows`);
       for (const decomp of enrichment.decomposition) {
         const wfName = decomp.name.replace(/\s+/g, "_");
+        if (priorCompliantMap.has(wfName)) {
+          const priorContent = priorCompliantMap.get(wfName)!;
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          generatedWorkflowNames.add(wfName);
+          if (wfName === "Main") hasMain = true;
+          xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
+          console.log(`[UiPath] Reused prior compliant workflow "${wfName}" in decomposition — skipping regeneration`);
+          continue;
+        }
         const decompNodes = processNodes.filter((n: any) => decomp.nodeIds.includes(n.id));
         const decompEdges = processEdges.filter((e: any) =>
           decomp.nodeIds.includes(e.sourceNodeId) || decomp.nodeIds.includes(e.targetNodeId)
@@ -2151,9 +2214,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               decompCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
             } catch (compErr: any) {
               decompComplianceFailed = true;
-              console.warn(`[UiPath] Compliance pass failed for decomposed "${wfName}": ${compErr.message} — replacing with stub workflow`);
-              decompCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
-              complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+              console.warn(`[UiPath] Compliance pass failed for decomposed "${wfName}": ${compErr.message} — attempting structural preservation`);
+              const spResult = tryStructuralPreservationOrStub(result.xaml, wfName, compErr.message);
+              decompCompliant = spResult.content;
+              complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
             }
             deferredWrites.set(`${libPath}/${wfName}.xaml`, decompCompliant);
             generatedWorkflowNames.add(wfName);
@@ -2175,9 +2239,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               specCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
             } catch (compErr: any) {
               specComplianceFailed = true;
-              console.warn(`[UiPath] Compliance pass failed for spec-decomposed "${wfName}": ${compErr.message} — replacing with stub workflow`);
-              specCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
-              complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+              console.warn(`[UiPath] Compliance pass failed for spec-decomposed "${wfName}": ${compErr.message} — attempting structural preservation`);
+              const spResult = tryStructuralPreservationOrStub(result.xaml, wfName, compErr.message);
+              specCompliant = spResult.content;
+              complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
             }
             deferredWrites.set(`${libPath}/${wfName}.xaml`, specCompliant);
             generatedWorkflowNames.add(wfName);
@@ -2192,6 +2257,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       for (const wf of workflows) {
         const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
         if (generatedWorkflowNames.has(wfName)) continue;
+        if (priorCompliantMap.has(wfName)) {
+          const priorContent = priorCompliantMap.get(wfName)!;
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          generatedWorkflowNames.add(wfName);
+          if (wfName === "Main") hasMain = true;
+          xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
+          console.log(`[UiPath] Reused prior compliant workflow "${wfName}" — skipping regeneration`);
+          continue;
+        }
         const result = tryGenerateOrStub(
           () => generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled, genCtx),
           wfName,
@@ -2205,9 +2279,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             richCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
             richComplianceFailed = true;
-            console.warn(`[UiPath] Compliance pass failed for rich XAML "${wfName}": ${compErr.message} — replacing with stub workflow`);
-            richCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
-            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+            console.warn(`[UiPath] Compliance pass failed for rich XAML "${wfName}": ${compErr.message} — attempting structural preservation`);
+            const spResult = tryStructuralPreservationOrStub(result.xaml, wfName, compErr.message);
+            richCompliant = spResult.content;
+            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
           generatedWorkflowNames.add(wfName);
@@ -2219,6 +2294,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       for (const wf of workflows) {
         const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
         if (generatedWorkflowNames.has(wfName)) continue;
+        if (priorCompliantMap.has(wfName)) {
+          const priorContent = priorCompliantMap.get(wfName)!;
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          generatedWorkflowNames.add(wfName);
+          if (wfName === "Main") hasMain = true;
+          xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
+          console.log(`[UiPath] Reused prior compliant workflow "${wfName}" — skipping regeneration`);
+          continue;
+        }
         const result = tryGenerateOrStub(
           () => generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled, genCtx),
           wfName,
@@ -2232,9 +2316,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             richCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
             remainingComplianceFailed = true;
-            console.warn(`[UiPath] Compliance pass failed for remaining rich XAML "${wfName}": ${compErr.message} — replacing with stub workflow`);
-            richCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
-            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+            console.warn(`[UiPath] Compliance pass failed for remaining rich XAML "${wfName}": ${compErr.message} — attempting structural preservation`);
+            const spResult = tryStructuralPreservationOrStub(result.xaml, wfName, compErr.message);
+            richCompliant = spResult.content;
+            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
           generatedWorkflowNames.add(wfName);
@@ -2257,9 +2342,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         try {
           processCompliant = compliancePass(processResult.xaml, `${processFileName}.xaml`);
         } catch (compErr: any) {
-          console.warn(`[UiPath] Compliance pass failed for process "${processFileName}": ${compErr.message} — replacing with stub workflow`);
-          processCompliant = compliancePass(generateStubWorkflow(processFileName, { reason: `Compliance transform failed — ${compErr.message}` }), `${processFileName}.xaml`, true);
-          complianceFallbacks.push({ file: `${processFileName}.xaml`, reason: compErr.message });
+          console.warn(`[UiPath] Compliance pass failed for process "${processFileName}": ${compErr.message} — attempting structural preservation`);
+          const spResult = tryStructuralPreservationOrStub(processResult.xaml, processFileName, compErr.message);
+          processCompliant = spResult.content;
+          complianceFallbacks.push({ file: `${processFileName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
         }
         deferredWrites.set(`${libPath}/${processFileName}.xaml`, processCompliant);
         console.log(`[UiPath] Generated process XAML from ${processNodes.length} map nodes: ${processResult.gaps.length} gaps`);
@@ -2485,7 +2571,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                 try {
                   retryCompliant = compliancePass(retryResult.xaml, `${className}.xaml`);
                 } catch (compErr: any) {
-                  retryCompliant = compliancePass(generateStubWorkflow(className, { reason: `Compliance transform failed — ${compErr.message}` }), `${className}.xaml`, true);
+                  retryCompliant = tryStructuralPreservationOrStub(retryResult.xaml, className, compErr.message).content;
                 }
                 deferredWrites.set(`${libPath}/${ref}`, retryCompliant);
                 existingFiles.add(ref);
@@ -2515,13 +2601,95 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     }
 
+    const prePruningXamlParts: string[] = xamlEntries.map(e => e.content);
+    Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+      if (path.endsWith(".xaml")) {
+        prePruningXamlParts.push(content);
+      }
+    });
+    const prePruningXamlContent = prePruningXamlParts.join("\n");
+
     {
       const mainDeferredKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Main.xaml");
       const mainContent = mainDeferredKey ? deferredWrites.get(mainDeferredKey) || "" : "";
-      const mainIsStubbed = earlyStubFallbacks.includes("Main.xaml") ||
-        mainContent.includes("STUB_BLOCKING_FALLBACK") || mainContent.includes("STUB: Main");
-      if (mainIsStubbed) {
-        console.log(`[Structural Dedup] Main.xaml is stubbed — skipping reachability pruning to preserve child workflows`);
+      const mainIsFullStub = earlyStubFallbacks.includes("Main.xaml") ||
+        mainContent.includes("STUB_BLOCKING_FALLBACK") || mainContent.includes("STUB: Main") ||
+        complianceFallbacks.some(fb => (fb.file === "Main.xaml" || fb.file === "Process.xaml") && fb.wasFullStub);
+      const mainHadFallback = mainIsFullStub ||
+        complianceFallbacks.some(fb => fb.file === "Main.xaml" || fb.file === "Process.xaml");
+      const processDeferredKeyForCheck = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Process.xaml");
+      const processContent = processDeferredKeyForCheck ? deferredWrites.get(processDeferredKeyForCheck) || "" : "";
+      const processIsFullStub = earlyStubFallbacks.includes("Process.xaml") ||
+        processContent.includes("STUB_BLOCKING_FALLBACK") || processContent.includes("STUB: Process") ||
+        complianceFallbacks.some(fb => fb.file === "Process.xaml" && fb.wasFullStub);
+      const processHadFallback = processIsFullStub ||
+        complianceFallbacks.some(fb => fb.file === "Process.xaml");
+      if (mainIsFullStub && mainDeferredKey) {
+        let stubbedMainXaml = deferredWrites.get(mainDeferredKey) || "";
+        const allWorkflowNames = new Set([...nonMainWorkflowNames, ...Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process")]);
+        const invokeRefsToInject: string[] = [];
+        if (!stubbedMainXaml.includes('WorkflowFileName="InitAllSettings.xaml"')) {
+          invokeRefsToInject.push(`      <ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`);
+        }
+        for (const subWfName of allWorkflowNames) {
+          const subFileName = `${subWfName}.xaml`;
+          if (!stubbedMainXaml.includes(`WorkflowFileName="${subFileName}"`)) {
+            invokeRefsToInject.push(`      <ui:InvokeWorkflowFile DisplayName="${subWfName}" WorkflowFileName="${subFileName}" />`);
+          }
+        }
+        if (invokeRefsToInject.length > 0) {
+          const seqVarsEndMatch = stubbedMainXaml.match(/<\/Sequence\.Variables>\s*\n/);
+          const rootSeqMatch = stubbedMainXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
+          const insertMatch = seqVarsEndMatch || rootSeqMatch;
+          if (insertMatch) {
+            const insertPos = insertMatch.index! + insertMatch[0].length;
+            stubbedMainXaml = stubbedMainXaml.slice(0, insertPos) + invokeRefsToInject.join("\n") + "\n" + stubbedMainXaml.slice(insertPos);
+            deferredWrites.set(mainDeferredKey, stubbedMainXaml);
+            const existingIdx = xamlEntries.findIndex(e => {
+              const bn = e.name.split("/").pop() || e.name;
+              return bn === "Main.xaml";
+            });
+            if (existingIdx >= 0) {
+              xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: stubbedMainXaml };
+            }
+            console.log(`[UiPath] Injected ${invokeRefsToInject.length} InvokeWorkflowFile reference(s) into stubbed Main.xaml to preserve invocation graph`);
+          }
+        }
+      }
+      if (processIsFullStub) {
+        const processDeferredKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Process.xaml");
+        if (processDeferredKey) {
+          let stubbedProcessXaml = deferredWrites.get(processDeferredKey) || "";
+          const processWorkflowNames = Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process" && n !== "InitAllSettings");
+          const processInvokeRefs: string[] = [];
+          for (const subWfName of processWorkflowNames) {
+            const subFileName = `${subWfName}.xaml`;
+            if (!stubbedProcessXaml.includes(`WorkflowFileName="${subFileName}"`)) {
+              processInvokeRefs.push(`      <ui:InvokeWorkflowFile DisplayName="Run ${subWfName}" WorkflowFileName="${subFileName}" />`);
+            }
+          }
+          if (processInvokeRefs.length > 0) {
+            const seqVarsEndMatch = stubbedProcessXaml.match(/<\/Sequence\.Variables>\s*\n/);
+            const rootSeqMatch = stubbedProcessXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
+            const insertMatch = seqVarsEndMatch || rootSeqMatch;
+            if (insertMatch) {
+              const insertPos = insertMatch.index! + insertMatch[0].length;
+              stubbedProcessXaml = stubbedProcessXaml.slice(0, insertPos) + processInvokeRefs.join("\n") + "\n" + stubbedProcessXaml.slice(insertPos);
+              deferredWrites.set(processDeferredKey, stubbedProcessXaml);
+              const existingIdx = xamlEntries.findIndex(e => {
+                const bn = e.name.split("/").pop() || e.name;
+                return bn === "Process.xaml";
+              });
+              if (existingIdx >= 0) {
+                xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: stubbedProcessXaml };
+              }
+              console.log(`[UiPath] Injected ${processInvokeRefs.length} InvokeWorkflowFile reference(s) into stubbed Process.xaml to preserve invocation graph`);
+            }
+          }
+        }
+      }
+      if (mainHadFallback || processHadFallback) {
+        console.log(`[Structural Dedup] ${mainHadFallback ? "Main.xaml" : ""}${mainHadFallback && processHadFallback ? " and " : ""}${processHadFallback ? "Process.xaml" : ""} had fallback — skipping reachability pruning to preserve child workflows`);
         const { graph } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
         Array.from(graph.entries()).forEach(([file, refs]) => {
           if (refs.length > 0) {
@@ -2584,7 +2752,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     });
     const allXamlContent = allXamlParts.join("\n");
-    const scannedPackages = scanXamlForRequiredPackages(allXamlContent);
+    const depAlignmentXamlContent = prePruningXamlContent;
+    const scannedPackages = scanXamlForRequiredPackages(depAlignmentXamlContent);
 
     {
       const DEPENDENCY_SAFE_LIST = new Set([
@@ -2600,7 +2769,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
         const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
-        if (prefixPattern.test(allXamlContent)) {
+        if (prefixPattern.test(depAlignmentXamlContent)) {
           DEPENDENCY_SAFE_LIST.add(pkgName);
           console.log(`[Dependency Alignment] Dynamically added ${pkgName} to safe list — namespace prefix "${prefix}:" detected in XAML`);
         }
@@ -2609,7 +2778,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       const usedPackages = new Set(Array.from(scannedPackages));
       usedPackages.add("UiPath.System.Activities");
 
-      const nsAndAsmPackages = extractXamlNamespaceAndAssemblyPackages(allXamlContent);
+      const nsAndAsmPackages = extractXamlNamespaceAndAssemblyPackages(depAlignmentXamlContent);
       for (const pkg of nsAndAsmPackages) {
         usedPackages.add(pkg);
       }
@@ -2619,7 +2788,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         if (catalogService.isLoaded()) {
           const activityTagPattern = /<([a-zA-Z]+):([A-Za-z]+)[\s/>]/g;
           let actMatch;
-          while ((actMatch = activityTagPattern.exec(allXamlContent)) !== null) {
+          while ((actMatch = activityTagPattern.exec(depAlignmentXamlContent)) !== null) {
             const activityTag = actMatch[2];
             const catalogPkg = catalogService.getPackageForActivity(activityTag);
             if (catalogPkg && !usedPackages.has(catalogPkg)) {
@@ -2745,6 +2914,66 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     }
 
     validateAndEnforceDependencyCompatibility(deps, dependencyWarnings);
+
+    {
+      const feedValidationIssues: string[] = [];
+      const allReferencedPackages = new Set(Array.from(scannedPackages));
+      const nsAndAsmPkgs = extractXamlNamespaceAndAssemblyPackages(depAlignmentXamlContent);
+      nsAndAsmPkgs.forEach(p => allReferencedPackages.add(p));
+      for (const [pkgName, version] of Object.entries(deps)) {
+        const versionRange = _metadataService.getPackageVersionRange(pkgName);
+        if (!versionRange) {
+          const referencedInXaml = allReferencedPackages.has(pkgName) || scannedPackages.has(pkgName);
+          if (referencedInXaml) {
+            feedValidationIssues.push(`${pkgName}@${version}`);
+            dependencyWarnings.push({
+              code: "DEPENDENCY_VERSION_UNVERIFIED",
+              message: `Package ${pkgName}@${version} has no verified metadata entry — version may not exist on any NuGet feed. Workflows referencing this package may fail to restore.`,
+              stage: "dependency-feed-validation",
+              recoverable: false,
+            });
+            console.warn(`[Dependency Feed Validation] UNVERIFIED: ${pkgName}@${version} — no metadata entry, version existence cannot be confirmed`);
+          }
+          continue;
+        }
+        const cleanVersion = extractExactVersion(version);
+        if (cleanVersion !== versionRange.preferred) {
+          feedValidationIssues.push(`${pkgName}@${version} (preferred: ${versionRange.preferred})`);
+          dependencyWarnings.push({
+            code: "DEPENDENCY_VERSION_MISMATCH",
+            message: `Package ${pkgName} resolved to ${version} but preferred verified version is ${versionRange.preferred} (source: ${versionRange.verificationSource}) — version may be stale`,
+            stage: "dependency-feed-validation",
+            recoverable: true,
+          });
+          console.warn(`[Dependency Feed Validation] VERSION MISMATCH: ${pkgName}@${version} vs preferred ${versionRange.preferred}`);
+        }
+        if (versionRange.verificationSource === "studio-bundled") {
+          const catalogVersion = catalogService.isLoaded() ? catalogService.getPreferredVersion(pkgName) : null;
+          if (catalogVersion && catalogVersion !== versionRange.preferred) {
+            dependencyWarnings.push({
+              code: "DEPENDENCY_STUDIO_BUNDLED_STALE",
+              message: `Package ${pkgName}@${versionRange.preferred} uses studio-bundled version but catalog suggests ${catalogVersion} — consider verifying against NuGet feed`,
+              stage: "dependency-feed-validation",
+              recoverable: true,
+            });
+            console.warn(`[Dependency Feed Validation] STUDIO-BUNDLED STALE: ${pkgName}@${versionRange.preferred} — catalog suggests ${catalogVersion}`);
+          }
+        }
+      }
+      const unverifiedBlockingPkgs = dependencyWarnings.filter(w => w.code === "DEPENDENCY_VERSION_UNVERIFIED");
+      if (unverifiedBlockingPkgs.length > 0) {
+        const unverifiedNames = unverifiedBlockingPkgs.map(w => w.message.split(" ")[1] || "unknown").join(", ");
+        console.error(`[Dependency Feed Validation] BLOCKING: ${unverifiedBlockingPkgs.length} XAML-referenced package(s) have no verified metadata: ${unverifiedNames}`);
+        throw new Error(
+          `Dependency feed validation failed: ${unverifiedBlockingPkgs.length} XAML-referenced package(s) have unverified versions that may not exist on any NuGet feed. Affected: ${feedValidationIssues.filter(i => !i.includes("preferred")).join(", ")}`
+        );
+      }
+      if (feedValidationIssues.length > 0) {
+        console.log(`[Dependency Feed Validation] ${feedValidationIssues.length} package(s) flagged (non-blocking): ${feedValidationIssues.join(", ")}`);
+      } else {
+        console.log(`[Dependency Feed Validation] All ${Object.keys(deps).length} package versions verified against metadata`);
+      }
+    }
 
     const allGaps = aggregateGaps(xamlResults);
 
@@ -3912,10 +4141,20 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       } else {
         const formattedViolations = formatQualityGateViolations(qualityGateResult);
         console.error(`[UiPath Quality Gate] FAILED after remediation:\n${formattedViolations}`);
-        throw new QualityGateError(
+        const classified = classifyQualityIssues(qualityGateResult);
+        const blockingFileSet = getBlockingFiles(classified);
+        const compliantFromCurrent = xamlEntries
+          .filter(e => {
+            const shortName = e.name.split("/").pop() || e.name;
+            return !blockingFileSet.has(shortName);
+          })
+          .map(e => ({ name: e.name.split("/").pop() || e.name, content: e.content }));
+        const qgError = new QualityGateError(
           `UiPath pre-package quality gate failed with ${qualityGateResult.summary.totalErrors} error(s) after auto-remediation:\n${formattedViolations}`,
-          qualityGateResult
+          qualityGateResult,
+          compliantFromCurrent
         );
+        throw qgError;
       }
     }
 

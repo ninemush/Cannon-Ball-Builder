@@ -56,6 +56,7 @@ export interface UiPathPackageInternal {
   autopilotEnabled?: boolean;
   forceRebuild?: boolean;
   complexityTier?: string;
+  priorCompliantWorkflows?: Array<{ name: string; content: string }>;
 }
 
 export interface AgentSpec {

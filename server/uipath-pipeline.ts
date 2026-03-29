@@ -24,7 +24,7 @@ import { runDhgAnalysis, type UpstreamContext, type ProcessStepSummary } from ".
 import { parseArtifactBlockAsObject } from "./lib/artifact-parser";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
-import { runQualityGate, type QualityGateResult } from "./uipath-quality-gate";
+import { runQualityGate, classifyQualityIssues, getBlockingFiles, type QualityGateResult } from "./uipath-quality-gate";
 import { calculateTemplateCompliance } from "./catalog/xaml-template-builder";
 import {
   calculateConfidenceScore,
@@ -142,6 +142,7 @@ export interface PipelineWarning {
   message: string;
   stage: string;
   recoverable: boolean;
+  affectedFiles?: string[];
 }
 
 export interface DowngradeEvent {
@@ -775,6 +776,7 @@ export async function compilePackageFromSpecs(
     _downgradeAttempt?: number;
     _accumulatedDowngrades?: DowngradeEvent[];
     _accumulatedWarnings?: PipelineWarning[];
+    _priorCompliantWorkflows?: Array<{ name: string; content: string }>;
     runId?: string;
     complexityTier?: ComplexityTier;
     forceRebuild?: boolean;
@@ -790,6 +792,7 @@ export async function compilePackageFromSpecs(
   let usedAIFallback = specResult.usedAIFallback;
   const maxDowngradeAttempts = options?.maxDowngradeAttempts ?? 1;
   const currentDowngradeAttempt = options?._downgradeAttempt ?? 0;
+  const priorCompliantWorkflows = options?._priorCompliantWorkflows || [];
 
   try {
     const { discoverNewerLines } = await import("./catalog/metadata-refresher");
@@ -839,6 +842,10 @@ export async function compilePackageFromSpecs(
       if (options?.forceRebuild) {
         enriched.internal.forceRebuild = true;
       }
+      if (priorCompliantWorkflows.length > 0) {
+        enriched.internal.priorCompliantWorkflows = priorCompliantWorkflows;
+        console.log(`[Pipeline] Passing ${priorCompliantWorkflows.length} prior compliant workflow(s) to build: ${priorCompliantWorkflows.map(w => w.name).join(", ")}`);
+      }
       buildResult = await buildNuGetPackage(enriched, ver, ideaId, mode, options?.onPipelineProgress ? (event) => {
         options.onPipelineProgress!(event);
       } : undefined, _pipelineProfile, options?.complexityTier);
@@ -858,6 +865,30 @@ export async function compilePackageFromSpecs(
           stage: "compiling",
           recoverable: true,
         });
+        const qgBlockingFiles = new Set<string>();
+        if (err.qualityGateResult) {
+          const classified = classifyQualityIssues(err.qualityGateResult);
+          const blockingFiles = getBlockingFiles(classified);
+          Array.from(blockingFiles).forEach(bf => qgBlockingFiles.add(bf));
+        }
+        const compliantFromCurrent = (err.compliantWorkflows || []).filter((w: { name: string; content: string }) => {
+          const shortName = w.name.split("/").pop() || w.name;
+          return !qgBlockingFiles.has(shortName);
+        });
+        const compliantFromPrior = priorCompliantWorkflows.filter(w => {
+          const shortName = w.name.split("/").pop() || w.name;
+          return !qgBlockingFiles.has(shortName);
+        });
+        const mergedCompliant = [...compliantFromCurrent];
+        const currentNames = new Set(mergedCompliant.map(w => w.name));
+        for (const pw of compliantFromPrior) {
+          if (!currentNames.has(pw.name)) {
+            mergedCompliant.push(pw);
+          }
+        }
+        if (mergedCompliant.length > 0) {
+          console.log(`[Pipeline] Carrying forward ${mergedCompliant.length} compliant workflow(s) (${compliantFromCurrent.length} from current attempt, ${compliantFromPrior.length} from prior): ${mergedCompliant.map(w => w.name).join(", ")}`);
+        }
         tracker.warn("compiling", `Quality gate failed — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
         tracker.cleanup();
         console.log(`[Pipeline] Auto-downgrade: full_implementation → baseline_openable due to QualityGateError (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
@@ -867,6 +898,7 @@ export async function compilePackageFromSpecs(
           _downgradeAttempt: currentDowngradeAttempt + 1,
           _accumulatedDowngrades: downgrades,
           _accumulatedWarnings: pipelineWarnings,
+          _priorCompliantWorkflows: mergedCompliant,
         });
       }
       throw err;
@@ -906,6 +938,19 @@ export async function compilePackageFromSpecs(
           stage: "compiling",
           recoverable: true,
         });
+        const strippingBlockedFiles = new Set<string>();
+        buildResult.dependencyWarnings?.forEach(w => {
+          if (w.code === "EXCESSIVE_PROPERTY_STRIPPING" && w.affectedFiles) {
+            w.affectedFiles.forEach(f => strippingBlockedFiles.add(f));
+          }
+        });
+        const compliantEntries = buildResult.xamlEntries.filter(entry => {
+          const shortName = entry.name.split("/").pop() || entry.name;
+          return !strippingBlockedFiles.has(shortName);
+        });
+        if (compliantEntries.length > 0) {
+          console.log(`[Pipeline] Carrying forward ${compliantEntries.length} compliant workflow(s) from build: ${compliantEntries.map(e => e.name).join(", ")}`);
+        }
         tracker.warn("compiling", `Excessive property stripping detected — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
         tracker.cleanup();
         console.log(`[Pipeline] Auto-downgrade: ${mode} → baseline_openable due to excessive property stripping`);
@@ -915,6 +960,7 @@ export async function compilePackageFromSpecs(
           _downgradeAttempt: currentDowngradeAttempt + 1,
           _accumulatedDowngrades: downgrades,
           _accumulatedWarnings: pipelineWarnings,
+          _priorCompliantWorkflows: compliantEntries.length > 0 ? compliantEntries : undefined,
         });
       }
     }
@@ -952,6 +998,7 @@ export async function compilePackageFromSpecs(
           _downgradeAttempt: currentDowngradeAttempt + 1,
           _accumulatedDowngrades: downgrades,
           _accumulatedWarnings: pipelineWarnings,
+          _priorCompliantWorkflows: buildResult.xamlEntries.length > 0 ? buildResult.xamlEntries : undefined,
         });
       }
       const archiveError = `Archive validation failed and no downgrade available: ${archiveValidation.errors.join("; ")}`;
