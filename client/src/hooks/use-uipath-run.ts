@@ -51,6 +51,7 @@ export interface UseUiPathRunReturn {
   completedRuns: Map<string, CompletedRunResult>;
   pipelineLogEntries: PipelineLogEntry[];
   pipelineComplete: boolean;
+  pipelineFinalStatus: string | null;
   isRunning: boolean;
   showProgressPanel: boolean;
   dismissProgressPanel: () => void;
@@ -73,6 +74,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
   const [completedRuns, setCompletedRuns] = useState<Map<string, CompletedRunResult>>(new Map());
   const [pipelineLogEntries, setPipelineLogEntries] = useState<PipelineLogEntry[]>([]);
   const [pipelineComplete, setPipelineComplete] = useState(false);
+  const [pipelineFinalStatus, setPipelineFinalStatus] = useState<string | null>(null);
 
   const [isRunning, setIsRunning] = useState(false);
   const [showProgressPanel, setShowProgressPanel] = useState(false);
@@ -312,6 +314,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     if (data.done) {
       console.log(`[useUiPathRun] done event received: runId=${runId}, status=${data.status}`);
       setPipelineComplete(true);
+      setPipelineFinalStatus(data.status || null);
       const finalRun = currentRunRef.current;
       if (finalRun && finalRun.runId === runId) {
         const finalStatus = (data.status || finalRun.status) as UiPathRunStatus;
@@ -472,6 +475,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     setCompletedRuns(new Map());
     setPipelineLogEntries([]);
     setPipelineComplete(false);
+    setPipelineFinalStatus(null);
     setIsRunning(false);
     setShowProgressPanel(false);
     setLiveStatus("");
@@ -547,6 +551,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     setLiveStatus("Generating UiPath package...");
     setPipelineLogEntries([]);
     setPipelineComplete(false);
+    setPipelineFinalStatus(null);
     setMetaValidationChipStatus("ready");
     setCancelState("idle");
     setGenerationStartTime(Date.now());
@@ -691,6 +696,7 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
     completedRuns,
     pipelineLogEntries,
     pipelineComplete,
+    pipelineFinalStatus,
     isRunning,
     showProgressPanel,
     dismissProgressPanel,

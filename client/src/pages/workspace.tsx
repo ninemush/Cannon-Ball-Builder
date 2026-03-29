@@ -28,6 +28,7 @@ import {
   Trash2,
   Brain,
   Archive,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -350,6 +351,7 @@ function UiPathProgressPanel({
   startTime,
   isRunning = true,
   onDismiss,
+  finalStatus,
 }: {
   entries: PipelineLogEntry[];
   isComplete: boolean;
@@ -358,6 +360,7 @@ function UiPathProgressPanel({
   startTime: number | null;
   isRunning?: boolean;
   onDismiss?: () => void;
+  finalStatus?: string | null;
 }) {
   const logEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -709,8 +712,22 @@ function UiPathProgressPanel({
         {isComplete && !failedEntry && (
           <div className="px-3 py-2 border-t border-border/30 pipeline-fade-in">
             <div className="flex items-center gap-1.5">
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-[11px] text-emerald-400 font-medium">Ready to deploy</span>
+              {finalStatus === "FALLBACK_READY" ? (
+                <>
+                  <AlertTriangle className="h-3 w-3 text-amber-500" />
+                  <span className="text-[11px] text-amber-500 font-medium" data-testid="pipeline-status-fallback">Needs work — structural defects detected</span>
+                </>
+              ) : finalStatus === "READY_WITH_WARNINGS" ? (
+                <>
+                  <AlertTriangle className="h-3 w-3 text-amber-400" />
+                  <span className="text-[11px] text-amber-400 font-medium" data-testid="pipeline-status-warnings">Ready with warnings</span>
+                </>
+              ) : (
+                <>
+                  <Check className="h-3 w-3 text-emerald-400" />
+                  <span className="text-[11px] text-emerald-400 font-medium" data-testid="pipeline-status-ready">Ready to deploy</span>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1065,6 +1082,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     completedRuns: completedUiPathRuns,
     pipelineLogEntries,
     pipelineComplete,
+    pipelineFinalStatus: uipathFinalStatus,
     isRunning: uipathIsRunning,
     showProgressPanel: uipathShowProgressPanel,
     dismissProgressPanel: uipathDismissProgressPanel,
@@ -2504,7 +2522,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               return;
             }
             if (uipathShowProgressPanel) {
-              rendered.push(<UiPathProgressPanel key={`${msg.id}-uipath-progress`} entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} isRunning={uipathIsRunning} onDismiss={uipathDismissProgressPanel} />);
+              rendered.push(<UiPathProgressPanel key={`${msg.id}-uipath-progress`} entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} isRunning={uipathIsRunning} onDismiss={uipathDismissProgressPanel} finalStatus={uipathFinalStatus} />);
               return;
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
@@ -2607,7 +2625,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           return rendered;
         })()}
         {uipathShowProgressPanel && !streamingMsg && (
-          <UiPathProgressPanel entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} isRunning={uipathIsRunning} onDismiss={uipathDismissProgressPanel} />
+          <UiPathProgressPanel entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} isRunning={uipathIsRunning} onDismiss={uipathDismissProgressPanel} finalStatus={uipathFinalStatus} />
         )}
         {isGeneratingDoc && !streamingMsg && !uipathShowProgressPanel && (
           streamingDocContent && streamingDocContent.length > 10 ? (

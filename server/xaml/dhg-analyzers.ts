@@ -730,7 +730,9 @@ export function calculateReadiness(
       }
       if (stubAwareness.totalWorkflowCount > 0 && stubAwareness.stubCount > 0) {
         const stubProportion = stubAwareness.stubCount / stubAwareness.totalWorkflowCount;
-        const stubDeduction = Math.round(stubProportion * 10);
+        const perStubPenalty = stubAwareness.stubCount * 3;
+        const proportionalPenalty = Math.round(stubProportion * 10);
+        const stubDeduction = Math.max(perStubPenalty, proportionalPenalty);
         score -= stubDeduction;
         notes.push(`${stubAwareness.stubCount}/${stubAwareness.totalWorkflowCount} workflow(s) are stubs (${Math.round(stubProportion * 100)}%) — structurally invalid`);
       }
@@ -768,8 +770,18 @@ export function calculateReadiness(
 
   if (stubAwareness?.entryPointStubbed && percent >= 20) {
     percent = 19;
-  } else if (stubAwareness && stubAwareness.stubCount > 0 && percent >= 40) {
-    percent = Math.min(percent, 39);
+  } else if (stubAwareness && stubAwareness.stubCount > 0) {
+    const stubFraction = stubAwareness.totalWorkflowCount > 0
+      ? stubAwareness.stubCount / stubAwareness.totalWorkflowCount
+      : 0;
+    const stubCap = stubAwareness.stubCount >= 4
+      ? Math.min(29, Math.round(30 * (1 - stubFraction)))
+      : stubAwareness.stubCount >= 2
+        ? Math.min(34, Math.round(40 * (1 - stubFraction)))
+        : 39;
+    if (percent > stubCap) {
+      percent = stubCap;
+    }
   }
 
   let rating: OverallReadiness["rating"];

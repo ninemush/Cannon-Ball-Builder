@@ -2580,7 +2580,8 @@ export function registerUiPathRoutes(app: Express): void {
       if (typeof (res as any).flush === "function") (res as any).flush();
 
       if (dbActiveRun.completed) {
-        res.write(`data: ${JSON.stringify({ done: true, status: dbActiveRun.finalStatus === "failed" ? "FAILED" : "READY" })}\n\n`);
+        const resolvedStatus = dbActiveRun.finalStatus === "failed" ? "FAILED" : (dbActiveRun.finalStatus || "READY");
+        res.write(`data: ${JSON.stringify({ done: true, status: resolvedStatus })}\n\n`);
         return res.end();
       }
 
@@ -2590,7 +2591,12 @@ export function registerUiPathRoutes(app: Express): void {
           res.write(`data: ${JSON.stringify({ pipelineEvent: event })}\n\n`);
           if (typeof (res as any).flush === "function") (res as any).flush();
           if (event.type === "failed" || (event.type === "completed" && event.stage === "run_manager")) {
-            res.write(`data: ${JSON.stringify({ done: true, status: event.type === "failed" ? "FAILED" : "READY" })}\n\n`);
+            let eventStatus = event.type === "failed" ? "FAILED" : "READY";
+            if (event.type === "completed" && event.message) {
+              const statusMatch = event.message.match(/status:\s*(\S+)/);
+              if (statusMatch) eventStatus = statusMatch[1];
+            }
+            res.write(`data: ${JSON.stringify({ done: true, status: eventStatus })}\n\n`);
             res.end();
           }
         } catch (e: any) {
