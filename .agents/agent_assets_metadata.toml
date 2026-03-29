@@ -30,3 +30,9 @@ id = "_ldv2vALLiPZcNA-NSU0c"
 uri = "file://package-generation-logs.txt"
 type = "text"
 title = "Full Package Generation Logs — Last 2 Runs"
+
+[[outputs]]
+id = "pn68z6nsh1KLcZJnRTc41"
+uri = "file://action-center-test-results.txt"
+type = "text"
+title = "Action Center Test Results (Tests 1-5 + Additional Endpoints)"

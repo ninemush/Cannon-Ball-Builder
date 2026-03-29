@@ -1,0 +1,94 @@
+Please revise #290 based on the validated artifact findings. I do not want this implemented as one umbrella “quality hardening” task.
+
+The latest package and logs show that the primary failures are specific upstream pipeline bugs, not mainly bad input and not mainly generic hardening gaps.
+
+What has been directly validated from the artifacts
+1. Main.xaml structural crash is real and directly confirmed
+- In the generated Main.xaml, `InitAllSettings.xaml` is injected before `<Sequence.Variables>`
+- This violates XAML property-element ordering
+- It matches the Studio error exactly:
+  - `'Activities' property has already been set on 'Sequence'`
+
+2. Multi-workflow loss is real and high impact
+- The package-generation run produced a multi-workflow spec
+- But the final package artifacts only contain a tiny subset of those workflows
+- This is a major upstream mapping/assembly loss of business logic, not a warning-level issue
+
+3. AssemblyReference warnings are false positives
+- `AssemblyReference` appears in XAML header metadata
+- These are not UiPath activities and should not be flagged as unprefixed activity tags
+
+4. Variable naming / typing issues are still surviving upstream
+- Dotted names like `dt_Constants.Rows` and `dt_Settings.Rows` are present in generated XAML
+- Invalid typed collection wiring is still present
+- These are real upstream generation/validation issues
+
+5. Dependency/reporting coherence is still broken
+- `project.json` only contains a narrow dependency set
+- but the package card / logs imply a much broader capability set
+- dependency resolution/reporting is still not coherent end-to-end
+
+Important conclusion
+This is not primarily an input-quality problem.
+It is a real pipeline bug / pipeline-design problem in specific upstream steps.
+
+What I want changed
+Please split #290 into smaller linked tasks, in this order:
+
+Task 1
+Fix multi-workflow spec-to-XAML mapping / assembly preservation
+Goal:
+- all workflows produced during scaffold/detail generation survive into final package assembly
+- a package generated from 8 workflow specs should actually contain those workflows unless explicitly stubbed/dropped with visible reasoning
+
+Task 2
+Fix Main.xaml structural injection ordering
+Goal:
+- `InitAllSettings` (or any similar injected invocation) must be inserted after `</Sequence.Variables>`, not before it
+- Main.xaml must open cleanly in Studio with no `'Activities' property has already been set on 'Sequence'` error
+
+Task 3
+Fix quality-gate false positives for XAML metadata tags
+Goal:
+- exclude `AssemblyReference` and other standard XAML metadata/header tags from unprefixed-activity checks
+- reduce noise so real issues are visible
+
+Task 4
+Fix upstream variable-name sanitization and typed collection generation
+Goal:
+- dotted variable names must be prevented/repaired upstream
+- typed collection / ForEach / variable typing correctness must be enforced upstream
+- not just detected late
+
+Task 5
+Fix dependency resolution/reporting coherence
+Goal:
+- `project.json`, package card, and actual generated activity/package usage must agree
+- use catalog-driven dependency lookup where appropriate
+- avoid a package that appears to use 7 packages while declaring only 2
+
+What NOT to keep as headline scope in this task set
+These may still be useful later, but they should not be the main fix direction for this run:
+- temperature tuning
+- maxTokens increase
+- lowercase `new -> New` autofix
+- targeted re-enrichment retry for missing workflows
+- generic “quality hardening” phrasing as the primary framing
+
+Those are secondary hardening items and should only be proposed after the core structural bugs above are separated out.
+
+What I want back
+Please return:
+1. the revised split task set replacing #290
+2. the recommended execution order
+3. which of the current #290 items should be:
+- retained as later hardening
+- moved into one of the split tasks
+- or dropped as not sufficiently validated by this run
+
+Please keep the revised tasks grounded in the actual validated artifacts:
+- Main.xaml structural ordering bug
+- multi-workflow loss before final package assembly
+- AssemblyReference quality-gate false positives
+- dotted variable names / type issues surviving upstream
+- dependency/reporting inconsistency
