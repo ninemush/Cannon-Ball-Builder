@@ -856,10 +856,13 @@ function wrapInTryCatch(innerXml: string, displayName: string): string {
 }
 
 function wrapInRetryScope(innerXml: string, displayName: string, retries: number = 3, interval: string = "00:00:05"): string {
+  const effectiveInnerXml = innerXml.trim()
+    ? innerXml
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement RetryScope body" Message="[&quot;Placeholder — RetryScope body has no activities yet&quot;]" />`;
   return `<ui:RetryScope NumberOfRetries="${retries}" RetryInterval="${interval}" DisplayName="Retry: ${escapeXml(displayName)}">
   <ui:RetryScope.Body>
     <Sequence DisplayName="Retry Body">
-      ${innerXml}
+      ${effectiveInnerXml}
     </Sequence>
   </ui:RetryScope.Body>
   <ui:RetryScope.Condition>
@@ -1035,7 +1038,7 @@ function assembleIfNode(
 
   const thenContent = thenXml.trim()
     ? thenXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement Then" Message="[&quot;Placeholder — implement this branch&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement Then branch" Message="[&quot;Placeholder — Then branch has no activities yet&quot;]" />`;
 
   let xml = `<If Condition="${condition}" DisplayName="${displayName}">\n`;
   xml += `  <If.Then>\n`;
@@ -1071,7 +1074,7 @@ function assembleWhileNode(
 
   const bodyContent = bodyXml.trim()
     ? bodyXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement Body" Message="[&quot;Placeholder — implement this branch&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement While body" Message="[&quot;Placeholder — While body has no activities yet&quot;]" />`;
 
   return `<While Condition="${condition}" DisplayName="${displayName}">\n` +
     `  <While.Body>\n` +
@@ -1155,7 +1158,7 @@ function assembleForEachNode(
 
   const bodyContent = bodyXml.trim()
     ? bodyXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement Body" Message="[&quot;Placeholder — implement this branch&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement ForEach body" Message="[&quot;Placeholder — ForEach body has no activities yet&quot;]" />`;
 
   const valuesInner = wrappedValues.startsWith("[") && wrappedValues.endsWith("]")
     ? `[${escapeXmlExpression(wrappedValues.slice(1, -1))}]`
@@ -1187,7 +1190,7 @@ function assembleRetryScopeNode(
 
   const bodyContent = bodyXml.trim()
     ? bodyXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement Retry" Message="[&quot;Placeholder — implement this branch&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement RetryScope body" Message="[&quot;Placeholder — RetryScope body has no activities yet&quot;]" />`;
 
   return `<ui:RetryScope NumberOfRetries="${node.numberOfRetries}" RetryInterval="${node.retryInterval}" DisplayName="${displayName}">\n` +
     `  <ui:RetryScope.Body>\n` +
