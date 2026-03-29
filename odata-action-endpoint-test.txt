@@ -1,0 +1,59 @@
+ACTION CENTER — OData Action Endpoint Test
+================================================================================
+Date: 2026-03-29T06:11:19.024Z
+
+=== CONFIG ===
+orgSlug: uipatezkzunj
+tenantName: DefaultTenant
+folderId: 2122822
+
+=== STEP 1: Get Token ===
+Scopes requested: OR.Tasks OR.Tasks.Read OR.Tasks.Write OR.Default
+Token HTTP Status: 200
+Has access_token: true
+Token acquired successfully
+
+=== STEP 2: Create Task Catalog via OData Action Endpoint ===
+URL: https://cloud.uipath.com/uipatezkzunj/DefaultTenant/orchestrator_/odata/TaskCatalogs/UiPath.Server.Configuration.OData.CreateTaskCatalog
+Method: POST
+Request Body: {
+  "Name": "CannonBall_AC_Test_ODataAction",
+  "Description": "Testing correct OData action endpoint"
+}
+
+HTTP Status: 201
+Content-Type: application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8
+Response Body:
+{"@odata.context":"https://cloud.uipath.com/uipatezkzunj/DefaultTenant/orchestrator_/odata/$metadata#TaskCatalogs/$entity","Key":"0a1d02f0-d69d-462b-b23f-eb277debd365","Name":"CannonBall_AC_Test_ODataAction","Description":"Testing correct OData action endpoint","CreationTime":"2026-03-29T06:11:19.4696833Z","LastModificationTime":null,"FoldersCount":1,"Encrypted":false,"RetentionAction":null,"RetentionPeriod":null,"RetentionBucketId":null,"RetentionBucketName":null,"Id":6953,"Tags":[]}
+
+Parsed Catalog ID: 6953
+
+STEP 2 RESULT: SUCCESS (HTTP 201)
+
+=== STEP 3: Verify Catalog Exists ===
+URL: https://cloud.uipath.com/uipatezkzunj/DefaultTenant/orchestrator_/odata/TaskCatalogs?$filter=Name%20eq%20'CannonBall_AC_Test_ODataAction'&$top=1
+HTTP Status: 200
+Response Body:
+{"@odata.context":"https://cloud.uipath.com/uipatezkzunj/DefaultTenant/orchestrator_/odata/$metadata#TaskCatalogs","@odata.count":1,"value":[{"Key":"0a1d02f0-d69d-462b-b23f-eb277debd365","Name":"CannonBall_AC_Test_ODataAction","Description":"Testing correct OData action endpoint","CreationTime":"2026-03-29T06:11:19.47Z","LastModificationTime":null,"FoldersCount":1,"Encrypted":false,"RetentionAction":"Delete","RetentionPeriod":180,"RetentionBucketId":null,"RetentionBucketName":null,"Id":6953,"Tags":[]}]}
+
+Catalog found in listing: true
+STEP 3 RESULT: CONFIRMED
+
+=== STEP 4: Cleanup — Delete Catalog ===
+URL: https://cloud.uipath.com/uipatezkzunj/DefaultTenant/orchestrator_/odata/TaskCatalogs(6953)
+HTTP Status: 204
+Response Body: (empty)
+STEP 4 RESULT: DELETED
+
+================================================================================
+SUMMARY
+================================================================================
+Step 1 (Token):   SUCCESS
+Step 2 (Create):  SUCCESS (HTTP 201)
+Step 3 (Verify):  CONFIRMED — catalog exists in listing
+Step 4 (Delete):  ATTEMPTED
+
+CONCLUSION: The OData action endpoint
+  /odata/TaskCatalogs/UiPath.Server.Configuration.OData.CreateTaskCatalog
+WORKS for creating task catalogs on this tenant.
+The provisioning code should be updated to use this endpoint.
