@@ -617,7 +617,7 @@ function collectActivityTypesFromWorkflows(workflows: Array<{ steps?: Array<{ ac
 export function resolveDependencies(
   pkg: { workflows?: Array<{ name?: string; steps?: Array<{ activityType?: string; activityPackage?: string }> }> },
   studioProfile: StudioProfile | null,
-  treeSpec: TreeWorkflowSpec | null,
+  treeSpecs: TreeWorkflowSpec | TreeWorkflowSpec[] | null,
   targetFramework?: "Windows" | "Portable",
 ): DependencyResolutionResult {
   const deps: Record<string, string> = {};
@@ -632,7 +632,11 @@ export function resolveDependencies(
     referencedPackages.add("UiPath.UIAutomation.Activities");
   }
 
-  if (treeSpec) {
+  const specArray: TreeWorkflowSpec[] = treeSpecs
+    ? (Array.isArray(treeSpecs) ? treeSpecs : [treeSpecs])
+    : [];
+
+  for (const treeSpec of specArray) {
     const activityTemplates = collectActivityTemplatesFromSpec(treeSpec);
     for (const template of activityTemplates) {
       let pkgId = catalogService.getPackageForActivity(template);
@@ -1384,6 +1388,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
   let enrichment: EnrichmentResult | null = null;
   let treeEnrichment: TreeEnrichmentResult | null = null;
+  let allTreeEnrichments: Map<string, { spec: TreeWorkflowSpec; processType: ProcessType }> = new Map();
   let _usedAIFallback = false;
   if (generationMode === "baseline_openable") {
     console.log(`[UiPath] baseline_openable mode — skipping AI enrichment, using flat scaffold`);
@@ -1392,15 +1397,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       pkg.workflows.some(w => w.steps && w.steps.length > 0);
     if (hasDecomposedSpecs) {
       try {
-        const { convertDecomposedSpecToTreeEnrichment } = await import("./spec-to-tree-mapper");
-        const mainWorkflow = pkg.workflows.find(w => w.name === "Main") || pkg.workflows[0];
-        if (mainWorkflow && mainWorkflow.steps.length > 0) {
-          const mappedEnrichment = convertDecomposedSpecToTreeEnrichment(mainWorkflow);
-          if (mappedEnrichment && mappedEnrichment.status === "success") {
-            treeEnrichment = mappedEnrichment;
-            console.log(`[UiPath] Using decomposed spec output for tree enrichment: "${mainWorkflow.name}" (${mainWorkflow.steps.length} steps → tree spec)`);
-            if (onProgress) onProgress({ type: "completed", stage: "spec_mapping", message: `Mapped decomposed spec to tree enrichment (${mainWorkflow.steps.length} steps)` });
+        const { mapPackageSpecToTreeEnrichments } = await import("./spec-to-tree-mapper");
+        allTreeEnrichments = mapPackageSpecToTreeEnrichments(pkg);
+        if (allTreeEnrichments.size > 0) {
+          const mainEntry = allTreeEnrichments.get("Main") || allTreeEnrichments.values().next().value;
+          if (mainEntry) {
+            treeEnrichment = { status: "success", workflowSpec: mainEntry.spec, processType: mainEntry.processType };
           }
+          const wfNames = Array.from(allTreeEnrichments.keys());
+          console.log(`[UiPath] Mapped ${allTreeEnrichments.size} decomposed spec(s) to tree enrichments: ${wfNames.join(", ")}`);
+          if (onProgress) onProgress({ type: "completed", stage: "spec_mapping", message: `Mapped ${allTreeEnrichments.size} decomposed spec(s) to tree enrichments` });
         }
       } catch (err: any) {
         console.log(`[UiPath] Spec-to-tree mapping failed: ${err.message} — continuing with normal enrichment`);
@@ -1496,8 +1502,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const explicitFw = pkg.internal?.targetFramework;
     const earlyIsServerless = explicitFw === "Portable" || !!pkg.internal?.isServerless || (!explicitFw && !!(_probeCacheSnapshot?.serverlessDetected) && !_probeCacheSnapshot?.flags?.hasUnattendedSlots);
     const earlyTf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (_earlyMetaTarget?.targetFramework || (earlyIsServerless ? "Portable" : "Windows"));
-    const earlyTreeSpec = treeEnrichment?.status === "success" ? treeEnrichment.workflowSpec : null;
-    const earlyDepRes = resolveDependencies(pkg, _studioProfile, earlyTreeSpec, earlyTf as "Windows" | "Portable");
+    const earlyTreeSpecs: TreeWorkflowSpec[] = [];
+    if (allTreeEnrichments.size > 0) {
+      Array.from(allTreeEnrichments.values()).forEach(entry => earlyTreeSpecs.push(entry.spec));
+    } else if (treeEnrichment?.status === "success") {
+      earlyTreeSpecs.push(treeEnrichment.workflowSpec);
+    }
+    const earlyDepRes = resolveDependencies(pkg, _studioProfile, earlyTreeSpecs.length > 0 ? earlyTreeSpecs : null, earlyTf as "Windows" | "Portable");
     const currentDepMap = earlyDepRes.deps;
     const xamlFpCheck = computeXamlFingerprint(enrichment, treeEnrichment, pkg, orchestratorArtifacts, generationMode, tierStr, currentDepMap, earlyTf);
     const xamlStageHit = cachedEntry.stageXaml && cachedEntry.stageXaml.fingerprint === xamlFpCheck;
@@ -1646,8 +1657,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
     const _metaTarget2 = _metadataService.getStudioTarget();
     const tf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (_metaTarget2?.targetFramework || (isServerless ? "Portable" : "Windows"));
-    const treeSpecForDeps = treeEnrichment?.status === "success" ? treeEnrichment.workflowSpec : null;
-    const depResolution = resolveDependencies(pkg, _studioProfile, treeSpecForDeps, tf as "Windows" | "Portable");
+    const allTreeSpecsForDeps: TreeWorkflowSpec[] = [];
+    if (allTreeEnrichments.size > 0) {
+      Array.from(allTreeEnrichments.values()).forEach(entry => {
+        allTreeSpecsForDeps.push(entry.spec);
+      });
+    } else if (treeEnrichment?.status === "success") {
+      allTreeSpecsForDeps.push(treeEnrichment.workflowSpec);
+    }
+    const depResolution = resolveDependencies(pkg, _studioProfile, allTreeSpecsForDeps.length > 0 ? allTreeSpecsForDeps : null, tf as "Windows" | "Portable");
     const deps = depResolution.deps;
     const dependencyWarnings = depResolution.warnings;
     const proactivelyResolvedPackages = new Set(Object.keys(deps));
@@ -1852,78 +1870,168 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const generatedWorkflowNames = new Set<string>();
 
     let specValidationReport: SpecValidationReport | null = null;
-    if (treeEnrichment && treeEnrichment.status === "success") {
-      let spec = treeEnrichment.workflowSpec;
-      const validationResult = validateSpec(spec, _studioProfile);
-      spec = validationResult.spec;
-      specValidationReport = validationResult.report;
-      treeEnrichment = { ...treeEnrichment, workflowSpec: spec };
+    const enrichmentsToProcess: Array<{ name: string; spec: TreeWorkflowSpec; processType: ProcessType }> = [];
+    if (allTreeEnrichments.size > 0) {
+      Array.from(allTreeEnrichments.entries()).forEach(([name, entry]) => {
+        enrichmentsToProcess.push({ name, spec: entry.spec, processType: entry.processType });
+      });
+    } else if (treeEnrichment && treeEnrichment.status === "success") {
+      enrichmentsToProcess.push({ name: treeEnrichment.workflowSpec.name || "Main", spec: treeEnrichment.workflowSpec, processType: treeEnrichment.processType });
+    }
 
-      if (specValidationReport.strippedProperties > 0) {
+    const nonMainWorkflowNames: string[] = [];
+
+    if (enrichmentsToProcess.length > 0) {
+      const mainIdx = enrichmentsToProcess.findIndex(e => e.name === "Main");
+      if (mainIdx > 0) {
+        const [mainEntry] = enrichmentsToProcess.splice(mainIdx, 1);
+        enrichmentsToProcess.unshift(mainEntry);
+      }
+
+      let totalStrippedProperties = 0;
+      let totalExcessiveStripping = 0;
+
+      for (const enrichEntry of enrichmentsToProcess) {
+        let spec = enrichEntry.spec;
+        const validationResult = validateSpec(spec, _studioProfile);
+        spec = validationResult.spec;
+        const report = validationResult.report;
+        totalStrippedProperties += report.strippedProperties;
+        totalExcessiveStripping += report.excessiveStrippingCount;
+
+        if (!specValidationReport) {
+          specValidationReport = { ...report };
+          treeEnrichment = { status: "success", workflowSpec: spec, processType: enrichEntry.processType };
+        } else {
+          specValidationReport.totalActivities += report.totalActivities;
+          specValidationReport.validActivities += report.validActivities;
+          specValidationReport.unknownActivities += report.unknownActivities;
+          specValidationReport.strippedProperties += report.strippedProperties;
+          specValidationReport.enumCorrections += report.enumCorrections;
+          specValidationReport.missingRequiredFilled += report.missingRequiredFilled;
+          specValidationReport.commentConversions += report.commentConversions;
+          specValidationReport.excessiveStrippingCount += report.excessiveStrippingCount;
+          specValidationReport.issues = specValidationReport.issues.concat(report.issues);
+        }
+
+        const specJson = JSON.stringify(spec, null, 2);
+        const truncatedSpec = specJson.length > 5000 ? specJson.slice(0, 5000) + "\n... [truncated]" : specJson;
+        console.log(`[UiPath] WorkflowSpec tree (validated) before assembly for "${enrichEntry.name}":\n${truncatedSpec}`);
+        console.log(`[UiPath] Using tree-based assembly for "${spec.name}"`);
+
+        const wfName = (spec.name || enrichEntry.name || projectName).replace(/\s+/g, "_");
+        try {
+          const { xaml, variables } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
+          let compliant: string;
+          try {
+            compliant = compliancePass(xaml, `${wfName}.xaml`);
+          } catch (compErr: any) {
+            console.warn(`[UiPath] Compliance pass failed for tree-assembled "${wfName}": ${compErr.message} — replacing with stub workflow`);
+            compliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
+            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+          }
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
+          generatedWorkflowNames.add(wfName);
+          if (wfName === "Main" || wfName === "Process") {
+            hasMain = true;
+          } else {
+            nonMainWorkflowNames.push(wfName);
+          }
+          xamlResults.push({
+            xaml: compliant,
+            gaps: [],
+            usedPackages: ["UiPath.System.Activities"],
+            variables: variables.map(v => ({ name: v.name, type: v.type, defaultValue: v.default || "" })),
+          });
+          console.log(`[UiPath] Tree assembly produced XAML for "${wfName}" (${variables.length} variables)`);
+        } catch (err: any) {
+          console.warn(`[UiPath] Tree assembly failed for "${wfName}": ${err.message} — emitting stub workflow`);
+          const stubXaml = compliancePass(generateStubWorkflow(wfName, { reason: `Tree assembly failed — ${err.message}` }), `${wfName}.xaml`, true);
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, stubXaml);
+          generatedWorkflowNames.add(wfName);
+          complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Tree assembly failed — ${err.message}` });
+          if (wfName === "Main" || wfName === "Process") {
+            hasMain = true;
+          } else {
+            nonMainWorkflowNames.push(wfName);
+          }
+          xamlResults.push({
+            xaml: stubXaml,
+            gaps: [],
+            usedPackages: ["UiPath.System.Activities"],
+            variables: [],
+          });
+          if (enrichEntry.name === enrichmentsToProcess[0]?.name) {
+            treeEnrichment = null;
+          }
+        }
+      }
+
+      if (totalStrippedProperties > 0) {
         dependencyWarnings.push({
           code: "CATALOG_PROPERTY_STRIPPED",
-          message: `Pre-emission validation stripped ${specValidationReport.strippedProperties} non-catalog properties`,
+          message: `Pre-emission validation stripped ${totalStrippedProperties} non-catalog properties across ${enrichmentsToProcess.length} workflow(s)`,
           stage: "spec-validation",
           recoverable: true,
         });
       }
 
-      if (specValidationReport.excessiveStrippingCount > 0) {
+      if (totalExcessiveStripping > 0) {
         dependencyWarnings.push({
           code: "EXCESSIVE_PROPERTY_STRIPPING",
-          message: `${specValidationReport.excessiveStrippingCount} activit(ies) had 3+ non-catalog properties stripped — indicates generation hallucination. Consider regenerating these activities.`,
+          message: `${totalExcessiveStripping} activit(ies) had 3+ non-catalog properties stripped — indicates generation hallucination. Consider regenerating these activities.`,
           stage: "spec-validation",
           recoverable: false,
         });
-        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${specValidationReport.excessiveStrippingCount} activities exceeded the stripping threshold — generation quality may be degraded`);
+        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${totalExcessiveStripping} activities exceeded the stripping threshold — generation quality may be degraded`);
       }
 
-      const specJson = JSON.stringify(spec, null, 2);
-      const truncatedSpec = specJson.length > 5000 ? specJson.slice(0, 5000) + "\n... [truncated]" : specJson;
-      console.log(`[UiPath] WorkflowSpec tree (validated) before assembly:\n${truncatedSpec}`);
-      console.log(`[UiPath] Using tree-based assembly for "${spec.name}"`);
-
-      const wfName = (spec.name || projectName).replace(/\s+/g, "_");
-      try {
-        const { xaml, variables } = assembleWorkflowFromSpec(spec, treeEnrichment.processType);
-        let compliant: string;
-        try {
-          compliant = compliancePass(xaml, `${wfName}.xaml`);
-        } catch (compErr: any) {
-          console.warn(`[UiPath] Compliance pass failed for tree-assembled "${wfName}": ${compErr.message} — replacing with stub workflow`);
-          compliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
-          complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+      const mainWfName = generatedWorkflowNames.has("Main") ? "Main" : (generatedWorkflowNames.has("Process") ? "Process" : (enrichmentsToProcess[0]?.name || "Main").replace(/\s+/g, "_"));
+      const mainXamlPath = `${libPath}/${mainWfName}.xaml`;
+      if (nonMainWorkflowNames.length > 0 && deferredWrites.has(mainXamlPath)) {
+        let mainXaml = deferredWrites.get(mainXamlPath)!;
+        const invokeRefs: string[] = [];
+        const initInvokeRef = `<ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`;
+        if (!mainXaml.includes('WorkflowFileName="InitAllSettings.xaml"')) {
+          invokeRefs.push(`      ${initInvokeRef}`);
         }
-        deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
-        generatedWorkflowNames.add(wfName);
-        if (wfName === "Main" || wfName === "Process") {
-          hasMain = true;
-          const initInvokeRef = `<ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`;
-          const rootSeqMatch = compliant.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
-          if (rootSeqMatch && !compliant.includes('WorkflowFileName="InitAllSettings.xaml"')) {
-            const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
-            compliant = compliant.slice(0, insertPos) + `      ${initInvokeRef}\n` + compliant.slice(insertPos);
-            deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
-            const existingIdx = xamlEntries.findIndex(e => {
-              const bn = e.name.split("/").pop() || e.name;
-              return bn === `${wfName}.xaml`;
-            });
-            if (existingIdx >= 0) {
-              xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: compliant };
-            }
-            console.log(`[UiPath] Injected InitAllSettings.xaml reference into tree-assembled ${wfName}.xaml`);
+        for (const subWfName of nonMainWorkflowNames) {
+          const subFileName = `${subWfName}.xaml`;
+          if (!mainXaml.includes(`WorkflowFileName="${subFileName}"`)) {
+            invokeRefs.push(`      <ui:InvokeWorkflowFile DisplayName="${subWfName}" WorkflowFileName="${subFileName}" />`);
           }
         }
-        xamlResults.push({
-          xaml: compliant,
-          gaps: [],
-          usedPackages: ["UiPath.System.Activities"],
-          variables: variables.map(v => ({ name: v.name, type: v.type, defaultValue: v.default || "" })),
-        });
-        console.log(`[UiPath] Tree assembly produced XAML for "${wfName}" (${variables.length} variables)`);
-      } catch (err: any) {
-        console.log(`[UiPath] Tree assembly failed for "${wfName}": ${err.message} — falling back to legacy path`);
-        treeEnrichment = null;
+        if (invokeRefs.length > 0) {
+          const rootSeqMatch = mainXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
+          if (rootSeqMatch) {
+            const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
+            mainXaml = mainXaml.slice(0, insertPos) + invokeRefs.join("\n") + "\n" + mainXaml.slice(insertPos);
+            deferredWrites.set(mainXamlPath, mainXaml);
+            const existingIdx = xamlEntries.findIndex(e => {
+              const bn = e.name.split("/").pop() || e.name;
+              return bn === `${mainWfName}.xaml`;
+            });
+            if (existingIdx >= 0) {
+              xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: mainXaml };
+            }
+            console.log(`[UiPath] Injected ${invokeRefs.length} InvokeWorkflowFile reference(s) into ${mainWfName}.xaml: InitAllSettings${nonMainWorkflowNames.length > 0 ? ", " + nonMainWorkflowNames.join(", ") : ""}`);
+          }
+        }
+      } else if (nonMainWorkflowNames.length === 0 && deferredWrites.has(mainXamlPath)) {
+        let mainXaml = deferredWrites.get(mainXamlPath)!;
+        if (!mainXaml.includes('WorkflowFileName="InitAllSettings.xaml"')) {
+          const rootSeqMatch = mainXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
+          if (rootSeqMatch) {
+            const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
+            mainXaml = mainXaml.slice(0, insertPos) + `      ${`<ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`}\n` + mainXaml.slice(insertPos);
+            deferredWrites.set(mainXamlPath, mainXaml);
+            console.log(`[UiPath] Injected InitAllSettings.xaml reference into tree-assembled ${mainWfName}.xaml`);
+          }
+        }
+      }
+
+      if (hasMain) {
+        console.log(`[UiPath] Multi-workflow tree assembly complete: ${generatedWorkflowNames.size} workflow(s) assembled (${nonMainWorkflowNames.length} non-Main)`);
       }
     }
 
