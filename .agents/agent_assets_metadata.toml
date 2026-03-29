@@ -42,3 +42,21 @@ id = "odLO2Mw_nU1h1QnPLztod"
 uri = "file://odata-action-endpoint-test.txt"
 type = "text"
 title = "OData Action Endpoint Test Results — All Steps Passed"
+
+[[outputs]]
+id = "zJgqbch2gHtitjenNxF0z"
+uri = "file://scripts/renderer-comparison/baseline.png"
+type = "image"
+title = "Baseline (25 nodes, current bezier connectors)"
+
+[[outputs]]
+id = "-XdSWAIQ5YpsdQB6ocCAG"
+uri = "file://scripts/renderer-comparison/orthogonal-25-nodes.png"
+type = "image"
+title = "Orthogonal (25 nodes, nodesep=160, cornerR=12)"
+
+[[outputs]]
+id = "hTnFS0W-8RkiloosvR1Gc"
+uri = "file://scripts/renderer-comparison/orthogonal-100-nodes.png"
+type = "image"
+title = "Orthogonal (100 nodes, 4x chained flow)"

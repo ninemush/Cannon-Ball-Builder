@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1255" height="2354" viewBox="0 0 1255 2354" shape-rendering="geometricPrecision" text-rendering="optimizeLegibility">
+  <defs>
+      <marker id="arrow-5eead4" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#5eead4"/>
+      </marker>
+    
+      <marker id="arrow-f87171" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#f87171"/>
+      </marker>
+    
+      <marker id="arrow-4ade80" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#4ade80"/>
+      </marker>
+    
+      <marker id="arrow-fbbf24" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#fbbf24"/>
+      </marker>
+    </defs>
+  <rect width="100%" height="100%" fill="#0a0a0f"/>
+  <text x="627.5" y="30" text-anchor="middle" fill="#71717a" font-size="12" font-weight="700" font-family="system-ui, sans-serif">BASELINE [BASELINE (bezier)]: 25 nodes, nodesep=60, ranksep=80, cornerR=8</text>
+  <path d="M 748 114 L 748 194" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 748 264 L 748 344" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 774 370 L 847 370 Q 855 370 855 378 L 855 1110 Q 855 1118 847 1118 L 821 1118 Q 813 1118 813 1126 L 813 2240" fill="none" stroke="#f87171" stroke-width="1.5" marker-end="url(#arrow-f87171)" stroke-linejoin="round"/>
+        <rect x="802.3" y="350" width="24.4" height="16" rx="4" fill="#18181b" stroke="#f87171" stroke-width="0.5"/>
+        <text x="814.5" y="360.8" text-anchor="middle" fill="#f87171" font-size="8" font-weight="500" font-family="system-ui, sans-serif">No</text>
+      <path d="M 722 370 L 531 370 Q 523 370 523 378 L 523 404.4 Q 523 412.4 531 412.4 L 655 412.4 Q 663 412.4 663 420.4 L 663 476" fill="none" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-4ade80)" stroke-linejoin="round"/>
+        <rect x="607.7" y="350" width="29.6" height="16" rx="4" fill="#18181b" stroke="#4ade80" stroke-width="0.5"/>
+        <text x="622.5" y="360.8" text-anchor="middle" fill="#4ade80" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Yes</text>
+      <path d="M 663 546 L 663 626" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 663 696 L 663 776" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 689 802 L 945 802 Q 953 802 953 810 L 953 836.4 Q 953 844.4 945 844.4 L 821 844.4 Q 813 844.4 813 852.4 L 813 908" fill="none" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-4ade80)" stroke-linejoin="round"/>
+        <rect x="806.2" y="782" width="29.6" height="16" rx="4" fill="#18181b" stroke="#4ade80" stroke-width="0.5"/>
+        <text x="821" y="792.8" text-anchor="middle" fill="#4ade80" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Yes</text>
+      <path d="M 813 978 L 813 1058" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 813 1128 L 813 1208" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 813 1260 L 813 1340" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrow-fbbf24)" stroke-linejoin="round"/>
+        <rect x="774.8" y="1292" width="76.4" height="16" rx="4" fill="#18181b" stroke="#fbbf24" stroke-width="0.5"/>
+        <text x="813" y="1302.8" text-anchor="middle" fill="#fbbf24" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Needs review</text>
+      <path d="M 813 1410 L 813 1499" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 787 1525 L 578 1525 Q 570 1525 570 1533 L 570 1563 Q 570 1571 578 1571 L 702 1571 Q 710 1571 710 1579 L 710 1640" fill="none" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-4ade80)" stroke-linejoin="round"/>
+        <rect x="650.7" y="1505" width="55.6" height="16" rx="4" fill="#18181b" stroke="#4ade80" stroke-width="0.5"/>
+        <text x="678.5" y="1515.8" text-anchor="middle" fill="#4ade80" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Approved</text>
+      <path d="M 839 1525 L 1147 1525 Q 1155 1525 1155 1533 L 1155 1683 Q 1155 1691 1147 1691 L 1023 1691 Q 1015 1691 1015 1699 L 1015 1940" fill="none" stroke="#f87171" stroke-width="1.5" marker-end="url(#arrow-f87171)" stroke-linejoin="round"/>
+        <rect x="969.2" y="1505" width="55.6" height="16" rx="4" fill="#18181b" stroke="#f87171" stroke-width="0.5"/>
+        <text x="997" y="1515.8" text-anchor="middle" fill="#f87171" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Rejected</text>
+      <path d="M 710 1710 L 710 1790" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 1015 2010 L 1015 2090" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 710 1860 L 710 1949" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 684 1975 L 408 1975 Q 400 1975 400 1983 L 400 2013 Q 400 2021 408 2021 L 532 2021 Q 540 2021 540 2029 L 540 2090" fill="none" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-4ade80)" stroke-linejoin="round"/>
+        <rect x="527.2" y="1955" width="29.6" height="16" rx="4" fill="#18181b" stroke="#4ade80" stroke-width="0.5"/>
+        <text x="542" y="1965.8" text-anchor="middle" fill="#4ade80" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Yes</text>
+      <path d="M 736 1975 L 845 1975 Q 853 1975 853 1983 L 853 2018.2 Q 853 2026.2 845 2026.2 L 819 2026.2 Q 811 2026.2 811 2034.2 L 811 2103" fill="none" stroke="#f87171" stroke-width="1.5" marker-end="url(#arrow-f87171)" stroke-linejoin="round"/>
+        <rect x="782.3" y="1955" width="24.4" height="16" rx="4" fill="#18181b" stroke="#f87171" stroke-width="0.5"/>
+        <text x="794.5" y="1965.8" text-anchor="middle" fill="#f87171" font-size="8" font-weight="500" font-family="system-ui, sans-serif">No</text>
+      <path d="M 637 802 L 278 802 Q 270 802 270 810 L 270 1009.2 Q 270 1017.2 278 1017.2 L 402 1017.2 Q 410 1017.2 410 1025.2 L 410 1340" fill="none" stroke="#f87171" stroke-width="1.5" marker-end="url(#arrow-f87171)" stroke-linejoin="round"/>
+        <rect x="441.3" y="782" width="24.4" height="16" rx="4" fill="#18181b" stroke="#f87171" stroke-width="0.5"/>
+        <text x="453.5" y="792.8" text-anchor="middle" fill="#f87171" font-size="8" font-weight="500" font-family="system-ui, sans-serif">No</text>
+      <path d="M 410 1410 L 410 1490" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 410 1560 L 410 1640" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 410 1710 L 410 1790" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 410 1860 L 410 1949" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 384 1975 L 108 1975 Q 100 1975 100 1983 L 100 2013 Q 100 2021 108 2021 L 232 2021 Q 240 2021 240 2029 L 240 2090" fill="none" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-4ade80)" stroke-linejoin="round"/>
+        <rect x="227.2" y="1955" width="29.6" height="16" rx="4" fill="#18181b" stroke="#4ade80" stroke-width="0.5"/>
+        <text x="242" y="1965.8" text-anchor="middle" fill="#4ade80" font-size="8" font-weight="500" font-family="system-ui, sans-serif">Yes</text>
+      <path d="M 436 1975 L 845 1975 Q 853 1975 853 1983 L 853 2018.2 Q 853 2026.2 845 2026.2 L 819 2026.2 Q 811 2026.2 811 2034.2 L 811 2103" fill="none" stroke="#f87171" stroke-width="1.5" marker-end="url(#arrow-f87171)" stroke-linejoin="round"/>
+        <rect x="632.3" y="1955" width="24.4" height="16" rx="4" fill="#18181b" stroke="#f87171" stroke-width="0.5"/>
+        <text x="644.5" y="1965.8" text-anchor="middle" fill="#f87171" font-size="8" font-weight="500" font-family="system-ui, sans-serif">No</text>
+      <path d="M 1015 2160 L 1015 2192 Q 1015 2200 1007 2200 L 821 2200 Q 813 2200 813 2208 L 813 2240" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 540 2160 L 540 2192 Q 540 2200 548 2200 L 805 2200 Q 813 2200 813 2208 L 813 2240" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/><path d="M 240 2160 L 240 2192 Q 240 2200 248 2200 L 805 2200 Q 813 2200 813 2208 L 813 2240" fill="none" stroke="#5eead4" stroke-width="1.5" marker-end="url(#arrow-5eead4)" stroke-linejoin="round"/>
+  
+      <circle cx="748" cy="92" r="18.04" fill="#059669" stroke="#34d399" stroke-width="2.5"/>
+      <polygon points="743.5802,85.686 743.5802,98.314 754.314,92" fill="white"/>
+    
+    <rect x="628" y="194" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="748" y="212" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Get Today&apos;s Birthday Events</text>
+    
+      <rect x="636" y="244" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="658.75" y="254.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="685.5" y="244" width="129.5" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="750.25" y="254.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Google Calendar (UiPa…</text>
+      
+  
+      <g transform="translate(748, 370)">
+        <rect x="-18.72" y="-18.72" width="37.44" height="37.44" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="2"/>
+        <text x="0" y="-2.3" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">Any</text>
+      </g>
+    
+      <circle cx="813" cy="2262" r="18.04" fill="#dc2626" stroke="#f87171" stroke-width="2.5"/>
+      <rect x="804.882" y="2253.882" width="16.236" height="16.236" rx="2" fill="white"/>
+    
+    <rect x="543" y="476" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="663" y="494" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">For Each Birthday Person</text>
+    
+      <rect x="551" y="526" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="573.75" y="536.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="600.5" y="526" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="639" y="536.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+    <rect x="543" y="626" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="663" y="644" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Lookup Contact by Full Name</text>
+    
+      <rect x="551" y="676" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="573.75" y="686.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="600.5" y="676" width="129.5" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="665.25" y="686.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Google Contacts (UiPa…</text>
+      
+  
+      <g transform="translate(663, 802)">
+        <rect x="-18.72" y="-18.72" width="37.44" height="37.44" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="2"/>
+        <text x="0" y="-2.3" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">Email</text>
+      </g>
+    
+    <rect x="693" y="908" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="813" y="926" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Select Preferred Email</text>
+    
+      <rect x="701" y="958" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="723.75" y="968.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="750.5" y="958" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="789" y="968.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+    <rect x="693" y="1058" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="813" y="1076" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Generate Birthday Message in</text>
+    
+      <rect x="701" y="1108" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="723.75" y="1118.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="750.5" y="1108" width="129.5" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="815.25" y="1118.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">UiPath GenAI Activiti…</text>
+      
+  
+      <g transform="translate(813, 1234)">
+        <rect x="-18.72" y="-18.72" width="37.44" height="37.44" rx="4" transform="rotate(45)" fill="#7c3aed" stroke="#a78bfa" stroke-width="2"/>
+        <text x="0" y="-2.3" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">Message</text>
+      </g>
+    
+    <rect x="693" y="1340" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="813" y="1358" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Create Human Review Task</text>
+    
+      <rect x="701" y="1390" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="723.75" y="1400.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="750.5" y="1390" width="82.25" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="791.625" y="1400.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Action Center</text>
+      
+  
+      <g transform="translate(813, 1525)">
+        <rect x="-18.72" y="-18.72" width="37.44" height="37.44" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="2"/>
+        <text x="0" y="-2.3" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">Approved to</text>
+      </g>
+    
+    <rect x="590" y="1640" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="710" y="1658" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Send Birthday Email</text>
+    
+      <rect x="598" y="1690" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="620.75" y="1700.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="647.5" y="1690" width="129.5" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="712.25" y="1700.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Gmail (Integration Se…</text>
+      
+  
+    <rect x="895" y="1940" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="1015" y="1958" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Skip Send (Rejected)</text>
+    
+      <rect x="903" y="1990" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="925.75" y="2000.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="952.5" y="1990" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="991" y="2000.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+    <rect x="590" y="1790" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="710" y="1808" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Mark Person Processed</text>
+    
+      <rect x="598" y="1840" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="620.75" y="1850.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="647.5" y="1840" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="686" y="1850.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Data Service</text>
+      
+  
+    <rect x="895" y="2090" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="1015" y="2108" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Mark Person Skipped</text>
+    
+      <rect x="903" y="2140" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="925.75" y="2150.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="952.5" y="2140" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="991" y="2150.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Data Service</text>
+      
+  
+      <g transform="translate(710, 1975)">
+        <rect x="-18.72" y="-18.72" width="37.44" height="37.44" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="2"/>
+        <text x="0" y="-2.3" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">Next</text>
+      </g>
+    
+    <rect x="420" y="2090" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="540" y="2108" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Loop to Next Person</text>
+    
+      <rect x="428" y="2140" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="450.75" y="2150.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="477.5" y="2140" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="516" y="2150.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+      <circle cx="811" cy="2125" r="18.04" fill="#dc2626" stroke="#f87171" stroke-width="2.5"/>
+      <rect x="802.882" y="2116.882" width="16.236" height="16.236" rx="2" fill="white"/>
+    
+    <rect x="290" y="1340" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="410" y="1358" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">No Action (No Email Found)</text>
+    
+      <rect x="298" y="1390" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="320.75" y="1400.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="347.5" y="1390" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="386" y="1400.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+    <rect x="290" y="1490" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="410" y="1508" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Mark Missing Email</text>
+    
+      <rect x="298" y="1540" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="320.75" y="1550.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="347.5" y="1540" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="386" y="1550.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Data Service</text>
+      
+  
+    <rect x="290" y="1640" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="410" y="1658" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Return to Loop Control</text>
+    
+      <rect x="298" y="1690" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="320.75" y="1700.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="347.5" y="1690" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="386" y="1700.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+    <rect x="290" y="1790" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="410" y="1808" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Continue Loop Check</text>
+    
+      <rect x="298" y="1840" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="320.75" y="1850.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="347.5" y="1840" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="386" y="1850.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+      <g transform="translate(410, 1975)">
+        <rect x="-18.72" y="-18.72" width="37.44" height="37.44" rx="4" transform="rotate(45)" fill="#d97706" stroke="#fbbf24" stroke-width="2"/>
+        <text x="0" y="-2.3" text-anchor="middle" fill="white" font-size="8" font-weight="600" font-family="system-ui, sans-serif">Next</text>
+      </g>
+    
+    <rect x="120" y="2090" width="240" height="70" rx="10" fill="#1e1e2e" stroke="#5eead4" stroke-width="2"/>
+    <text x="240" y="2108" text-anchor="middle" fill="#f4f4f5" font-size="10" font-weight="600" font-family="system-ui, sans-serif">Loop to Next (from missing</text>
+    
+      <rect x="128" y="2140" width="45.5" height="14" rx="4" fill="#374151"/>
+      <text x="150.75" y="2150.08" text-anchor="middle" fill="#d1d5db" font-size="7.5" font-family="system-ui, sans-serif">System</text>
+    
+        <rect x="177.5" y="2140" width="77" height="14" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.5"/>
+        <text x="216" y="2150.08" text-anchor="middle" fill="#94a3b8" font-size="7.5" font-family="system-ui, sans-serif">Orchestrator</text>
+      
+  
+</svg>
