@@ -1,5 +1,5 @@
 import { getCodeLLM, SDD_LLM_TIMEOUT_MS } from "./lib/llm";
-import { sanitizeAndParseJson } from "./lib/json-utils";
+import { sanitizeAndParseJson, diagnoseJsonFailure } from "./lib/json-utils";
 import { uipathPackageSchema, type UiPathPackageSpec } from "./types/uipath-package";
 import { repairTruncatedPackageJson } from "./uipath-prompts";
 import { storage } from "./storage";
@@ -290,13 +290,25 @@ function parseScaffold(rawText: string): ScaffoldResult {
   return parsed as ScaffoldResult;
 }
 
-function parseWorkflowDetail(rawText: string, workflowName: string): UiPathPackageSpec["workflows"][number] {
+function parseWorkflowDetail(rawText: string, workflowName: string, runLogger?: RunLogger): UiPathPackageSpec["workflows"][number] {
   let parsed: any;
   try {
     parsed = sanitizeAndParseJson(rawText);
-  } catch {
+  } catch (sanitizeErr: any) {
     const repaired = repairTruncatedPackageJson(rawText);
-    if (!repaired) throw new Error(`Failed to parse detail response for ${workflowName}`);
+    if (!repaired) {
+      const diag = diagnoseJsonFailure(rawText);
+      const logId = runLogger?.getRunId() ?? "unknown";
+      console.error(`[SpecDecomposer] [${logId}] JSON parse failed for workflow "${workflowName}" — ${diag.truncationHint}, length=${diag.totalLength}, bracketDepth=${diag.bracketDepth}, endsInString=${diag.endsInString}`);
+      console.error(`[SpecDecomposer] [${logId}] Response head (first 1500 chars): ${diag.head}`);
+      if (diag.tail) {
+        console.error(`[SpecDecomposer] [${logId}] Response tail (last 500 chars): ${diag.tail}`);
+      }
+      if (runLogger) {
+        runLogger.recordRetry(`json_parse_diag_${workflowName}`, 0, `${diag.truncationHint} | len=${diag.totalLength} | depth=${diag.bracketDepth} | inStr=${diag.endsInString} | sanitizeErr=${sanitizeErr?.message}`);
+      }
+      throw new Error(`Failed to parse detail response for ${workflowName} (${diag.truncationHint}, length=${diag.totalLength})`);
+    }
     parsed = repaired;
   }
 
@@ -590,7 +602,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
           timeoutMs: perWorkflowTimeout,
         });
 
-        const detail = parseWorkflowDetail(detailResponse.text || "{}", entry.name);
+        const detail = parseWorkflowDetail(detailResponse.text || "{}", entry.name, runLogger);
         workflowDetails.set(entry.name, detail);
         succeeded = true;
 

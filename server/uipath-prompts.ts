@@ -68,64 +68,94 @@ export function repairTruncatedPackageJson(rawText: string): any | null {
     if (firstBrace === -1) return null;
     text = text.slice(firstBrace);
 
-    let inString = false;
-    let escaped = false;
-    let lastSafePos = 0;
-    const stack: string[] = [];
+    for (let attempts = 0; attempts < 40; attempts++) {
+      text = stripTrailingGarbage(text);
 
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (escaped) { escaped = false; continue; }
-      if (ch === "\\") { escaped = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (ch === "{" || ch === "[") {
-        stack.push(ch === "{" ? "}" : "]");
-      } else if (ch === "}" || ch === "]") {
-        if (stack.length > 0) stack.pop();
-      }
-      if (ch === "," || ch === "}" || ch === "]") {
-        lastSafePos = i;
-      }
-    }
+      let inString = false;
+      let escaped = false;
+      const stack: string[] = [];
 
-    if (inString) {
-      text = text.slice(0, text.lastIndexOf('"'));
-    }
-
-    for (let attempts = 0; attempts < 30; attempts++) {
-      text = text.replace(/,\s*$/, "");
-
-      let s = false, esc = false;
-      const st: string[] = [];
       for (let i = 0; i < text.length; i++) {
-        const c = text[i];
-        if (esc) { esc = false; continue; }
-        if (c === "\\") { esc = true; continue; }
-        if (c === '"') { s = !s; continue; }
-        if (s) continue;
-        if (c === "{") st.push("}");
-        else if (c === "[") st.push("]");
-        else if (c === "}" || c === "]") { if (st.length > 0) st.pop(); }
+        const ch = text[i];
+        if (escaped) { escaped = false; continue; }
+        if (ch === "\\") { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === "{" || ch === "[") {
+          stack.push(ch === "{" ? "}" : "]");
+        } else if (ch === "}" || ch === "]") {
+          if (stack.length > 0) stack.pop();
+        }
       }
 
-      if (s) {
-        text = text.slice(0, text.lastIndexOf('"'));
+      if (inString) {
+        const lastQuote = text.lastIndexOf('"');
+        if (lastQuote > 0) {
+          text = text.slice(0, lastQuote);
+        } else {
+          return null;
+        }
         continue;
       }
 
-      const closing = st.reverse().join("");
-      try {
-        return JSON.parse(text + closing);
-      } catch {
-        const cutPoints = [text.lastIndexOf(","), text.lastIndexOf("}")].filter(p => p > 0);
-        const cutAt = Math.max(...cutPoints, -1);
-        if (cutAt <= 0) return null;
-        text = text.slice(0, cutAt);
+      text = text.replace(/,\s*$/, "");
+
+      text = text.replace(/,(\s*[}\]])/g, "$1");
+
+      const partialPropMatch = text.match(/[,{]\s*"[^"]*"\s*:\s*$/);
+      if (partialPropMatch) {
+        const keepChar = text[text.length - partialPropMatch[0].length] === "{" ? "{" : "";
+        text = text.slice(0, text.length - partialPropMatch[0].length) + keepChar;
+        continue;
+      }
+
+      const partialKeyOnly = text.match(/[,{]\s*"[^"]*"\s*$/);
+      if (partialKeyOnly) {
+        const keepChar = text[text.length - partialKeyOnly[0].length] === "{" ? "{" : "";
+        text = text.slice(0, text.length - partialKeyOnly[0].length) + keepChar;
+        continue;
+      }
+
+      const partialPropNoValue = text.match(/[,{]\s*"[^"]*"\s*:\s*"[^"]*$/);
+      if (partialPropNoValue) {
+        const keepChar = text[text.length - partialPropNoValue[0].length] === "{" ? "{" : "";
+        text = text.slice(0, text.length - partialPropNoValue[0].length) + keepChar;
+        continue;
+      }
+
+      {
+        let s2 = false, esc2 = false;
+        const st2: string[] = [];
+        for (let i = 0; i < text.length; i++) {
+          const c = text[i];
+          if (esc2) { esc2 = false; continue; }
+          if (c === "\\") { esc2 = true; continue; }
+          if (c === '"') { s2 = !s2; continue; }
+          if (s2) continue;
+          if (c === "{") st2.push("}");
+          else if (c === "[") st2.push("]");
+          else if (c === "}" || c === "]") { if (st2.length > 0) st2.pop(); }
+        }
+
+        const closing = st2.reverse().join("");
+        try {
+          return JSON.parse(text + closing);
+        } catch {
+          const cutPoints = [text.lastIndexOf(","), text.lastIndexOf("}"), text.lastIndexOf("]")].filter(p => p > 0);
+          const cutAt = Math.max(...cutPoints, -1);
+          if (cutAt <= 0) return null;
+          text = text.slice(0, cutAt);
+        }
       }
     }
     return null;
   } catch {
     return null;
   }
+}
+
+function stripTrailingGarbage(text: string): string {
+  text = text.replace(/,\s*$/, "");
+  text = text.replace(/:\s*$/, "");
+  return text;
 }
