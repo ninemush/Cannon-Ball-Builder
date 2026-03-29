@@ -115,6 +115,7 @@ const SYSTEM_ACTIVITIES_NO_PREFIX = new Set([
   "ForEach", "Flowchart", "FlowStep", "FlowDecision", "FlowSwitch", "Switch",
   "AddToCollection", "RemoveFromCollection", "ClearCollection", "ExistsInCollection",
   "Catch", "Rethrow",
+  "State", "StateMachine", "Transition",
 ]);
 
 export function getActivityPrefix(templateName: string): string {
@@ -1145,11 +1146,11 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
 
   let xml = rawXaml;
 
-  const isStateMachineXaml = /<StateMachine[\s>]/.test(xml);
-  const hasUiPathNamespace = /xmlns:ui="http:\/\/schemas\.uipath\.com\/workflow\/activities"/.test(xml);
+  const isStateMachineWorkflow = /<Activity[\s\S]*?>\s*(?:<[^>]*>\s*)*<StateMachine[\s>]/.test(xml) ||
+    (/<StateMachine\s/.test(xml) && /<State\s/.test(xml) && /<Transition\s/.test(xml));
 
-  const targetNamespaces = isCrossPlatform ? UIPATH_CROSS_PLATFORM_NAMESPACES : UIPATH_NAMESPACES;
-  if (!(isStateMachineXaml && hasUiPathNamespace)) {
+  if (!isStateMachineWorkflow) {
+    const targetNamespaces = isCrossPlatform ? UIPATH_CROSS_PLATFORM_NAMESPACES : UIPATH_NAMESPACES;
     const oldNsBlock = xml.match(/xmlns="http:\/\/schemas\.microsoft\.com\/netfx\/2009\/xaml\/activities"[\s\S]*?xmlns:x="http:\/\/schemas\.microsoft\.com\/winfx\/2006\/xaml"/);
     if (oldNsBlock) {
       xml = xml.replace(oldNsBlock[0], targetNamespaces);
@@ -1177,14 +1178,16 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     viewStateEntries.push({ id: rootId, width: rootHint.w, height: rootHint.h });
   }
 
-  const settingsBlock = isCrossPlatform
-    ? UIPATH_CSHARP_SETTINGS.replace("__ROOT_ID__", rootId)
-    : UIPATH_VB_SETTINGS.replace("__ROOT_ID__", rootId);
+  if (!isStateMachineWorkflow) {
+    const settingsBlock = isCrossPlatform
+      ? UIPATH_CSHARP_SETTINGS.replace("__ROOT_ID__", rootId)
+      : UIPATH_VB_SETTINGS.replace("__ROOT_ID__", rootId);
 
-  const alreadyHasSettings = /VisualBasic\.Settings|TextExpression\.NamespacesForImplementation/.test(xml);
-  const firstTag = xml.match(/<(Sequence|StateMachine|Flowchart)\s/);
-  if (firstTag && firstTag.index !== undefined && !alreadyHasSettings) {
-    xml = xml.slice(0, firstTag.index) + settingsBlock + "\n  " + xml.slice(firstTag.index);
+    const alreadyHasSettings = /VisualBasic\.Settings|TextExpression\.NamespacesForImplementation/.test(xml);
+    const firstTag = xml.match(/<(Sequence|StateMachine|Flowchart)\s/);
+    if (firstTag && firstTag.index !== undefined && !alreadyHasSettings) {
+      xml = xml.slice(0, firstTag.index) + settingsBlock + "\n  " + xml.slice(firstTag.index);
+    }
   }
 
   xml = xml.replace(/scg:DataTable/g, "scg2:DataTable");
