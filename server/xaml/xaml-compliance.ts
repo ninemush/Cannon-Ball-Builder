@@ -655,34 +655,19 @@ const XML_PREFIXES = new Set([
   "sads", "sapv", "p", "local", "xmlns", "clr",
 ]);
 
-const SPECIFIC_VARIABLE_TYPES: Record<string, string> = {
-  "gmailAppPassword": "s:Security.SecureString",
-  "primaryRouteDisrupted": "x:Boolean",
-  "c2cAvailable": "x:Boolean",
-  "smtpSendAttempt": "x:Int32",
-  "severityCode": "x:Int32",
-};
+function inferVariableTypeFromBindingContext(varName: string, xml: string): string | null {
+  const escapedName = varName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function inferVariableType(varName: string): string {
-  if (SPECIFIC_VARIABLE_TYPES[varName]) return SPECIFIC_VARIABLE_TYPES[varName];
+  const catchPattern = new RegExp(`<Catch\\s[^>]*>\\s*<Catch\\.Action>\\s*<ActivityAction[^>]*>\\s*<ActivityAction\\.Argument>\\s*<DelegateInArgument[^>]*Name="${escapedName}"`, "s");
+  if (catchPattern.test(xml)) {
+    const catchTypeMatch = xml.match(new RegExp(`<Catch\\s[^>]*x:TypeArguments="([^"]+)"[^>]*>[\\s\\S]*?Name="${escapedName}"`));
+    if (catchTypeMatch) {
+      return catchTypeMatch[1];
+    }
+    return "s:Exception";
+  }
 
-  const lower = varName.toLowerCase();
-  if (lower.startsWith("str_")) return "x:String";
-  if (lower.startsWith("int_") || lower.startsWith("i_") || lower.startsWith("int32_")) return "x:Int32";
-  if (lower.startsWith("bool_") || lower.startsWith("b_") || lower.startsWith("is_") || lower.startsWith("has_")) return "x:Boolean";
-  if (lower.startsWith("dt_") || lower.startsWith("datatable_")) return "scg2:DataTable";
-  if (lower.startsWith("qi_")) return "ui:QueueItem";
-  if (lower.startsWith("dic_") || lower.startsWith("dict_")) return "scg:Dictionary(x:String, x:Object)";
-  if (lower.startsWith("arr_")) return "s:String[]";
-  if (lower.startsWith("img_")) return "ui:Image";
-  if (lower.startsWith("dbl_") || lower.startsWith("dec_")) return "x:Double";
-  if (lower.startsWith("obj_")) return "x:Object";
-  if (lower.startsWith("sec_")) return "s:Security.SecureString";
-  if (lower.startsWith("row_") || lower.startsWith("drow_")) return "scg2:DataRow";
-  if (lower.startsWith("lst_")) return "scg:List(x:String)";
-  if (lower.startsWith("out_")) return "x:String";
-  if (lower.startsWith("in_")) return "x:String";
-  return "x:Object";
+  return null;
 }
 
 function isExcludedToken(token: string): boolean {
@@ -758,10 +743,10 @@ function ensureVariableDeclarations(xml: string): string {
     }
   }
 
-  const missingVars: { name: string; type: string; refIndex: number }[] = [];
+  const missingVars: { name: string; type: string | null; refIndex: number }[] = [];
   for (const [varName, refIdx] of Array.from(referencedVarsWithPos)) {
     if (!declaredVars.has(varName)) {
-      missingVars.push({ name: varName, type: inferVariableType(varName), refIndex: refIdx });
+      missingVars.push({ name: varName, type: inferVariableTypeFromBindingContext(varName, xml), refIndex: refIdx });
     }
   }
 
@@ -770,13 +755,23 @@ function ensureVariableDeclarations(xml: string): string {
   const classMatch = xml.match(/x:Class="([^"]+)"/);
   const workflowName = classMatch ? classMatch[1] : "unknown";
 
+  const declarableVars = missingVars.filter(v => v.type !== null);
+  const undeclarableVars = missingVars.filter(v => v.type === null);
+
+  for (const v of undeclarableVars) {
+    const lineNum = xml.substring(0, v.refIndex).split("\n").length;
+    console.warn(`[XAML Compliance] Undeclared variable "${v.name}" at line ${lineNum} in ${workflowName} — type cannot be deterministically inferred from binding context, skipping auto-declaration (will be reported as quality gate violation)`);
+  }
+
+  if (declarableVars.length === 0) return xml;
+
   const seqInsertions = new Map<number, { name: string; type: string }[]>();
-  for (const v of missingVars) {
-    console.log(`Auto-declared variable ${v.name} as ${v.type} in ${workflowName}`);
+  for (const v of declarableVars) {
+    console.log(`Auto-declared variable ${v.name} as ${v.type} in ${workflowName} (deterministic from binding context)`);
     const seqIdx = findNearestEnclosingSequenceIndex(xml, v.refIndex);
     const key = seqIdx >= 0 ? seqIdx : 0;
     if (!seqInsertions.has(key)) seqInsertions.set(key, []);
-    seqInsertions.get(key)!.push({ name: v.name, type: v.type });
+    seqInsertions.get(key)!.push({ name: v.name, type: v.type! });
   }
 
   const sortedKeys = Array.from(seqInsertions.keys()).sort((a, b) => b - a);

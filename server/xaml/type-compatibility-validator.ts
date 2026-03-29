@@ -139,8 +139,8 @@ const CONVERSION_MAP: Record<string, Record<string, ConversionInfo>> = {
     "System.Int32": { kind: "unrepairable", detail: "Cannot convert DataTable to Int32 — use DataTable.Rows.Count for row count" },
   },
   "System.Object": {
-    "System.Collections.Generic.IEnumerable`1[System.Object]": { kind: "variable-type-change", detail: "Object variable should be typed as IEnumerable — retype variable to match ForEach.Values" },
-    "System.Collections.IEnumerable": { kind: "variable-type-change", detail: "Object variable should be typed as IEnumerable — retype variable to match ForEach.Values" },
+    "System.Collections.Generic.IEnumerable`1[System.Object]": { kind: "unrepairable", detail: "Object variable is bound to a property expecting IEnumerable — retype the variable to the correct concrete collection type (e.g., List(Of String), DataTable) based on the upstream activity output" },
+    "System.Collections.IEnumerable": { kind: "unrepairable", detail: "Object variable is bound to a property expecting IEnumerable — retype the variable to the correct concrete collection type (e.g., List(Of String), DataTable) based on the upstream activity output" },
   },
 };
 
@@ -153,6 +153,26 @@ export function getConversion(sourceType: string, targetType: string): Conversio
   const srcConversions = CONVERSION_MAP[src];
   if (srcConversions && srcConversions[tgt]) {
     return srcConversions[tgt];
+  }
+
+  if (src === "System.Object") {
+    const isConcreteCollection = tgt.includes("List") || tgt.includes("Array") ||
+      tgt === "System.Data.DataTable" || tgt.includes("Dictionary") ||
+      tgt.includes("Collection") || tgt.includes("Queue") || tgt.includes("Stack");
+    const isGenericInterface = tgt.includes("IEnumerable") || tgt.includes("ICollection") || tgt.includes("IList");
+
+    if (isConcreteCollection && !isGenericInterface) {
+      return {
+        kind: "variable-type-change",
+        detail: `Object variable should be retyped to ${tgt} — deterministic retype based on activity metadata`,
+      };
+    }
+    if (isGenericInterface) {
+      return {
+        kind: "unrepairable",
+        detail: `Object variable is bound to a property expecting ${tgt} — retype the variable to the correct concrete collection type based on the upstream activity output`,
+      };
+    }
   }
 
   return {
@@ -427,7 +447,7 @@ export function validateTypeCompatibility(
           if (conflictingTargets && conflictingTargets.size > 1) {
             violations.push({
               category: "accuracy",
-              severity: "warning",
+              severity: "error",
               check: "TYPE_MISMATCH",
               file: shortName,
               detail: `Line ${binding.line}: Variable "${binding.boundVariable}" is bound to multiple Out properties with conflicting types (${Array.from(conflictingTargets).join(", ")}). Manual resolution required.`,
@@ -520,33 +540,72 @@ export function validateTypeCompatibility(
         if (conversion.kind === "wrap" && conversion.wrapper) {
           pendingWraps.push({ binding, conversion, varInfo });
         } else if (conversion.kind === "variable-type-change") {
-          const targetTypeArg = clrTypeToXamlTypeArg(normalizeClrType(binding.expectedClrType));
-          const oldType = varInfo.type;
-          const oldClrType = varInfo.fullClrType;
-          patchedContent = changeVariableType(patchedContent, binding.boundVariable, targetTypeArg);
-          changed = true;
-          madeChangesThisPass = true;
+          const normalizedExpected = normalizeClrType(binding.expectedClrType);
+          const isObjectToConcreteCollection = varInfo.fullClrType === "System.Object" &&
+            !normalizedExpected.includes("IEnumerable") &&
+            !normalizedExpected.includes("ICollection") &&
+            !normalizedExpected.includes("IList") &&
+            (normalizedExpected.includes("List") || normalizedExpected.includes("Array") ||
+             normalizedExpected === "System.Data.DataTable" || normalizedExpected.includes("Dictionary") ||
+             normalizedExpected.includes("Collection"));
 
-          repairs.push({
-            file: shortName,
-            line: binding.line,
-            activity: binding.activityTag,
-            property: binding.propertyName,
-            expectedType: binding.expectedClrType,
-            actualType: oldClrType,
-            repairKind: "variable-type-change",
-            boundVariable: binding.boundVariable,
-            detail: `Changed variable "${binding.boundVariable}" type from ${oldType} to ${targetTypeArg} to match ${binding.activityTag}.${binding.propertyName} input type`,
-          });
+          if (varInfo.fullClrType === "System.Object" && !isObjectToConcreteCollection) {
+            repairs.push({
+              file: shortName,
+              line: binding.line,
+              activity: binding.activityTag,
+              property: binding.propertyName,
+              expectedType: binding.expectedClrType,
+              actualType: varInfo.fullClrType,
+              repairKind: "unrepairable",
+              boundVariable: binding.boundVariable,
+              detail: `Object variable "${binding.boundVariable}" cannot be retyped to generic interface ${binding.expectedClrType} — requires a concrete collection type`,
+            });
 
-          violations.push({
-            category: "accuracy",
-            severity: "warning",
-            check: "TYPE_MISMATCH",
-            file: shortName,
-            detail: `Line ${binding.line}: Auto-repaired — changed variable "${binding.boundVariable}" type from ${oldType} to ${targetTypeArg} to match ${binding.activityTag}.${binding.propertyName} (${binding.expectedClrType})`,
-          });
+            violations.push({
+              category: "accuracy",
+              severity: "error",
+              check: "OBJECT_TO_IENUMERABLE",
+              file: shortName,
+              detail: `Line ${binding.line}: Variable "${binding.boundVariable}" (System.Object) bound to ${binding.activityTag}.${binding.propertyName} (expects ${binding.expectedClrType}). Retype the variable to a concrete collection type.`,
+            });
+          } else {
+            const targetTypeArg = clrTypeToXamlTypeArg(normalizedExpected);
+            const oldType = varInfo.type;
+            const oldClrType = varInfo.fullClrType;
+            patchedContent = changeVariableType(patchedContent, binding.boundVariable, targetTypeArg);
+            changed = true;
+            madeChangesThisPass = true;
+
+            repairs.push({
+              file: shortName,
+              line: binding.line,
+              activity: binding.activityTag,
+              property: binding.propertyName,
+              expectedType: binding.expectedClrType,
+              actualType: oldClrType,
+              repairKind: "variable-type-change",
+              boundVariable: binding.boundVariable,
+              detail: `Changed variable "${binding.boundVariable}" type from ${oldType} to ${targetTypeArg} to match ${binding.activityTag}.${binding.propertyName} input type`,
+            });
+
+            violations.push({
+              category: "accuracy",
+              severity: "warning",
+              check: "TYPE_MISMATCH",
+              file: shortName,
+              detail: `Line ${binding.line}: Auto-repaired — changed variable "${binding.boundVariable}" type from ${oldType} to ${targetTypeArg} to match ${binding.activityTag}.${binding.propertyName} (${binding.expectedClrType})`,
+            });
+          }
         } else {
+          const isObjectToCollection = varInfo.fullClrType === "System.Object" &&
+            (normalizeClrType(binding.expectedClrType).includes("IEnumerable") ||
+             normalizeClrType(binding.expectedClrType).includes("ICollection") ||
+             normalizeClrType(binding.expectedClrType).includes("IList") ||
+             normalizeClrType(binding.expectedClrType).includes("List") ||
+             normalizeClrType(binding.expectedClrType).includes("Array") ||
+             normalizeClrType(binding.expectedClrType).includes("Collection"));
+
           repairs.push({
             file: shortName,
             line: binding.line,
@@ -561,8 +620,8 @@ export function validateTypeCompatibility(
 
           violations.push({
             category: "accuracy",
-            severity: "warning",
-            check: "TYPE_MISMATCH",
+            severity: isObjectToCollection ? "error" : "warning",
+            check: isObjectToCollection ? "OBJECT_TO_IENUMERABLE" : "TYPE_MISMATCH",
             file: shortName,
             detail: `Line ${binding.line}: Type mismatch — variable "${binding.boundVariable}" (${varInfo.fullClrType}) bound to ${binding.activityTag}.${binding.propertyName} (expects ${binding.expectedClrType}). ${conversion.detail}`,
           });
@@ -685,6 +744,29 @@ export function validateTypeCompatibility(
             const dictMatch = varInfo.type.match(/Dictionary\s*\(\s*Of\s+(\w+)\s*,\s*(\w+)\s*\)/i) || varInfo.type.match(/Dictionary<([^,]+),\s*([^>]+)>/i);
             if (!correctItemType && dictMatch) {
               correctItemType = `scg:KeyValuePair(${dictMatch[1].trim()}, ${dictMatch[2].trim()})`;
+            }
+          }
+        }
+      }
+
+      if (!correctItemType && simpleVarMatch && varRef) {
+        const alreadyReported = violations.some(v =>
+          v.check === "OBJECT_TO_IENUMERABLE" &&
+          v.file === shortName &&
+          v.detail.includes(`"${varRef}"`)
+        );
+        if (!alreadyReported) {
+          const varInfo = extractVariableDeclarations(patchedContent).find(v => v.name === varRef);
+          if (varInfo) {
+            const fullType = normalizeClrType(varInfo.type);
+            if (fullType === "System.Object") {
+              violations.push({
+                category: "accuracy",
+                severity: "error",
+                check: "OBJECT_TO_IENUMERABLE",
+                file: shortName,
+                detail: `Line ${feLine}: Variable "${varRef}" (System.Object) is bound to ForEach.Values which expects IEnumerable. Cannot determine concrete collection type — retype the variable to the correct collection type (e.g., List(Of String), DataTable) or fix the upstream activity that populates it.`,
+              });
             }
           }
         }

@@ -553,6 +553,41 @@ export function lintExpression(expression: string): LintResult {
     }
   }
 
+  if (testOutsideStrings(corrected, /\?\./)) {
+    const before = corrected;
+    corrected = replaceOutsideStrings(corrected, /\b([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\?\.([a-zA-Z_]\w*)/g,
+      (_match: string, obj: string, prop: string) => {
+        return `If(${obj} IsNot Nothing, ${obj}.${prop}, Nothing)`;
+      }
+    );
+    if (corrected !== before) {
+      issues.push({ code: "CSHARP_NULL_CONDITIONAL", message: "C# '?.' null-conditional operator converted to VB.NET 'If(obj IsNot Nothing, obj.Prop, Nothing)'", autoFixed: true });
+      wasModified = true;
+    }
+  }
+
+  {
+    const strippedForNarrowing = corrected.replace(/"(?:[^"\\]|\\.)*"/g, (m) => " ".repeat(m.length))
+      .replace(/&quot;[^&]*&quot;/g, (m) => " ".repeat(m.length));
+    const narrowingPatterns: Array<{ pattern: RegExp; fix: string }> = [
+      { pattern: /\bCInt\s*\(\s*([a-zA-Z_]\w*)\s*\)/g, fix: "CInt" },
+      { pattern: /\bCDbl\s*\(\s*([a-zA-Z_]\w*)\s*\)/g, fix: "CDbl" },
+      { pattern: /\bCDec\s*\(\s*([a-zA-Z_]\w*)\s*\)/g, fix: "CDec" },
+      { pattern: /\bCLng\s*\(\s*([a-zA-Z_]\w*)\s*\)/g, fix: "CLng" },
+      { pattern: /\bCSng\s*\(\s*([a-zA-Z_]\w*)\s*\)/g, fix: "CSng" },
+    ];
+    for (const np of narrowingPatterns) {
+      let nm;
+      while ((nm = np.pattern.exec(strippedForNarrowing)) !== null) {
+        const argName = nm[1];
+        const argIsCTypeWrapped = new RegExp(`\\bCType\\s*\\(\\s*${argName}\\b`).test(strippedForNarrowing);
+        if (!argIsCTypeWrapped) {
+          reportOnly("IMPLICIT_NARROWING", `Expression contains ${np.fix}(${argName}) which may fail under Option Strict On if "${argName}" is typed as Object — ensure the variable is correctly typed`);
+        }
+      }
+    }
+  }
+
   const exprWithoutStrings = corrected.replace(/&quot;[^&]*&quot;/g, (m) => " ".repeat(m.length)).replace(/"[^"]*"/g, (m) => " ".repeat(m.length));
   const openParens = (exprWithoutStrings.match(/\(/g) || []).length;
   const closeParens = (exprWithoutStrings.match(/\)/g) || []).length;
@@ -888,12 +923,13 @@ export function lintXamlExpressions(
       for (const varName of undeclaredVars) {
         violations.push({
           category: "accuracy",
-          severity: "warning",
-          check: "EXPRESSION_SYNTAX",
+          severity: "error",
+          check: "UNDECLARED_VARIABLE",
           file: loc.file,
-          detail: `Line ${loc.line}: Possible undeclared variable "${varName}" in expression: ${loc.expression.substring(0, 60)}${loc.expression.length > 60 ? "..." : ""}`,
+          detail: `Line ${loc.line}: Undeclared variable "${varName}" in expression: ${loc.expression.substring(0, 60)}${loc.expression.length > 60 ? "..." : ""} — variable is not declared in any <Variable> block in scope`,
         });
         totalIssues++;
+        unfixable++;
       }
     }
 
