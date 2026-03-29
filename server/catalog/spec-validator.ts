@@ -1,7 +1,8 @@
 import { catalogService, type CatalogProperty } from "./catalog-service";
 import type { StudioProfile } from "./metadata-service";
 import { metadataService } from "./metadata-service";
-import type { WorkflowSpec, WorkflowNode, ActivityNode } from "../workflow-spec-types";
+import type { WorkflowSpec, WorkflowNode, ActivityNode, VariableDeclaration, ForEachNode } from "../workflow-spec-types";
+import { sanitizeVariableName, isUnsafeVariableName } from "../workflow-tree-assembler";
 
 export interface SpecValidationIssue {
   severity: "error" | "warning" | "info";
@@ -341,6 +342,276 @@ function validateNode(
   return node;
 }
 
+function sanitizeVariableDeclarationsInSpec(
+  variables: VariableDeclaration[],
+  renameMap: Map<string, string>,
+  report: SpecValidationReport,
+): VariableDeclaration[] {
+  const seen = new Set<string>();
+  return variables.map(v => {
+    const reason = isUnsafeVariableName(v.name);
+    if (!reason) {
+      seen.add(v.name);
+      return v;
+    }
+    let safeName = sanitizeVariableName(v.name);
+    let counter = 2;
+    while (seen.has(safeName)) {
+      safeName = `${sanitizeVariableName(v.name)}_${counter}`;
+      counter++;
+    }
+    seen.add(safeName);
+    renameMap.set(v.name, safeName);
+    report.issues.push({
+      severity: "warning",
+      code: "UNSAFE_VARIABLE_NAME",
+      activityTemplate: "Variable",
+      activityDisplayName: v.name,
+      message: `Variable "${v.name}" ${reason} — auto-repaired to "${safeName}"`,
+      autoFixed: true,
+    });
+    console.log(`[SpecValidator] Auto-repaired variable name "${v.name}" → "${safeName}" (${reason})`);
+    return { ...v, name: safeName };
+  });
+}
+
+function replaceVarRefsInString(str: string, renameMap: Map<string, string>): string {
+  let result = str;
+  renameMap.forEach((newName, oldName) => {
+    if (oldName === newName) return;
+    const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    result = result.replace(new RegExp(`\\b${escaped}\\b`, "g"), newName);
+  });
+  return result;
+}
+
+function replaceVarRefsInValueIntent(intent: any, renameMap: Map<string, string>): any {
+  if (!intent || typeof intent !== "object") return intent;
+  if (intent.type === "variable" && typeof intent.name === "string") {
+    const newName = renameMap.get(intent.name);
+    if (newName) return { ...intent, name: newName };
+    return intent;
+  }
+  if (intent.type === "expression") {
+    let updated = { ...intent };
+    if (typeof intent.left === "string") updated.left = replaceVarRefsInString(intent.left, renameMap);
+    if (typeof intent.right === "string") updated.right = replaceVarRefsInString(intent.right, renameMap);
+    return updated;
+  }
+  if (intent.type === "url_with_params" && typeof intent.baseUrl === "string") {
+    return { ...intent, baseUrl: replaceVarRefsInString(intent.baseUrl, renameMap) };
+  }
+  return intent;
+}
+
+function replaceVarRefsInPropertyValue(value: any, renameMap: Map<string, string>): any {
+  if (typeof value === "string") return replaceVarRefsInString(value, renameMap);
+  if (typeof value === "object" && value !== null && "type" in value) {
+    return replaceVarRefsInValueIntent(value, renameMap);
+  }
+  return value;
+}
+
+function replaceVarRefsInCondition(condition: string | any, renameMap: Map<string, string>): string | any {
+  if (typeof condition === "string") return replaceVarRefsInString(condition, renameMap);
+  return replaceVarRefsInValueIntent(condition, renameMap);
+}
+
+function sanitizeVarRefsInNode(node: WorkflowNode, renameMap: Map<string, string>, report: SpecValidationReport): WorkflowNode {
+  if (renameMap.size === 0) return node;
+
+  if (node.kind === "activity") {
+    const newProps: Record<string, any> = {};
+    for (const [k, v] of Object.entries(node.properties)) {
+      newProps[k] = replaceVarRefsInPropertyValue(v, renameMap);
+    }
+    const newOutputVar = node.outputVar ? replaceVarRefsInString(node.outputVar, renameMap) : node.outputVar;
+    return { ...node, properties: newProps, outputVar: newOutputVar };
+  }
+
+  if (node.kind === "sequence") {
+    const localVars = node.variables
+      ? sanitizeVariableDeclarationsInSpec(node.variables, renameMap, report)
+      : node.variables;
+    return {
+      ...node,
+      variables: localVars,
+      children: node.children.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+    };
+  }
+
+  if (node.kind === "tryCatch") {
+    return {
+      ...node,
+      tryChildren: node.tryChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+      catchChildren: node.catchChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+      finallyChildren: node.finallyChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+    };
+  }
+
+  if (node.kind === "if") {
+    return {
+      ...node,
+      condition: replaceVarRefsInCondition(node.condition, renameMap),
+      thenChildren: node.thenChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+      elseChildren: node.elseChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+    };
+  }
+
+  if (node.kind === "while") {
+    return {
+      ...node,
+      condition: replaceVarRefsInCondition(node.condition, renameMap),
+      bodyChildren: node.bodyChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+    };
+  }
+
+  if (node.kind === "forEach") {
+    return {
+      ...node,
+      valuesExpression: replaceVarRefsInString(node.valuesExpression, renameMap),
+      iteratorName: sanitizeVariableName(node.iteratorName || "item"),
+      bodyChildren: node.bodyChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+    };
+  }
+
+  if (node.kind === "retryScope") {
+    return {
+      ...node,
+      bodyChildren: node.bodyChildren.map(c => sanitizeVarRefsInNode(c, renameMap, report)),
+    };
+  }
+
+  return node;
+}
+
+const SPEC_TYPE_TO_XAML: Record<string, string> = {
+  "String": "x:String",
+  "string": "x:String",
+  "Int32": "x:Int32",
+  "int32": "x:Int32",
+  "Integer": "x:Int32",
+  "integer": "x:Int32",
+  "Int64": "x:Int64",
+  "int64": "x:Int64",
+  "Boolean": "x:Boolean",
+  "boolean": "x:Boolean",
+  "Double": "x:Double",
+  "double": "x:Double",
+  "Decimal": "x:Decimal",
+  "decimal": "x:Decimal",
+  "Object": "x:Object",
+  "object": "x:Object",
+  "DataRow": "scg2:DataRow",
+  "datarow": "scg2:DataRow",
+  "DataTable": "scg2:DataTable",
+  "datatable": "scg2:DataTable",
+  "DateTime": "s:DateTime",
+  "datetime": "s:DateTime",
+  "TimeSpan": "s:TimeSpan",
+  "timespan": "s:TimeSpan",
+};
+
+function toXamlType(rawType: string): string {
+  if (SPEC_TYPE_TO_XAML[rawType]) return SPEC_TYPE_TO_XAML[rawType];
+  if (rawType.includes(":")) return rawType;
+  return SPEC_TYPE_TO_XAML[rawType.toLowerCase()] || rawType;
+}
+
+function inferCorrectForEachItemType(node: ForEachNode, allVariables: VariableDeclaration[]): string | null {
+  const expr = node.valuesExpression.trim().replace(/^\[|\]$/g, "");
+  if (/\.Rows$/i.test(expr) || /\.AsEnumerable\(\)$/i.test(expr)) {
+    return "scg2:DataRow";
+  }
+  const simpleVar = expr.match(/^(\w+)$/);
+  if (simpleVar) {
+    const decl = allVariables.find(v => v.name === simpleVar[1]);
+    if (decl) {
+      const lower = decl.type.toLowerCase();
+      if (lower.includes("datatable")) return "scg2:DataRow";
+      const listMatch = decl.type.match(/List\s*\(\s*Of\s+(\w+)\s*\)/i) || decl.type.match(/List<([^>]+)>/i);
+      if (listMatch) return toXamlType(listMatch[1].trim());
+      const arrayMatch = decl.type.match(/Array\s*\(\s*Of\s+(\w+)\s*\)/i) || decl.type.match(/(\w+)\[\]/);
+      if (arrayMatch) return toXamlType(arrayMatch[1].trim());
+      const dictMatch = decl.type.match(/Dictionary\s*\(\s*Of\s+(\w+)\s*,\s*(\w+)\s*\)/i) || decl.type.match(/Dictionary<([^,]+),\s*([^>]+)>/i);
+      if (dictMatch) return `scg:KeyValuePair(${toXamlType(dictMatch[1].trim())}, ${toXamlType(dictMatch[2].trim())})`;
+    }
+  }
+  return null;
+}
+
+function correctForEachTypesInNode(node: WorkflowNode, allVariables: VariableDeclaration[], report: SpecValidationReport): WorkflowNode {
+  if (node.kind === "forEach") {
+    const inferred = inferCorrectForEachItemType(node, allVariables);
+    let correctedNode = node;
+    if (inferred && node.itemType !== inferred) {
+      report.issues.push({
+        severity: "info",
+        code: "FOREACH_TYPE_INFERRED",
+        activityTemplate: "ForEach",
+        activityDisplayName: node.displayName,
+        message: `ForEach itemType corrected from "${node.itemType}" to "${inferred}" based on valuesExpression "${node.valuesExpression}"`,
+        autoFixed: true,
+      });
+      correctedNode = { ...node, itemType: inferred };
+    }
+
+    const expr = node.valuesExpression.trim().replace(/^\[|\]$/g, "");
+    const rowsMatch = expr.match(/^(\w+)\.Rows$/i) || expr.match(/^(\w+)\.AsEnumerable\(\)$/i);
+    if (rowsMatch) {
+      const varName = rowsMatch[1];
+      const decl = allVariables.find(v => v.name === varName);
+      if (decl && !decl.type.toLowerCase().includes("datatable")) {
+        report.issues.push({
+          severity: "warning",
+          code: "VARIABLE_TYPE_MISMATCH",
+          activityTemplate: "Variable",
+          activityDisplayName: varName,
+          message: `Variable "${varName}" typed as "${decl.type}" but expression "${node.valuesExpression}" accesses DataTable members — corrected to DataTable`,
+          autoFixed: true,
+        });
+        decl.type = "DataTable";
+      }
+    }
+
+    return {
+      ...correctedNode,
+      bodyChildren: correctedNode.bodyChildren.map(c => correctForEachTypesInNode(c, allVariables, report)),
+    };
+  }
+
+  if (node.kind === "sequence") {
+    const localVars = [...allVariables, ...(node.variables || [])];
+    return {
+      ...node,
+      children: node.children.map(c => correctForEachTypesInNode(c, localVars, report)),
+    };
+  }
+
+  if (node.kind === "tryCatch") {
+    return {
+      ...node,
+      tryChildren: node.tryChildren.map(c => correctForEachTypesInNode(c, allVariables, report)),
+      catchChildren: node.catchChildren.map(c => correctForEachTypesInNode(c, allVariables, report)),
+      finallyChildren: node.finallyChildren.map(c => correctForEachTypesInNode(c, allVariables, report)),
+    };
+  }
+
+  if (node.kind === "if") {
+    return {
+      ...node,
+      thenChildren: node.thenChildren.map(c => correctForEachTypesInNode(c, allVariables, report)),
+      elseChildren: node.elseChildren.map(c => correctForEachTypesInNode(c, allVariables, report)),
+    };
+  }
+
+  if (node.kind === "while" || node.kind === "retryScope") {
+    return { ...node, bodyChildren: node.bodyChildren.map(c => correctForEachTypesInNode(c, allVariables, report)) };
+  }
+
+  return node;
+}
+
 export function validateWorkflowSpec(
   spec: WorkflowSpec,
   studioProfile?: StudioProfile | null,
@@ -352,14 +623,34 @@ export function validateWorkflowSpec(
   const report = createEmptyReport();
   const effectiveProfile = studioProfile ?? catalogService.getStudioProfile();
 
-  const validatedChildren = spec.rootSequence.children.map(
+  const renameMap = new Map<string, string>();
+  const sanitizedTopVars = sanitizeVariableDeclarationsInSpec(spec.variables || [], renameMap, report);
+  const sanitizedRootVars = spec.rootSequence.variables
+    ? sanitizeVariableDeclarationsInSpec(spec.rootSequence.variables, renameMap, report)
+    : spec.rootSequence.variables;
+
+  let sanitizedChildren = spec.rootSequence.children.map(
+    child => sanitizeVarRefsInNode(child, renameMap, report),
+  );
+
+  const allVarsForTypeCheck: VariableDeclaration[] = [
+    ...sanitizedTopVars,
+    ...(sanitizedRootVars || []),
+  ];
+  sanitizedChildren = sanitizedChildren.map(
+    child => correctForEachTypesInNode(child, allVarsForTypeCheck, report),
+  );
+
+  const validatedChildren = sanitizedChildren.map(
     child => validateNode(child, report, effectiveProfile),
   );
 
   const validatedSpec: WorkflowSpec = {
     ...spec,
+    variables: sanitizedTopVars,
     rootSequence: {
       ...spec.rootSequence,
+      variables: sanitizedRootVars,
       children: validatedChildren,
     },
   };

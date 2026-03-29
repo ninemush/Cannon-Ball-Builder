@@ -1074,45 +1074,59 @@ function assembleWhileNode(
     `</While>`;
 }
 
+function inferCollectionItemType(declaredType: string): string | null {
+  const lower = declaredType.toLowerCase();
+  if (lower.includes("datatable")) return "scg2:DataRow";
+
+  const listMatch = declaredType.match(/List\s*\(\s*Of\s+(\w+)\s*\)/i)
+    || declaredType.match(/List<([^>]+)>/i)
+    || declaredType.match(/System\.Collections\.Generic\.List.*?<([^>]+)>/i);
+  if (listMatch) {
+    return mapClrType(listMatch[1].trim());
+  }
+
+  const arrayMatch = declaredType.match(/Array\s*\(\s*Of\s+(\w+)\s*\)/i)
+    || declaredType.match(/(\w+)\[\]/);
+  if (arrayMatch) {
+    return mapClrType(arrayMatch[1].trim());
+  }
+
+  const dictMatch = declaredType.match(/Dictionary\s*\(\s*Of\s+(\w+)\s*,\s*(\w+)\s*\)/i)
+    || declaredType.match(/Dictionary<([^,]+),\s*([^>]+)>/i);
+  if (dictMatch) {
+    const keyType = mapClrType(dictMatch[1].trim());
+    const valType = mapClrType(dictMatch[2].trim());
+    return `scg:KeyValuePair(${keyType}, ${valType})`;
+  }
+
+  return null;
+}
+
 function inferForEachItemType(itemType: string, valuesExpression: string, allVariables: VariableDeclaration[]): string {
-  if (itemType && itemType !== "x:Object" && itemType !== "x:String") return itemType;
   const expr = valuesExpression.trim().replace(/^\[|\]$/g, "");
-  if (/\bdt_\w*\.Rows\b/i.test(expr) || /\.AsEnumerable\(\)/i.test(expr) || /\bDataTable\b.*\.Rows\b/i.test(expr)) {
+
+  const isDataTableIteration = /\bdt_\w*\.Rows\b/i.test(expr) || /\.AsEnumerable\(\)/i.test(expr)
+    || /\bDataTable\b.*\.Rows\b/i.test(expr) || /^(\w+)\.Rows$/i.test(expr);
+
+  if (isDataTableIteration) {
     return "scg2:DataRow";
   }
-  const rowsMatch = expr.match(/^(\w+)\.Rows$/i);
-  if (rowsMatch) {
-    const varName = rowsMatch[1];
-    const decl = allVariables.find(v => v.name === varName);
-    if (decl) {
-      const mappedType = mapClrType(decl.type).toLowerCase();
-      if (mappedType.includes("datatable")) {
-        return "scg2:DataRow";
-      }
-    }
-  }
-  const asEnumMatch = expr.match(/^(\w+)\.AsEnumerable\(\)$/i);
-  if (asEnumMatch) {
-    const varName = asEnumMatch[1];
-    const decl = allVariables.find(v => v.name === varName);
-    if (decl) {
-      const mappedType = mapClrType(decl.type).toLowerCase();
-      if (mappedType.includes("datatable")) {
-        return "scg2:DataRow";
-      }
-    }
-  }
+
+  let expressionInferred: string | null = null;
   const simpleVarMatch = expr.match(/^(\w+)$/);
   if (simpleVarMatch) {
     const varName = simpleVarMatch[1];
     const decl = allVariables.find(v => v.name === varName);
     if (decl) {
-      const mappedType = mapClrType(decl.type).toLowerCase();
-      if (mappedType.includes("datatable")) {
-        return "scg2:DataRow";
-      }
+      expressionInferred = inferCollectionItemType(decl.type);
     }
   }
+
+  if (expressionInferred) {
+    return expressionInferred;
+  }
+
+  if (itemType && itemType !== "x:Object") return itemType;
   return itemType || "x:Object";
 }
 

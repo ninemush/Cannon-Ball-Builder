@@ -574,63 +574,151 @@ export function validateTypeCompatibility(
       if (!madeChangesThisPass) break;
     }
 
-    const forEachTagPattern = /<ForEach\s[^>]*>/g;
-    let feMatch;
-    while ((feMatch = forEachTagPattern.exec(patchedContent)) !== null) {
-      const feTag = feMatch[0];
+    const forEachBlockPattern = /<ForEach\s[^>]*>[\s\S]*?<\/ForEach>/g;
+    let feBlockMatch;
+    while ((feBlockMatch = forEachBlockPattern.exec(patchedContent)) !== null) {
+      const feBlock = feBlockMatch[0];
+      const feBlockStart = feBlockMatch.index;
+      const feTagMatch = feBlock.match(/<ForEach\s[^>]*>/);
+      if (!feTagMatch) continue;
+      const feTag = feTagMatch[0];
       const typeArgMatch = feTag.match(/x:TypeArguments="([^"]+)"/);
       const valuesMatch = feTag.match(/Values="\[([^\]]*)\]"/);
       if (!typeArgMatch || !valuesMatch) continue;
       const feTypeArg = typeArgMatch[1];
       const feValues = valuesMatch[1];
-      const feLine = patchedContent.substring(0, feMatch.index).split("\n").length;
+      const feLine = patchedContent.substring(0, feBlockStart).split("\n").length;
 
       const rowsMatch = feValues.match(/^(\w+)\.Rows$/i);
       const asEnumMatch = feValues.match(/^(\w+)\.AsEnumerable\(\)$/i);
-      const varRef = rowsMatch?.[1] || asEnumMatch?.[1];
+      const simpleVarMatch = feValues.match(/^(\w+)$/);
+      const varRef = rowsMatch?.[1] || asEnumMatch?.[1] || simpleVarMatch?.[1];
 
-      let shouldBeDataRow = false;
-      if (varRef) {
-        const varInfo = extractVariableDeclarations(patchedContent).find(v => v.name === varRef);
-        if (varInfo && normalizeClrType(varInfo.type) === "System.Data.DataTable") {
-          shouldBeDataRow = true;
+      let correctItemType: string | null = null;
+
+      if (rowsMatch || asEnumMatch) {
+        correctItemType = "scg2:DataRow";
+        if (varRef) {
+          const varInfo = extractVariableDeclarations(patchedContent).find(v => v.name === varRef);
+          if (varInfo && normalizeClrType(varInfo.type) !== "System.Data.DataTable") {
+            const escapedVarType = varInfo.type.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            patchedContent = patchedContent.replace(
+              new RegExp(`(<Variable\\s+x:TypeArguments=")${escapedVarType}("\\s+Name="${varRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}")`),
+              `$1scg2:DataTable$2`
+            );
+            patchedContent = patchedContent.replace(
+              new RegExp(`(<Variable\\s+Name="${varRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s+x:TypeArguments=")${escapedVarType}(")`),
+              `$1scg2:DataTable$2`
+            );
+            changed = true;
+            violations.push({
+              category: "accuracy",
+              severity: "warning",
+              check: "FOREACH_TYPE_MISMATCH",
+              file: shortName,
+              detail: `Line ${feLine}: Auto-repaired — Variable "${varRef}" type changed from "${varInfo.type}" to "scg2:DataTable" because expression "${feValues}" accesses DataTable members`,
+            });
+          }
         }
-      }
-
-      if (!shouldBeDataRow) {
+      } else if (!rowsMatch && !asEnumMatch) {
         if (/\bdt_\w*\.Rows\b/i.test(feValues) || /\.AsEnumerable\(\)/i.test(feValues) || /\bDataTable\b.*\.Rows\b/i.test(feValues)) {
-          shouldBeDataRow = true;
+          correctItemType = "scg2:DataRow";
         }
       }
 
-      if (shouldBeDataRow && normalizeClrType(feTypeArg) !== "System.Data.DataRow") {
-        const newTag = feTag.replace(
-          `x:TypeArguments="${feTypeArg}"`,
-          `x:TypeArguments="scg2:DataRow"`
-        );
-        patchedContent = patchedContent.substring(0, feMatch.index) + newTag + patchedContent.substring(feMatch.index + feTag.length);
+      if (!correctItemType && simpleVarMatch && varRef) {
+        const varInfo = extractVariableDeclarations(patchedContent).find(v => v.name === varRef);
+        if (varInfo) {
+          const fullType = normalizeClrType(varInfo.type);
+          if (fullType === "System.Data.DataTable") {
+            correctItemType = "scg2:DataRow";
+          } else {
+            const listMatch = varInfo.type.match(/List\s*\(\s*Of\s+(\w+)\s*\)/i) || varInfo.type.match(/List<([^>]+)>/i);
+            if (listMatch) {
+              const innerType = listMatch[1].trim();
+              const mapped = CLR_SHORT_TO_FULL[innerType] || CLR_SHORT_TO_FULL[`x:${innerType}`];
+              if (mapped === "System.String") correctItemType = "x:String";
+              else if (mapped === "System.Int32") correctItemType = "x:Int32";
+              else if (mapped === "System.Object") correctItemType = "x:Object";
+              else correctItemType = innerType;
+            }
+            const arrayMatch = varInfo.type.match(/Array\s*\(\s*Of\s+(\w+)\s*\)/i) || varInfo.type.match(/(\w+)\[\]/);
+            if (!correctItemType && arrayMatch) {
+              const innerType = arrayMatch[1].trim();
+              const mapped = CLR_SHORT_TO_FULL[innerType] || CLR_SHORT_TO_FULL[`x:${innerType}`];
+              if (mapped === "System.String") correctItemType = "x:String";
+              else if (mapped === "System.Int32") correctItemType = "x:Int32";
+              else if (mapped === "System.Object") correctItemType = "x:Object";
+              else correctItemType = innerType;
+            }
+            const dictMatch = varInfo.type.match(/Dictionary\s*\(\s*Of\s+(\w+)\s*,\s*(\w+)\s*\)/i) || varInfo.type.match(/Dictionary<([^,]+),\s*([^>]+)>/i);
+            if (!correctItemType && dictMatch) {
+              correctItemType = `scg:KeyValuePair(${dictMatch[1].trim()}, ${dictMatch[2].trim()})`;
+            }
+          }
+        }
+      }
 
-        const actActionPattern = new RegExp(
-          `<ActivityAction\\s+x:TypeArguments="${feTypeArg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
-          "g"
-        );
-        patchedContent = patchedContent.replace(actActionPattern, `<ActivityAction x:TypeArguments="scg2:DataRow"`);
+      if (!correctItemType) continue;
 
-        const delegatePattern = new RegExp(
-          `<DelegateInArgument\\s+x:TypeArguments="${feTypeArg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
-          "g"
-        );
-        patchedContent = patchedContent.replace(delegatePattern, `<DelegateInArgument x:TypeArguments="scg2:DataRow"`);
+      const actActionTypeMatch = feBlock.match(/<ActivityAction\s+x:TypeArguments="([^"]+)"/);
+      const delegateTypeMatch = feBlock.match(/<DelegateInArgument\s+x:TypeArguments="([^"]+)"/);
+      const actActionType = actActionTypeMatch?.[1] || null;
+      const delegateType = delegateTypeMatch?.[1] || null;
 
-        changed = true;
+      const feNorm = normalizeClrType(feTypeArg);
+      const correctNorm = normalizeClrType(correctItemType);
+      const actNorm = actActionType ? normalizeClrType(actActionType) : null;
+      const delNorm = delegateType ? normalizeClrType(delegateType) : null;
 
-        violations.push({
-          category: "accuracy",
-          severity: "warning",
-          check: "FOREACH_TYPE_MISMATCH",
-          file: shortName,
-          detail: `Line ${feLine}: Auto-repaired — ForEach TypeArguments changed from "${feTypeArg}" to "scg2:DataRow" because Values expression "${feValues}" iterates over DataTable rows`,
-        });
+      const feMismatch = feNorm !== correctNorm;
+      const actMismatch = actNorm !== null && actNorm !== correctNorm;
+      const delMismatch = delNorm !== null && delNorm !== correctNorm;
+
+      if (feMismatch || actMismatch || delMismatch) {
+        let repairedBlock = feBlock;
+
+        if (feMismatch) {
+          repairedBlock = repairedBlock.replace(
+            `<ForEach ${feTag.slice(9)}`,
+            `<ForEach ${feTag.slice(9)}`.replace(
+              `x:TypeArguments="${feTypeArg}"`,
+              `x:TypeArguments="${correctItemType}"`
+            )
+          );
+        }
+
+        if (actActionType && (actMismatch || feMismatch)) {
+          repairedBlock = repairedBlock.replace(
+            new RegExp(`<ActivityAction\\s+x:TypeArguments="${actActionType.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`),
+            `<ActivityAction x:TypeArguments="${correctItemType}"`
+          );
+        }
+
+        if (delegateType && (delMismatch || feMismatch)) {
+          repairedBlock = repairedBlock.replace(
+            new RegExp(`<DelegateInArgument\\s+x:TypeArguments="${delegateType.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`),
+            `<DelegateInArgument x:TypeArguments="${correctItemType}"`
+          );
+        }
+
+        if (repairedBlock !== feBlock) {
+          patchedContent = patchedContent.substring(0, feBlockStart) + repairedBlock + patchedContent.substring(feBlockStart + feBlock.length);
+          changed = true;
+
+          const repairedParts: string[] = [];
+          if (feMismatch) repairedParts.push(`ForEach "${feTypeArg}"`);
+          if (actMismatch) repairedParts.push(`ActivityAction "${actActionType}"`);
+          if (delMismatch) repairedParts.push(`DelegateInArgument "${delegateType}"`);
+
+          violations.push({
+            category: "accuracy",
+            severity: "warning",
+            check: "FOREACH_TYPE_MISMATCH",
+            file: shortName,
+            detail: `Line ${feLine}: Auto-repaired — coordinated type repair to "${correctItemType}" (changed: ${repairedParts.join(", ")}) because Values expression "${feValues}" iterates over a typed collection`,
+          });
+        }
       }
     }
 

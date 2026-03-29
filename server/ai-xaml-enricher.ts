@@ -103,10 +103,12 @@ Variables must be declared inside the nearest enclosing Sequence.Variables block
 Variable names must be context-specific (str_CustomerEmail not str_Email, dt_InvoiceData not dt_Data).
 
 PROHIBITED variable names — these are property accesses, NOT variable declarations:
-  ✗ dt_Constants.Rows  → use dt_ConstantsRows or iterate with ForEach
-  ✗ dt_Settings.Rows   → use dt_SettingsRows or iterate with ForEach
+  NEVER declare variables with dots — \`dt_Constants.Rows\` is a runtime property access on a DataTable variable, not a variable name. Use \`dt_Constants\` as the variable and \`.Rows\` as a property access in expressions.
+  ✗ dt_Constants.Rows  → use dt_Constants as variable, access .Rows in expressions
+  ✗ dt_Settings.Rows   → use dt_Settings as variable, access .Rows in expressions
   ✗ obj_Result.Value    → use obj_ResultValue
-  ✗ any name containing a dot (.) — dots indicate property access in VB.NET, not valid variable identifiers`;
+  ✗ any name containing a dot (.) — dots indicate property access in VB.NET, not valid variable identifiers
+  ✗ names with spaces, leading digits, or VB.NET reserved words are also invalid`;
 
 const SECTION_4_OUTPUT = `=== SECTION 4: WORKFLOW SPECIFICATION ===
 OUTPUT FORMAT — respond with ONLY valid JSON matching this schema.
