@@ -372,6 +372,129 @@ function assignDecisionHandles(
   }
 }
 
+function segmentIntersectsBox(
+  x1: number, y1: number, x2: number, y2: number,
+  bx: number, by: number, bw: number, bh: number,
+  margin: number = 10
+): boolean {
+  const left = bx - margin;
+  const right = bx + bw + margin;
+  const top = by - margin;
+  const bottom = by + bh + margin;
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+  if (maxX < left || minX > right || maxY < top || minY > bottom) return false;
+  if (x1 === x2) return x1 >= left && x1 <= right && !(minY >= bottom || maxY <= top);
+  if (y1 === y2) return y1 >= top && y1 <= bottom && !(minX >= right || maxX <= left);
+  const slope = (y2 - y1) / (x2 - x1);
+  const yAtLeft = y1 + slope * (left - x1);
+  const yAtRight = y1 + slope * (right - x1);
+  return (yAtLeft >= top && yAtLeft <= bottom) || (yAtRight >= top && yAtRight <= bottom);
+}
+
+function findMinClearanceX(
+  obstacleNodes: LayoutNode[],
+  sx: number, sy: number, tx: number, ty: number,
+  side: "left" | "right"
+): number {
+  const yMin = Math.min(sy, ty);
+  const yMax = Math.max(sy, ty);
+  const margin = 20;
+  const relevant = obstacleNodes.filter(n =>
+    n.y + n.height > yMin - margin && n.y < yMax + margin
+  );
+  if (relevant.length === 0) {
+    return side === "left" ? Math.min(sx, tx) - margin : Math.max(sx, tx) + margin;
+  }
+  if (side === "left") {
+    const minX = Math.min(...relevant.map(n => n.x));
+    return minX - margin;
+  }
+  const maxX = Math.max(...relevant.map(n => n.x + n.width));
+  return maxX + margin;
+}
+
+function computeMinElbowRoute(
+  sx: number, sy: number, tx: number, ty: number,
+  obstacleNodes: LayoutNode[],
+  exitDirection?: "left" | "right" | "bottom"
+): { x: number; y: number }[] {
+  const dx = Math.abs(tx - sx);
+  const isAligned = dx < 5;
+
+  function segHitsObstacle(x1: number, y1: number, x2: number, y2: number): boolean {
+    return obstacleNodes.some(obs =>
+      segmentIntersectsBox(x1, y1, x2, y2, obs.x, obs.y, obs.width, obs.height)
+    );
+  }
+
+  if (exitDirection === "left" || exitDirection === "right") {
+    const lPath = [
+      { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
+    ];
+    if (!segHitsObstacle(sx, sy, tx, sy) && !segHitsObstacle(tx, sy, tx, ty)) return lPath;
+
+    const midY = (sy + ty) / 2;
+    const zPath = [
+      { x: sx, y: sy }, { x: sx, y: midY },
+      { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+    if (!segHitsObstacle(sx, sy, sx, midY) && !segHitsObstacle(sx, midY, tx, midY) && !segHitsObstacle(tx, midY, tx, ty)) return zPath;
+
+    const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, exitDirection);
+    return [
+      { x: sx, y: sy }, { x: detourX, y: sy },
+      { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+  }
+
+  if (isAligned) {
+    if (!segHitsObstacle(sx, sy, sx, ty)) {
+      return [{ x: sx, y: sy }, { x: sx, y: ty }];
+    }
+    let bestDetourX = sx;
+    let bestClearance = 0;
+    for (const obs of obstacleNodes) {
+      if (!segmentIntersectsBox(sx, sy, sx, ty, obs.x, obs.y, obs.width, obs.height)) continue;
+      const leftX = obs.x - 20;
+      const rightX = obs.x + obs.width + 20;
+      const leftDist = Math.abs(sx - leftX);
+      const rightDist = Math.abs(sx - rightX);
+      const chosenX = leftDist <= rightDist ? leftX : rightX;
+      if (Math.abs(chosenX - sx) > bestClearance) {
+        bestDetourX = chosenX;
+        bestClearance = Math.abs(chosenX - sx);
+      }
+    }
+    const midY = (sy + ty) / 2;
+    return [
+      { x: sx, y: sy }, { x: bestDetourX, y: sy },
+      { x: bestDetourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+  }
+
+  const lPath = [
+    { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
+  ];
+  if (!segHitsObstacle(sx, sy, tx, sy) && !segHitsObstacle(tx, sy, tx, ty)) return lPath;
+
+  const midY = (sy + ty) / 2;
+  const zPath = [
+    { x: sx, y: sy }, { x: sx, y: midY },
+    { x: tx, y: midY }, { x: tx, y: ty }
+  ];
+  if (!segHitsObstacle(sx, sy, sx, midY) && !segHitsObstacle(sx, midY, tx, midY) && !segHitsObstacle(tx, midY, tx, ty)) return zPath;
+
+  const preferRight = tx > sx;
+  const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, preferRight ? "right" : "left");
+  return [
+    { x: sx, y: sy }, { x: detourX, y: sy },
+    { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+  ];
+}
+
 function computeEdgePoints(
   srcNode: LayoutNode,
   tgtNode: LayoutNode,
@@ -385,115 +508,30 @@ function computeEdgePoints(
   const cy = srcNode.y + srcNode.height / 2;
   const tx = tgtNode.x + tgtNode.width / 2;
   const ty = tgtNode.y;
-
-  if (!isDecisionSource) {
-    const sx = cx;
-    const sy = srcNode.y + srcNode.height;
-
-    if (ty < sy) {
-      const goRight = tx > cx;
-      const allEdges = allNodes.map(n => ({
-        left: n.x,
-        right: n.x + n.width,
-      }));
-      const maxRight = Math.max(...allEdges.map(e => e.right));
-      const minLeft = Math.min(...allEdges.map(e => e.left));
-      const routeX = goRight
-        ? maxRight + 40
-        : minLeft - 40;
-      return [
-        { x: sx, y: sy },
-        { x: sx, y: sy + 20 },
-        { x: routeX, y: sy + 20 },
-        { x: routeX, y: ty - 20 },
-        { x: tx, y: ty - 20 },
-        { x: tx, y: ty },
-      ];
-    }
-
-    if (Math.abs(sx - tx) < 8) {
-      return [{ x: sx, y: sy }, { x: tx, y: ty }];
-    }
-
-    const midY = sy + (ty - sy) * 0.5;
-    return [
-      { x: sx, y: sy },
-      { x: sx, y: midY },
-      { x: tx, y: midY },
-      { x: tx, y: ty },
-    ];
-  }
-
   const halfDiamond = cfg.decisionSize / 2;
+  const obstacleNodes = allNodes.filter(n => n.id !== srcNode.id && n.id !== tgtNode.id);
 
-  if (sourceHandle === "left") {
+  if (isDecisionSource && sourceHandle === "left") {
     const sx = cx - halfDiamond;
     const sy = cy;
-
-    const targetLeftEdge = tgtNode.x;
-    const routeX = Math.min(sx - 30, targetLeftEdge - 20);
-
-    const midY = sy + (ty - sy) * 0.4;
-
-    if (ty <= cy) {
-      return [
-        { x: sx, y: sy },
-        { x: routeX, y: sy },
-        { x: routeX, y: ty - 20 },
-        { x: tx, y: ty - 20 },
-        { x: tx, y: ty },
-      ];
-    }
-
-    return [
-      { x: sx, y: sy },
-      { x: routeX, y: sy },
-      { x: routeX, y: midY },
-      { x: tx, y: midY },
-      { x: tx, y: ty },
-    ];
+    return computeMinElbowRoute(sx, sy, tx, ty, obstacleNodes, "left");
   }
 
-  if (sourceHandle === "right") {
+  if (isDecisionSource && sourceHandle === "right") {
     const sx = cx + halfDiamond;
     const sy = cy;
+    return computeMinElbowRoute(sx, sy, tx, ty, obstacleNodes, "right");
+  }
 
-    const targetRightEdge = tgtNode.x + tgtNode.width;
-    const routeX = Math.max(sx + 30, targetRightEdge + 20);
-
-    const midY = sy + (ty - sy) * 0.4;
-
-    if (ty <= cy) {
-      return [
-        { x: sx, y: sy },
-        { x: routeX, y: sy },
-        { x: routeX, y: ty - 20 },
-        { x: tx, y: ty - 20 },
-        { x: tx, y: ty },
-      ];
-    }
-
-    return [
-      { x: sx, y: sy },
-      { x: routeX, y: sy },
-      { x: routeX, y: midY },
-      { x: tx, y: midY },
-      { x: tx, y: ty },
-    ];
+  if (isDecisionSource) {
+    const sx = cx;
+    const sy = cy + halfDiamond;
+    return computeMinElbowRoute(sx, sy, tx, ty, obstacleNodes, "bottom");
   }
 
   const sx = cx;
-  const sy = cy + halfDiamond;
-  if (Math.abs(sx - tx) < 8) {
-    return [{ x: sx, y: sy }, { x: tx, y: ty }];
-  }
-  const midY = sy + (ty - sy) * 0.5;
-  return [
-    { x: sx, y: sy },
-    { x: sx, y: midY },
-    { x: tx, y: midY },
-    { x: tx, y: ty },
-  ];
+  const sy = srcNode.y + srcNode.height;
+  return computeMinElbowRoute(sx, sy, tx, ty, obstacleNodes, "bottom");
 }
 
 function renderEdgePath(points: { x: number; y: number }[], r: number): string {

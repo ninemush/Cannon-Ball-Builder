@@ -1459,17 +1459,34 @@ export function registerDocumentRoutes(app: Express): void {
           try {
             const mapImage = await renderProcessMapImage(nodes, edges, viewType);
             if (mapImage) {
-              docChildren.push(new Paragraph({
-                children: [
-                  new ImageRun({
-                    data: mapImage.buffer,
-                    transformation: { width: mapImage.width, height: mapImage.height },
-                    type: "png",
-                  }),
-                ],
-                spacing: { before: 100, after: 200 },
-                alignment: AlignmentType.CENTER,
-              }));
+              if (mapImage.pages && mapImage.pages.length > 1) {
+                for (let pageIdx = 0; pageIdx < mapImage.pages.length; pageIdx++) {
+                  const page = mapImage.pages[pageIdx];
+                  docChildren.push(new Paragraph({
+                    children: [
+                      new ImageRun({
+                        data: page.buffer,
+                        transformation: { width: page.width, height: page.height },
+                        type: "png",
+                      }),
+                    ],
+                    spacing: { before: pageIdx === 0 ? 100 : 50, after: 50 },
+                    alignment: AlignmentType.CENTER,
+                  }));
+                }
+              } else {
+                docChildren.push(new Paragraph({
+                  children: [
+                    new ImageRun({
+                      data: mapImage.buffer,
+                      transformation: { width: mapImage.width, height: mapImage.height },
+                      type: "png",
+                    }),
+                  ],
+                  spacing: { before: 100, after: 200 },
+                  alignment: AlignmentType.CENTER,
+                }));
+              }
             } else {
               docChildren.push(new Paragraph({
                 children: [new TextRun({ text: "[Process map image could not be generated]", italics: true, color: "888888" })],

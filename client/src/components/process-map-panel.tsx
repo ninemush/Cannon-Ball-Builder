@@ -16,8 +16,6 @@ import {
   Position,
   BaseEdge,
   EdgeLabelRenderer,
-  getSmoothStepPath,
-  getBezierPath,
   useReactFlow,
   useStore,
   ReactFlowProvider,
@@ -1584,6 +1582,145 @@ function edgePathIntersectsNode(
   return (yAtLeft >= top && yAtLeft <= bottom) || (yAtRight >= top && yAtRight <= bottom);
 }
 
+function buildOrthogonalPath(
+  points: { x: number; y: number }[],
+  cornerRadius: number = 12
+): string {
+  if (points.length < 2) return "";
+  if (points.length === 2) {
+    return `M ${points[0].x},${points[0].y} L ${points[1].x},${points[1].y}`;
+  }
+  const r = cornerRadius;
+  let d = `M ${points[0].x},${points[0].y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const next = points[i + 1];
+    const dx1 = curr.x - prev.x;
+    const dy1 = curr.y - prev.y;
+    const dx2 = next.x - curr.x;
+    const dy2 = next.y - curr.y;
+    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+    if (len1 < 1 || len2 < 1) {
+      d += ` L ${curr.x},${curr.y}`;
+      continue;
+    }
+    const isStraight = Math.abs(dx1 * dy2 - dy1 * dx2) < 0.01 * len1 * len2;
+    if (isStraight) continue;
+    const clampR = Math.min(r, len1 / 2, len2 / 2);
+    const ax = curr.x - (dx1 / len1) * clampR;
+    const ay = curr.y - (dy1 / len1) * clampR;
+    const bx = curr.x + (dx2 / len2) * clampR;
+    const by = curr.y + (dy2 / len2) * clampR;
+    d += ` L ${ax},${ay} Q ${curr.x},${curr.y} ${bx},${by}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last.x},${last.y}`;
+  return d;
+}
+
+function findMinClearanceX(
+  obstacleNodes: { id: string; x: number; y: number; w: number; h: number }[],
+  sx: number, sy: number, tx: number, ty: number,
+  side: "left" | "right"
+): number {
+  const yMin = Math.min(sy, ty);
+  const yMax = Math.max(sy, ty);
+  const margin = 20;
+  const relevant = obstacleNodes.filter(n =>
+    n.y + n.h > yMin - margin && n.y < yMax + margin
+  );
+  if (relevant.length === 0) {
+    return side === "left" ? Math.min(sx, tx) - margin : Math.max(sx, tx) + margin;
+  }
+  if (side === "left") {
+    const minX = Math.min(...relevant.map(n => n.x));
+    return minX - margin;
+  }
+  const maxX = Math.max(...relevant.map(n => n.x + n.w));
+  return maxX + margin;
+}
+
+function computeOrthogonalPoints(
+  sx: number, sy: number, tx: number, ty: number,
+  obstacleNodes: { id: string; x: number; y: number; w: number; h: number }[],
+  exitDirection?: "left" | "right" | "bottom"
+): { x: number; y: number }[] {
+  const dx = Math.abs(tx - sx);
+  const isAligned = dx < 5;
+
+  function segBlocked(x1: number, y1: number, x2: number, y2: number): boolean {
+    return obstacleNodes.some((n) =>
+      edgePathIntersectsNode(x1, y1, x2, y2, n.x, n.y, n.w, n.h)
+    );
+  }
+
+  if (exitDirection === "left" || exitDirection === "right") {
+    const lPath: { x: number; y: number }[] = [
+      { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
+    ];
+    if (!segBlocked(sx, sy, tx, sy) && !segBlocked(tx, sy, tx, ty)) return lPath;
+
+    const midY = (sy + ty) / 2;
+    const zPath: { x: number; y: number }[] = [
+      { x: sx, y: sy }, { x: sx, y: midY },
+      { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+    if (!segBlocked(sx, sy, sx, midY) && !segBlocked(sx, midY, tx, midY) && !segBlocked(tx, midY, tx, ty)) return zPath;
+
+    const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, exitDirection);
+    return [
+      { x: sx, y: sy }, { x: detourX, y: sy },
+      { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+  }
+
+  if (isAligned) {
+    if (!segBlocked(sx, sy, sx, ty)) {
+      return [{ x: sx, y: sy }, { x: sx, y: ty }];
+    }
+    let bestDetourX = sx;
+    let bestClearance = 0;
+    for (const obs of obstacleNodes) {
+      if (!edgePathIntersectsNode(sx, sy, sx, ty, obs.x, obs.y, obs.w, obs.h)) continue;
+      const leftX = obs.x - 20;
+      const rightX = obs.x + obs.w + 20;
+      const leftDist = Math.abs(sx - leftX);
+      const rightDist = Math.abs(sx - rightX);
+      const chosenX = leftDist <= rightDist ? leftX : rightX;
+      if (Math.abs(chosenX - sx) > bestClearance) {
+        bestDetourX = chosenX;
+        bestClearance = Math.abs(chosenX - sx);
+      }
+    }
+    const midY = (sy + ty) / 2;
+    return [
+      { x: sx, y: sy }, { x: bestDetourX, y: sy },
+      { x: bestDetourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+  }
+
+  const lPath: { x: number; y: number }[] = [
+    { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
+  ];
+  if (!segBlocked(sx, sy, tx, sy) && !segBlocked(tx, sy, tx, ty)) return lPath;
+
+  const midY = (sy + ty) / 2;
+  const zPath: { x: number; y: number }[] = [
+    { x: sx, y: sy }, { x: sx, y: midY },
+    { x: tx, y: midY }, { x: tx, y: ty }
+  ];
+  if (!segBlocked(sx, sy, sx, midY) && !segBlocked(sx, midY, tx, midY) && !segBlocked(tx, midY, tx, ty)) return zPath;
+
+  const preferRight = tx > sx;
+  const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, preferRight ? "right" : "left");
+  return [
+    { x: sx, y: sy }, { x: detourX, y: sy },
+    { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+  ];
+}
+
 function CustomEdge({
   id,
   sourceX,
@@ -1601,93 +1738,36 @@ function CustomEdge({
   const sourceSiblings = data?.sourceSiblings || 1;
   const targetIndex = data?.targetIndex || 0;
   const targetSiblings = data?.targetSiblings || 1;
-  const totalNodes = data?.totalNodes || 0;
   const simplified = data?.simplified || false;
   const targetNodeType = data?.targetNodeType || "task";
   const nodeBounds: { id: string; x: number; y: number; w: number; h: number }[] = data?.nodeBounds || [];
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
-  const useBezier = simplified || totalNodes > 25;
   const isEndTarget = targetNodeType === "end";
 
-  const sourceOffset = simplified ? 0 : (sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * (useBezier ? 12 : 20) : 0);
-  const targetOffset = (simplified || isEndTarget) ? 0 : (targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * (useBezier ? 12 : 20) : 0);
+  const sourceOffset = simplified ? 0 : (sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * 20 : 0);
+  const targetOffset = (simplified || isEndTarget) ? 0 : (targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * 20 : 0);
 
   let edgePath: string;
   let labelX: number;
   let labelY: number;
 
+  const adjSourceX = sourceX + sourceOffset;
+  const adjTargetX = targetX + targetOffset;
   const obstacleNodes = nodeBounds.filter((n) => n.id !== source && n.id !== target);
 
-  const isConvergent = targetSiblings > 1 && !simplified;
-  if (isConvergent) {
-    const sx = sourceX + sourceOffset;
-    const sy = sourceY;
-    const tx = targetX;
-    const ty = targetY;
-    const dy = ty - sy;
-    const maxSpread = isEndTarget ? 35 : 25;
-    const fanSpread = (targetIndex - (targetSiblings - 1) / 2) * Math.min(maxSpread, 180 / targetSiblings);
-    const cx1 = sx;
-    const cy1 = sy + dy * 0.4;
-    const cx2 = tx + fanSpread;
-    const cy2 = ty - Math.abs(dy) * 0.3;
-    edgePath = `M ${sx},${sy} C ${cx1},${cy1} ${cx2},${cy2} ${tx},${ty}`;
-    labelX = (sx + tx) / 2 + fanSpread * 0.3;
-    labelY = (sy + ty) / 2;
-  } else {
-    const adjSourceX = sourceX + sourceOffset;
-    const adjTargetX = targetX + targetOffset;
+  let exitDir: "left" | "right" | "bottom" | undefined;
+  if (sourcePosition === Position.Left) exitDir = "left";
+  else if (sourcePosition === Position.Right) exitDir = "right";
+  else exitDir = "bottom";
 
-    const smoothStepOffset = (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0) ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) : 20;
+  const points = computeOrthogonalPoints(adjSourceX, sourceY, adjTargetX, targetY, obstacleNodes, exitDir);
+  edgePath = buildOrthogonalPath(points, 12);
 
-    const checkOrthogonalObstacle = (): boolean => {
-      if (useBezier || obstacleNodes.length === 0) return false;
-      const midY = (sourceY + targetY) / 2;
-      const segments: [number, number, number, number][] = [
-        [adjSourceX, sourceY, adjSourceX, midY],
-        [adjSourceX, midY, adjTargetX, midY],
-        [adjTargetX, midY, adjTargetX, targetY],
-      ];
-      return obstacleNodes.some((n) =>
-        segments.some(([x1, y1, x2, y2]) => edgePathIntersectsNode(x1, y1, x2, y2, n.x, n.y, n.w, n.h))
-      );
-    };
-
-    const needsDetour = checkOrthogonalObstacle();
-
-    if (needsDetour) {
-      const detourClearance = 40;
-      const detourX = adjSourceX > adjTargetX
-        ? Math.min(adjSourceX, adjTargetX) - detourClearance
-        : Math.max(adjSourceX, adjTargetX) + detourClearance;
-      const midY = (sourceY + targetY) / 2;
-      edgePath = `M ${adjSourceX},${sourceY} L ${detourX},${sourceY} L ${detourX},${midY} L ${adjTargetX},${midY} L ${adjTargetX},${targetY}`;
-      labelX = (adjSourceX + adjTargetX) / 2;
-      labelY = midY;
-    } else {
-      [edgePath, labelX, labelY] = useBezier
-        ? getBezierPath({
-            sourceX: adjSourceX,
-            sourceY,
-            sourcePosition,
-            targetX: adjTargetX,
-            targetY,
-            targetPosition,
-          })
-        : getSmoothStepPath({
-            sourceX: adjSourceX,
-            sourceY,
-            sourcePosition,
-            targetX: adjTargetX,
-            targetY,
-            targetPosition,
-            borderRadius: 16,
-            offset: smoothStepOffset,
-          });
-    }
-  }
+  const midIdx = Math.floor(points.length / 2);
+  labelX = (points[midIdx - 1]?.x + points[midIdx]?.x) / 2 || (adjSourceX + adjTargetX) / 2;
+  labelY = (points[midIdx - 1]?.y + points[midIdx]?.y) / 2 || (sourceY + targetY) / 2;
 
   const label = data?.label || "";
   const isYes = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(label);
@@ -1704,8 +1784,8 @@ function CustomEdge({
   else if (isPartial) edgeColor = "rgba(245,158,11,0.7)";
   else if (label) edgeColor = isDark ? "rgba(148,163,184,0.5)" : "rgba(100,116,139,0.6)";
 
-  const strokeWidth = simplified ? 2 : useBezier ? (label ? 1.5 : 1.2) : (label ? 1.5 : 1.2);
-  const edgeOpacity = simplified ? 0.85 : useBezier ? 0.7 : 1;
+  const strokeWidth = simplified ? 2 : (label ? 1.5 : 1.2);
+  const edgeOpacity = simplified ? 0.85 : 1;
 
   return (
     <>
@@ -2275,7 +2355,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       const srcSiblings = sourceGroups[String(e.sourceNodeId)] || [e];
       const tgtSiblings = targetGroups[String(e.targetNodeId)] || [e];
       const markerColor = activeView === "sdd" ? "rgba(249,115,22,0.5)" : activeView === "to-be" ? "rgba(34,197,94,0.5)" : "rgba(120,120,145,0.4)";
-      const markerSize = isSimplified ? 16 : nodeCount > 25 ? 10 : 14;
+      const markerSize = isSimplified ? 16 : 14;
       const srcType = nodeTypeMap2[String(e.sourceNodeId)] || "task";
       const tgtType = nodeTypeMap2[String(e.targetNodeId)] || "task";
       const isDecision = srcType === "decision" || srcType === "agent-decision";

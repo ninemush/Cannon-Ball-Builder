@@ -243,46 +243,105 @@ function segmentIntersectsBox(
   return false;
 }
 
-function computeTargetEntry(
-  tgtNode: LayoutNode,
-  approachX: number,
-  approachY: number,
-): { x: number; y: number; side: "top" | "left" | "right" } {
-  const tx = tgtNode.x + tgtNode.width / 2;
-  const ty = tgtNode.y;
-  const tgtCenterY = tgtNode.y + tgtNode.height / 2;
-  const tgtType = (tgtNode.data?.nodeType || "task").toLowerCase();
-  const isEndNode = tgtType === "end" || tgtType === "start";
-  const radius = tgtNode.width / 2;
+function findMinClearanceX(
+  obstacleNodes: LayoutNode[],
+  sx: number, sy: number, tx: number, ty: number,
+  side: "left" | "right"
+): number {
+  const yMin = Math.min(sy, ty);
+  const yMax = Math.max(sy, ty);
+  const margin = 20;
+  const relevant = obstacleNodes.filter(n =>
+    n.y + n.height > yMin - margin && n.y < yMax + margin
+  );
+  if (relevant.length === 0) {
+    return side === "left" ? Math.min(sx, tx) - margin : Math.max(sx, tx) + margin;
+  }
+  if (side === "left") {
+    const minX = Math.min(...relevant.map(n => n.x));
+    return minX - margin;
+  }
+  const maxX = Math.max(...relevant.map(n => n.x + n.width));
+  return maxX + margin;
+}
 
-  const dx = approachX - tx;
-  const dy = approachY - tgtCenterY;
-  const horizontalDist = Math.abs(dx);
-  const verticalDist = Math.abs(dy);
+function computeMinElbowRoute(
+  sx: number, sy: number, tx: number, ty: number,
+  obstacleNodes: LayoutNode[],
+  exitDirection?: "left" | "right" | "bottom"
+): { x: number; y: number }[] {
+  const dx = Math.abs(tx - sx);
+  const isAligned = dx < 5;
 
-  const enterFromSide = horizontalDist > tgtNode.width && horizontalDist >= verticalDist;
-
-  if (enterFromSide) {
-    if (dx < 0) {
-      const entryX = isEndNode ? tx - radius : tgtNode.x;
-      return { x: entryX, y: tgtCenterY, side: "left" };
-    } else {
-      const entryX = isEndNode ? tx + radius : tgtNode.x + tgtNode.width;
-      return { x: entryX, y: tgtCenterY, side: "right" };
-    }
+  function segHitsObstacle(x1: number, y1: number, x2: number, y2: number): boolean {
+    return obstacleNodes.some(obs =>
+      segmentIntersectsBox(x1, y1, x2, y2, obs.x, obs.y, obs.width, obs.height)
+    );
   }
 
-  if (isEndNode) {
-    if (horizontalDist > radius * 0.5) {
-      if (dx < 0) {
-        return { x: tx - radius, y: tgtCenterY, side: "left" };
-      } else {
-        return { x: tx + radius, y: tgtCenterY, side: "right" };
+  if (exitDirection === "left" || exitDirection === "right") {
+    const lPath = [
+      { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
+    ];
+    if (!segHitsObstacle(sx, sy, tx, sy) && !segHitsObstacle(tx, sy, tx, ty)) return lPath;
+
+    const midY = (sy + ty) / 2;
+    const zPath = [
+      { x: sx, y: sy }, { x: sx, y: midY },
+      { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+    if (!segHitsObstacle(sx, sy, sx, midY) && !segHitsObstacle(sx, midY, tx, midY) && !segHitsObstacle(tx, midY, tx, ty)) return zPath;
+
+    const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, exitDirection);
+    return [
+      { x: sx, y: sy }, { x: detourX, y: sy },
+      { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+    ];
+  }
+
+  if (isAligned) {
+    if (!segHitsObstacle(sx, sy, sx, ty)) {
+      return [{ x: sx, y: sy }, { x: sx, y: ty }];
+    }
+    let bestDetourX = sx;
+    let bestClearance = 0;
+    for (const obs of obstacleNodes) {
+      if (!segmentIntersectsBox(sx, sy, sx, ty, obs.x, obs.y, obs.width, obs.height)) continue;
+      const leftX = obs.x - 20;
+      const rightX = obs.x + obs.width + 20;
+      const leftDist = Math.abs(sx - leftX);
+      const rightDist = Math.abs(sx - rightX);
+      const chosenX = leftDist <= rightDist ? leftX : rightX;
+      if (Math.abs(chosenX - sx) > bestClearance) {
+        bestDetourX = chosenX;
+        bestClearance = Math.abs(chosenX - sx);
       }
     }
-    return { x: tx, y: tgtCenterY - radius, side: "top" };
+    const midY = (sy + ty) / 2;
+    return [
+      { x: sx, y: sy }, { x: bestDetourX, y: sy },
+      { x: bestDetourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+    ];
   }
-  return { x: tx, y: ty, side: "top" };
+
+  const lPath = [
+    { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
+  ];
+  if (!segHitsObstacle(sx, sy, tx, sy) && !segHitsObstacle(tx, sy, tx, ty)) return lPath;
+
+  const midY = (sy + ty) / 2;
+  const zPath = [
+    { x: sx, y: sy }, { x: sx, y: midY },
+    { x: tx, y: midY }, { x: tx, y: ty }
+  ];
+  if (!segHitsObstacle(sx, sy, sx, midY) && !segHitsObstacle(sx, midY, tx, midY) && !segHitsObstacle(tx, midY, tx, ty)) return zPath;
+
+  const preferRight = tx > sx;
+  const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, preferRight ? "right" : "left");
+  return [
+    { x: sx, y: sy }, { x: detourX, y: sy },
+    { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
+  ];
 }
 
 function computeEdgePoints(
@@ -296,133 +355,30 @@ function computeEdgePoints(
   const tx = tgtNode.x + tgtNode.width / 2;
   const ty = tgtNode.y;
   const diamondR = 42;
-  const clearance = 60;
-  const elbowClearance = 20;
-
-  const isBackEdge = ty < cy;
-
   const obstacleNodes = (allNodes || []).filter(n => n.id !== srcNode.id && n.id !== tgtNode.id);
-
-  function adjustClearanceForObstacles(baseX: number, baseY: number, endY: number, direction: "left" | "right"): number {
-    let adjustedX = baseX;
-    for (const obs of obstacleNodes) {
-      if (obs.y + obs.height < Math.min(baseY, endY) - 10 || obs.y > Math.max(baseY, endY) + 10) continue;
-      if (direction === "left") {
-        if (obs.x < adjustedX && obs.x + obs.width + 20 > adjustedX) {
-          adjustedX = obs.x - 20;
-        }
-      } else {
-        if (obs.x + obs.width > adjustedX && obs.x - 20 < adjustedX) {
-          adjustedX = obs.x + obs.width + 20;
-        }
-      }
-    }
-    return adjustedX;
-  }
-
-  function routeFromHorizontalExit(sx: number, sy: number, exitX: number, handleDir: "left" | "right"): { x: number; y: number }[] {
-    if (isBackEdge) {
-      const routeX = handleDir === "left"
-        ? Math.min(exitX, tgtNode.x - clearance)
-        : Math.max(exitX, tgtNode.x + tgtNode.width + clearance);
-      const entry = computeTargetEntry(tgtNode, routeX, sy);
-      return [{ x: sx, y: sy }, { x: routeX, y: sy }, { x: routeX, y: entry.y }, { x: entry.x, y: entry.y }];
-    }
-
-    const entry = computeTargetEntry(tgtNode, exitX, sy);
-
-    if (entry.side === "left" || entry.side === "right") {
-      return [{ x: sx, y: sy }, { x: exitX, y: sy }, { x: exitX, y: entry.y }, { x: entry.x, y: entry.y }];
-    }
-
-    if (Math.abs(exitX - entry.x) < 5) {
-      return [{ x: sx, y: sy }, { x: entry.x, y: sy }, { x: entry.x, y: entry.y }];
-    }
-
-    const elbowY = entry.y - elbowClearance;
-    return [{ x: sx, y: sy }, { x: exitX, y: sy }, { x: exitX, y: elbowY }, { x: entry.x, y: elbowY }, { x: entry.x, y: entry.y }];
-  }
 
   if (sourceHandle === "left") {
     const sx = cx - diamondR;
     const sy = cy;
-    let exitX = sx - clearance;
-    exitX = adjustClearanceForObstacles(exitX, sy, ty, "left");
-    return routeFromHorizontalExit(sx, sy, exitX, "left");
+    const targetTopX = tgtNode.x + tgtNode.width / 2;
+    const targetTopY = tgtNode.y;
+    return computeMinElbowRoute(sx, sy, targetTopX, targetTopY, obstacleNodes, "left");
   }
 
   if (sourceHandle === "right") {
     const sx = cx + diamondR;
     const sy = cy;
-    let exitX = sx + clearance;
-    exitX = adjustClearanceForObstacles(exitX, sy, ty, "right");
-    return routeFromHorizontalExit(sx, sy, exitX, "right");
-  }
-
-  if (sourceHandle === "bottom-left") {
-    const sx = cx - diamondR * 0.5;
-    const sy = cy + diamondR;
-    const entry = computeTargetEntry(tgtNode, sx, sy);
-    if (Math.abs(sx - entry.x) < 5) {
-      return [{ x: sx, y: sy }, { x: sx, y: entry.y }, { x: entry.x, y: entry.y }];
-    }
-    if (entry.side === "left" || entry.side === "right") {
-      const midY = sy + (entry.y - sy) * 0.5;
-      return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: entry.x, y: midY }, { x: entry.x, y: entry.y }];
-    }
-    const midY = sy + (entry.y - sy) * 0.3;
-    return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: entry.x, y: midY }, { x: entry.x, y: entry.y }];
-  }
-
-  if (sourceHandle === "bottom-right") {
-    const sx = cx + diamondR * 0.5;
-    const sy = cy + diamondR;
-    const entry = computeTargetEntry(tgtNode, sx, sy);
-    if (Math.abs(sx - entry.x) < 5) {
-      return [{ x: sx, y: sy }, { x: sx, y: entry.y }, { x: entry.x, y: entry.y }];
-    }
-    if (entry.side === "left" || entry.side === "right") {
-      const midY = sy + (entry.y - sy) * 0.5;
-      return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: entry.x, y: midY }, { x: entry.x, y: entry.y }];
-    }
-    const midY = sy + (entry.y - sy) * 0.3;
-    return [{ x: sx, y: sy }, { x: sx, y: midY }, { x: entry.x, y: midY }, { x: entry.x, y: entry.y }];
+    const targetTopX = tgtNode.x + tgtNode.width / 2;
+    const targetTopY = tgtNode.y;
+    return computeMinElbowRoute(sx, sy, targetTopX, targetTopY, obstacleNodes, "right");
   }
 
   const sx = srcNode.x + srcNode.width / 2;
   const sy = srcNode.y + srcNode.height;
-  if (isBackEdge) {
-    const routeX = Math.max(srcNode.x + srcNode.width + clearance, tgtNode.x + tgtNode.width + clearance);
-    const entry = computeTargetEntry(tgtNode, routeX, sy);
-    return [{ x: sx, y: sy }, { x: sx, y: sy + clearance / 2 }, { x: routeX, y: sy + clearance / 2 }, { x: routeX, y: entry.y }, { x: entry.x, y: entry.y }];
-  }
-  const entry = computeTargetEntry(tgtNode, sx, sy);
-  if (Math.abs(sx - entry.x) < 5) {
-    const directPath = [{ x: sx, y: sy }, { x: sx, y: entry.y }, { x: entry.x, y: entry.y }];
-    const hasObstacle = obstacleNodes.some(obs =>
-      segmentIntersectsBox(sx, sy, sx, entry.y, obs.x, obs.y, obs.width, obs.height)
-    );
-    if (!hasObstacle) return directPath;
-    const detourX = sx + clearance;
-    const elbowY = entry.y - elbowClearance;
-    return [{ x: sx, y: sy }, { x: detourX, y: sy }, { x: detourX, y: elbowY }, { x: entry.x, y: elbowY }, { x: entry.x, y: entry.y }];
-  }
-  const midY = (sy + entry.y) / 2;
-  const path = [{ x: sx, y: sy }, { x: sx, y: midY }, { x: entry.x, y: midY }, { x: entry.x, y: entry.y }];
-  const hasObstacleOnPath = obstacleNodes.some(obs => {
-    for (let i = 0; i < path.length - 1; i++) {
-      if (segmentIntersectsBox(path[i].x, path[i].y, path[i + 1].x, path[i + 1].y, obs.x, obs.y, obs.width, obs.height)) {
-        return true;
-      }
-    }
-    return false;
-  });
-  if (hasObstacleOnPath) {
-    const detourX = entry.x > sx ? Math.max(entry.x + clearance, sx + clearance) : Math.min(entry.x - clearance, sx - clearance);
-    const elbowY = entry.y - elbowClearance;
-    return [{ x: sx, y: sy }, { x: detourX, y: sy }, { x: detourX, y: elbowY }, { x: entry.x, y: elbowY }, { x: entry.x, y: entry.y }];
-  }
-  return path;
+  const targetTopX = tgtNode.x + tgtNode.width / 2;
+  const targetTopY = tgtNode.y;
+
+  return computeMinElbowRoute(sx, sy, targetTopX, targetTopY, obstacleNodes, "bottom");
 }
 
 function computeLayout(nodes: MapNode[], edges: MapEdge[]): { layoutNodes: LayoutNode[]; layoutEdges: LayoutEdge[] } {
@@ -649,50 +605,14 @@ function renderNodeSvg(node: LayoutNode, viewType: string): string {
   `;
 }
 
-export async function renderProcessMapImage(
-  nodes: MapNode[],
-  edges: MapEdge[],
-  viewType: string
-): Promise<{ buffer: Buffer; width: number; height: number } | null> {
-  if (!nodes.length) return null;
-
-  const { layoutNodes, layoutEdges } = computeLayout(nodes, edges);
-
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of layoutNodes) {
-    const nType = (n.data.nodeType || "task").toLowerCase();
-    const extra = (nType === "decision" || nType === "agent-decision") ? 34 : 0;
-    minX = Math.min(minX, n.x - extra);
-    minY = Math.min(minY, n.y - extra);
-    maxX = Math.max(maxX, n.x + n.width + extra);
-    maxY = Math.max(maxY, n.y + n.height + extra);
-  }
-  for (const e of layoutEdges) {
-    for (const p of e.points) {
-      minX = Math.min(minX, p.x - 10);
-      minY = Math.min(minY, p.y - 10);
-      maxX = Math.max(maxX, p.x + 10);
-      maxY = Math.max(maxY, p.y + 10);
-    }
-  }
-
-  const padding = 50;
-  let svgWidth = Math.min(maxX - minX + padding * 2, MAX_SVG_DIMENSION);
-  let svgHeight = Math.min(maxY - minY + padding * 2, MAX_SVG_DIMENSION);
-  const offsetX = -minX + padding;
-  const offsetY = -minY + padding;
-
-  const adjustedNodes = layoutNodes.map((n) => ({
-    ...n,
-    x: n.x + offsetX,
-    y: n.y + offsetY,
-  }));
-
-  const adjustedEdges = layoutEdges.map((e) => ({
-    ...e,
-    points: e.points.map((p) => ({ x: p.x + offsetX, y: p.y + offsetY })),
-  }));
-
+function buildSvgContent(
+  adjustedNodes: LayoutNode[],
+  adjustedEdges: LayoutEdge[],
+  svgWidth: number,
+  svgHeight: number,
+  viewType: string,
+  pageLabel?: string
+): string {
   let edgesSvg = "";
   for (const edge of adjustedEdges) {
     const color = getEdgeColor(edge.label, viewType);
@@ -705,10 +625,9 @@ export async function renderProcessMapImage(
       let lx: number, ly: number;
       if (edge.isDecisionSource && edge.points.length >= 2) {
         const srcPt = edge.points[0];
-        const isBottomHandle = edge.sourceHandle === "bottom-left" || edge.sourceHandle === "bottom-right";
-        const xDir = edge.sourceHandle === "left" ? -1 : edge.sourceHandle === "right" ? 1 : edge.sourceHandle === "bottom-left" ? -0.5 : edge.sourceHandle === "bottom-right" ? 0.5 : 0;
-        lx = srcPt.x + xDir * (isBottomHandle ? 40 : 45);
-        ly = srcPt.y + (isBottomHandle ? 25 : 30);
+        const xDir = edge.sourceHandle === "left" ? -1 : edge.sourceHandle === "right" ? 1 : 0;
+        lx = srcPt.x + xDir * 45;
+        ly = srcPt.y + 30;
       } else {
         const midIdx = Math.floor(edge.points.length / 2);
         lx = edge.points[midIdx]?.x || 0;
@@ -741,14 +660,130 @@ export async function renderProcessMapImage(
     `;
   }
 
+  let pageLabelSvg = "";
+  if (pageLabel) {
+    pageLabelSvg = `<text x="${svgWidth - 20}" y="20" text-anchor="end" fill="#71717a" font-size="11" font-weight="600" font-family="system-ui, sans-serif">${escapeXml(pageLabel)}</text>`;
+    const pageMatch = pageLabel.match(/Page (\d+) of (\d+)/);
+    if (pageMatch) {
+      const currentPage = parseInt(pageMatch[1], 10);
+      const totalPages = parseInt(pageMatch[2], 10);
+      if (currentPage > 1) {
+        pageLabelSvg += `
+          <rect x="${svgWidth / 2 - 80}" y="2" width="160" height="22" rx="4" fill="#27272a" stroke="#3f3f46" stroke-width="0.5"/>
+          <text x="${svgWidth / 2}" y="17" text-anchor="middle" fill="#a1a1aa" font-size="10" font-weight="500" font-family="system-ui, sans-serif">▲ Continued from Page ${currentPage - 1}</text>`;
+      }
+      if (currentPage < totalPages) {
+        pageLabelSvg += `
+          <rect x="${svgWidth / 2 - 80}" y="${svgHeight - 24}" width="160" height="22" rx="4" fill="#27272a" stroke="#3f3f46" stroke-width="0.5"/>
+          <text x="${svgWidth / 2}" y="${svgHeight - 9}" text-anchor="middle" fill="#a1a1aa" font-size="10" font-weight="500" font-family="system-ui, sans-serif">▼ Continues on Page ${currentPage + 1}</text>`;
+      }
+    }
+  }
+
   const bgColor = "#0a0a0f";
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}" text-rendering="geometricPrecision" shape-rendering="optimizeLegibility">
   <defs>${markerDefs}</defs>
   <rect width="100%" height="100%" fill="${bgColor}"/>
+  ${pageLabelSvg}
   ${edgesSvg}
   ${nodesSvg}
 </svg>`;
+}
+
+export async function renderProcessMapImage(
+  nodes: MapNode[],
+  edges: MapEdge[],
+  viewType: string
+): Promise<{ buffer: Buffer; width: number; height: number; pages?: { buffer: Buffer; width: number; height: number }[] } | null> {
+  if (!nodes.length) return null;
+
+  const { layoutNodes, layoutEdges } = computeLayout(nodes, edges);
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of layoutNodes) {
+    const nType = (n.data.nodeType || "task").toLowerCase();
+    const extra = (nType === "decision" || nType === "agent-decision") ? 34 : 0;
+    minX = Math.min(minX, n.x - extra);
+    minY = Math.min(minY, n.y - extra);
+    maxX = Math.max(maxX, n.x + n.width + extra);
+    maxY = Math.max(maxY, n.y + n.height + extra);
+  }
+  for (const e of layoutEdges) {
+    for (const p of e.points) {
+      minX = Math.min(minX, p.x - 10);
+      minY = Math.min(minY, p.y - 10);
+      maxX = Math.max(maxX, p.x + 10);
+      maxY = Math.max(maxY, p.y + 10);
+    }
+  }
+
+  const padding = 50;
+  const svgWidth = Math.min(maxX - minX + padding * 2, MAX_SVG_DIMENSION);
+  const svgHeight = Math.min(maxY - minY + padding * 2, MAX_SVG_DIMENSION);
+  const offsetX = -minX + padding;
+  const offsetY = -minY + padding;
+
+  const adjustedNodes = layoutNodes.map((n) => ({
+    ...n,
+    x: n.x + offsetX,
+    y: n.y + offsetY,
+  }));
+
+  const adjustedEdges = layoutEdges.map((e) => ({
+    ...e,
+    points: e.points.map((p) => ({ x: p.x + offsetX, y: p.y + offsetY })),
+  }));
+
+  const useMultiPage = nodes.length >= 50;
+
+  if (useMultiPage) {
+    const pageHeight = 800;
+    const overlap = 60;
+    const totalPages = Math.ceil(svgHeight / (pageHeight - overlap));
+    const pages: { buffer: Buffer; width: number; height: number }[] = [];
+
+    for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
+      const yStart = pageIdx * (pageHeight - overlap);
+      const yEnd = yStart + pageHeight;
+      const pageLabel = `Page ${pageIdx + 1} of ${totalPages}`;
+
+      const pageNodes = adjustedNodes.filter(n => {
+        const nBottom = n.y + n.height;
+        return nBottom > yStart && n.y < yEnd;
+      }).map(n => ({ ...n, y: n.y - yStart }));
+
+      const pageEdges = adjustedEdges.filter(e => {
+        return e.points.some(p => p.y >= yStart && p.y <= yEnd);
+      }).map(e => ({
+        ...e,
+        points: e.points.map(p => ({ x: p.x, y: p.y - yStart })),
+      }));
+
+      const actualPageHeight = Math.min(pageHeight, svgHeight - yStart);
+      const svg = buildSvgContent(pageNodes, pageEdges, svgWidth, actualPageHeight, viewType, pageLabel);
+
+      try {
+        const pngBuffer = await sharp(Buffer.from(svg), { density: 200 })
+          .sharpen()
+          .png()
+          .toBuffer();
+
+        const maxDocWidth = 580;
+        const scale = svgWidth > maxDocWidth ? maxDocWidth / svgWidth : 1;
+        const docWidth = Math.round(svgWidth * scale);
+        const docHeight = Math.round(actualPageHeight * scale);
+        pages.push({ buffer: pngBuffer, width: docWidth, height: docHeight });
+      } catch (err) {
+        console.error(`[Process Map Renderer] Failed to render page ${pageIdx + 1}:`, err);
+      }
+    }
+
+    if (pages.length === 0) return null;
+    return { buffer: pages[0].buffer, width: pages[0].width, height: pages[0].height, pages };
+  }
+
+  const svg = buildSvgContent(adjustedNodes, adjustedEdges, svgWidth, svgHeight, viewType);
 
   try {
     const pngBuffer = await sharp(Buffer.from(svg), { density: 200 })

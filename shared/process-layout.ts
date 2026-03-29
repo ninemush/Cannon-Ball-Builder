@@ -317,18 +317,20 @@ export function computeProcessAwareLayout(
 
   let verticalGap: number;
   let branchXOffset: number;
+  const defaultTaskWidth = 280;
+  const gutter = 40;
   if (nodeCount > 60) {
     verticalGap = Math.round(45 + density * 8);
-    branchXOffset = Math.round(380 + branchCount * 8);
+    branchXOffset = defaultTaskWidth + gutter + Math.round(branchCount * 6);
   } else if (nodeCount > 30) {
     verticalGap = Math.round(55 + density * 10);
-    branchXOffset = Math.round(400 + branchCount * 10);
+    branchXOffset = defaultTaskWidth + gutter + Math.round(branchCount * 8);
   } else {
     verticalGap = Math.round(65 + density * 12);
-    branchXOffset = Math.round(420 + branchCount * 12);
+    branchXOffset = defaultTaskWidth + gutter + Math.round(branchCount * 10);
   }
   verticalGap = Math.max(40, Math.min(verticalGap, 100));
-  branchXOffset = Math.max(350, Math.min(branchXOffset, 550));
+  branchXOffset = Math.max(defaultTaskWidth + gutter, Math.min(branchXOffset, 500));
 
   const centerX = 400;
 
