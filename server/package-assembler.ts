@@ -1928,18 +1928,20 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         try {
           const { xaml, variables } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
           let compliant: string;
+          let complianceFailed = false;
           try {
             compliant = compliancePass(xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
+            complianceFailed = true;
             console.warn(`[UiPath] Compliance pass failed for tree-assembled "${wfName}": ${compErr.message} — replacing with stub workflow`);
             compliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
           }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
           generatedWorkflowNames.add(wfName);
-          if (wfName === "Main" || wfName === "Process") {
+          if ((wfName === "Main" || wfName === "Process") && !complianceFailed) {
             hasMain = true;
-          } else {
+          } else if (wfName !== "Main" && wfName !== "Process") {
             nonMainWorkflowNames.push(wfName);
           }
           xamlResults.push({
@@ -1955,9 +1957,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           deferredWrites.set(`${libPath}/${wfName}.xaml`, stubXaml);
           generatedWorkflowNames.add(wfName);
           complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Tree assembly failed — ${err.message}` });
-          if (wfName === "Main" || wfName === "Process") {
-            hasMain = true;
-          } else {
+          if (wfName !== "Main" && wfName !== "Process") {
             nonMainWorkflowNames.push(wfName);
           }
           xamlResults.push({
@@ -2061,19 +2061,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           if (result) {
             xamlResults.push(result);
             let decompCompliant: string;
+            let decompComplianceFailed = false;
             try {
               decompCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
             } catch (compErr: any) {
+              decompComplianceFailed = true;
               console.warn(`[UiPath] Compliance pass failed for decomposed "${wfName}": ${compErr.message} — replacing with stub workflow`);
               decompCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
               complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
             }
             deferredWrites.set(`${libPath}/${wfName}.xaml`, decompCompliant);
             generatedWorkflowNames.add(wfName);
-            if (wfName === "Main") hasMain = true;
+            if (wfName === "Main" && !decompComplianceFailed) hasMain = true;
             console.log(`[UiPath] Generated decomposed workflow "${wfName}": ${decompNodes.length} nodes, ${result.gaps.length} gaps`);
-          } else if (wfName === "Main") {
-            hasMain = true;
           }
         } else {
           const specFallback = { name: decomp.name, description: decomp.description || "", steps: [] as Array<{ name: string; description: string }> };
@@ -2085,19 +2085,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           if (result) {
             xamlResults.push(result);
             let specCompliant: string;
+            let specComplianceFailed = false;
             try {
               specCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
             } catch (compErr: any) {
+              specComplianceFailed = true;
               console.warn(`[UiPath] Compliance pass failed for spec-decomposed "${wfName}": ${compErr.message} — replacing with stub workflow`);
               specCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
               complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
             }
             deferredWrites.set(`${libPath}/${wfName}.xaml`, specCompliant);
             generatedWorkflowNames.add(wfName);
-            if (wfName === "Main") hasMain = true;
+            if (wfName === "Main" && !specComplianceFailed) hasMain = true;
             console.log(`[UiPath] Generated decomposed workflow "${wfName}" from spec (no matching nodes): ${result.gaps.length} gaps`);
-          } else if (wfName === "Main") {
-            hasMain = true;
           }
         }
       }
@@ -2115,19 +2115,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         if (result) {
           xamlResults.push(result);
           let richCompliant: string;
+          let richComplianceFailed = false;
           try {
             richCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
+            richComplianceFailed = true;
             console.warn(`[UiPath] Compliance pass failed for rich XAML "${wfName}": ${compErr.message} — replacing with stub workflow`);
             richCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
           }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
           generatedWorkflowNames.add(wfName);
-          if (wfName === "Main") hasMain = true;
+          if (wfName === "Main" && !richComplianceFailed) hasMain = true;
           console.log(`[UiPath] Generated rich XAML for "${wfName}": ${result.gaps.length} gaps, ${result.usedPackages.length} packages`);
-        } else if (wfName === "Main") {
-          hasMain = true;
         }
       }
     } else {
@@ -2142,19 +2142,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         if (result) {
           xamlResults.push(result);
           let richCompliant: string;
+          let remainingComplianceFailed = false;
           try {
             richCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
+            remainingComplianceFailed = true;
             console.warn(`[UiPath] Compliance pass failed for remaining rich XAML "${wfName}": ${compErr.message} — replacing with stub workflow`);
             richCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
           }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
           generatedWorkflowNames.add(wfName);
-          if (wfName === "Main") hasMain = true;
+          if (wfName === "Main" && !remainingComplianceFailed) hasMain = true;
           console.log(`[UiPath] Generated remaining workflow "${wfName}" alongside tree-assembled workflows`);
-        } else if (wfName === "Main") {
-          hasMain = true;
         }
       }
     }
@@ -4181,7 +4181,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       for (const dKey of deferredXamlKeys) {
         const dBasename = dKey.split("/").pop() || dKey;
         if (!xamlBasenames.has(dBasename)) {
-          console.warn(`[Parity Pre-Check] XAML "${dBasename}" exists in deferredWrites but not in xamlEntries — coverage gap`);
+          console.warn(`[Parity Pre-Check] XAML "${dBasename}" exists in deferredWrites but not in xamlEntries — adding to xamlEntries`);
+          xamlEntries.push({ name: dKey, content: deferredWrites.get(dKey)! });
+          xamlBasenames.add(dBasename);
         }
       }
       for (const entry of xamlEntries) {

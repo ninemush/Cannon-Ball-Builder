@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getActivityPrefixStrict, validateActivityTagSemantics, validateNamespacePrefixes, normalizeNamespaceAliases, makeUiPathCompliant } from "../xaml/xaml-compliance";
+import { getActivityPrefixStrict, validateActivityTagSemantics, validateNamespacePrefixes, normalizeNamespaceAliases, makeUiPathCompliant, collectUsedPackages } from "../xaml/xaml-compliance";
 
 describe("XAML namespace prefix normalization", () => {
   describe("getActivityPrefixStrict canonical prefix lookup", () => {
@@ -253,6 +253,84 @@ describe("XAML namespace prefix normalization", () => {
       expect(result).toContain("<uds:QueryRecords ");
       expect(result).not.toMatch(/<dataservice:/);
       expect(result).toBeDefined();
+    });
+  });
+
+  describe("collectUsedPackages — alias-aware package detection", () => {
+    it("detects package from canonical prefix", () => {
+      const xml = `<upers:CreateFormTask DisplayName="Create Task" />`;
+      const packages = collectUsedPackages(xml);
+      expect(packages.has("UiPath.Persistence.Activities")).toBe(true);
+    });
+
+    it("detects package from alias prefix (persistence: → UiPath.Persistence.Activities)", () => {
+      const xml = `<persistence:CreateFormTask DisplayName="Create Task" />`;
+      const packages = collectUsedPackages(xml);
+      expect(packages.has("UiPath.Persistence.Activities")).toBe(true);
+    });
+
+    it("detects package from alias prefix (ds: → UiPath.DataService.Activities)", () => {
+      const xml = `<ds:CreateEntity DisplayName="Create Entity" />`;
+      const packages = collectUsedPackages(xml);
+      expect(packages.has("UiPath.DataService.Activities")).toBe(true);
+    });
+
+    it("detects package from alias prefix (dataservice: → UiPath.DataService.Activities)", () => {
+      const xml = `<dataservice:QueryRecords DisplayName="Query" />`;
+      const packages = collectUsedPackages(xml);
+      expect(packages.has("UiPath.DataService.Activities")).toBe(true);
+    });
+  });
+
+  describe("alias-without-xmlns — end-to-end compliance", () => {
+    it("persistence: tags without xmlns:persistence declaration pass makeUiPathCompliant", () => {
+      const xml = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <persistence:CreateFormTask DisplayName="Create Task" />
+  </Sequence>
+</Activity>`;
+
+      const result = makeUiPathCompliant(xml);
+      expect(result).toContain("<upers:CreateFormTask ");
+      expect(result).not.toMatch(/<persistence:/);
+      expect(result).toContain("xmlns:upers=");
+      expect(result).toContain("UiPath.Persistence.Activities");
+    });
+
+    it("ds: tags without xmlns:ds declaration pass makeUiPathCompliant", () => {
+      const xml = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <ds:CreateEntity DisplayName="Create Entity" />
+  </Sequence>
+</Activity>`;
+
+      const result = makeUiPathCompliant(xml);
+      expect(result).toContain("<uds:CreateEntity ");
+      expect(result).not.toMatch(/(<\/?)ds:/);
+      expect(result).toContain("xmlns:uds=");
+    });
+
+    it("multiple alias prefixes without xmlns declarations all resolve correctly", () => {
+      const xml = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <persistence:CreateFormTask DisplayName="Create Task" />
+    <dataservice:QueryRecords DisplayName="Query Records" />
+  </Sequence>
+</Activity>`;
+
+      const result = makeUiPathCompliant(xml);
+      expect(result).toContain("<upers:CreateFormTask ");
+      expect(result).toContain("<uds:QueryRecords ");
+      expect(result).toContain("xmlns:upers=");
+      expect(result).toContain("xmlns:uds=");
+      expect(result).not.toMatch(/<persistence:/);
+      expect(result).not.toMatch(/<dataservice:/);
     });
   });
 });

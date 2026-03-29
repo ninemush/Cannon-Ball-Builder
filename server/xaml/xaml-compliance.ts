@@ -221,11 +221,23 @@ export function getActivityTag(templateName: string): string {
 export function collectUsedPackages(xaml: string): Set<string> {
   const usedPackages = new Set<string>();
 
+  const canonicalPrefixToPackage = new Map<string, string>();
   for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
     if (!info.prefix || info.prefix === "ui") continue;
+    canonicalPrefixToPackage.set(info.prefix, packageId);
     const prefixPattern = new RegExp(`<${info.prefix}:`, "g");
     if (prefixPattern.test(xaml)) {
       usedPackages.add(packageId);
+    }
+  }
+
+  for (const [alias, canonical] of Object.entries(PREFIX_ALIAS_MAP)) {
+    const aliasPattern = new RegExp(`<${alias}:`, "g");
+    if (aliasPattern.test(xaml)) {
+      const packageId = canonicalPrefixToPackage.get(canonical);
+      if (packageId) {
+        usedPackages.add(packageId);
+      }
     }
   }
 
@@ -1344,8 +1356,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return match;
   });
 
-  xml = injectDynamicNamespaceDeclarations(xml, isCrossPlatform);
-
   xml = xml.replace(/<(ui:(?:While|RetryScope))\s+([^>]*?)\/>/g, (match, tag, attrs) => {
     if (tag === "ui:While") {
       return `<${tag} ${attrs}>
@@ -1579,6 +1589,8 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     }
     throw new Error(`XAML activity tag semantic validation failed: ${semanticValidation.errors.join("; ")}`);
   }
+
+  xml = injectDynamicNamespaceDeclarations(xml, isCrossPlatform);
 
   const nsValidation = validateNamespacePrefixes(xml);
   if (!nsValidation.valid) {
