@@ -2268,5 +2268,52 @@ describe("UiPath Generation Regression Tests", () => {
       const unprefixedErrors = result.violations.filter(v => v.check === "unprefixed-activity");
       expect(unprefixedErrors).toHaveLength(0);
     });
+
+    it("quality gate does NOT flag AssemblyReference tags inside TextExpression metadata blocks", () => {
+      const xamlWithMetadata = makeValidXaml("Main", `<ui:MessageBox DisplayName="Hello" />`);
+      const compliant = makeUiPathCompliant(xamlWithMetadata, "Windows");
+      expect(compliant).toContain("<AssemblyReference>");
+      expect(compliant).toContain("<TextExpression.ReferencesForImplementation>");
+      const required = scanXamlForRequiredPackages(compliant);
+      const deps: Record<string, string> = {};
+      for (const pkg of required) deps[pkg] = "25.10.0";
+      if (!deps["UiPath.System.Activities"]) deps["UiPath.System.Activities"] = "25.10.0";
+      const result = runQG(
+        [{ name: "Main.xaml", content: compliant }],
+        deps,
+      );
+      const assemblyRefViolations = result.violations.filter(
+        v => v.check === "UNPREFIXED_ACTIVITY_TAG" && v.detail?.includes("AssemblyReference")
+      );
+      expect(assemblyRefViolations).toHaveLength(0);
+    });
+
+    it("quality gate STILL flags real unprefixed activity tags outside metadata blocks", () => {
+      const xamlWithUnprefixed = `<?xml version="1.0" encoding="utf-8"?>
+<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+          xmlns:ui="http://schemas.uipath.com/workflow/activities"
+          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence>
+    <TextExpression.ReferencesForImplementation>
+      <sco:Collection x:TypeArguments="AssemblyReference" xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib">
+        <AssemblyReference>System.Activities</AssemblyReference>
+      </sco:Collection>
+    </TextExpression.ReferencesForImplementation>
+    <FakeCustomActivity DisplayName="Should be flagged" />
+  </Sequence>
+</Activity>`;
+      const result = runQG(
+        [{ name: "Main.xaml", content: xamlWithUnprefixed }],
+        { "UiPath.System.Activities": "25.10.0" },
+      );
+      const fakeViolations = result.violations.filter(
+        v => v.check === "UNPREFIXED_ACTIVITY_TAG" && v.detail?.includes("FakeCustomActivity")
+      );
+      expect(fakeViolations.length).toBeGreaterThan(0);
+      const assemblyRefViolations = result.violations.filter(
+        v => v.check === "UNPREFIXED_ACTIVITY_TAG" && v.detail?.includes("AssemblyReference")
+      );
+      expect(assemblyRefViolations).toHaveLength(0);
+    });
   });
 });
