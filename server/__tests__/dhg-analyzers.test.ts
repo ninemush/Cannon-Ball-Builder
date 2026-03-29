@@ -590,6 +590,28 @@ describe("runDhgAnalysis", () => {
     expect(result.environmentRequirements.requiredPackages).toContain("UiPath.System.Activities");
     expect(result.environmentRequirements.requiredPackages).toContain("UiPath.Excel.Activities");
   });
+
+  it("DHG requiredPackages matches full post-alignment dependency set for multi-workflow packages", () => {
+    const postAlignmentDeps = {
+      "UiPath.System.Activities": "[25.10.17127]",
+      "UiPath.Excel.Activities": "[2.24.2]",
+      "UiPath.UIAutomation.Activities": "[25.10.17127]",
+      "UiPath.Mail.Activities": "[1.23.11]",
+      "UiPath.Web.Activities": "[1.21.0]",
+      "UiPath.Persistence.Activities": "[3.0.3]",
+      "UiPath.IntelligentOCR.Activities": "[6.13.0]",
+    };
+    const projectJson = JSON.stringify({ dependencies: postAlignmentDeps });
+    const result = runDhgAnalysis([], projectJson);
+    const reportedPkgs = result.environmentRequirements.requiredPackages;
+    const expectedPkgs = Object.keys(postAlignmentDeps);
+    expect(reportedPkgs.sort()).toEqual(expectedPkgs.sort());
+  });
+
+  it("DHG requiredPackages is empty when projectJsonContent is undefined", () => {
+    const result = runDhgAnalysis([], undefined);
+    expect(result.environmentRequirements.requiredPackages).toEqual([]);
+  });
 });
 
 describe("DHG generator with analysis context", () => {

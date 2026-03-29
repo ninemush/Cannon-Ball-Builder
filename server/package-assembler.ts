@@ -4030,16 +4030,6 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const archiveXamlEntries = Array.from(deferredWrites.entries())
       .filter(([k]) => k.endsWith(".xaml"))
       .map(([name, content]) => ({ name, content }));
-    const dhgAnalysis = runDhgAnalysis(
-      archiveXamlEntries,
-      undefined,
-      qualityWarningCount,
-      remediationCount,
-      pkg.internal?.automationType || undefined,
-      undefined,
-      undefined,
-      stubAwareness,
-    );
 
     const dhgAllFiles = new Set(
       Array.from(deferredWrites.keys())
@@ -4132,17 +4122,6 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
       studioCompatibility: dhgStudioCompatibility,
     };
-
-    const dhgContext: DhgContext = {
-      projectName,
-      workflowNames: archiveWfNames,
-      generationMode: generationMode || undefined,
-      generationModeReason: modeConfig.reason,
-      analysis: dhgAnalysis,
-    };
-    const dhg = generateDhgFromOutcomeReport(assemblerOutcomeReport, dhgContext);
-    archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
-    console.log(`[UiPath] Generated Developer Handoff Guide (structured): ${archiveWfNames.length} workflows, ${outcomeRemediations.length} remediations, REFramework=${useReFramework}`);
 
     if (xamlEntries.length > 0) {
       let parityMatches = 0;
@@ -4306,6 +4285,29 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
     const finalProjectJsonStr = JSON.stringify(projectJson, null, 2);
     archive.append(finalProjectJsonStr, { name: `${libPath}/project.json` });
+
+    {
+      const dhgAnalysis = runDhgAnalysis(
+        archiveXamlEntries,
+        finalProjectJsonStr,
+        qualityWarningCount,
+        remediationCount,
+        pkg.internal?.automationType || undefined,
+        undefined,
+        undefined,
+        stubAwareness,
+      );
+      const dhgContext: DhgContext = {
+        projectName,
+        workflowNames: archiveWfNames,
+        generationMode: generationMode || undefined,
+        generationModeReason: modeConfig.reason,
+        analysis: dhgAnalysis,
+      };
+      const dhg = generateDhgFromOutcomeReport(assemblerOutcomeReport, dhgContext);
+      archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
+      console.log(`[UiPath] Generated Developer Handoff Guide (structured): ${archiveWfNames.length} workflows, ${outcomeRemediations.length} remediations, REFramework=${useReFramework}`);
+    }
 
     const depEntries = Object.entries(deps).map(
       ([id, ver]) => `      <dependency id="${id}" version="${ver}" />`
