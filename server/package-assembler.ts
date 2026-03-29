@@ -986,6 +986,91 @@ export type BuildResult = {
   projectJsonContent?: string;
 };
 
+export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
+  const fixes: string[] = [];
+  const attrPattern = /((?:Message|Default|Value)=")([^"]+)(")/g;
+
+  const result = content.replace(attrPattern, (match, prefix, val, suffix) => {
+    if (!val.includes("[") || !val.includes("]")) return match;
+    if (val.startsWith("[") && val.endsWith("]")) {
+      const inner = val.substring(1, val.length - 1);
+      let innerDepth = 0;
+      let isFullyBracketed = true;
+      for (let ci = 0; ci < inner.length; ci++) {
+        if (inner[ci] === "[") innerDepth++;
+        else if (inner[ci] === "]") {
+          if (innerDepth === 0) { isFullyBracketed = false; break; }
+          innerDepth--;
+        }
+      }
+      if (isFullyBracketed) return match;
+    }
+
+    const hasLiteralBeforeBracket = /^[^[&\d]/.test(val) &&
+      !val.startsWith("True") && !val.startsWith("False") &&
+      !val.startsWith("Nothing") && !val.startsWith("PLACEHOLDER");
+    const hasLiteralAfterBracket = val.startsWith("[") && !val.endsWith("]");
+    const hasBracketThenLiteralThenBracket = val.startsWith("[") && val.endsWith("]") && !hasLiteralBeforeBracket;
+    if (!hasLiteralBeforeBracket && !hasLiteralAfterBracket && !hasBracketThenLiteralThenBracket) return match;
+
+    const bracketSegments: { start: number; end: number; content: string }[] = [];
+    let depth = 0;
+    let segStart = -1;
+    for (let i = 0; i < val.length; i++) {
+      if (val[i] === "[") {
+        if (depth === 0) segStart = i;
+        depth++;
+      } else if (val[i] === "]") {
+        depth--;
+        if (depth === 0 && segStart >= 0) {
+          bracketSegments.push({ start: segStart, end: i, content: val.substring(segStart + 1, i) });
+          segStart = -1;
+        } else if (depth < 0) {
+          return match;
+        }
+      }
+    }
+    if (depth !== 0) return match;
+    if (bracketSegments.length === 0) return match;
+
+    const vbExpressionPattern = /^[a-zA-Z_]\w*(\.\w+)*(\(.*\))?(\.\w+(\(.*\))?)*$/;
+    for (const seg of bracketSegments) {
+      if (seg.content.length === 0) return match;
+      const decoded = seg.content.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+      const trimmed = decoded.trim();
+      if (!vbExpressionPattern.test(trimmed)) return match;
+      const looksLikeVbExpression = trimmed.includes("_") || trimmed.includes(".") || trimmed.includes("(");
+      if (!looksLikeVbExpression) return match;
+    }
+
+    const vbOperatorPattern = /[+\-*/%=<>^\\]/;
+    const parts: string[] = [];
+    let lastIdx = 0;
+    for (const seg of bracketSegments) {
+      if (seg.start > lastIdx) {
+        const literal = val.substring(lastIdx, seg.start);
+        if (literal.includes("&quot;") || literal.includes("&amp;")) return match;
+        if (vbOperatorPattern.test(literal.trim())) return match;
+        parts.push(`&quot;${literal}&quot;`);
+      }
+      parts.push(seg.content);
+      lastIdx = seg.end + 1;
+    }
+    if (lastIdx < val.length) {
+      const literal = val.substring(lastIdx);
+      if (literal.includes("&quot;") || literal.includes("&amp;")) return match;
+      if (vbOperatorPattern.test(literal.trim())) return match;
+      parts.push(`&quot;${literal}&quot;`);
+    }
+
+    const corrected = `[${parts.join(" &amp; ")}]`;
+    fixes.push(`${val} → ${corrected}`);
+    return prefix + corrected + suffix;
+  });
+
+  return { content: result, fixes };
+}
+
 export function removeDuplicateAttributes(content: string): { content: string; changed: boolean; fixedTags: string[] } {
   const fixedTags: string[] = [];
   const result = content.replace(/<([a-zA-Z_][\w.:]*)\s([^>]*?)(\s*\/?>)/g, (match, tag, attrStr, closing) => {
@@ -3288,6 +3373,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         return `Message="[&quot;${val}&quot;]"`;
       });
 
+      const mixedExprResult = fixMixedLiteralExpressionSyntax(content);
+      if (mixedExprResult.fixes.length > 0) {
+        content = mixedExprResult.content;
+        for (const fix of mixedExprResult.fixes) {
+          autoFixSummary.push(`Mixed-expression: ${fix} in ${xamlEntries[i].name}`);
+        }
+        wasFixed = true;
+      }
+
       if (content !== xamlEntries[i].content) {
         xamlEntries[i] = { name: xamlEntries[i].name, content };
         const basename = xamlEntries[i].name.split("/").pop() || xamlEntries[i].name;
@@ -4350,6 +4444,7 @@ ${depEntries}
     else if (fix.includes("Escaped bare <")) repairCode = "REPAIR_BARE_ANGLE_ESCAPE";
     else if (fix.includes("Removed duplicate attr")) repairCode = "REPAIR_DUPLICATE_ATTRIBUTE";
     else if (fix.includes("TakeScreenshot OutputPath") || fix.includes("TakeScreenshot FileName")) repairCode = "REPAIR_TAKESCREENSHOT_STRIP";
+    else if (fix.includes("Mixed-expression:")) repairCode = "REPAIR_MIXED_EXPRESSION_SYNTAX";
     else if (fix.includes("Per-activity stub") || fix.includes("Per-sequence stub") || fix.includes("per-workflow")) continue;
 
     const fileMatch = fix.match(/in\s+([\w/.-]+\.xaml)/);

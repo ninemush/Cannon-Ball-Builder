@@ -188,7 +188,8 @@ export type RepairCode =
   | "REPAIR_INVOKE_PATH_FIX"
   | "REPAIR_DEPENDENCY_ADD"
   | "REPAIR_GENERIC"
-  | "REPAIR_PLACEHOLDER_CLEANUP";
+  | "REPAIR_PLACEHOLDER_CLEANUP"
+  | "REPAIR_MIXED_EXPRESSION_SYNTAX";
 
 export interface RemediationEntry {
   level: RemediationLevel;
