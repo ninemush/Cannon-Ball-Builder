@@ -290,6 +290,10 @@ function removeUnreachableFiles(
   const reasons: string[] = [];
 
   Array.from(unreachable).forEach(file => {
+    if (file === "Main.xaml" || file === "Process.xaml" || file === "InitAllSettings.xaml") {
+      console.log(`[Structural Dedup] Protected "${file}" from removal — critical entry-point file`);
+      return;
+    }
     const archivePath = `${libPath}/${file}`;
     if (deferredWrites.has(archivePath)) {
       deferredWrites.delete(archivePath);
@@ -304,6 +308,7 @@ function removeUnreachableFiles(
     const entryName = xamlEntries[i].name;
     const relPath = entryName.startsWith(prefix) ? entryName.slice(prefix.length) : (entryName.split("/").pop() || entryName);
     if (unreachable.has(relPath)) {
+      if (relPath === "Main.xaml" || relPath === "Process.xaml" || relPath === "InitAllSettings.xaml") continue;
       if (!removedFiles.includes(relPath)) {
         removedFiles.push(relPath);
         reasons.push(`Removed "${relPath}" from xamlEntries: unreachable from Main.xaml entry-point graph`);
@@ -2002,9 +2007,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           }
         }
         if (invokeRefs.length > 0) {
+          const seqVarsEndMatch = mainXaml.match(/<\/Sequence\.Variables>\s*\n/);
           const rootSeqMatch = mainXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
-          if (rootSeqMatch) {
-            const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
+          const insertMatch = seqVarsEndMatch || rootSeqMatch;
+          if (insertMatch) {
+            const insertPos = insertMatch.index! + insertMatch[0].length;
             mainXaml = mainXaml.slice(0, insertPos) + invokeRefs.join("\n") + "\n" + mainXaml.slice(insertPos);
             deferredWrites.set(mainXamlPath, mainXaml);
             const existingIdx = xamlEntries.findIndex(e => {
@@ -2020,9 +2027,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       } else if (nonMainWorkflowNames.length === 0 && deferredWrites.has(mainXamlPath)) {
         let mainXaml = deferredWrites.get(mainXamlPath)!;
         if (!mainXaml.includes('WorkflowFileName="InitAllSettings.xaml"')) {
+          const seqVarsEndMatch = mainXaml.match(/<\/Sequence\.Variables>\s*\n/);
           const rootSeqMatch = mainXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
-          if (rootSeqMatch) {
-            const insertPos = rootSeqMatch.index! + rootSeqMatch[0].length;
+          const insertMatch = seqVarsEndMatch || rootSeqMatch;
+          if (insertMatch) {
+            const insertPos = insertMatch.index! + insertMatch[0].length;
             mainXaml = mainXaml.slice(0, insertPos) + `      ${`<ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`}\n` + mainXaml.slice(insertPos);
             deferredWrites.set(mainXamlPath, mainXaml);
             console.log(`[UiPath] Injected InitAllSettings.xaml reference into tree-assembled ${mainWfName}.xaml`);
@@ -2122,7 +2131,32 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
       }
     } else {
-      console.log(`[UiPath] Skipping workflows loop: tree-assembly produced monolithic XAML — suppressing modular sub-workflow emission to avoid orphaned files`);
+      for (const wf of workflows) {
+        const wfName = (wf.name || "Workflow").replace(/\s+/g, "_");
+        if (generatedWorkflowNames.has(wfName)) continue;
+        const result = tryGenerateOrStub(
+          () => generateRichXamlFromSpec(wf, sddContent || undefined, undefined, tf, apEnabled, genCtx),
+          wfName,
+          wf.name || "Workflow",
+        );
+        if (result) {
+          xamlResults.push(result);
+          let richCompliant: string;
+          try {
+            richCompliant = compliancePass(result.xaml, `${wfName}.xaml`);
+          } catch (compErr: any) {
+            console.warn(`[UiPath] Compliance pass failed for remaining rich XAML "${wfName}": ${compErr.message} — replacing with stub workflow`);
+            richCompliant = compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErr.message}` }), `${wfName}.xaml`, true);
+            complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message });
+          }
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
+          generatedWorkflowNames.add(wfName);
+          if (wfName === "Main") hasMain = true;
+          console.log(`[UiPath] Generated remaining workflow "${wfName}" alongside tree-assembled workflows`);
+        } else if (wfName === "Main") {
+          hasMain = true;
+        }
+      }
     }
 
     if (!hasMain && processNodes.length > 0 && !enrichment?.decomposition?.length && !treeEnrichment) {
@@ -2344,17 +2378,52 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
 
       let stubCount = 0;
+      let retryCount = 0;
       for (const ref of referencedFiles) {
         if (!existingFiles.has(ref)) {
           const baseName = ref.split("/").pop() || ref;
           const className = baseName.replace(/\.xaml$/i, "");
-          const stubXaml = buildXaml(className, `${className} - Stub Workflow`, `
+          let generated = false;
+          const matchingWfSpec = workflows.find(w => {
+            const wfSanitized = (w.name || "").replace(/\s+/g, "_");
+            return wfSanitized === className || w.name === className;
+          });
+          if (matchingWfSpec && matchingWfSpec.steps && matchingWfSpec.steps.length > 0) {
+            try {
+              const retryResult = tryGenerateOrStub(
+                () => generateRichXamlFromSpec(matchingWfSpec, sddContent || undefined, undefined, tf, apEnabled, genCtx),
+                className,
+                matchingWfSpec.description || className,
+              );
+              if (retryResult) {
+                let retryCompliant: string;
+                try {
+                  retryCompliant = compliancePass(retryResult.xaml, `${className}.xaml`);
+                } catch (compErr: any) {
+                  retryCompliant = compliancePass(generateStubWorkflow(className, { reason: `Compliance transform failed — ${compErr.message}` }), `${className}.xaml`, true);
+                }
+                deferredWrites.set(`${libPath}/${ref}`, retryCompliant);
+                existingFiles.add(ref);
+                retryCount++;
+                generated = true;
+                console.log(`[Scaffold] Retry-generated XAML for missing referenced workflow: ${ref} (${matchingWfSpec.steps.length} steps)`);
+              }
+            } catch (retryErr: any) {
+              console.log(`[Scaffold] Retry generation failed for ${ref}: ${retryErr.message} — falling back to stub`);
+            }
+          }
+          if (!generated) {
+            const stubXaml = buildXaml(className, `${className} - Stub Workflow`, `
         <ui:Comment DisplayName="TODO: Implement ${escapeXml(className)}" Text="This workflow was auto-generated as a stub. Open in UiPath Studio to implement the logic." />`);
-          deferredWrites.set(`${libPath}/${ref}`, compliancePass(stubXaml, ref));
-          existingFiles.add(ref);
-          stubCount++;
-          console.log(`[Scaffold] Generated stub XAML for referenced workflow: ${ref}`);
+            deferredWrites.set(`${libPath}/${ref}`, compliancePass(stubXaml, ref));
+            existingFiles.add(ref);
+            stubCount++;
+            console.log(`[Scaffold] Generated stub XAML for referenced workflow: ${ref}`);
+          }
         }
+      }
+      if (retryCount > 0) {
+        console.log(`[Scaffold] Retry-generated ${retryCount} XAML file(s) for missing referenced workflows`);
       }
       if (stubCount > 0) {
         console.log(`[Scaffold] Generated ${stubCount} stub XAML file(s) for missing referenced workflows`);
@@ -2458,6 +2527,24 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       const nsAndAsmPackages = extractXamlNamespaceAndAssemblyPackages(allXamlContent);
       for (const pkg of nsAndAsmPackages) {
         usedPackages.add(pkg);
+      }
+
+      try {
+        const { catalogService } = await import("./catalog/catalog-service");
+        if (catalogService.isLoaded()) {
+          const activityTagPattern = /<([a-zA-Z]+):([A-Za-z]+)[\s/>]/g;
+          let actMatch;
+          while ((actMatch = activityTagPattern.exec(allXamlContent)) !== null) {
+            const activityTag = actMatch[2];
+            const catalogPkg = catalogService.getPackageForActivity(activityTag);
+            if (catalogPkg && !usedPackages.has(catalogPkg)) {
+              usedPackages.add(catalogPkg);
+              console.log(`[Dependency Alignment] Catalog-based addition: ${catalogPkg} — activity "${activityTag}" found in XAML`);
+            }
+          }
+        }
+      } catch (catalogErr: any) {
+        console.log(`[Dependency Alignment] Catalog-based dependency resolution skipped: ${catalogErr.message}`);
       }
 
       for (const safePkg of DEPENDENCY_SAFE_LIST) {

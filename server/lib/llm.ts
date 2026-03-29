@@ -38,6 +38,7 @@ export interface LLMOptions {
   system: string;
   messages: LLMMessage[];
   maxTokens: number;
+  temperature?: number;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -143,6 +144,7 @@ class AnthropicProvider implements LLMProvider {
       max_tokens: options.maxTokens,
       system: options.system,
       messages: toAnthropicMessages(options.messages),
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
     });
 
     return {
@@ -286,6 +288,7 @@ class OpenAIProvider implements LLMProvider {
         messages,
         max_completion_tokens: tokenParams.max_completion_tokens,
         stream: true,
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       };
       console.log(`[OpenAI] Stream params: model=${p.model}, max_completion_tokens=${p.max_completion_tokens}, max_tokens=<not set>`);
       return p;
@@ -295,6 +298,7 @@ class OpenAIProvider implements LLMProvider {
       messages,
       max_tokens: tokenParams.max_tokens,
       stream: true,
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
     };
     console.log(`[OpenAI] Stream params: model=${p.model}, max_tokens=${p.max_tokens}, max_completion_tokens=<not set>`);
     return p;
@@ -488,6 +492,7 @@ class GeminiProvider implements LLMProvider {
       contents: toGeminiContents(options.messages),
       generationConfig: {
         maxOutputTokens: options.maxTokens,
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       },
     };
     if (options.system) {

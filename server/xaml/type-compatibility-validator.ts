@@ -645,12 +645,60 @@ export function validateTypeCompatibility(
       if (/[^a-zA-Z0-9_]/.test(vName)) reasons.push("contains invalid character(s)");
       if (VBNET_RESERVED.has(vName.toLowerCase())) reasons.push("is a VB.NET reserved word");
       if (reasons.length > 0) {
+        let sanitized = vName.replace(/\./g, "_");
+        sanitized = sanitized.replace(/[^a-zA-Z0-9_]/g, "_");
+        sanitized = sanitized.replace(/^[0-9]+/, "");
+        sanitized = sanitized.replace(/_+/g, "_");
+        sanitized = sanitized.replace(/^_|_$/g, "");
+        if (!sanitized) sanitized = "var1";
+        if (VBNET_RESERVED.has(sanitized.toLowerCase())) sanitized = `_${sanitized}`;
+        let suffix = 1;
+        const baseSanitized = sanitized;
+        while (sanitized !== vName && patchedContent.includes(`Name="${sanitized}"`)) {
+          sanitized = `${baseSanitized}_${suffix}`;
+          suffix++;
+        }
+        if (sanitized !== vName) {
+          const escapedOriginal = vName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          patchedContent = patchedContent.replace(
+            new RegExp(`Name="${escapedOriginal}"`, "g"),
+            `Name="${sanitized}"`,
+          );
+          patchedContent = patchedContent.replace(
+            new RegExp(`\\[${escapedOriginal}\\]`, "g"),
+            `[${sanitized}]`,
+          );
+          patchedContent = patchedContent.replace(
+            new RegExp(`\\b${escapedOriginal}\\b`, "g"),
+            sanitized,
+          );
+          changed = true;
+          repairs.push({
+            file: shortName,
+            repair: `Auto-repaired variable name "${vName}" → "${sanitized}" (${reasons.join(", ")})`,
+          });
+        }
         violations.push({
           category: "accuracy",
-          severity: "error",
+          severity: "warning",
           check: "UNSAFE_VARIABLE_NAME",
           file: shortName,
-          detail: `Variable "${vName}" has an invalid name — ${reasons.join(", ")}. This will cause Studio load failures.`,
+          detail: `Variable "${vName}" had an invalid name — ${reasons.join(", ")}. ${sanitized !== vName ? `Auto-repaired to "${sanitized}".` : "Could not auto-repair."}`,
+        });
+      }
+    }
+
+    const vbNewPattern = /="\[([^\]]*)\bnew\s+([A-Z])/g;
+    let vbNewMatch;
+    while ((vbNewMatch = vbNewPattern.exec(patchedContent)) !== null) {
+      const fullExpr = vbNewMatch[0];
+      const corrected = fullExpr.replace(/\bnew\s+([A-Z])/g, "New $1");
+      if (corrected !== fullExpr) {
+        patchedContent = patchedContent.replace(fullExpr, corrected);
+        changed = true;
+        repairs.push({
+          file: shortName,
+          repair: `Auto-corrected lowercase "new" to "New" in VB.NET expression`,
         });
       }
     }

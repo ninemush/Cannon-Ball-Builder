@@ -979,8 +979,11 @@ export async function compilePackageFromSpecs(
     const hasStructuralCatalogErrors = qgResult
       ? qgResult.violations.some((v: any) => v.severity === "error" && (v.check === "CATALOG_STRUCTURAL_VIOLATION" || v.check === "ENUM_VIOLATION"))
       : false;
+    const hasMainXamlMissing = qgResult
+      ? qgResult.violations.some((v: any) => v.severity === "error" && v.check === "main-xaml")
+      : false;
     let qualityGateBlocking = mode === "baseline_openable"
-      ? (isIncomplete || hasStructuralCatalogErrors)
+      ? (isIncomplete || hasStructuralCatalogErrors || hasMainXamlMissing)
       : (qgResult ? (!qgResult.passed || isIncomplete) : false);
     let qualityGateWarnings: string[] = qgResult
       ? qgResult.violations

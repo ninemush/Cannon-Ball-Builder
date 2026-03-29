@@ -100,7 +100,13 @@ Naming conventions (MANDATORY):
   qi_VariableName    qid_VariableName
 
 Variables must be declared inside the nearest enclosing Sequence.Variables block.
-Variable names must be context-specific (str_CustomerEmail not str_Email, dt_InvoiceData not dt_Data).`;
+Variable names must be context-specific (str_CustomerEmail not str_Email, dt_InvoiceData not dt_Data).
+
+PROHIBITED variable names — these are property accesses, NOT variable declarations:
+  ✗ dt_Constants.Rows  → use dt_ConstantsRows or iterate with ForEach
+  ✗ dt_Settings.Rows   → use dt_SettingsRows or iterate with ForEach
+  ✗ obj_Result.Value    → use obj_ResultValue
+  ✗ any name containing a dot (.) — dots indicate property access in VB.NET, not valid variable identifiers`;
 
 const SECTION_4_OUTPUT = `=== SECTION 4: WORKFLOW SPECIFICATION ===
 OUTPUT FORMAT — respond with ONLY valid JSON matching this schema.
@@ -283,7 +289,8 @@ Generate the enriched workflow specification. For each node, provide the specifi
 
       console.log(`[AI XAML Enricher] Requesting enrichment for ${nodeDescriptions.length} nodes (streaming)...`);
       const stream = getCodeLLM().stream({
-        maxTokens: 8192,
+        maxTokens: 12288,
+        temperature: 0.15,
         system: systemPrompt,
         messages: [{ role: "user", content: userMessage }],
         timeoutMs,
@@ -611,6 +618,7 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
 
       const stream = getCodeLLM().stream({
         maxTokens: 16384,
+        temperature: 0.15,
         system: systemPrompt,
         messages,
         timeoutMs,

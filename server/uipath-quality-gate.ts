@@ -2058,13 +2058,26 @@ export function runQualityGate(input: QualityGateInput): QualityGateResult {
     "Variable", "Literal", "StateMachine", "State", "FinalState", "Transition",
     "InArgument", "OutArgument", "InOutArgument", "ActivityAction",
     "DelegateInArgument", "DelegateOutArgument",
+    "AssemblyReference", "Collection", "String",
   ]);
   const unprefixedActivityViolations: QualityGateViolation[] = [];
   for (const entry of input.xamlEntries) {
     const shortName = entry.name.split("/").pop() || entry.name;
     const lines = entry.content.split("\n");
     const unprefixedTagRegex = /^(\s*)<([A-Z][A-Za-z]+)([\s>\/])/;
+    let insideMetadataBlock = false;
     for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (trimmed.includes("<TextExpression.ReferencesForImplementation") ||
+          trimmed.includes("<TextExpression.NamespacesForImplementation")) {
+        insideMetadataBlock = true;
+      }
+      if (trimmed.includes("</TextExpression.ReferencesForImplementation") ||
+          trimmed.includes("</TextExpression.NamespacesForImplementation")) {
+        insideMetadataBlock = false;
+        continue;
+      }
+      if (insideMetadataBlock) continue;
       const match = unprefixedTagRegex.exec(lines[i]);
       if (!match) continue;
       const tagName = match[2];
