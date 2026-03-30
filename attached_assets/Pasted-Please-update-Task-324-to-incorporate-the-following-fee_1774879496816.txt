@@ -1,0 +1,70 @@
+Please update Task #324 to incorporate the following feedback and adjust the implementation plan accordingly.
+
+I agree with the current approach overall. It is strong, practical, and much better than a generic “improve package quality” task.
+
+What should remain:
+- evidence-first investigation for `State/StateMachine` and `RetryScope`
+- fixing `x:Object` degradation as a systemic upstream defect
+- fixing undeclared `str_AssetValue`
+- aligning report dependencies with final `project.json`
+- validating against the active Studio/profile combination as the final acceptance gate
+
+Please incorporate these additional requirements:
+
+1. Add explicit VB-only expression enforcement for VB projects
+This should be a distinct task or explicit subtask, not only implied through other fixes.
+
+Reason:
+- the live package still shows C# expression leakage such as `new Dictionary<String,Object>()`
+- there are expression/condition parsing failures that point to unsafe expression normalization
+
+Required behavior:
+- if the project language is VB, reject C# syntax before XAML emission
+- do not emit object construction or expression forms that are not valid VB.NET
+- if an expression cannot be normalized confidently, block or simplify instead of guessing
+- add regression coverage for:
+  - `new Dictionary<String,Object>()`
+  - malformed conditions
+  - unwrapped / invalid VB expressions in UiPath activity properties
+
+2. Add explicit structural child-model validation for container activities
+This should be a distinct task or explicit subtask.
+
+Must cover at least:
+- `If.Then`
+- `If.Else`
+- `TryCatch`
+- `RetryScope`
+- `State`
+- `Transition`
+- `ForEach`
+
+Reason:
+- some Studio failures are not just malformed XML; they are invalid content-model structures
+- real failures included malformed `Else` structure and container-related load/parser issues
+
+Required behavior:
+- validate container child cardinality and allowed child shapes before final package output
+- auto-wrap multiple children in `Sequence` where valid
+- otherwise fail the workflow deterministically instead of emitting structurally ambiguous XAML
+- add regression tests for these container/content-model failures
+
+Please also refine two existing tasks:
+
+Task 3 refinement:
+- do not scope the fix only to `Assign`
+- broader rule:
+  when the tree assembler already emitted a concrete typed XAML construct, the type-compatibility validator must not override it using generic catalog inference
+
+Task 4 refinement:
+- do not limit this to `GetAsset` / `GetCredential`
+- add a general scan pass that auto-declares missing implicit output variables for all relevant template-emitting activities
+
+Please update the task description / scope so the final implementation plan explicitly includes:
+- VB-only expression enforcement
+- structural child-model validation
+- broader typed-emission precedence over generic catalog inference
+- generalized implicit output-variable declaration
+
+The goal remains:
+generate Studio-loadable, typed, compatibility-safe UiPath packages for Studio 25.10 Windows/VB, without breaking type safety or emitting structurally invalid XAML.
