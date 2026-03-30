@@ -12,7 +12,7 @@ import archiver from "archiver";
     generateCloseAllApplicationsXaml,
     generateKillAllProcessesXaml,
     aggregateGaps,
-    makeUiPathCompliant,
+    normalizeXaml as makeUiPathCompliant,
     ensureBracketWrapped,
     normalizeAssignArgumentNesting,
     validateXamlContent,

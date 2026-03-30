@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { MetaValidationDashboard } from "@/components/meta-validation-dashboard";
+import { PipelineHealthDashboard } from "@/components/pipeline-health-dashboard";
 import {
   ShieldAlert,
   Shield,
@@ -3660,6 +3661,10 @@ export default function SettingsPage() {
               <Database className="mr-1.5 sm:mr-2 h-4 w-4" />
               <span className="text-xs sm:text-sm">Metadata</span>
             </TabsTrigger>
+            <TabsTrigger value="pipeline-health" data-testid="tab-pipeline-health">
+              <Activity className="mr-1.5 sm:mr-2 h-4 w-4" />
+              <span className="text-xs sm:text-sm">Pipeline Health</span>
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -3682,6 +3687,11 @@ export default function SettingsPage() {
         </TabsContent>
         <TabsContent value="metadata" className="mt-4">
           <MetadataFreshnessTab />
+        </TabsContent>
+        <TabsContent value="pipeline-health" className="mt-4">
+          <Card data-testid="card-pipeline-health">
+            <PipelineHealthDashboard />
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

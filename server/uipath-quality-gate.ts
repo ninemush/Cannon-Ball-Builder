@@ -1978,6 +1978,71 @@ function computeReadiness(violations: QualityGateViolation[]): PackageReadiness 
   return "SUCCESS";
 }
 
+function checkTransitiveDependencies(input: QualityGateInput): QualityGateViolation[] {
+  const violations: QualityGateViolation[] = [];
+
+  let declaredPackages: Set<string>;
+  try {
+    const projectJson = JSON.parse(input.projectJsonContent);
+    declaredPackages = new Set(Object.keys(projectJson.dependencies || {}));
+  } catch {
+    return violations;
+  }
+
+  for (const entry of input.xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const requiredPackages = scanXamlForRequiredPackages(entry.content);
+
+    for (const pkg of requiredPackages) {
+      if (pkg === "UiPath.System.Activities") continue;
+      const exactMatch = declaredPackages.has(pkg);
+      if (!exactMatch) {
+        const fuzzyMatch = Array.from(declaredPackages).some(d =>
+          d.toLowerCase() === pkg.toLowerCase()
+        );
+        if (!fuzzyMatch) {
+          violations.push({
+            category: "accuracy",
+            severity: "warning",
+            check: "transitive-dependency-missing",
+            file: shortName,
+            detail: `Activity requires package "${pkg}" but it is not declared in project.json dependencies`,
+          });
+        }
+      }
+    }
+
+    const errorActivityPattern = /<([\w:]*ErrorActivity[\w]*)\s/g;
+    let errorMatch;
+    while ((errorMatch = errorActivityPattern.exec(entry.content)) !== null) {
+      violations.push({
+        category: "accuracy",
+        severity: "error",
+        check: "error-activity-reference",
+        file: shortName,
+        detail: `ErrorActivity-class reference "${errorMatch[1]}" detected — indicates a failed activity resolution at design time`,
+      });
+    }
+
+    const unknownTypePattern = /TypeArgument="([^"]+)"/g;
+    let typeMatch;
+    while ((typeMatch = unknownTypePattern.exec(entry.content)) !== null) {
+      const typeArg = typeMatch[1];
+      if (typeArg.includes("ErrorActivity") || typeArg.includes("UnknownType")) {
+        violations.push({
+          category: "accuracy",
+          severity: "warning",
+          check: "unresolved-type-argument",
+          file: shortName,
+          detail: `Unresolved type argument "${typeArg}" — likely indicates missing transitive dependency`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 export function validatePackage(input: QualityGateInput): QualityGateResult {
   const blockedViolations = scanBlockedPatterns(input);
   const completenessViolations = checkCompleteness(input);
@@ -2093,6 +2158,8 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
     }
   }
 
+  const transitiveDependencyViolations = checkTransitiveDependencies(input);
+
   const allViolations = [
     ...blockedViolations,
     ...completenessViolations,
@@ -2105,6 +2172,7 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
     ...selectorWarnings,
     ...doubleEncodingViolations,
     ...unprefixedActivityViolations,
+    ...transitiveDependencyViolations,
   ];
 
   const hasErrors = allViolations.some(v => v.severity === "error");
@@ -2185,6 +2253,7 @@ const BLOCKING_CHECKS = new Set([
   "CATALOG_STRUCTURAL_VIOLATION",
   "EXPRESSION_SYNTAX_UNFIXABLE",
   "unprefixed-activity",
+  "error-activity-reference",
   "OBJECT_TO_IENUMERABLE",
   "UNDECLARED_VARIABLE",
   "TYPE_MISMATCH",
@@ -2226,6 +2295,8 @@ const WARNING_CHECKS = new Set([
   "EXPRESSION_SYNTAX",
   "SELECTOR_PLACEHOLDER",
   "SELECTOR_LOW_QUALITY",
+  "transitive-dependency-missing",
+  "unresolved-type-argument",
 ]);
 
 export function classifyQualityIssues(result: QualityGateResult): ClassifiedIssue[] {

@@ -23,7 +23,8 @@ export {
   ensureBracketWrapped,
   looksLikeVariableRef,
   smartBracketWrap,
-  makeUiPathCompliant,
+  normalizeXaml,
+  normalizeXaml as makeUiPathCompliant,
   normalizeAssignArgumentNesting,
   type TargetFramework,
 } from "./xaml/xaml-compliance";

@@ -13,6 +13,7 @@ import { registerFileUploadRoutes } from "./file-upload";
 import { evaluateTransition } from "./stage-transition";
 import { SUPPORTED_MODELS, CHAT_SUPPORTED_MODELS, setDbModel, getActiveModel, getProviderName, setDbCodeModel, getActiveCodeModel, getCodeProviderName, setDbMetaValidationModel, getActiveMetaValidationModel, getMetaValidationProviderName } from "./lib/llm";
 import { getMetricsSummary, getAllMetrics, type MetaValidationMode } from "./meta-validation";
+import { getConvergenceReport, getAllPipelineHealth } from "./pipeline-health";
 import { metadataService } from "./catalog/metadata-service";
 import { refreshAll, refreshGeneration, refreshIntegration, startRefreshScheduler, discoverNewerLines, verifyPreferredVersionsOnStartup, runStartupDiscovery } from "./catalog/metadata-refresher";
 
@@ -631,6 +632,31 @@ export async function registerRoutes(
     } catch (err: any) {
       return res.status(500).json({ message: `Refresh failed: ${err.message}` });
     }
+  });
+
+  app.get("/api/admin/pipeline-health/convergence", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const dbUser = await storage.getUser(req.session.userId);
+    if (!dbUser || (req.session.activeRole || dbUser.role) !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const days = parseInt(req.query.days as string) || 30;
+    const report = await getConvergenceReport(days);
+    return res.json(report);
+  });
+
+  app.get("/api/admin/pipeline-health/history", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const dbUser = await storage.getUser(req.session.userId);
+    if (!dbUser || (req.session.activeRole || dbUser.role) !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const metrics = await getAllPipelineHealth();
+    return res.json(metrics.slice(-50));
   });
 
   const schedulerIntervalMs = parseInt(process.env.METADATA_REFRESH_INTERVAL_MS || "", 10) || 24 * 60 * 60 * 1000;

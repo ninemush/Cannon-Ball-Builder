@@ -33,19 +33,37 @@ export function generateDhgFromOutcomeReport(
     if (context.generationModeReason) md += `**Mode Reason:** ${context.generationModeReason}\n`;
   }
 
-  if (context.analysis) {
-    const r = context.analysis.readiness;
-    md += `**Deployment Readiness:** ${r.rating} (${r.percent}%)\n`;
-  }
-
-  md += `\n`;
-
   const totalPropertyRemediations = report.propertyRemediations.length;
   const totalActivityRemediations = report.remediations.filter(r => r.level === "activity").length;
   const totalSequenceRemediations = report.remediations.filter(r => r.level === "sequence").length;
   const totalStructuralLeafRemediations = report.remediations.filter(r => r.level === "structural-leaf").length;
   const totalWorkflowRemediations = report.remediations.filter(r => r.level === "workflow").length;
   const totalRemediations = totalPropertyRemediations + report.remediations.length;
+
+  const hasStubs = totalWorkflowRemediations > 0 || totalActivityRemediations > 0 || totalSequenceRemediations > 0 || totalStructuralLeafRemediations > 0;
+  const hasStructuralDefects = report.studioCompatibility?.some(
+    (sc: PerWorkflowStudioCompatibility) => sc.level === "studio-blocked"
+  ) ?? false;
+  const transitiveDependencyWarnings = report.qualityWarnings.filter(
+    w => w.check === "transitive-dependency-missing" || w.check === "error-activity-reference" || w.check === "unresolved-type-argument"
+  );
+
+  if (context.analysis) {
+    const r = context.analysis.readiness;
+    let adjustedPercent = r.percent;
+    let adjustedRating = r.rating;
+    if ((hasStubs || hasStructuralDefects) && adjustedPercent > 69) {
+      adjustedPercent = Math.min(adjustedPercent, 69);
+      adjustedRating = adjustedPercent >= 65 ? "Mostly Ready" : adjustedPercent >= 40 ? "Needs Work" : "Not Ready";
+    }
+    if (transitiveDependencyWarnings.length > 0 && adjustedPercent > 79) {
+      adjustedPercent = Math.min(adjustedPercent, 79);
+      adjustedRating = adjustedPercent >= 65 ? "Mostly Ready" : adjustedPercent >= 40 ? "Needs Work" : "Not Ready";
+    }
+    md += `**Deployment Readiness:** ${adjustedRating} (${adjustedPercent}%)\n`;
+  }
+
+  md += `\n`;
 
   md += `**Total Estimated Effort: ~${report.totalEstimatedEffortMinutes} minutes (${(report.totalEstimatedEffortMinutes / 60).toFixed(1)} hours)**\n`;
   md += `**Remediations:** ${totalRemediations} total (${totalPropertyRemediations} property, ${totalActivityRemediations} activity, ${totalSequenceRemediations} sequence, ${totalStructuralLeafRemediations} structural-leaf, ${totalWorkflowRemediations} workflow)\n`;
@@ -310,9 +328,24 @@ export function generateDhgFromOutcomeReport(
     md += `\n`;
   }
 
+  if (transitiveDependencyWarnings.length > 0) {
+    md += `### Transitive Dependency Issues (${transitiveDependencyWarnings.length})\n\n`;
+    md += `Activities reference packages or types that are not declared in project.json. These may cause runtime failures.\n\n`;
+    md += `| # | File | Check | Detail | Est. Minutes |\n`;
+    md += `|---|------|-------|--------|-------------|\n`;
+    transitiveDependencyWarnings.forEach((w, i) => {
+      const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
+      md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 10} |\n`;
+    });
+    md += `\n`;
+  }
+
   if (report.qualityWarnings.length > 0) {
     const selectorWarnings = report.qualityWarnings.filter(w => w.check === "SELECTOR_PLACEHOLDER" || w.check === "SELECTOR_LOW_QUALITY");
-    const otherWarnings = report.qualityWarnings.filter(w => w.check !== "SELECTOR_PLACEHOLDER" && w.check !== "SELECTOR_LOW_QUALITY");
+    const nonTransitiveWarnings = report.qualityWarnings.filter(w =>
+      w.check !== "SELECTOR_PLACEHOLDER" && w.check !== "SELECTOR_LOW_QUALITY" &&
+      w.check !== "transitive-dependency-missing" && w.check !== "error-activity-reference" && w.check !== "unresolved-type-argument"
+    );
 
     if (selectorWarnings.length > 0) {
       md += `### UI Selector Warnings (${selectorWarnings.length})\n\n`;
@@ -329,11 +362,11 @@ export function generateDhgFromOutcomeReport(
       md += `\n`;
     }
 
-    if (otherWarnings.length > 0) {
-      md += `### Quality Warnings (${otherWarnings.length})\n\n`;
+    if (nonTransitiveWarnings.length > 0) {
+      md += `### Quality Warnings (${nonTransitiveWarnings.length})\n\n`;
       md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
       md += `|---|------|-------|--------|-----------------|-------------|\n`;
-      otherWarnings.forEach((w, i) => {
+      nonTransitiveWarnings.forEach((w, i) => {
         const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
         const action = (w.developerAction || "").length > 80
           ? (w.developerAction || "").slice(0, 77) + "..."

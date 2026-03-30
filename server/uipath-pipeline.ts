@@ -15,7 +15,7 @@ import {
 import { catalogService } from "./catalog/catalog-service";
 import type { StudioProfile } from "./catalog/metadata-service";
 import {
-  makeUiPathCompliant,
+  normalizeXaml as normalizeXamlCompliance,
   validateXamlContent,
   type XamlGap,
 } from "./xaml-generator";
@@ -40,6 +40,7 @@ import {
   type EntryWorkflowMetadata,
 } from "./meta-validation";
 import { classifyComplexity, estimateComplexityFromContext, type ComplexityTier, type ComplexityClassification } from "./complexity-classifier";
+import { recordPipelineHealth, computePipelineHealthFromResult } from "./pipeline-health";
 
 export type { GenerationMode };
 export type { ComplexityTier, ComplexityClassification };
@@ -710,11 +711,11 @@ export async function generateWorkflowSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("spec_generating", "Loading context and preparing spec generation");
-    tracker.heartbeat("spec_generating", () => "Loading idea, SDD, and process map data");
+    tracker.start("spec_generation", "Loading context and preparing spec generation");
+    tracker.heartbeat("spec_generation", () => "Loading idea, SDD, and process map data");
     const ctx = options?.preloadedContext || await loadIdeaContext(ideaId);
     const artifacts = await extractOrchestratorArtifacts(ctx.sdd?.content, pipelineWarnings);
-    tracker.complete("spec_generating", "Context loaded for spec generation", {
+    tracker.complete("spec_generation", "Context loaded for spec generation", {
       hasSdd: !!ctx.sdd,
       hasPdd: !!ctx.pdd,
       nodeCount: ctx.mapNodes.length,
@@ -726,14 +727,14 @@ export async function generateWorkflowSpecs(
 
     let aiSkills: any[] = [];
     if (mode !== "baseline_openable") {
-      tracker.start("confidence_assessment", "Fetching AI Center skills");
-      tracker.heartbeat("confidence_assessment", () => "Checking AI Center availability");
+      tracker.start("spec_generation_ai", "Fetching AI Center skills");
+      tracker.heartbeat("spec_generation_ai", () => "Checking AI Center availability");
     }
     try {
       const aiResult = await getAICenterSkills();
       if (aiResult.available) aiSkills = aiResult.skills;
       if (mode !== "baseline_openable") {
-        tracker.complete("confidence_assessment", `${aiSkills.length} AI skill(s) available`, { skillCount: aiSkills.length });
+        tracker.complete("spec_generation_ai", `${aiSkills.length} AI skill(s) available`, { skillCount: aiSkills.length });
       }
     } catch (err: any) {
       const msg = err?.message || "Unknown error";
@@ -745,15 +746,15 @@ export async function generateWorkflowSpecs(
         recoverable: true,
       });
       if (mode !== "baseline_openable") {
-        tracker.warn("confidence_assessment", `AI Center unavailable: ${msg}`);
-        tracker.complete("confidence_assessment", "Continuing without AI Center");
+        tracker.warn("spec_generation_ai", `AI Center unavailable: ${msg}`);
+        tracker.complete("spec_generation_ai", "Continuing without AI Center");
       }
     }
 
     const enrichedPkg = enrichPackageWithContext(pkg, ctx, artifacts, aiSkills);
 
-    tracker.start("spec_ready", "Spec generation complete");
-    tracker.complete("spec_ready", "WorkflowSpecs ready for compilation");
+    tracker.start("spec_generation_done", "Spec generation complete");
+    tracker.complete("spec_generation_done", "WorkflowSpecs ready for XAML emission");
 
     if (options?.runId) {
       try {
@@ -852,10 +853,10 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("compiling", "Assembling XAML workflows");
+    tracker.start("xaml_emission", "Assembling XAML workflows");
     const workflowCount = (pkg as any).workflows?.length || 0;
     let currentWorkflowIdx = 0;
-    tracker.heartbeat("compiling", () => {
+    tracker.heartbeat("xaml_emission", () => {
       return `Building workflow ${currentWorkflowIdx + 1} of ${workflowCount || "?"}`;
     });
     let buildResult: BuildResult;
@@ -911,7 +912,7 @@ export async function compilePackageFromSpecs(
         if (mergedCompliant.length > 0) {
           console.log(`[Pipeline] Carrying forward ${mergedCompliant.length} compliant workflow(s) (${compliantFromCurrent.length} from current attempt, ${compliantFromPrior.length} from prior): ${mergedCompliant.map(w => w.name).join(", ")}`);
         }
-        tracker.warn("compiling", `Quality gate failed — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
+        tracker.warn("xaml_emission", `Quality gate failed — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
         tracker.cleanup();
         console.log(`[Pipeline] Auto-downgrade: full_implementation → baseline_openable due to QualityGateError (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
         return compilePackageFromSpecs(ideaId, specResult, pkg, {
@@ -931,7 +932,7 @@ export async function compilePackageFromSpecs(
     }
 
     currentWorkflowIdx = workflowCount > 0 ? workflowCount - 1 : 0;
-    tracker.complete("compiling", `${buildResult.xamlEntries.length} XAML file(s) assembled`, {
+    tracker.complete("xaml_emission", `${buildResult.xamlEntries.length} XAML file(s) assembled`, {
       xamlCount: buildResult.xamlEntries.length,
       cacheHit: buildResult.cacheHit,
     });
@@ -939,7 +940,7 @@ export async function compilePackageFromSpecs(
     if (buildResult.dependencyWarnings) {
       pipelineWarnings.push(...buildResult.dependencyWarnings);
       for (const w of buildResult.dependencyWarnings) {
-        tracker.warn("compiling", w.message);
+        tracker.warn("xaml_emission", w.message);
       }
 
       const excessiveStrippingWarning = buildResult.dependencyWarnings.find(
@@ -973,7 +974,7 @@ export async function compilePackageFromSpecs(
         if (compliantEntries.length > 0) {
           console.log(`[Pipeline] Carrying forward ${compliantEntries.length} compliant workflow(s) from build: ${compliantEntries.map(e => e.name).join(", ")}`);
         }
-        tracker.warn("compiling", `Excessive property stripping detected — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
+        tracker.warn("xaml_emission", `Excessive property stripping detected — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
         tracker.cleanup();
         console.log(`[Pipeline] Auto-downgrade: ${mode} → baseline_openable due to excessive property stripping`);
         return compilePackageFromSpecs(ideaId, specResult, pkg, {
@@ -993,10 +994,10 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("validating", "Validating archive and catalog compliance");
+    tracker.start("compliance_normalization", "Validating archive and catalog compliance");
     const archiveValidation = validateArchiveStructure(buildResult.buffer);
     if (!archiveValidation.valid) {
-      tracker.warn("validating", `Archive validation failed: ${archiveValidation.errors.join("; ")}`);
+      tracker.warn("compliance_normalization", `Archive validation failed: ${archiveValidation.errors.join("; ")}`);
       if (mode !== "baseline_openable" && currentDowngradeAttempt < maxDowngradeAttempts) {
         const downgradeEvent: DowngradeEvent = {
           fromMode: mode,
@@ -1024,7 +1025,7 @@ export async function compilePackageFromSpecs(
         });
       }
       const archiveError = `Archive validation failed and no downgrade available: ${archiveValidation.errors.join("; ")}`;
-      tracker.fail("validating", archiveError);
+      tracker.fail("compliance_normalization", archiveError);
       tracker.cleanup();
       throw new Error(archiveError);
     }
@@ -1054,9 +1055,9 @@ export async function compilePackageFromSpecs(
       }
     } catch (err: any) {
       console.warn(`[Pipeline] Template compliance calculation failed: ${err.message}`);
-      tracker.warn("validating", `Template compliance check failed: ${err.message}`);
+      tracker.warn("compliance_normalization", `Template compliance check failed: ${err.message}`);
     }
-    tracker.complete("validating", "Validation complete", { templateComplianceScore });
+    tracker.complete("compliance_normalization", "Compliance normalization complete", { templateComplianceScore });
 
     const qgResult = buildResult.qualityGateResult;
     const isIncomplete = qgResult ? qgResult.completenessLevel === "incomplete" : false;
@@ -1090,7 +1091,7 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("remediating", "Running meta-validation and remediation");
+    tracker.start("validation", "Running meta-validation and remediation");
     let metaValidationResult: MetaValidationResult | undefined;
     let finalXamlEntries = buildResult.xamlEntries;
     let finalPackageBuffer = buildResult.buffer;
@@ -1344,7 +1345,7 @@ export async function compilePackageFromSpecs(
       console.error(`[Pipeline] ${canonicalRebuildErrorMsg}`);
       throw new Error(canonicalRebuildErrorMsg);
     }
-    tracker.complete("remediating", "Remediation complete");
+    tracker.complete("validation", "Validation and remediation complete");
 
     if (options?.runId) {
       try {
@@ -1352,13 +1353,13 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("packaging", "Building .nupkg archive");
+    tracker.start("packaging_dhg", "Building .nupkg archive");
     if (hasNupkg) {
-      tracker.complete("packaging", `Package built (${Math.round(finalPackageBuffer.length / 1024)}KB)`, {
+      tracker.complete("packaging_dhg", `Package built (${Math.round(finalPackageBuffer.length / 1024)}KB)`, {
         sizeBytes: finalPackageBuffer.length,
       });
     } else {
-      tracker.fail("packaging", "Package build produced no output");
+      tracker.fail("packaging_dhg", "Package build produced no output");
     }
 
     if (options?.runId) {
@@ -1367,10 +1368,10 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
-    tracker.start("dhg_generation", "Generating Developer Handoff Guide");
-    tracker.heartbeat("dhg_generation", () => "Analyzing workflows and writing guide");
+    tracker.start("packaging_dhg_guide", "Generating Developer Handoff Guide");
+    tracker.heartbeat("packaging_dhg_guide", () => "Analyzing workflows and writing guide");
     const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode);
-    tracker.complete("dhg_generation", "Handoff Guide generated", {
+    tracker.complete("packaging_dhg_guide", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
 
@@ -1475,6 +1476,22 @@ export async function compilePackageFromSpecs(
     } catch (metricsErr: unknown) {
       const errMsg = metricsErr instanceof Error ? metricsErr.message : String(metricsErr);
       console.warn(`[Pipeline] Failed to record generation metrics: ${errMsg}`);
+    }
+
+    try {
+      const pipelineStartTime = (tracker as any).startTimes?.get("spec_generation") || Date.now();
+      const durationMs = Date.now() - pipelineStartTime;
+      const transitiveDepsCount = qgResult
+        ? qgResult.violations.filter((v: any) =>
+            v.check === "transitive-dependency-missing" || v.check === "error-activity-reference" || v.check === "unresolved-type-argument"
+          ).length
+        : 0;
+      const qgRunCount = 1 + downgrades.length;
+      const healthMetrics = computePipelineHealthFromResult(result, ideaId, durationMs, qgRunCount, transitiveDepsCount);
+      await recordPipelineHealth(healthMetrics);
+    } catch (healthErr: unknown) {
+      const errMsg = healthErr instanceof Error ? healthErr.message : String(healthErr);
+      console.warn(`[Pipeline] Failed to record pipeline health: ${errMsg}`);
     }
 
     console.log(`[Pipeline] Cached result for ${ideaId} (mode=${mode}, fingerprint ${fp}, ${finalPackageBuffer.length} bytes, status=${finalStatus}, warnings=${pipelineWarnings.length}, templateCompliance=${templateComplianceScore ?? "N/A"})`);
@@ -1688,13 +1705,15 @@ export async function runBuildPipeline(
 
 export { QualityGateError } from "./uipath-integration";
 
-export function normalizeXaml(
+export function normalizeAndAnalyzeXaml(
   xaml: string,
   targetFramework: "Windows" | "Portable" = "Windows",
 ): { normalized: string; report: AnalysisReport } {
-  const compliant = makeUiPathCompliant(xaml, targetFramework);
+  const compliant = normalizeXamlCompliance(xaml, targetFramework);
   const { fixed, report } = analyzeAndFix(compliant);
   return { normalized: fixed, report };
 }
 
-export { makeUiPathCompliant, analyzeAndFix };
+export { normalizeAndAnalyzeXaml as normalizeXaml };
+
+export { normalizeXamlCompliance as makeUiPathCompliant, analyzeAndFix };

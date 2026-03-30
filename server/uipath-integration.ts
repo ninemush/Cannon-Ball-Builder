@@ -20,7 +20,7 @@ import {
   aggregateGaps,
   generateDeveloperHandoffGuide,
   generateDhgSummary,
-  makeUiPathCompliant,
+  normalizeXaml as makeUiPathCompliant,
   ensureBracketWrapped,
   validateXamlContent,
   generateStubWorkflow,

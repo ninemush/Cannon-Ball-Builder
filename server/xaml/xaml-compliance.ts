@@ -1168,7 +1168,7 @@ export function validateXmlWellFormedness(xml: string): { valid: boolean; errors
   return { valid: errors.length === 0, errors };
 }
 
-export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFramework = "Windows"): string {
+export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework = "Windows"): string {
   let idCounter = 0;
   const viewStateEntries: { id: string; width: number; height: number }[] = [];
   const isCrossPlatform = targetFramework === "Portable";
