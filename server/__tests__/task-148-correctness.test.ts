@@ -65,14 +65,14 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
   });
 
   describe("2. Expression emission hardening", () => {
-    it("sanitizePropertyValue preserves bracket-wrapped expressions intact", () => {
+    it("sanitizePropertyValue escapes quotes in bracket-wrapped expressions", () => {
       const result = sanitizePropertyValue("Message", "[str_Name & \" is ready\"]");
-      expect(result).toBe("[str_Name & \" is ready\"]");
+      expect(result).toBe("[str_Name &amp; &quot; is ready&quot;]");
     });
 
-    it("sanitizePropertyValue preserves bracket expression with quotes", () => {
+    it("sanitizePropertyValue escapes bracket expression with quotes", () => {
       const result = sanitizePropertyValue("Value", "[\"Hello World\"]");
-      expect(result).toBe("[\"Hello World\"]");
+      expect(result).toBe("[&quot;Hello World&quot;]");
     });
 
     it("sanitizePropertyValue strips quotes from plain strings", () => {

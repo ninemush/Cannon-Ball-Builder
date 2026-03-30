@@ -1216,11 +1216,21 @@ function renderVariablesBlock(variables: VariableDecl[], targetFramework?: Targe
     const safeName = sanitizeVarName(v.name);
     if (emittedNames.has(safeName)) return;
     emittedNames.add(safeName);
+    let defaultAttr = "";
     if (v.defaultValue) {
-      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" Default="${escapeXmlExpression(v.defaultValue)}" />\n`;
-    } else {
-      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}" />\n`;
+      const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
+      if (isObjectType) {
+        const trimmed = v.defaultValue.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+          defaultAttr = ` Default="${escapeXmlExpression(v.defaultValue)}"`;
+        } else {
+          console.warn(`[Variable Guard] Omitting literal Default="${v.defaultValue}" for x:Object variable "${safeName}" — UiPath does not support Literal<Object>`);
+        }
+      } else {
+        defaultAttr = ` Default="${escapeXmlExpression(v.defaultValue)}"`;
+      }
     }
+    xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}"${defaultAttr} />\n`;
   });
   xml += "      </Sequence.Variables>";
   return xml;
@@ -1288,7 +1298,9 @@ export function sanitizePropertyValue(key: string, value: any): string {
     }
     const isVbExpression = /^\[.*\]$/.test(value.trim());
     if (isVbExpression) {
-      return value;
+      const inner = value.trim().slice(1, -1);
+      const escapedInner = escapeXmlExpression(inner);
+      return `[${escapedInner}]`;
     }
     return value.replace(/["']/g, "");
   }
@@ -1310,7 +1322,8 @@ export function sanitizePropertyValue(key: string, value: any): string {
       const kvPairs = entries.map(([k, v]) => `{"${k}", "${String(v)}"}`).join(", ");
       return `New Dictionary(Of String, String) From {${kvPairs}}`;
     }
-    return JSON.stringify(value);
+    const jsonStr = JSON.stringify(value);
+    return escapeXml(jsonStr);
   }
   return String(value);
 }
@@ -1471,13 +1484,17 @@ function renderControlFlowActivity(
     const rawValues = properties["Values"] || rawProperties["Values"] || "";
     const needsValuesReview = !rawValues || rawValues === "TODO_Collection" || rawValues.startsWith("TODO_") || rawValues.startsWith("PLACEHOLDER_");
     const values = needsValuesReview ? "New List(Of Object)" : rawValues;
-    if (itemType === "x:Object" || itemType === "x:String") {
-      const valExpr = String(values).replace(/^\[|\]$/g, "");
-      if (/\bdt_\w*\.Rows\b/i.test(valExpr) || /\.AsEnumerable\(\)/i.test(valExpr) || /\bDataTable\b.*\.Rows\b/i.test(valExpr)) {
-        itemType = "scg2:DataRow";
-      } else if (/\.Rows\b/i.test(valExpr)) {
+    const valExpr = String(values).replace(/^\[|\]$/g, "");
+    const isDataTableIteration = /\bdt_\w*\.Rows\b/i.test(valExpr) || /\.AsEnumerable\(\)/i.test(valExpr)
+      || /\bDataTable\b.*\.Rows\b/i.test(valExpr) || /\.Rows\b/i.test(valExpr);
+    if (isDataTableIteration) {
+      if (itemType !== "scg2:DataRow") {
+        console.warn(`[ForEach Guard] Type mismatch in renderControlFlowActivity: x:TypeArguments="${itemType}" but Values expression "${valExpr}" iterates DataTable rows — auto-correcting to scg2:DataRow`);
         itemType = "scg2:DataRow";
       }
+    } else if (itemType === "x:Object" || itemType === "x:String") {
+      const mappedType = mapClrType(itemType);
+      if (mappedType !== itemType) itemType = mappedType;
     }
 
     const rawIteratorName = String(properties["IteratorVariable"] || rawProperties["IteratorVariable"] || "item");
@@ -1567,6 +1584,15 @@ export function renderActivity(
     "InvokeWorkflowFile", "StateMachine", "State", "FinalState",
   ]);
 
+  const RENDER_ACTIVITY_INHERITED_PROPS = new Set([
+    "DisplayName", "ContinueOnError", "Timeout", "Private", "DelayBefore", "DelayAfter",
+    "TimeoutMS", "Annotation", "AnnotationText", "sap2010:Annotation.AnnotationText",
+    "Selector", "Result", "WorkflowFileName",
+    "To", "Value", "TypeArgument", "Condition",
+    "Values", "IteratorVariable", "Body",
+    "Level", "Message",
+  ]);
+
   if (catalogService.isLoaded()) {
     const lookupName = activityType.replace(/^[a-zA-Z][a-zA-Z0-9]*:/, "");
     if (!BUILTIN_ACTIVITY_TYPES.has(lookupName) && !BUILTIN_ACTIVITY_TYPES.has(activityType)) {
@@ -1576,6 +1602,27 @@ export function renderActivity(
         return `
           <!-- UNKNOWN ACTIVITY: ${escapeXml(activityType)} — "${escapeXml(displayName)}" -->
           <ui:Comment Text="Unknown activity type: ${escapeXml(activityType)}. Manual implementation required." DisplayName="${escapeXml(displayName)} (stub)" />`;
+      }
+
+      const catalogKnownProps = new Set<string>();
+      if (schema.activity && schema.activity.properties) {
+        for (const p of schema.activity.properties) {
+          catalogKnownProps.add(p.name);
+        }
+      }
+
+      const filteredKeys: string[] = [];
+      for (const key of Object.keys(properties)) {
+        if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
+        if (RENDER_ACTIVITY_INHERITED_PROPS.has(key)) continue;
+        if (catalogKnownProps.has(key)) continue;
+        filteredKeys.push(key);
+      }
+      if (filteredKeys.length > 0) {
+        console.log(`[renderActivity] Pre-emission filter: removed ${filteredKeys.length} non-catalog property(ies) from ${activityType} "${displayName}": ${filteredKeys.join(", ")}`);
+        for (const key of filteredKeys) {
+          delete properties[key];
+        }
       }
     }
   }
@@ -1607,7 +1654,7 @@ export function renderActivity(
     if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
     const sanitized = sanitizePropertyValue(key, value);
     if (sanitized === "") continue;
-    propAttrs += ` ${key}="${escapeXml(sanitized)}"`;
+    propAttrs += ` ${key}="${escapeXmlExpression(sanitized)}"`;
   }
 
   if (selectorHint && !isCrossPlatform) {

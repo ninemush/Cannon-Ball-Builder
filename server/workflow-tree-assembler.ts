@@ -932,11 +932,21 @@ function assembleSequenceNode(
     varsBlock = "  <Sequence.Variables>\n";
     for (const v of node.variables) {
       const typeAttr = mapClrType(v.type);
+      let defaultAttr = "";
       if (v.default) {
-        varsBlock += `    <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" Default="${escapeXml(v.default)}" />\n`;
-      } else {
-        varsBlock += `    <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" />\n`;
+        const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
+        if (isObjectType) {
+          const trimmed = v.default.trim();
+          if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            defaultAttr = ` Default="${escapeXml(v.default)}"`;
+          } else {
+            console.warn(`[Variable Guard] Omitting literal Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
+          }
+        } else {
+          defaultAttr = ` Default="${escapeXml(v.default)}"`;
+        }
       }
+      varsBlock += `    <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}"${defaultAttr} />\n`;
     }
     varsBlock += "  </Sequence.Variables>\n";
   }
@@ -1146,8 +1156,32 @@ function inferForEachItemType(itemType: string, valuesExpression: string, allVar
     return expressionInferred;
   }
 
-  if (itemType && itemType !== "x:Object") return itemType;
+  if (itemType && itemType !== "x:Object") {
+    const mappedItem = mapClrType(itemType);
+    if (mappedItem === "x:String" && isDataTableIteration) {
+      return "scg2:DataRow";
+    }
+    return mappedItem;
+  }
   return itemType || "x:Object";
+}
+
+function validateForEachTypeConsistency(itemType: string, valuesExpression: string): string {
+  const expr = valuesExpression.trim().replace(/^\[|\]$/g, "");
+  const isDataTableIteration = /\bdt_\w*\.Rows\b/i.test(expr) || /\.AsEnumerable\(\)/i.test(expr)
+    || /\bDataTable\b.*\.Rows\b/i.test(expr) || /^(\w+)\.Rows$/i.test(expr);
+
+  if (isDataTableIteration && itemType !== "scg2:DataRow") {
+    console.warn(`[ForEach Guard] Type mismatch: x:TypeArguments="${itemType}" but Values expression "${expr}" iterates DataTable rows — auto-correcting to scg2:DataRow`);
+    return "scg2:DataRow";
+  }
+
+  if (itemType === "x:String" && /\.Rows\b/i.test(expr)) {
+    console.warn(`[ForEach Guard] Type mismatch: x:TypeArguments="x:String" but Values expression "${expr}" appears to iterate rows — auto-correcting to scg2:DataRow`);
+    return "scg2:DataRow";
+  }
+
+  return itemType;
 }
 
 function assembleForEachNode(
@@ -1158,7 +1192,8 @@ function assembleForEachNode(
   emissionContext: EmissionContext = "normal",
 ): string {
   const displayName = escapeXml(node.displayName);
-  const itemType = inferForEachItemType(node.itemType || "x:Object", node.valuesExpression, allVariables);
+  const inferredType = inferForEachItemType(node.itemType || "x:Object", node.valuesExpression, allVariables);
+  const itemType = validateForEachTypeConsistency(inferredType, node.valuesExpression);
   const wrappedValues = ensureBracketWrapped(node.valuesExpression);
 
   const bodyXml = node.bodyChildren
@@ -1221,11 +1256,21 @@ function buildVariablesBlock(variables: VariableDeclaration[]): string {
     if (seen.has(v.name)) continue;
     seen.add(v.name);
     const typeAttr = mapClrType(v.type);
+    let defaultAttr = "";
     if (v.default) {
-      xml += `      <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" Default="${escapeXml(v.default)}" />\n`;
-    } else {
-      xml += `      <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" />\n`;
+      const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
+      if (isObjectType) {
+        const trimmed = v.default.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+          defaultAttr = ` Default="${escapeXml(v.default)}"`;
+        } else {
+          console.warn(`[Variable Guard] Omitting literal Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
+        }
+      } else {
+        defaultAttr = ` Default="${escapeXml(v.default)}"`;
+      }
     }
+    xml += `      <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}"${defaultAttr} />\n`;
   }
   xml += "    </Sequence.Variables>";
   return xml;

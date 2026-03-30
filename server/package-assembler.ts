@@ -215,43 +215,75 @@ function isVersionFromValidatedSource(
   return null;
 }
 
+function normalizeXamlPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^[./]+/, "");
+}
+
 function buildReachabilityGraph(
   deferredWrites: Map<string, string>,
   xamlEntries: Array<{ name: string; content: string }>,
   libPath: string,
 ): { reachable: Set<string>; unreachable: Set<string>; graph: Map<string, string[]> } {
   const allFiles = new Map<string, string>();
+  const filenameToKey = new Map<string, string>();
   const prefix = libPath + "/";
 
   Array.from(deferredWrites.entries()).forEach(([path, content]) => {
     if (path.endsWith(".xaml")) {
       const relPath = path.startsWith(prefix) ? path.slice(prefix.length) : (path.split("/").pop() || path);
-      allFiles.set(relPath, content);
+      const normalizedKey = normalizeXamlPath(relPath);
+      allFiles.set(normalizedKey, content);
+      const basename = normalizedKey.split("/").pop() || normalizedKey;
+      if (!filenameToKey.has(basename)) {
+        filenameToKey.set(basename, normalizedKey);
+      }
     }
   });
   for (const entry of xamlEntries) {
     const relPath = entry.name.startsWith(prefix) ? entry.name.slice(prefix.length) : (entry.name.split("/").pop() || entry.name);
-    if (relPath.endsWith(".xaml") && !allFiles.has(relPath)) {
-      allFiles.set(relPath, entry.content);
+    const normalizedKey = normalizeXamlPath(relPath);
+    if (normalizedKey.endsWith(".xaml") && !allFiles.has(normalizedKey)) {
+      allFiles.set(normalizedKey, entry.content);
+      const basename = normalizedKey.split("/").pop() || normalizedKey;
+      if (!filenameToKey.has(basename)) {
+        filenameToKey.set(basename, normalizedKey);
+      }
     }
   }
 
   const graph = new Map<string, string[]>();
-  const invokePattern = /WorkflowFileName="([^"]+)"/g;
 
   Array.from(allFiles.entries()).forEach(([file, content]) => {
     const refs: string[] = [];
+    const invokePattern = /WorkflowFileName="([^"]+)"/g;
     let match;
     while ((match = invokePattern.exec(content)) !== null) {
-      const ref = match[1].replace(/\\/g, "/").replace(/^[./]+/, "");
-      refs.push(ref);
+      const rawRef = normalizeXamlPath(match[1]);
+      if (allFiles.has(rawRef)) {
+        refs.push(rawRef);
+      } else {
+        const refBasename = rawRef.split("/").pop() || rawRef;
+        const mappedKey = filenameToKey.get(refBasename);
+        if (mappedKey) {
+          refs.push(mappedKey);
+        } else {
+          refs.push(rawRef);
+        }
+      }
     }
     graph.set(file, refs);
   });
 
   const reachable = new Set<string>();
-  const queue = ["Main.xaml"];
-  reachable.add("Main.xaml");
+  const mainKey = allFiles.has("Main.xaml") ? "Main.xaml" : (filenameToKey.get("Main.xaml") || "Main.xaml");
+  const queue = [mainKey];
+  reachable.add(mainKey);
+
+  const processKey = allFiles.has("Process.xaml") ? "Process.xaml" : filenameToKey.get("Process.xaml");
+  if (processKey && !reachable.has(processKey)) {
+    reachable.add(processKey);
+    queue.push(processKey);
+  }
 
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -272,7 +304,8 @@ function buildReachabilityGraph(
 
   const unreachable = new Set<string>();
   Array.from(allFiles.keys()).forEach(file => {
-    if (!reachable.has(file) && !INFRASTRUCTURE_FILES.has(file)) {
+    const basename = file.split("/").pop() || file;
+    if (!reachable.has(file) && !INFRASTRUCTURE_FILES.has(basename)) {
       unreachable.add(file);
     }
   });
@@ -4468,13 +4501,39 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       "EXPRESSION_SYNTAX_UNFIXABLE",
       "TYPE_MISMATCH",
       "FOREACH_TYPE_MISMATCH",
+      "LITERAL_TYPE_ERROR",
     ]);
     const dhgFilesWithStructuralDefects = new Set(
       qualityGateResult.violations
         .filter(v => v.severity === "error" && dhgStructuralDefectChecks.has(v.check))
         .map(v => v.file)
     );
-    const dhgFullyGenerated = Array.from(dhgAllFiles).filter(f => !dhgRemediatedFileSet.has(f) && !earlyStubFallbacks.includes(f) && !dhgFilesWithStructuralDefects.has(f));
+    const DHG_STUB_CONTENT_PATTERNS = [
+      "STUB_BLOCKING_FALLBACK",
+      "STUB: ",
+      "STUB_WORKFLOW_GENERATOR_FAILURE",
+      "stub — Final validation remediation",
+      "stub due to generation/compliance failure",
+      "Manual implementation required",
+    ];
+    const dhgFilesWithStubContent = new Set<string>();
+    for (const entry of xamlEntries) {
+      const shortName = entry.name.split("/").pop() || entry.name;
+      if (DHG_STUB_CONTENT_PATTERNS.some(pattern => entry.content.includes(pattern))) {
+        dhgFilesWithStubContent.add(shortName);
+      }
+      const hasImpl = /<(Sequence|Flowchart|StateMachine)\b/i.test(entry.content);
+      const isEmptyAct = /<Activity[^>]*>\s*<\/Activity>/s.test(entry.content);
+      if (isEmptyAct || (!hasImpl && entry.content.includes("<Activity"))) {
+        dhgFilesWithStubContent.add(shortName);
+      }
+    }
+    const dhgFullyGenerated = Array.from(dhgAllFiles).filter(f =>
+      !dhgRemediatedFileSet.has(f) &&
+      !earlyStubFallbacks.includes(f) &&
+      !dhgFilesWithStructuralDefects.has(f) &&
+      !dhgFilesWithStubContent.has(f)
+    );
 
     const dhgQualityWarnings = qualityGateResult.violations
       .filter(v => v.severity === "warning")
@@ -4492,7 +4551,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       "unknown-activity", "undeclared-namespace", "invalid-type-argument",
       "invalid-default-value", "policy-blocked-activity", "pseudo-xaml",
       "fake-trycatch", "object-object", "EXPRESSION_SYNTAX_UNFIXABLE",
-      "TYPE_MISMATCH", "FOREACH_TYPE_MISMATCH",
+      "TYPE_MISMATCH", "FOREACH_TYPE_MISMATCH", "LITERAL_TYPE_ERROR",
     ]);
     const dhgStudioWarningChecks = new Set([
       "placeholder-value", "expression-syntax-mismatch", "invoke-arg-type-mismatch",
@@ -4505,6 +4564,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         dhgStubbedFiles.add(r.file);
       }
     }
+    for (const f of dhgFilesWithStubContent) dhgStubbedFiles.add(f);
     const dhgStudioCompatibility: PerWorkflowStudioCompatibility[] = Array.from(dhgAllFiles).map(file => {
       if (dhgStubbedFiles.has(file)) {
         return {
@@ -4823,13 +4883,42 @@ ${depEntries}
     "EXPRESSION_SYNTAX_UNFIXABLE",
     "TYPE_MISMATCH",
     "FOREACH_TYPE_MISMATCH",
+    "LITERAL_TYPE_ERROR",
   ]);
   const filesWithStructuralDefects = new Set(
     qualityGateResult.violations
       .filter(v => v.severity === "error" && structuralDefectChecks.has(v.check))
       .map(v => v.file)
   );
-  const fullyGenerated = Array.from(allFiles).filter(f => !remediatedFiles.has(f) && !earlyStubFallbacks.includes(f) && !filesWithStructuralDefects.has(f));
+  const STUB_CONTENT_PATTERNS = [
+    "STUB_BLOCKING_FALLBACK",
+    "STUB: ",
+    "STUB_WORKFLOW_GENERATOR_FAILURE",
+    "stub — Final validation remediation",
+    "stub due to generation/compliance failure",
+    "Manual implementation required",
+  ];
+
+  const filesWithStubContent = new Set<string>();
+  for (const entry of xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    if (STUB_CONTENT_PATTERNS.some(pattern => entry.content.includes(pattern))) {
+      filesWithStubContent.add(shortName);
+    }
+    const hasImplementation = /<(Sequence|Flowchart|StateMachine)\b/i.test(entry.content);
+    const isEmptyActivity = /<Activity[^>]*>\s*<\/Activity>/s.test(entry.content);
+    if (isEmptyActivity || (!hasImplementation && entry.content.includes("<Activity"))) {
+      filesWithStubContent.add(shortName);
+      console.log(`[Classification Guard] ${shortName}: empty or missing Implementation body — excluded from fullyGenerated`);
+    }
+  }
+
+  const fullyGenerated = Array.from(allFiles).filter(f =>
+    !remediatedFiles.has(f) &&
+    !earlyStubFallbacks.includes(f) &&
+    !filesWithStructuralDefects.has(f) &&
+    !filesWithStubContent.has(f)
+  );
 
   const qualityWarnings = qualityGateResult.violations
     .filter(v => v.severity === "warning")
@@ -4859,6 +4948,7 @@ ${depEntries}
     "EXPRESSION_SYNTAX_UNFIXABLE",
     "TYPE_MISMATCH",
     "FOREACH_TYPE_MISMATCH",
+    "LITERAL_TYPE_ERROR",
   ]);
   const studioWarningChecks = new Set([
     "placeholder-value",
@@ -4876,6 +4966,7 @@ ${depEntries}
       stubbedFiles.add(r.file);
     }
   }
+  for (const f of filesWithStubContent) stubbedFiles.add(f);
   const studioCompatibility: PerWorkflowStudioCompatibility[] = Array.from(allFiles).map(file => {
     if (stubbedFiles.has(file)) {
       return {

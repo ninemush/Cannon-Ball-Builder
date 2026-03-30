@@ -2170,6 +2170,9 @@ const BLOCKING_CHECKS = new Set([
   "unprefixed-activity",
   "OBJECT_TO_IENUMERABLE",
   "UNDECLARED_VARIABLE",
+  "TYPE_MISMATCH",
+  "FOREACH_TYPE_MISMATCH",
+  "LITERAL_TYPE_ERROR",
 ]);
 
 const WARNING_CHECKS = new Set([
@@ -2204,7 +2207,6 @@ const WARNING_CHECKS = new Set([
   "empty-http-endpoint",
   "unassigned-decision-variable",
   "EXPRESSION_SYNTAX",
-  "TYPE_MISMATCH",
   "SELECTOR_PLACEHOLDER",
   "SELECTOR_LOW_QUALITY",
 ]);

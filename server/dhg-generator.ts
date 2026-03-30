@@ -69,6 +69,7 @@ export function generateDhgFromOutcomeReport(
     md += `### Workflow Inventory\n\n`;
     md += `| # | Workflow | Status |\n`;
     md += `|---|----------|--------|\n`;
+    const studioCompat = report.studioCompatibility || [];
     context.workflowNames.forEach((wf, i) => {
       const isStubbed = report.remediations.some(
         r => (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE" || r.remediationCode === "STUB_WORKFLOW_BLOCKING") && (r.file === `${wf}.xaml` || r.file === wf)
@@ -80,7 +81,23 @@ export function generateDhgFromOutcomeReport(
       const hasPlaceholders = report.qualityWarnings.some(
         w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
       );
-      const status = isStubbed ? "Structurally invalid (stub)" : isFullyGenerated ? "Fully Generated" : hasPlaceholders ? "Generated with Placeholders" : hasRemediation ? "Generated with Remediations" : "Generated";
+      const studioEntry = studioCompat.find(
+        (s: PerWorkflowStudioCompatibility) => s.file === `${wf}.xaml` || s.file === wf
+      );
+      const isStudioBlocked = studioEntry && studioEntry.level === "studio-blocked";
+
+      let status: string;
+      if (isStubbed || isStudioBlocked) {
+        status = "Structurally invalid (stub)";
+      } else if (isFullyGenerated) {
+        status = "Fully Generated";
+      } else if (hasPlaceholders) {
+        status = "Generated with Placeholders";
+      } else if (hasRemediation) {
+        status = "Generated with Remediations";
+      } else {
+        status = "Generated";
+      }
       md += `| ${i + 1} | \`${wf}.xaml\` | ${status} |\n`;
     });
     md += `\n`;
