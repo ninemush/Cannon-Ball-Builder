@@ -180,7 +180,8 @@ export function isUnsafeVariableName(name: string): string | null {
 }
 
 function mapClrType(type: string): string {
-  const lower = type.toLowerCase();
+  const trimmed = type.trim();
+  const lower = trimmed.toLowerCase();
   if (lower === "string" || lower === "system.string" || lower === "x:string") return "x:String";
   if (lower === "int32" || lower === "integer" || lower === "int" || lower === "system.int32" || lower === "x:int32") return "x:Int32";
   if (lower === "int64" || lower === "long" || lower === "system.int64" || lower === "x:int64") return "x:Int64";
@@ -190,26 +191,83 @@ function mapClrType(type: string): string {
   if (lower === "datetime" || lower === "system.datetime" || lower === "s:datetime") return "s:DateTime";
   if (lower === "timespan" || lower === "system.timespan" || lower === "s:timespan") return "s:TimeSpan";
   if (lower === "object" || lower === "system.object" || lower === "x:object") return "x:Object";
-  if (lower.includes("datatable")) return "scg2:DataTable";
+  if (lower === "securestring" || lower === "system.security.securestring") return "s:Security.SecureString";
+
+  if (lower.includes("datatable") && !lower.includes("dictionary")) return "scg2:DataTable";
   if (lower.includes("datarow")) return "scg2:DataRow";
   if (lower.includes("securestring")) return "s:Security.SecureString";
+
+  const dictMatch = trimmed.match(/^Dictionary\s*<\s*([^,]+)\s*,\s*([^>]+)\s*>$/i);
+  if (dictMatch) {
+    const keyType = mapClrType(dictMatch[1].trim());
+    const valType = mapClrType(dictMatch[2].trim());
+    return `scg:Dictionary(${keyType}, ${valType})`;
+  }
+
+  const listMatch = trimmed.match(/^List\s*<\s*([^>]+)\s*>$/i);
+  if (listMatch) {
+    const itemType = mapClrType(listMatch[1].trim());
+    return `scg:List(${itemType})`;
+  }
+
+  const arrayMatch = trimmed.match(/^Array\s*<\s*([^>]+)\s*>$/i);
+  if (arrayMatch) {
+    const itemType = mapClrType(arrayMatch[1].trim());
+    return `scg:List(${itemType})`;
+  }
+
+  const arrayBracketMatch = trimmed.match(/^(\w+)\[\]$/);
+  if (arrayBracketMatch) {
+    const itemType = mapClrType(arrayBracketMatch[1].trim());
+    return `scg:List(${itemType})`;
+  }
+
   return "x:Object";
+}
+
+function inferTypeFromDefault(defaultValue: string | undefined): string | null {
+  if (!defaultValue) return null;
+  const trimmed = defaultValue.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return null;
+  const unquoted = trimmed.replace(/^&quot;|&quot;$/g, "").replace(/^"|"$/g, "");
+  if (trimmed === "True" || trimmed === "False") return "x:Boolean";
+  if (/^-?\d+$/.test(trimmed)) return "x:Int32";
+  if (/^-?\d+\.\d+$/.test(trimmed)) return "x:Double";
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return "x:String";
+  if (trimmed.startsWith("&quot;") && trimmed.endsWith("&quot;")) return "x:String";
+  if (unquoted !== trimmed && unquoted.length < trimmed.length) return "x:String";
+  return null;
 }
 
 function inferAssignType(varName: string, variables: VariableDeclaration[]): string {
   const decl = variables.find(v => v.name === varName);
-  if (decl) return mapClrType(decl.type);
+  if (decl) {
+    const mapped = mapClrType(decl.type);
+    if (mapped !== "x:Object") return mapped;
+    const prefixInferred = inferTypeFromPrefix(varName);
+    if (prefixInferred) return prefixInferred;
+    const defaultInferred = inferTypeFromDefault(decl.default);
+    if (defaultInferred) return defaultInferred;
+    return mapped;
+  }
+  const prefixInferred = inferTypeFromPrefix(varName);
+  if (prefixInferred) return prefixInferred;
+  return "x:Object";
+}
+
+function inferTypeFromPrefix(varName: string): string | null {
   if (varName.startsWith("str_")) return "x:String";
-  if (varName.startsWith("int_")) return "x:Int32";
-  if (varName.startsWith("bool_")) return "x:Boolean";
+  if (varName.startsWith("int_") || varName.startsWith("num_")) return "x:Int32";
+  if (varName.startsWith("bool_") || varName.startsWith("is_") || varName.startsWith("has_")) return "x:Boolean";
   if (varName.startsWith("dbl_")) return "x:Double";
   if (varName.startsWith("dec_")) return "x:Decimal";
-  if (varName.startsWith("dt_")) return "scg2:DataTable";
-  if (varName.startsWith("drow_")) return "scg2:DataRow";
+  if (varName.startsWith("dt_")) return "s:DateTime";
+  if (varName.startsWith("dr_") || varName.startsWith("drow_")) return "scg2:DataRow";
+  if (varName.startsWith("dict_")) return "scg:Dictionary(x:String, x:Object)";
   if (varName.startsWith("sec_")) return "s:Security.SecureString";
   if (varName.startsWith("ts_")) return "s:TimeSpan";
   if (varName.startsWith("obj_")) return "x:Object";
-  return "x:Object";
+  return null;
 }
 
 function indent(xml: string, level: number): string {
@@ -578,7 +636,16 @@ function resolveAssignTemplate(node: ActivityNode, allVariables: VariableDeclara
   const wrappedVal = resolvePropertyValue(valRaw as PropertyValue);
 
   const safeToExpr = escapeXmlTextContent(normalizeXmlExpression(wrappedTo));
-  const safeValExpr = escapeXmlTextContent(normalizeXmlExpression(wrappedVal));
+  let safeValExpr = escapeXmlTextContent(normalizeXmlExpression(wrappedVal));
+
+  if (typeArg === "x:Object") {
+    const valContent = safeValExpr.trim();
+    const isLiteral = !(valContent.startsWith("[") && valContent.endsWith("]"));
+    if (isLiteral && valContent.length > 0) {
+      safeValExpr = `[${valContent}]`;
+      console.warn(`[Argument Guard] Bracket-wrapping literal value "${valContent}" for x:Object Assign "${displayName}"`);
+    }
+  }
 
   return `<Assign DisplayName="${displayName}">\n` +
     `  <Assign.To>\n` +
@@ -962,17 +1029,21 @@ function assembleSequenceNode(
   if (node.variables && node.variables.length > 0) {
     varsBlock = "  <Sequence.Variables>\n";
     for (const v of node.variables) {
-      const typeAttr = mapClrType(v.type);
+      let typeAttr = mapClrType(v.type);
+      if (typeAttr === "x:Object") {
+        const prefixType = inferTypeFromPrefix(v.name);
+        if (prefixType) {
+          typeAttr = prefixType;
+        } else {
+          const defaultType = inferTypeFromDefault(v.default);
+          if (defaultType) typeAttr = defaultType;
+        }
+      }
       let defaultAttr = "";
       if (v.default) {
         const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
         if (isObjectType) {
-          const trimmed = v.default.trim();
-          if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-            defaultAttr = ` Default="${escapeXml(v.default)}"`;
-          } else {
-            console.warn(`[Variable Guard] Omitting literal Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
-          }
+          console.warn(`[Variable Guard] Omitting Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
         } else {
           const wrappedDefault = wrapVariableDefault(v.default, v.type);
           defaultAttr = ` Default="${escapeXml(wrappedDefault)}"`;
@@ -1148,6 +1219,7 @@ function inferCollectionItemType(declaredType: string): string | null {
   }
 
   const arrayMatch = declaredType.match(/Array\s*\(\s*Of\s+(\w+)\s*\)/i)
+    || declaredType.match(/Array<([^>]+)>/i)
     || declaredType.match(/(\w+)\[\]/);
   if (arrayMatch) {
     return mapClrType(arrayMatch[1].trim());
@@ -1159,6 +1231,16 @@ function inferCollectionItemType(declaredType: string): string | null {
     const keyType = mapClrType(dictMatch[1].trim());
     const valType = mapClrType(dictMatch[2].trim());
     return `scg:KeyValuePair(${keyType}, ${valType})`;
+  }
+
+  const scgListMatch = declaredType.match(/^scg:List\((.+)\)$/);
+  if (scgListMatch) {
+    return scgListMatch[1].trim();
+  }
+
+  const scgDictMatch = declaredType.match(/^scg:Dictionary\((.+),\s*(.+)\)$/);
+  if (scgDictMatch) {
+    return `scg:KeyValuePair(${scgDictMatch[1].trim()}, ${scgDictMatch[2].trim()})`;
   }
 
   return null;
@@ -1181,6 +1263,10 @@ function inferForEachItemType(itemType: string, valuesExpression: string, allVar
     const decl = allVariables.find(v => v.name === varName);
     if (decl) {
       expressionInferred = inferCollectionItemType(decl.type);
+      if (!expressionInferred) {
+        const mappedVarType = mapClrType(decl.type);
+        expressionInferred = inferCollectionItemType(mappedVarType);
+      }
     }
   }
 
@@ -1287,17 +1373,21 @@ function buildVariablesBlock(variables: VariableDeclaration[]): string {
   for (const v of variables) {
     if (seen.has(v.name)) continue;
     seen.add(v.name);
-    const typeAttr = mapClrType(v.type);
+    let typeAttr = mapClrType(v.type);
+    if (typeAttr === "x:Object") {
+      const prefixType = inferTypeFromPrefix(v.name);
+      if (prefixType) {
+        typeAttr = prefixType;
+      } else {
+        const defaultType = inferTypeFromDefault(v.default);
+        if (defaultType) typeAttr = defaultType;
+      }
+    }
     let defaultAttr = "";
     if (v.default) {
       const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
       if (isObjectType) {
-        const trimmed = v.default.trim();
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-          defaultAttr = ` Default="${escapeXml(v.default)}"`;
-        } else {
-          console.warn(`[Variable Guard] Omitting literal Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
-        }
+        console.warn(`[Variable Guard] Omitting Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
       } else {
         const wrappedDefault = wrapVariableDefault(v.default, v.type);
         defaultAttr = ` Default="${escapeXml(wrappedDefault)}"`;
@@ -1540,7 +1630,7 @@ export function assembleWorkflowFromSpec(
   const variablesBlock = buildVariablesBlock(allVariables);
   const xMembersBlock = buildXMembersBlock(wfArgs);
 
-  const xaml = `<?xml version="1.0" encoding="utf-8"?>
+  let xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(workflowName)}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -1556,6 +1646,8 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
     ${activitiesXml}
   </Sequence>
 </Activity>`;
+
+  xaml = sanitizeObjectLiteralArguments(xaml);
 
   const validationResult = XMLValidator.validate(xaml, { allowBooleanAttributes: true });
   if (validationResult !== true) {
@@ -1577,4 +1669,21 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
   }
 
   return { xaml, variables: allVariables };
+}
+
+function sanitizeObjectLiteralArguments(xaml: string): string {
+  return xaml.replace(
+    /(<(?:In|Out|InOut)Argument\s+x:TypeArguments="x:Object"(?:\s+[^>]*)?>)([^<]+)(<\/(?:In|Out|InOut)Argument>)/g,
+    (_match, openTag, content, closeTag) => {
+      const trimmed = content.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        return `${openTag}${content}${closeTag}`;
+      }
+      if (trimmed.length > 0) {
+        console.warn(`[Argument Guard] Bracket-wrapping literal content "${trimmed}" in x:Object argument`);
+        return `${openTag}[${trimmed}]${closeTag}`;
+      }
+      return `${openTag}${content}${closeTag}`;
+    }
+  );
 }

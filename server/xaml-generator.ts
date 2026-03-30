@@ -1194,6 +1194,33 @@ function sanitizeVarName(name: string): string {
   return sanitized;
 }
 
+function inferTypeFromPrefix(varName: string): string | null {
+  if (varName.startsWith("str_")) return "x:String";
+  if (varName.startsWith("int_") || varName.startsWith("num_")) return "x:Int32";
+  if (varName.startsWith("bool_") || varName.startsWith("is_") || varName.startsWith("has_")) return "x:Boolean";
+  if (varName.startsWith("dbl_")) return "x:Double";
+  if (varName.startsWith("dec_")) return "x:Decimal";
+  if (varName.startsWith("dt_")) return "s:DateTime";
+  if (varName.startsWith("dr_") || varName.startsWith("drow_")) return "scg2:DataRow";
+  if (varName.startsWith("dict_")) return "scg:Dictionary(x:String, x:Object)";
+  if (varName.startsWith("sec_")) return "s:Security.SecureString";
+  if (varName.startsWith("ts_")) return "s:TimeSpan";
+  if (varName.startsWith("obj_")) return "x:Object";
+  return null;
+}
+
+function inferTypeFromDefaultValue(defaultValue: string | undefined): string | null {
+  if (!defaultValue) return null;
+  const trimmed = defaultValue.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return null;
+  if (trimmed === "True" || trimmed === "False") return "x:Boolean";
+  if (/^-?\d+$/.test(trimmed)) return "x:Int32";
+  if (/^-?\d+\.\d+$/.test(trimmed)) return "x:Double";
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return "x:String";
+  if (trimmed.startsWith("&quot;") && trimmed.endsWith("&quot;")) return "x:String";
+  return null;
+}
+
 function renderVariablesBlock(variables: VariableDecl[], targetFramework?: TargetFramework): string {
   const isCSharp = targetFramework === "Portable";
   const screenshotDefault = isCSharp
@@ -1212,20 +1239,24 @@ function renderVariablesBlock(variables: VariableDecl[], targetFramework?: Targe
   let xml = "<Sequence.Variables>\n";
   const emittedNames = new Set<string>();
   uniqueVars.forEach((v) => {
-    const typeAttr = mapClrType(v.type);
+    let typeAttr = mapClrType(v.type);
     const safeName = sanitizeVarName(v.name);
     if (emittedNames.has(safeName)) return;
     emittedNames.add(safeName);
+    if (typeAttr === "x:Object") {
+      const prefixType = inferTypeFromPrefix(safeName);
+      if (prefixType) {
+        typeAttr = prefixType;
+      } else {
+        const defaultType = inferTypeFromDefaultValue(v.defaultValue);
+        if (defaultType) typeAttr = defaultType;
+      }
+    }
     let defaultAttr = "";
     if (v.defaultValue) {
       const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
       if (isObjectType) {
-        const trimmed = v.defaultValue.trim();
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-          defaultAttr = ` Default="${escapeXmlExpression(v.defaultValue)}"`;
-        } else {
-          console.warn(`[Variable Guard] Omitting literal Default="${v.defaultValue}" for x:Object variable "${safeName}" — UiPath does not support Literal<Object>`);
-        }
+        console.warn(`[Variable Guard] Omitting Default="${v.defaultValue}" for x:Object variable "${safeName}" — UiPath does not support Literal<Object>`);
       } else {
         defaultAttr = ` Default="${escapeXmlExpression(v.defaultValue)}"`;
       }
@@ -1253,7 +1284,8 @@ function generateXMembersBlock(
 }
 
 function mapClrType(type: string): string {
-  const lower = type.toLowerCase();
+  const trimmed = type.trim();
+  const lower = trimmed.toLowerCase();
   if (lower === "string" || lower === "system.string") return "x:String";
   if (lower === "int32" || lower === "integer" || lower === "int" || lower === "system.int32") return "x:Int32";
   if (lower === "int64" || lower === "long" || lower === "system.int64") return "x:Int64";
@@ -1263,14 +1295,40 @@ function mapClrType(type: string): string {
   if (lower === "datetime" || lower === "system.datetime") return "s:DateTime";
   if (lower === "timespan" || lower === "system.timespan") return "s:TimeSpan";
   if (lower === "object" || lower === "system.object") return "x:Object";
-  if (lower.includes("datatable") || lower.includes("system.data.datatable")) return "scg2:DataTable";
+  if (lower === "securestring" || lower === "system.security.securestring") return "s:Security.SecureString";
+
+  if ((lower.includes("datatable") || lower.includes("system.data.datatable")) && !lower.includes("dictionary")) return "scg2:DataTable";
   if (lower.includes("datarow") || lower.includes("system.data.datarow")) return "scg2:DataRow";
-  if (lower.includes("securestring") || lower.includes("system.security.securestring")) return "s:Security.SecureString";
+  if (lower.includes("securestring")) return "s:Security.SecureString";
   if (lower.includes("mailmessage") || lower.includes("system.net.mail.mailmessage")) return "s:Net.Mail.MailMessage";
-  if (lower.includes("list(") || lower.includes("list<")) return type;
-  if (lower.includes("dictionary") || lower.includes("dictionary<")) return type;
-  if (lower.includes("queueitem") || lower.includes("uipath.core.queueitem")) return "ui:QueueItem";
+  if (lower.includes("queueitem") && !lower.includes("queueitemdata")) return "ui:QueueItem";
   if (lower.includes("queueitemdata") || lower.includes("uipath.core.queueitemdata")) return "ui:QueueItemData";
+
+  const dictMatch = trimmed.match(/^Dictionary\s*<\s*([^,]+)\s*,\s*([^>]+)\s*>$/i);
+  if (dictMatch) {
+    const keyType = mapClrType(dictMatch[1].trim());
+    const valType = mapClrType(dictMatch[2].trim());
+    return `scg:Dictionary(${keyType}, ${valType})`;
+  }
+
+  const listMatch = trimmed.match(/^List\s*<\s*([^>]+)\s*>$/i);
+  if (listMatch) {
+    const itemType = mapClrType(listMatch[1].trim());
+    return `scg:List(${itemType})`;
+  }
+
+  const arrayMatch = trimmed.match(/^Array\s*<\s*([^>]+)\s*>$/i);
+  if (arrayMatch) {
+    const itemType = mapClrType(arrayMatch[1].trim());
+    return `scg:List(${itemType})`;
+  }
+
+  const arrayBracketMatch = trimmed.match(/^(\w+)\[\]$/);
+  if (arrayBracketMatch) {
+    const itemType = mapClrType(arrayBracketMatch[1].trim());
+    return `scg:List(${itemType})`;
+  }
+
   return type;
 }
 
@@ -1285,9 +1343,60 @@ function isNonCriticalActivity(activityType: string): boolean {
   return nonCritical.some(t => activityType === t);
 }
 
+function sanitizeObjectLiteralArguments(xaml: string): string {
+  return xaml.replace(
+    /(<(?:In|Out|InOut)Argument\s+x:TypeArguments="x:Object"(?:\s+[^>]*)?>)([^<]+)(<\/(?:In|Out|InOut)Argument>)/g,
+    (_match, openTag: string, content: string, closeTag: string) => {
+      const trimmed = content.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        return `${openTag}${content}${closeTag}`;
+      }
+      if (trimmed.length > 0) {
+        console.warn(`[Argument Guard] Bracket-wrapping literal content "${trimmed}" in x:Object argument`);
+        return `${openTag}[${trimmed}]${closeTag}`;
+      }
+      return `${openTag}${content}${closeTag}`;
+    }
+  );
+}
+
+const CATALOG_INTEGER_PROPERTY_NAMES = new Set([
+  "TimeoutMS", "DelayBefore", "DelayAfter", "DelayBetween",
+  "MaxRetries", "NumberOfRetries", "MaxNumberOfRetries",
+]);
+
+const _integerPropertyCache = new Map<string, boolean>();
+function isSchemaIntegerProperty(propName: string): boolean {
+  if (_integerPropertyCache.has(propName)) return _integerPropertyCache.get(propName)!;
+  if (!catalogService.isLoaded()) return false;
+  const integerClrTypes = new Set(["System.Int32", "System.Int64", "System.UInt32", "System.Byte"]);
+  const allActivities = catalogService.getAllActivities();
+  for (const schema of allActivities) {
+    for (const prop of schema.activity.properties) {
+      if (prop.name === propName && integerClrTypes.has(prop.clrType)) {
+        _integerPropertyCache.set(propName, true);
+        return true;
+      }
+    }
+  }
+  _integerPropertyCache.set(propName, false);
+  return false;
+}
+
 export function sanitizePropertyValue(key: string, value: any): string {
   if (value === null || value === undefined) {
     return "";
+  }
+  if (CATALOG_INTEGER_PROPERTY_NAMES.has(key) || isSchemaIntegerProperty(key)) {
+    if (typeof value === "string") {
+      const trimmed = value.trim().replace(/["']/g, "");
+      if (/^-?\d+$/.test(trimmed)) {
+        return trimmed;
+      }
+    }
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return String(value);
+    }
   }
   if (typeof value === "string") {
     if (value === "[object Object]") {
@@ -1492,9 +1601,11 @@ function renderControlFlowActivity(
         console.warn(`[ForEach Guard] Type mismatch in renderControlFlowActivity: x:TypeArguments="${itemType}" but Values expression "${valExpr}" iterates DataTable rows — auto-correcting to scg2:DataRow`);
         itemType = "scg2:DataRow";
       }
-    } else if (itemType === "x:Object" || itemType === "x:String") {
-      const mappedType = mapClrType(itemType);
-      if (mappedType !== itemType) itemType = mappedType;
+    } else if (itemType === "x:Object") {
+      const prefixType = inferTypeFromPrefix(valExpr);
+      if (prefixType && prefixType !== "x:Object") {
+        itemType = prefixType;
+      }
     }
 
     const rawIteratorName = String(properties["IteratorVariable"] || rawProperties["IteratorVariable"] || "item");
@@ -1713,7 +1824,15 @@ export function renderActivity(
     const toValue = ensureBracketWrapped(rawToValue);
     const assignValue = smartBracketWrap(rawAssignValue);
     const safeToValue = normalizeXmlExpression(toValue);
-    const safeAssignValue = normalizeXmlExpression(assignValue);
+    let safeAssignValue = normalizeXmlExpression(assignValue);
+    if (toType === "x:Object") {
+      const valContent = safeAssignValue.trim();
+      const isLiteral = !(valContent.startsWith("[") && valContent.endsWith("]"));
+      if (isLiteral && valContent.length > 0) {
+        safeAssignValue = `[${valContent}]`;
+        console.warn(`[Argument Guard] Bracket-wrapping literal value "${valContent}" for x:Object Assign "${enforced}"`);
+      }
+    }
     innerActivity = `<Assign DisplayName="${escapeXml(enforced)}"${propAttrs.replace(/\s+(To|Value|to|value|TypeArgument)="[^"]*"/g, "")}>
               <Assign.To><OutArgument x:TypeArguments="${toType}">${safeToValue}</OutArgument></Assign.To>
               <Assign.Value><InArgument x:TypeArguments="${toType}">${safeAssignValue}</InArgument></Assign.Value>
@@ -2410,7 +2529,7 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
 </Activity>`;
 
   return {
-    xaml,
+    xaml: sanitizeObjectLiteralArguments(xaml),
     gaps: allGaps,
     usedPackages: Array.from(usedPackages),
     variables: allVariables,
@@ -2609,7 +2728,7 @@ ${xMembersBlockSpec}  <Sequence DisplayName="${escapeXml(wfName)}">
 </Activity>`;
 
   return {
-    xaml,
+    xaml: sanitizeObjectLiteralArguments(xaml),
     gaps: allGaps,
     usedPackages: Array.from(usedPackages),
     variables: allVariables,
