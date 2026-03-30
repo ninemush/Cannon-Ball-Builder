@@ -1,0 +1,69 @@
+Based on the architectural investigation, I think the core hypothesis is now mostly validated:
+
+the package-generation pipeline is not just suffering from isolated generation bugs. A major part of the instability is architectural:
+- too much correctness is deferred downstream
+- XAML is mutated too many times after initial emission
+- the compliance / validation / remediation / preservation layers are compensating for each other rather than operating from a clean shared contract
+- and the pipeline can create secondary or tertiary defects while trying to repair primary ones
+
+I want you to produce a concrete stabilization plan for the package-generation architecture itself.
+
+This is NOT a request for another long list of bug tickets.
+I want a convergence plan.
+
+What I want back
+Please return two outputs.
+
+OUTPUT 1 — Architectural diagnosis
+Using the codebase, the recent run logs, and the generated package artifacts, give me a concise but rigorous diagnosis of the architectural causes of instability.
+
+I want you to explicitly address:
+1. Which stages are generation-time emitters vs post-generation mutators
+2. Which mutator stages can introduce net-new defects
+3. Where stage ordering assumptions are fragile
+4. Where the pipeline is compensating for earlier-stage damage instead of preventing it
+5. Whether the compliance pass is doing too much semantic surgery
+6. Whether structural preservation / stubbing is too tightly coupled to diagnosis and escalation
+7. Whether DHG/readiness currently reflects actual Studio-loadability or just pipeline-internal validity
+
+For each major point, label it as:
+- proven from code/artifacts
+- strongly likely
+- or still hypothetical
+
+OUTPUT 2 — Stabilization plan
+I want a concrete plan for how to make package generation actually converge.
+
+Please propose:
+1. The 3-5 highest-leverage architectural interventions
+2. What must be fixed at generation time vs validation time vs reporting time
+3. Which XAML mutation responsibilities should be reduced or removed from the compliance pass
+4. Which remediation actions should remain automatic, and which should stop mutating output
+5. How escalation/stubbing rules should change so local defects stop turning into package-wide collapse
+6. What the canonical package-generation pipeline should look like after stabilization
+7. What metrics would prove we are improving net package-generation reliability rather than just moving defects around
+
+Constraints
+- I do NOT want a dual-pipeline or permanent multi-mode architecture as the end state
+- I want one canonical pipeline
+- Use the March 26 behavior only as a benchmark/reference for desired characteristics, not as a permanent alternate branch
+- Focus on net package usefulness, Studio-loadability, and truthful reporting
+- Do not optimize for “100% compliant” if the package is still hollow or heavily stubbed
+
+Questions I want explicitly answered
+1. What are the top 3-5 architectural reasons we keep “creating our own issues” in the package-generation part?
+2. Which current mutation layers are adding the most risk?
+3. What should stop mutating XAML entirely?
+4. What should be enforced upstream before XAML is emitted?
+5. What should the final canonical pipeline stages be after stabilization?
+6. What evidence would show that package generation is actually converging across runs?
+
+Important
+Please make this evidence-based and code-based, not just conceptual.
+Use:
+- the real code paths
+- recent run logs
+- the generated package artifacts / DHGs / Studio findings
+- recurring patterns across V5/V6/V7/V8 and the March 26 reference behavior
+
+I want the result to be a real architectural plan we can use to steer the package-generation work, not another symptom-only task list.
