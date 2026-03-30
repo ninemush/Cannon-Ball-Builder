@@ -1,0 +1,105 @@
+Please do one more forensic pass focused on the latest run, but this time I want strict root-cause attribution for the structurally invalid workflows and a direct acceptance-gap assessment.
+
+Your previous analysis was useful, especially:
+- no clean Studio-stable build has been achieved
+- reachability improved
+- DHG truthfulness is still broken
+- string literals are still being treated as expressions
+- Newtonsoft.Json is still being discovered reactively
+
+Now I want the next level of precision.
+
+What I want you to answer
+1. For each workflow that is structurally invalid / compliance-failure in the latest run, where exactly does it first become broken?
+Choose one primary break stage for each file:
+- spec generation
+- pre-emission spec validation
+- tree assembly / emission
+- expression builder / expression serialization
+- compliance mutation
+- quality gate validation
+- DHG / classification only
+
+2. For each of those workflows, is the breakage:
+- XML well-formedness
+- XAML structural invalidity
+- expression syntax
+- type/argument mismatch
+- missing dependency / unresolved activity type
+- namespace/type resolution
+- or a downstream misclassification
+
+3. Which latest-run acceptance criteria are still not met?
+Please assess the latest run against the intended outcomes of the stabilization work and list:
+- met
+- partially met
+- not met
+with evidence
+
+Specific files to analyze
+Use the latest package and focus on:
+- Main.xaml
+- InitAllSettings.xaml
+- GetTodaysBirthdayEvents.xaml
+- ResolveRecipientEmail.xaml
+- GenerateGreetingWithPolicyGate.xaml
+- CreatePolicyReviewTask.xaml
+- SendGreetingEmail.xaml
+- PersistAuditAndIdempotency.xaml
+- project.json
+- DeveloperHandoffGuide (latest)
+
+Specific issues I want traced precisely
+1. InitAllSettings.xaml
+- Confirm whether the “Reading configuration from Config.xlsx...” issue originates in expression builder / serialization
+- Confirm whether the ForEach typing problem still exists or has changed
+- Explain why Studio says DynamicActivity / Implementation is null while the DHG says it is openable / remediated
+
+2. Main.xaml
+- Identify the exact expression or property causing the Studio BC30201 “Expression expected” error
+- Explain why DHG still treated Main as fully generated despite that Studio-visible error
+
+3. The 6 structurally invalid workflows
+- For each one, identify the first break point and the concrete failure signature
+- If they are assembly-failure placeholders, say that explicitly
+- If they were valid at emission but broken later, show which stage did it
+
+4. DHG truthfulness
+- Confirm the hardcoded dhgAccuracy = 1.0 issue
+- Compare the logged convergence metric, the DHG output, and the actual artifact state
+- Tell me whether DHG/reporting is still overstating quality in the latest run
+
+5. Dependency resolution
+- Assess whether Newtonsoft.Json is actually required by the emitted workflows in the latest package
+- If yes, show where
+- If no, explain why the system still warns about discovering it reactively
+- Also evaluate whether project.json is semantically incomplete relative to the intended process design
+
+Output format
+Please return:
+
+A. File-by-file root-cause table
+Columns:
+- file
+- first break stage
+- failure class
+- concrete evidence
+- downstream effects
+
+B. Acceptance-gap table
+For the intended stabilization outcomes:
+- outcome
+- met / partially met / not met
+- evidence
+
+C. Final assessment
+One concise conclusion:
+- are we seeing meaningful progress,
+- or mostly better detection/reporting around still-broken generation?
+
+Important
+Do not give me another roadmap here.
+I want a strict forensic assessment of:
+- where each broken file first becomes broken
+- what class of defect it is
+- and which claimed stabilization outcomes still have not been achieved.
