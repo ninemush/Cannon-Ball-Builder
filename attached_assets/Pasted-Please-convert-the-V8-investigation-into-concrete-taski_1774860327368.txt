@@ -1,0 +1,86 @@
+Please convert the V8 investigation into concrete tasking.
+
+I agree with the current diagnosis that V8 is worse than V7 because of multiple interacting failure classes, not one single issue.
+
+What I want you to use as the working diagnosis
+The V8 package appears to have at least four distinct issue classes:
+
+1. XML emission correctness failures
+- some workflows are becoming full STUB_WORKFLOW_GENERATOR_FAILURE stubs because the generated XAML is malformed before compliance/preservation can safely recover it
+- examples from the investigation include:
+  - mismatched closing tags
+  - invalid tag-name/attribute leakage
+  - invalid whitespace after `<`
+- this points to workflow-tree-assembler / dynamic template / property-rendering defects
+
+2. Over-aggressive undeclared-variable blocking
+- workflows that are structurally valid are still getting escalated to STUB_WORKFLOW_BLOCKING because the quality gate is misclassifying tokens like:
+  - Birthdays
+  - Personal
+  - Home
+  - BGV8
+  - InConfig
+  - StringComparer
+  as undeclared variables / blocking defects
+- this appears to be a major validator false-positive problem, not just noise
+
+3. Object-literal / type-emission defects
+- the generator is still emitting x:Object variables/arguments with literal defaults or other invalid literal usage
+- UiPath Studio rejects Literal<Object>
+- this remains a recurring upstream generation defect across runs
+
+4. Truthfulness / structural-preservation mismatch
+- files may be reported as preserved/openable even when Studio still fails to load them
+- structural preservation metrics and DHG classification are still too optimistic relative to real Studio behavior
+
+What I want back
+Please return a split task set in the usual format, covering these four issue areas separately:
+
+Task A
+Fix XML emission correctness in workflow-tree-assembler / dynamic template rendering
+Goal:
+- generated XAML must be well-formed before compliance/preservation
+- malformed tag construction, mismatched closers, invalid attribute injection, and invalid whitespace/tag-name formation must be prevented at source
+
+Task B
+Fix undeclared-variable validator false positives and severity
+Goal:
+- the undeclared-variable logic must stop treating legitimate literals/constants/config tokens as blocking errors
+- context-aware handling should distinguish:
+  - real undeclared identifiers
+  - string literals/constants
+  - known safe framework/config tokens
+- blocking severity should be reserved for truly real unresolved variable references
+
+Task C
+Fix Object-literal and type-emission correctness
+Goal:
+- x:Object variables/arguments must not be emitted with invalid literal defaults
+- the generator must emit valid types/defaults that UiPath Studio accepts
+- this should be fixed upstream, not only caught in validation
+
+Task D
+Fix truthfulness/classification relative to real Studio loadability
+Goal:
+- workflows that Studio cannot load must not be reported as fully generated / studio-openable / preserved-clean
+- structural preservation metrics must not overstate package usability
+- DHG should match actual Studio behavior
+
+Important requirements
+- do not reduce this to only “compliance transform bugs”
+- do not reduce this to only “validator tuning”
+- I want explicit separation between:
+  - generation-time correctness defects
+  - validator false-positive/severity defects
+  - reporting/truthfulness defects
+- for each task, include downstream impact review
+
+Also please answer this explicitly:
+Will fixing these issues likely get us back toward V7-style output quality, but improved?
+
+My expectation is:
+- yes, this should move us back toward V7-level package usefulness
+- but with better correctness and fewer false passes
+- assuming the XML emission fixes and validator false-positive fixes are implemented well
+
+Please state whether you agree with that expectation, and why.
