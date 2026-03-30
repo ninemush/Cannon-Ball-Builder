@@ -363,17 +363,51 @@ export function generateDhgFromOutcomeReport(
     }
 
     if (nonTransitiveWarnings.length > 0) {
-      md += `### Quality Warnings (${nonTransitiveWarnings.length})\n\n`;
-      md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
-      md += `|---|------|-------|--------|-----------------|-------------|\n`;
-      nonTransitiveWarnings.forEach((w, i) => {
-        const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
-        const action = (w.developerAction || "").length > 80
-          ? (w.developerAction || "").slice(0, 77) + "..."
-          : (w.developerAction || "—");
-        md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${action.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes} |\n`;
-      });
-      md += `\n`;
+      const placeholderWarnings = nonTransitiveWarnings.filter(w => w.check === "placeholder-value");
+      const otherWarnings = nonTransitiveWarnings.filter(w => w.check !== "placeholder-value");
+
+      if (placeholderWarnings.length > 0) {
+        const handoffWarnings = placeholderWarnings.filter(w => (w as any).stubCategory !== "failure");
+        const failureWarnings = placeholderWarnings.filter(w => (w as any).stubCategory === "failure");
+
+        if (handoffWarnings.length > 0) {
+          md += `### Developer Implementation Required (${handoffWarnings.length})\n\n`;
+          md += `These placeholders represent intentional handoff points where developer implementation is expected.\n\n`;
+          md += `| # | File | Detail | Est. Minutes |\n`;
+          md += `|---|------|--------|-------------|\n`;
+          handoffWarnings.forEach((w, i) => {
+            const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
+            md += `| ${i + 1} | \`${w.file}\` | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 10} |\n`;
+          });
+          md += `\n`;
+        }
+
+        if (failureWarnings.length > 0) {
+          md += `### Generation Failures — Pipeline Errors (${failureWarnings.length})\n\n`;
+          md += `These placeholders exist because the generation pipeline could not produce the content. These should be prioritized for remediation.\n\n`;
+          md += `| # | File | Detail | Est. Minutes |\n`;
+          md += `|---|------|--------|-------------|\n`;
+          failureWarnings.forEach((w, i) => {
+            const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
+            md += `| ${i + 1} | \`${w.file}\` | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 15} |\n`;
+          });
+          md += `\n`;
+        }
+      }
+
+      if (otherWarnings.length > 0) {
+        md += `### Quality Warnings (${otherWarnings.length})\n\n`;
+        md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
+        md += `|---|------|-------|--------|-----------------|-------------|\n`;
+        otherWarnings.forEach((w, i) => {
+          const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
+          const action = (w.developerAction || "").length > 80
+            ? (w.developerAction || "").slice(0, 77) + "..."
+            : (w.developerAction || "—");
+          md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${action.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes} |\n`;
+        });
+        md += `\n`;
+      }
     }
   }
 

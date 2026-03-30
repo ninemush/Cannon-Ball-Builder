@@ -221,6 +221,7 @@ function normalizeXamlPath(p: string): string {
 interface StudioLoadabilityResult {
   loadable: boolean;
   reason?: string;
+  repairable?: boolean;
 }
 
 function checkStudioLoadability(xamlContent: string): StudioLoadabilityResult {
@@ -245,7 +246,7 @@ function checkStudioLoadability(xamlContent: string): StudioLoadabilityResult {
   const implPattern = /<(?:Sequence|Flowchart|StateMachine)\b(?!\.)(?:\s|>|\/)/i;
   const hasImplementation = implPattern.test(xamlContent);
   if (!hasImplementation) {
-    return { loadable: false, reason: "No <Sequence>, <Flowchart>, or <StateMachine> child — Studio will report DynamicActivity/Implementation is null" };
+    return { loadable: false, reason: "No <Sequence>, <Flowchart>, or <StateMachine> child — Studio will report DynamicActivity/Implementation is null", repairable: true };
   }
 
   const openTags: string[] = [];
@@ -269,6 +270,57 @@ function checkStudioLoadability(xamlContent: string): StudioLoadabilityResult {
   }
 
   return { loadable: true };
+}
+
+function repairMissingImplementation(xamlContent: string, fileName: string): { repaired: boolean; content: string } {
+  const loadResult = checkStudioLoadability(xamlContent);
+  if (loadResult.loadable || !loadResult.repairable) {
+    return { repaired: false, content: xamlContent };
+  }
+
+  const activityOpenMatch = xamlContent.match(/<Activity\b[\s\S]*?>/);
+  const activityCloseIdx = xamlContent.lastIndexOf("</Activity>");
+  if (!activityOpenMatch || activityCloseIdx < 0) {
+    return { repaired: false, content: xamlContent };
+  }
+
+  const activityOpenEnd = activityOpenMatch.index! + activityOpenMatch[0].length;
+  const innerContent = xamlContent.substring(activityOpenEnd, activityCloseIdx).trim();
+
+  const xMembersMatch = innerContent.match(/<x:Members\b[\s\S]*?<\/x:Members>/);
+  const xMembersBlock = xMembersMatch ? xMembersMatch[0] : "";
+  const remainingInner = xMembersMatch
+    ? innerContent.replace(xMembersBlock, "").trim()
+    : innerContent;
+
+  const className = fileName.replace(/\.xaml$/i, "").replace(/[^A-Za-z0-9_]/g, "_");
+  const hasUiNamespace = /xmlns:ui=/.test(xamlContent);
+
+  let sequenceBody: string;
+  if (remainingInner.length > 0) {
+    sequenceBody = `  <Sequence DisplayName="${className}">\n    ${remainingInner}\n  </Sequence>`;
+  } else {
+    const stubComment = hasUiNamespace
+      ? `<ui:Comment Text="[IMPLEMENTATION_REPAIRED] Root container was missing — this stub Sequence was injected to prevent DynamicActivity/Implementation null. Implement the actual logic here." DisplayName="Implementation Repair Stub" />`
+      : `<!-- [IMPLEMENTATION_REPAIRED] Root container was missing — this stub Sequence was injected to prevent DynamicActivity/Implementation null. Implement the actual logic here. -->`;
+    sequenceBody = `  <Sequence DisplayName="${className}">\n    ${stubComment}\n  </Sequence>`;
+  }
+
+  const repairedXaml =
+    xamlContent.substring(0, activityOpenEnd) +
+    "\n" +
+    (xMembersBlock ? xMembersBlock + "\n" : "") +
+    sequenceBody +
+    "\n" +
+    xamlContent.substring(activityCloseIdx);
+
+  const recheckResult = checkStudioLoadability(repairedXaml);
+  if (recheckResult.loadable) {
+    console.log(`[UiPath] Implementation repair succeeded for "${fileName}" — injected root Sequence`);
+    return { repaired: true, content: repairedXaml };
+  }
+
+  return { repaired: false, content: xamlContent };
 }
 
 function classifyStubFailureCategory(
@@ -2497,6 +2549,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             compliant = spResult.content;
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
+          const implRepair = repairMissingImplementation(compliant, `${wfName}.xaml`);
+          if (implRepair.repaired) {
+            compliant = implRepair.content;
+          }
           deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
           generatedWorkflowNames.add(wfName);
           if ((wfName === "Main" || wfName === "Process") && !complianceFailed) {
@@ -4623,7 +4679,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     for (const entry of xamlEntries) {
       const shortName = (entry.name.split("/").pop() || entry.name).replace(/\.xaml$/i, "");
       if (stubRemediationFiles.has(shortName) || earlyStubFallbacks.includes(shortName + ".xaml")) continue;
-      const loadability = checkStudioLoadability(entry.content);
+      let loadability = checkStudioLoadability(entry.content);
+      if (!loadability.loadable && loadability.repairable) {
+        const repair = repairMissingImplementation(entry.content, entry.name.split("/").pop() || entry.name);
+        if (repair.repaired) {
+          entry.content = repair.content;
+          const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
+          if (archivePath) deferredWrites.set(archivePath, repair.content);
+          loadability = checkStudioLoadability(entry.content);
+        }
+      }
       if (!loadability.loadable) {
         assemblerStudioBlockedCount++;
         assemblerStudioLoadableCount = Math.max(0, assemblerStudioLoadableCount - 1);
@@ -4705,7 +4770,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (DHG_STUB_CONTENT_PATTERNS.some(pattern => entry.content.includes(pattern))) {
         dhgFilesWithStubContent.add(shortName);
       }
-      const loadability = checkStudioLoadability(entry.content);
+      let loadability = checkStudioLoadability(entry.content);
+      if (!loadability.loadable && loadability.repairable) {
+        const repair = repairMissingImplementation(entry.content, shortName);
+        if (repair.repaired) {
+          entry.content = repair.content;
+          const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === shortName);
+          if (archivePath) deferredWrites.set(archivePath, repair.content);
+          loadability = checkStudioLoadability(entry.content);
+        }
+      }
       if (!loadability.loadable) {
         dhgStudioNonLoadableFiles.add(shortName);
         dhgStudioLoadabilityReasons.set(shortName, loadability.reason || "Unknown Studio-loadability failure");
@@ -4728,6 +4802,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         detail: v.detail,
         severity: v.severity as "warning",
         businessContext: v.businessContext,
+        stubCategory: v.stubCategory,
       }));
 
     const dhgStudioBlockingChecks = new Set([
@@ -5132,7 +5207,16 @@ ${depEntries}
     if (STUB_CONTENT_PATTERNS.some(pattern => entry.content.includes(pattern))) {
       filesWithStubContent.add(shortName);
     }
-    const loadability = checkStudioLoadability(entry.content);
+    let loadability = checkStudioLoadability(entry.content);
+    if (!loadability.loadable && loadability.repairable) {
+      const repair = repairMissingImplementation(entry.content, shortName);
+      if (repair.repaired) {
+        entry.content = repair.content;
+        const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === shortName);
+        if (archivePath) deferredWrites.set(archivePath, repair.content);
+        loadability = checkStudioLoadability(entry.content);
+      }
+    }
     if (!loadability.loadable) {
       studioNonLoadableFiles.add(shortName);
       studioLoadabilityReasons.set(shortName, loadability.reason || "Unknown Studio-loadability failure");
@@ -5156,6 +5240,7 @@ ${depEntries}
       detail: v.detail,
       severity: v.severity as "warning",
       businessContext: v.businessContext,
+      stubCategory: v.stubCategory,
     }));
 
   const studioBlockingChecks = new Set([

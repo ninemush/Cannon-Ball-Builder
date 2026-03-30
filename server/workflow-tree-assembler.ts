@@ -1882,6 +1882,168 @@ function sanitizeNodeVariableRefs(node: WorkflowNode, renameMap: Map<string, str
   return node;
 }
 
+function injectTransactionItemNullGuard(activitiesXml: string, allVariables: VariableDeclaration[]): string {
+  const transactionVarNames = allVariables
+    .filter(v => v.type === "UiPath.Core.QueueItem" || v.type === "ui:QueueItem")
+    .map(v => v.name);
+
+  if (transactionVarNames.length === 0) {
+    const defaultNames = ["qi_TransactionItem", "obj_TransactionItem", "out_TransactionItem"];
+    for (const name of defaultNames) {
+      if (activitiesXml.includes(`${name}.`)) {
+        transactionVarNames.push(name);
+      }
+    }
+  }
+
+  if (transactionVarNames.length === 0) return activitiesXml;
+
+  for (const varName of transactionVarNames) {
+    const propAccessPattern = new RegExp(`${varName}\\.\\w+`);
+    if (!propAccessPattern.test(activitiesXml)) continue;
+
+    const alreadyGuarded = new RegExp(
+      `Condition="\\[${varName}\\s+IsNot\\s+Nothing\\]"`,
+      "i"
+    ).test(activitiesXml);
+    if (alreadyGuarded) continue;
+
+    const topLevelActivities = extractTopLevelXmlElements(activitiesXml);
+    if (topLevelActivities.length === 0) continue;
+
+    const accessingElements: string[] = [];
+    const nonAccessingElements: string[] = [];
+
+    for (const elem of topLevelActivities) {
+      if (propAccessPattern.test(elem)) {
+        accessingElements.push(elem);
+      } else {
+        nonAccessingElements.push(elem);
+      }
+    }
+
+    if (accessingElements.length === 0) continue;
+
+    const guardedContent = accessingElements.join("\n    ");
+    const guardedBlock =
+      `<If DisplayName="Check ${varName} Not Null" Condition="[${varName} IsNot Nothing]">\n` +
+      `      <If.Then>\n` +
+      `        <Sequence DisplayName="${varName} Processing">\n` +
+      `          ${guardedContent}\n` +
+      `        </Sequence>\n` +
+      `      </If.Then>\n` +
+      `      <If.Else>\n` +
+      `        <Sequence DisplayName="${varName} Is Null">\n` +
+      `          <ui:LogMessage Level="Warn" Message="[&quot;${varName} is Nothing — skipping property access&quot;]" DisplayName="Null Guard: ${varName}" />\n` +
+      `        </Sequence>\n` +
+      `      </If.Else>\n` +
+      `    </If>`;
+
+    const rebuiltParts: string[] = [];
+    let accessIdx = 0;
+    let guardInserted = false;
+    for (const elem of topLevelActivities) {
+      if (propAccessPattern.test(elem)) {
+        if (!guardInserted) {
+          rebuiltParts.push(guardedBlock);
+          guardInserted = true;
+        }
+        accessIdx++;
+      } else {
+        rebuiltParts.push(elem);
+      }
+    }
+
+    activitiesXml = rebuiltParts.join("\n    ");
+  }
+
+  return activitiesXml;
+}
+
+function extractTopLevelXmlElements(xml: string): string[] {
+  const elements: string[] = [];
+  const trimmed = xml.trim();
+  if (!trimmed) return elements;
+
+  let i = 0;
+  while (i < trimmed.length) {
+    while (i < trimmed.length && trimmed[i] !== '<') i++;
+    if (i >= trimmed.length) break;
+
+    if (trimmed.substring(i, i + 4) === '<!--') {
+      const commentEnd = trimmed.indexOf('-->', i + 4);
+      if (commentEnd < 0) {
+        elements.push(trimmed.substring(i));
+        break;
+      }
+      elements.push(trimmed.substring(i, commentEnd + 3));
+      i = commentEnd + 3;
+      continue;
+    }
+
+    const tagNameMatch = trimmed.substring(i).match(/^<([a-zA-Z][\w:.]*)/);
+    if (!tagNameMatch) {
+      i++;
+      continue;
+    }
+
+    const tagName = tagNameMatch[1];
+    let depth = 0;
+    let j = i;
+    let foundEnd = false;
+
+    while (j < trimmed.length) {
+      const nextOpen = trimmed.indexOf('<', j);
+      if (nextOpen < 0) break;
+
+      if (trimmed[nextOpen + 1] === '/') {
+        const closeTag = trimmed.substring(nextOpen).match(/^<\/([a-zA-Z][\w:.]*)\s*>/);
+        if (closeTag) {
+          if (depth === 0 && closeTag[1] === tagName) {
+            const end = nextOpen + closeTag[0].length;
+            elements.push(trimmed.substring(i, end));
+            i = end;
+            foundEnd = true;
+            break;
+          }
+          if (closeTag[1] === tagName) depth--;
+          j = nextOpen + closeTag[0].length;
+          continue;
+        }
+      }
+
+      const selfClose = trimmed.substring(nextOpen).match(/^<[a-zA-Z][\w:.]*[^>]*\/>/);
+      if (selfClose && nextOpen === i && depth === 0) {
+        elements.push(selfClose[0]);
+        i = nextOpen + selfClose[0].length;
+        foundEnd = true;
+        break;
+      }
+      if (selfClose) {
+        j = nextOpen + selfClose[0].length;
+        continue;
+      }
+
+      const openTag = trimmed.substring(nextOpen).match(/^<([a-zA-Z][\w:.]*)/);
+      if (openTag) {
+        if (nextOpen !== i || depth > 0) {
+          if (openTag[1] === tagName) depth++;
+        }
+        j = nextOpen + openTag[0].length;
+      } else {
+        j = nextOpen + 1;
+      }
+    }
+
+    if (!foundEnd) {
+      elements.push(trimmed.substring(i));
+      break;
+    }
+  }
+
+  return elements;
+}
+
 export function assembleWorkflowFromSpec(
   spec: WorkflowSpec,
   processType: ProcessType = "general",
@@ -1946,6 +2108,8 @@ export function assembleWorkflowFromSpec(
     }
     throw e;
   }
+
+  activitiesXml = injectTransactionItemNullGuard(activitiesXml, allVariables);
 
   const isMainWorkflow = workflowName.toLowerCase() === "main" || workflowName.toLowerCase() === "main.xaml";
   const isInitAllSettings = workflowName.toLowerCase().includes("initallsettings");

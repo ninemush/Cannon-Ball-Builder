@@ -36,6 +36,7 @@ export type QualityGateViolation = {
   file: string;
   detail: string;
   businessContext?: string;
+  stubCategory?: "handoff" | "failure";
 };
 
 export type PositiveEvidence = {
@@ -476,12 +477,18 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
     for (const pattern of PLACEHOLDER_PATTERNS) {
       const matches = contentWithoutComments.match(new RegExp(pattern.source, "gi"));
       if (matches && matches.length > 0) {
+        const hasFailureMarkers = /STUB_BLOCKING_FALLBACK|ASSEMBLY_FAILED|Generator failed|Generator could not|VB_EXPRESSION_BLOCKED|IMPLEMENTATION_REPAIRED/i.test(content);
+        const stubCategory: "handoff" | "failure" = hasFailureMarkers ? "failure" : "handoff";
+        const categoryLabel = stubCategory === "failure"
+          ? "Generation Failure — Pipeline Error"
+          : "Developer Implementation Required";
         violations.push({
           category: "completeness",
           severity: "warning",
           check: "placeholder-value",
           file: shortName,
-          detail: `Contains ${matches.length} placeholder value(s) matching "${pattern.source}"`,
+          detail: `Contains ${matches.length} placeholder value(s) matching "${pattern.source}" [${categoryLabel}]`,
+          stubCategory,
         });
       }
     }
@@ -628,6 +635,39 @@ function checkCompleteness(input: QualityGateInput): QualityGateViolation[] {
       name = name.replace(/&quot;/g, "").replace(/^"|"$/g, "");
       if (!name.startsWith("TODO") && !name.startsWith("PLACEHOLDER")) {
         referencedAssets.add(name);
+      }
+    }
+
+    const vbExpressionAssetPatterns = [
+      /GetAsset\s*\(\s*"([^"]+)"\s*\)/g,
+      /GetCredential\s*\(\s*"([^"]+)"\s*\)/g,
+      /in_Config\s*\(\s*"([^"]+)"\s*\)/g,
+      /dict_Config\s*\(\s*"([^"]+)"\s*\)/g,
+    ];
+    for (const vbPattern of vbExpressionAssetPatterns) {
+      let vbMatch;
+      while ((vbMatch = vbPattern.exec(allXamlContent)) !== null) {
+        let name = vbMatch[1];
+        name = name.replace(/&quot;/g, "").replace(/^"|"$/g, "");
+        if (!name.startsWith("TODO") && !name.startsWith("PLACEHOLDER")) {
+          referencedAssets.add(name);
+        }
+      }
+    }
+
+    const escapedExprPatterns = [
+      /GetAsset\s*\(\s*&quot;([^&]+)&quot;\s*\)/g,
+      /GetCredential\s*\(\s*&quot;([^&]+)&quot;\s*\)/g,
+      /in_Config\s*\(\s*&quot;([^&]+)&quot;\s*\)/g,
+      /dict_Config\s*\(\s*&quot;([^&]+)&quot;\s*\)/g,
+    ];
+    for (const escPattern of escapedExprPatterns) {
+      let escMatch;
+      while ((escMatch = escPattern.exec(allXamlContent)) !== null) {
+        let name = escMatch[1];
+        if (!name.startsWith("TODO") && !name.startsWith("PLACEHOLDER")) {
+          referencedAssets.add(name);
+        }
       }
     }
 

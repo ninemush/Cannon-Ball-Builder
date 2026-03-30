@@ -232,6 +232,7 @@ export interface QualityWarningEntry {
   developerAction: string;
   estimatedEffortMinutes: number;
   businessContext?: string;
+  stubCategory?: "handoff" | "failure";
 }
 
 export const PROPERTY_REMEDIATION_ESCALATION_THRESHOLD = 3;
