@@ -1,0 +1,97 @@
+I agree with the hybrid direction and want to proceed with that approach.
+
+I do NOT want a blind rollback to the March 26 pipeline, and I do NOT want to keep the current streamlined path as the only default while it is still destroying usable output.
+
+What I want is a controlled hybrid that keeps the best parts of both:
+
+Keep from current pipeline:
+- richer spec generation / decomposition
+- better typed variables and workflow intent
+- DHG generation
+- dependency resolution framework
+- structural preservation framework
+- deterministic validators, but tuned conservatively
+
+Restore from the March 26 path:
+- the AI enrichment / refinement stage that turns specs into cleaner XAML activity trees before final assembly
+- the simpler, more robust orchestration style for Main.xaml on complex packages
+- the clearer scaffold/TODO fallback style when a workflow cannot be fully generated cleanly
+
+Fix in current pipeline:
+- compliance transform corruption, starting with duplicate attribute / duplicate DisplayName behavior
+- overly aggressive validator escalation for noisy-but-nonblocking expression cases
+- destructive reachability pruning after Main.xaml or Process.xaml is stubbed
+
+Recommended implementation strategy
+
+1. Add a build-mode flag with at least:
+- current_streamlined
+- hybrid_enriched
+
+Optional:
+- legacy_scaffold
+
+2. In hybrid_enriched mode:
+- use the CURRENT spec generation as the source of truth
+- then run the March 26-style AI enrichment/refinement pass on top of those specs before final XAML assembly
+- treat the mapped/decomposed spec as authoritative, with enrichment refining or filling clean activity-tree details rather than replacing the overall workflow contract
+
+3. Keep structural preservation from the current pipeline:
+- preserve containers / invokes / workflow skeleton when possible
+- stub invalid leaves conservatively
+- avoid inventing business logic heuristically
+
+4. Fix the compliance path:
+- eliminate duplicate-attribute generation, especially duplicate DisplayName
+- add a final duplicate-attribute sanitization/dedup pass before returning transformed XML
+- verify that the compliance pass is no longer the main destroyer of otherwise-valid generated workflows
+
+5. Tune validator severity:
+- keep truly structural/type errors blocking
+- downgrade known noisy false-positive expression patterns from “stub activity” to warning where safe
+- do not weaken validators broadly; tune them specifically
+
+6. Protect orchestration graph integrity:
+- if Main.xaml or Process.xaml is stubbed through any path, preserve or inject InvokeWorkflowFile references
+- skip reachability pruning when entrypoint fallback occurred
+
+What I want validated
+Please run the same package idea through:
+- current_streamlined
+- hybrid_enriched
+
+And compare:
+- fully generated workflow count
+- workflow-level stub count
+- activity-level stub count
+- compliance/final-validation crashes
+- stripped properties
+- unknown activities
+- enum corrections
+- reachable workflow count
+- dependency coherence
+- Studio-openability
+- DHG readiness/manual remediation minutes
+
+Success criteria for hybrid_enriched
+I want hybrid_enriched to become the preferred/default mode only if it consistently beats current_streamlined on actual package usefulness, especially:
+- Main.xaml / Process.xaml not stubbed
+- more workflows fully generated
+- fewer compliance-corruption failures
+- intact invocation graph
+- materially lower manual remediation effort
+- package remains openable in Studio and structurally useful to a developer
+
+Important caution
+Please do not assume the duplicate DisplayName bug is the only issue.
+It looks like a major destroyer, but I want the work framed as:
+- restore cleaner XAML refinement
+- reduce destructive post-processing
+- preserve graph structure when partial invalidity occurs
+- and then validate whether duplicate-attribute fixes plus hybrid enrichment are sufficient
+
+What I want back
+1. the concrete hybrid design
+2. the minimal code changes needed to enable the mode
+3. the comparison plan between current_streamlined and hybrid_enriched
+4. the decision rule for when hybrid_enriched should become the default
