@@ -4532,10 +4532,30 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             }));
           }
         }
+        const isMainFile = corruptedFile === "Main.xaml" || corruptedFile === `${mainWfName}.xaml`;
+        let invokeWorkflows: Array<{ displayName: string; fileName: string }> | undefined;
+        if (isMainFile && nonMainWorkflowNames.length > 0) {
+          const seenFiles = new Set<string>();
+          invokeWorkflows = [];
+          const initFile = "InitAllSettings.xaml";
+          if (!seenFiles.has(initFile)) {
+            seenFiles.add(initFile);
+            invokeWorkflows.push({ displayName: "Initialize All Settings", fileName: initFile });
+          }
+          for (const name of nonMainWorkflowNames) {
+            const fn = `${name}.xaml`;
+            if (!seenFiles.has(fn) && name !== stubName) {
+              seenFiles.add(fn);
+              invokeWorkflows.push({ displayName: name, fileName: fn });
+            }
+          }
+          console.log(`[UiPath Pre-Package Validation] Main.xaml stub will preserve ${invokeWorkflows.length} InvokeWorkflowFile reference(s) to maintain sub-workflow reachability`);
+        }
         const stubXaml = generateStubWorkflow(stubName, {
           reason: `Final validation remediation — original XAML had well-formedness violations`,
           arguments: finalArgs.length > 0 ? finalArgs : undefined,
           variables: finalVars.length > 0 ? finalVars : undefined,
+          invokeWorkflows: invokeWorkflows && invokeWorkflows.length > 0 ? invokeWorkflows : undefined,
         });
         let stubCompliant: string;
         try {
@@ -4878,7 +4898,29 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           if (!recheck.valid) {
             console.error(`[XML Well-Formedness Gate] ${fileName}: still invalid after targeted fix — replacing with Studio-openable stub`);
             const stubName = fileName.replace(/\.xaml$/i, "");
-            const stubXaml = generateStubWorkflow(stubName, { reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}` });
+            const isMainStub = fileName === "Main.xaml" || fileName === `${mainWfName}.xaml`;
+            let stubInvokes: Array<{ displayName: string; fileName: string }> | undefined;
+            if (isMainStub && nonMainWorkflowNames.length > 0) {
+              const seenFiles = new Set<string>();
+              stubInvokes = [];
+              const initFile = "InitAllSettings.xaml";
+              if (!seenFiles.has(initFile)) {
+                seenFiles.add(initFile);
+                stubInvokes.push({ displayName: "Initialize All Settings", fileName: initFile });
+              }
+              for (const name of nonMainWorkflowNames) {
+                const fn = `${name}.xaml`;
+                if (!seenFiles.has(fn) && fn !== fileName) {
+                  seenFiles.add(fn);
+                  stubInvokes.push({ displayName: name, fileName: fn });
+                }
+              }
+              console.log(`[XML Well-Formedness Gate] Main.xaml stub preserving ${stubInvokes.length} InvokeWorkflowFile reference(s)`);
+            }
+            const stubXaml = generateStubWorkflow(stubName, {
+              reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}`,
+              invokeWorkflows: stubInvokes && stubInvokes.length > 0 ? stubInvokes : undefined,
+            });
             sanitized = stubXaml;
             autoFixSummary.push(`Replaced ${fileName} with Studio-openable stub due to XML well-formedness failure`);
           } else {

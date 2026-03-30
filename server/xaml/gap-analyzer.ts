@@ -421,6 +421,7 @@ export interface StubWorkflowOptions {
   variables?: Array<{ name: string; type: string; defaultValue?: string }>;
   reason?: string;
   isBlockingFallback?: boolean;
+  invokeWorkflows?: Array<{ displayName: string; fileName: string }>;
 }
 
 export function generateStubWorkflow(fileName: string, options?: StubWorkflowOptions): string {
@@ -450,6 +451,13 @@ export function generateStubWorkflow(fileName: string, options?: StubWorkflowOpt
     variableDecls = "\n    <Sequence.Variables />";
   }
 
+  let invokeBlock = "";
+  if (options?.invokeWorkflows?.length) {
+    invokeBlock = "\n" + options.invokeWorkflows.map(wf =>
+      `    <ui:InvokeWorkflowFile DisplayName="${escapeXml(wf.displayName)}" WorkflowFileName="${escapeXml(wf.fileName)}" />`
+    ).join("\n");
+  }
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${className}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
@@ -461,7 +469,7 @@ export function generateStubWorkflow(fileName: string, options?: StubWorkflowOpt
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${argumentProps}
   <Sequence DisplayName="${escapeXml(className)}">${variableDecls}
-    <ui:LogMessage Level="Warn" Message="[&quot;${stubLabel}: ${escapeXml(className)} — ${escapeXml(reason)}. Implement the actual logic here.&quot;]" DisplayName="Stub Warning: ${escapeXml(className)}" />
+    <ui:LogMessage Level="Warn" Message="[&quot;${stubLabel}: ${escapeXml(className)} — ${escapeXml(reason)}. Implement the actual logic here.&quot;]" DisplayName="Stub Warning: ${escapeXml(className)}" />${invokeBlock}
   </Sequence>
 </Activity>`;
 }

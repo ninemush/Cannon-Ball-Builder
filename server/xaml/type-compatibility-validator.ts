@@ -64,6 +64,12 @@ const IMPLICIT_COMPATIBLE: [string, string][] = [
   ["System.Single", "System.Double"],
 ];
 
+const GENERIC_CATALOG_TYPES = new Set(["System.Object", "Object"]);
+
+function isGenericCatalogType(normalizedType: string): boolean {
+  return GENERIC_CATALOG_TYPES.has(normalizedType);
+}
+
 export function areTypesCompatible(sourceType: string, targetType: string): boolean {
   const src = normalizeClrType(sourceType);
   const tgt = normalizeClrType(targetType);
@@ -428,12 +434,17 @@ export function validateTypeCompatibility(
           if (binding.direction !== "Out" && binding.direction !== "InOut") continue;
           const varInfo = varMap.get(binding.boundVariable);
           if (!varInfo) continue;
-          if (areTypesCompatible(normalizeClrType(binding.expectedClrType), varInfo.fullClrType)) continue;
-          const normalized = normalizeClrType(binding.expectedClrType);
+          const normalizedExp = normalizeClrType(binding.expectedClrType);
+          if (isGenericCatalogType(normalizedExp) &&
+              varInfo.fullClrType !== "System.Object" &&
+              varInfo.fullClrType !== "Object") {
+            continue;
+          }
+          if (areTypesCompatible(normalizedExp, varInfo.fullClrType)) continue;
           if (!outTargetsByVar.has(binding.boundVariable)) {
             outTargetsByVar.set(binding.boundVariable, new Set());
           }
-          outTargetsByVar.get(binding.boundVariable)!.add(normalized);
+          outTargetsByVar.get(binding.boundVariable)!.add(normalizedExp);
         }
 
         for (const binding of bindings) {
@@ -441,7 +452,16 @@ export function validateTypeCompatibility(
           const varInfo = varMap.get(binding.boundVariable);
           if (!varInfo) continue;
 
-          if (areTypesCompatible(normalizeClrType(binding.expectedClrType), varInfo.fullClrType)) continue;
+          const normalizedExpectedOut = normalizeClrType(binding.expectedClrType);
+
+          if (isGenericCatalogType(normalizedExpectedOut) &&
+              varInfo.fullClrType !== "System.Object" &&
+              varInfo.fullClrType !== "Object") {
+            console.log(`[Type Compatibility] Skipping Out type-change for "${binding.boundVariable}" (${binding.activityTag}.${binding.propertyName}) — variable has concrete type ${varInfo.fullClrType}, catalog expects generic ${normalizedExpectedOut}`);
+            continue;
+          }
+
+          if (areTypesCompatible(normalizedExpectedOut, varInfo.fullClrType)) continue;
 
           const conflictingTargets = outTargetsByVar.get(binding.boundVariable);
           if (conflictingTargets && conflictingTargets.size > 1) {
@@ -472,17 +492,6 @@ export function validateTypeCompatibility(
             r.repairKind === "variable-type-change"
           );
           if (alreadyRepaired) continue;
-
-          const normalizedExpectedOut = normalizeClrType(binding.expectedClrType);
-          const GENERIC_CATALOG_TYPES = new Set([
-            "System.Object", "Object",
-          ]);
-          if (GENERIC_CATALOG_TYPES.has(normalizedExpectedOut) &&
-              varInfo.fullClrType !== "System.Object" &&
-              varInfo.fullClrType !== "Object") {
-            console.log(`[Type Compatibility] Skipping Out type-change for "${binding.boundVariable}" — variable has concrete type ${varInfo.fullClrType}, catalog expects generic ${normalizedExpectedOut}`);
-            continue;
-          }
 
           const targetTypeArg = clrTypeToXamlTypeArg(normalizedExpectedOut);
           const oldType = varInfo.type;
@@ -553,8 +562,7 @@ export function validateTypeCompatibility(
         } else if (conversion.kind === "variable-type-change") {
           const normalizedExpected = normalizeClrType(binding.expectedClrType);
 
-          const GENERIC_CATALOG_TYPES_IN = new Set(["System.Object", "Object"]);
-          if (GENERIC_CATALOG_TYPES_IN.has(normalizedExpected) &&
+          if (isGenericCatalogType(normalizedExpected) &&
               varInfo.fullClrType !== "System.Object" &&
               varInfo.fullClrType !== "Object") {
             console.log(`[Type Compatibility] Skipping In type-change for "${binding.boundVariable}" — variable has concrete type ${varInfo.fullClrType}, catalog expects generic ${normalizedExpected}`);

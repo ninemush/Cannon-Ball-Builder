@@ -604,7 +604,7 @@ function applyCatalogConformance(xml: string): string {
 
       const wrapper = correction.argumentWrapper || "InArgument";
       const xType = correction.typeArguments || "x:String";
-      const wrappedVal = ensureBracketWrapped(propVal);
+      const wrappedVal = escapeXmlTextContent(ensureBracketWrapped(propVal));
       const childElement = `<${tag}.${propName}>\n    <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n  </${tag}.${propName}>`;
 
       const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -2007,10 +2007,18 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
     return { xaml: fallbackXaml, variables: allVariables };
   }
 
+  xaml = sanitizeUnescapedAmpersands(xaml);
+
   const validationResult = XMLValidator.validate(xaml, { allowBooleanAttributes: true });
   if (validationResult !== true) {
     const err = validationResult.err;
-    console.error(`[Tree Assembler] Post-assembly XML well-formedness check FAILED for "${workflowName}": ${err.msg} at line ${err.line}, col ${err.col}`);
+    const lines = xaml.split("\n");
+    const contextStart = Math.max(0, err.line - 3);
+    const contextEnd = Math.min(lines.length, err.line + 2);
+    const contextSnippet = lines.slice(contextStart, contextEnd)
+      .map((l, i) => `  ${contextStart + i + 1}${contextStart + i + 1 === err.line ? " >>>" : "    "} ${l}`)
+      .join("\n");
+    console.error(`[Tree Assembler] Post-assembly XML well-formedness check FAILED for "${workflowName}": ${err.msg} at line ${err.line}, col ${err.col}\nContext:\n${contextSnippet}`);
     const fallbackXaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(workflowName)}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
@@ -2240,6 +2248,29 @@ function deduplicateAssemblyAttributes(xaml: string): string {
     console.log(`[Tree Assembler] Deduplicated attributes in ${dedupCount} element(s) before well-formedness check`);
   }
   return result;
+}
+
+function sanitizeUnescapedAmpersands(xaml: string): string {
+  let sanitized = xaml;
+  let fixCount = 0;
+
+  sanitized = sanitized.replace(/="([^"]*)"/g, (_match, attrVal: string) => {
+    const fixed = attrVal.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/g, "&amp;");
+    if (fixed !== attrVal) fixCount++;
+    return `="${fixed}"`;
+  });
+
+  sanitized = sanitized.replace(/>([^<]+)</g, (_match, textContent: string) => {
+    const fixed = textContent.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/g, "&amp;");
+    if (fixed !== textContent) fixCount++;
+    return `>${fixed}<`;
+  });
+
+  if (fixCount > 0) {
+    console.warn(`[XML Sanitizer] Fixed ${fixCount} unescaped ampersand(s) in assembled XAML`);
+  }
+
+  return sanitized;
 }
 
 function sanitizeObjectLiteralArguments(xaml: string): string {
