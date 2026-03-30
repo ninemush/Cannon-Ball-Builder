@@ -763,20 +763,34 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
             <AlertTriangle className="h-3 w-3" /> {warnings.length} warning{warnings.length !== 1 ? "s" : ""}
           </span>
         )}
-        {templateComplianceScore !== undefined && !isNaN(templateComplianceScore) && (
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-              templateComplianceScore >= 0.9
-                ? "bg-emerald-500/15 text-emerald-500"
-                : templateComplianceScore >= 0.7
-                  ? "bg-amber-500/15 text-amber-500"
-                  : "bg-red-500/15 text-red-500"
-            }`}
-            data-testid="badge-template-compliance"
-          >
-            {Math.round(templateComplianceScore * 100)}% compliant
-          </span>
-        )}
+        {templateComplianceScore !== undefined && !isNaN(templateComplianceScore) && (() => {
+          const hasStubs = outcomeSummary && (outcomeSummary.stubbedActivities > 0 || outcomeSummary.stubbedSequences > 0 || outcomeSummary.stubbedWorkflows > 0);
+          const hasStructuralDefects = isFallbackReady || isFailed;
+          if (hasStubs || hasStructuralDefects) {
+            return (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-500/15 text-red-500"
+                data-testid="badge-template-compliance"
+              >
+                {hasStructuralDefects ? "Not ready" : "Has stubs — not fully compliant"}
+              </span>
+            );
+          }
+          return (
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                templateComplianceScore >= 0.9
+                  ? "bg-emerald-500/15 text-emerald-500"
+                  : templateComplianceScore >= 0.7
+                    ? "bg-amber-500/15 text-amber-500"
+                    : "bg-red-500/15 text-red-500"
+              }`}
+              data-testid="badge-template-compliance"
+            >
+              {Math.round(templateComplianceScore * 100)}% compliant
+            </span>
+          );
+        })()}
         {completenessLevel && (
           <span
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${

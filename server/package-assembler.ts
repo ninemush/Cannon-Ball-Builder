@@ -447,6 +447,25 @@ function buildReachabilityGraph(
   return { reachable, unreachable, graph };
 }
 
+function filterUnreachableBySpecDecomposition(
+  unreachable: Set<string>,
+  generatedWorkflowNames: Set<string>,
+): { trulyOrphaned: Set<string>; specRetained: Set<string> } {
+  const trulyOrphaned = new Set<string>();
+  const specRetained = new Set<string>();
+
+  Array.from(unreachable).forEach(file => {
+    const basename = (file.split("/").pop() || file).replace(/\.xaml$/i, "");
+    if (generatedWorkflowNames.has(basename)) {
+      specRetained.add(file);
+    } else {
+      trulyOrphaned.add(file);
+    }
+  });
+
+  return { trulyOrphaned, specRetained };
+}
+
 function removeUnreachableFiles(
   deferredWrites: Map<string, string>,
   xamlEntries: Array<{ name: string; content: string }>,
@@ -1964,6 +1983,111 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
       console.log(`[UiPath] ${priorCompliantMap.size} prior compliant workflow(s) available for reuse: ${Array.from(priorCompliantMap.keys()).join(", ")}`);
     }
+    type CatalogPropertySnapshot = Map<string, Map<string, string>>;
+
+    const COMPLIANCE_EXPECTED_TRANSFORMS: Record<string, Set<string>> = {
+      "Assign": new Set(["To", "Value"]),
+      "InvokeWorkflowFile": new Set(["Input", "Output"]),
+    };
+
+    function snapshotCatalogValidProperties(xml: string): CatalogPropertySnapshot {
+      const snapshot: CatalogPropertySnapshot = new Map();
+      const elementRegex = /<((?:[\w]+:)?[\w]+)(\s[^>]*?|\s*)(\/?>)/g;
+      let elMatch;
+      while ((elMatch = elementRegex.exec(xml)) !== null) {
+        const fullTag = elMatch[1];
+        if (fullTag.includes(".") || fullTag.startsWith("x:") || fullTag.startsWith("sap") || fullTag.startsWith("mc:")) continue;
+        const className = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
+        const schema = catalogService.getActivitySchema(className);
+        if (!schema) continue;
+
+        const expectedTransforms = COMPLIANCE_EXPECTED_TRANSFORMS[className];
+        const attrString = elMatch[2];
+        const attrRegex2 = /([\w]+(?:\.[\w]+)?)="([^"]*)"/g;
+        let attrMatch;
+        const validAttrs = new Map<string, string>();
+        while ((attrMatch = attrRegex2.exec(attrString)) !== null) {
+          if (attrMatch[1].startsWith("xmlns") || attrMatch[1].includes(":")) continue;
+          const propName = attrMatch[1];
+          if (expectedTransforms && expectedTransforms.has(propName)) continue;
+          const propVal = attrMatch[2];
+          const knownProp = schema.activity.properties.find(p => p.name === propName);
+          if (knownProp && knownProp.xamlSyntax === "attribute") {
+            validAttrs.set(propName, propVal);
+          }
+        }
+        if (validAttrs.size > 0) {
+          const key = `${fullTag}@${elMatch.index}`;
+          snapshot.set(key, validAttrs);
+        }
+      }
+      return snapshot;
+    }
+
+    function enforcePreCompliancePropertyProtection(preComplianceXml: string, postComplianceXml: string, snapshot: CatalogPropertySnapshot, fileName: string): string {
+      if (snapshot.size === 0) return postComplianceXml;
+      let result = postComplianceXml;
+      let protectedCount = 0;
+      let damagedCount = 0;
+
+      Array.from(snapshot.entries()).forEach(([key, validAttrs]) => {
+        const tagName = key.split("@")[0];
+        Array.from(validAttrs.entries()).forEach(([propName, propVal]) => {
+          const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const escapedPropVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const attrPattern = new RegExp(`${escapedPropName}="${escapedPropVal}"`);
+          if (attrPattern.test(result)) {
+            protectedCount++;
+            return;
+          }
+          damagedCount++;
+          const escapedPropValXml = propVal.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const nsPrefix = tagName.includes(":") ? tagName.split(":")[0] + ":" : "";
+          const localTag = tagName.includes(":") ? tagName.split(":")[1] : tagName;
+          const childElPatterns = [
+            new RegExp(`<${nsPrefix}${localTag}\\.${escapedPropName}>\\s*<(?:In|Out|InOut)Argument[^>]*>\\s*${escapedPropValXml.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*</(?:In|Out|InOut)Argument>\\s*</${nsPrefix}${localTag}\\.${escapedPropName}>`, "s"),
+            new RegExp(`<${localTag}\\.${escapedPropName}>\\s*<(?:In|Out|InOut)Argument[^>]*>\\s*${escapedPropValXml.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*</(?:In|Out|InOut)Argument>\\s*</${localTag}\\.${escapedPropName}>`, "s"),
+          ];
+          let restored = false;
+          for (const pat of childElPatterns) {
+            const childMatch = pat.exec(result);
+            if (childMatch) {
+              const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const tagOpenPat = new RegExp(`<${escapedTag}\\s[^>]*?>`, "g");
+              const searchRegion = result.substring(0, childMatch.index);
+              let lastTagMatch: RegExpExecArray | null = null;
+              let m;
+              while ((m = tagOpenPat.exec(searchRegion)) !== null) {
+                lastTagMatch = m;
+              }
+              if (lastTagMatch) {
+                const childStr = childMatch[0];
+                const childIdx = childMatch.index;
+                result = result.substring(0, childIdx) + result.substring(childIdx + childStr.length);
+                const tagOpenStr = lastTagMatch[0];
+                const tagOpenEnd = lastTagMatch.index + tagOpenStr.length - 1;
+                result = result.substring(0, tagOpenEnd) + ` ${propName}="${propVal}"` + result.substring(tagOpenEnd);
+                restored = true;
+                console.log(`[Compliance Preservation] ${fileName}: restored "${propName}" on <${tagName}> from child-element back to attribute form`);
+              }
+              break;
+            }
+          }
+          if (!restored) {
+            console.warn(`[Compliance Preservation] ${fileName}: catalog-valid property "${propName}" on <${tagName}> was damaged by compliance pass and could not be auto-restored`);
+          }
+        });
+      });
+
+      if (damagedCount > 0) {
+        console.log(`[Compliance Preservation] ${fileName}: ${damagedCount} damaged, ${protectedCount} preserved; auto-restored where possible`);
+      } else if (protectedCount > 0) {
+        console.log(`[Compliance Preservation] ${fileName}: all ${protectedCount} catalog-valid property(ies) preserved through compliance pass`);
+      }
+      return result;
+    }
+
+    let totalPostComplianceReCorrections = 0;
     function postComplianceCatalogConformance(content: string, fileName: string): string {
       if (!catalogService.isLoaded()) return content;
       let result = content;
@@ -2079,13 +2203,18 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
       }
       if (reCorrections > 0) {
+        totalPostComplianceReCorrections += reCorrections;
         console.log(`[Post-Compliance Catalog] ${fileName}: re-corrected ${reCorrections} property(ies) that were corrupted by compliance pass`);
       }
       return result;
     }
 
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
+      const preCatalogSnapshot = catalogService.isLoaded() ? snapshotCatalogValidProperties(rawXaml) : null;
       let compliant = makeUiPathCompliant(rawXaml, tf);
+      if (preCatalogSnapshot && preCatalogSnapshot.size > 0) {
+        compliant = enforcePreCompliancePropertyProtection(rawXaml, compliant, preCatalogSnapshot, fileName);
+      }
       compliant = postComplianceCatalogConformance(compliant, fileName);
       const { filtered, removed } = filterBlockedActivitiesFromXaml(compliant, automationPattern);
       compliant = filtered;
@@ -2187,6 +2316,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     }
 
     const nonMainWorkflowNames: string[] = [];
+    let deferredHallucinatedRecoveries: Array<{ template: string; displayName: string; file: string }> = [];
 
     if (enrichmentsToProcess.length > 0) {
       const mainIdx = enrichmentsToProcess.findIndex(e => e.name === "Main");
@@ -2206,9 +2336,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         const report = validationResult.report;
         totalStrippedProperties += report.strippedProperties;
         totalExcessiveStripping += report.excessiveStrippingCount;
+        const wfFileName = ((spec.name || enrichEntry.name || "").replace(/\s+/g, "_")) + ".xaml";
         if (report.excessiveStrippingCount > 0) {
-          const wfFileName = ((spec.name || enrichEntry.name || "").replace(/\s+/g, "_")) + ".xaml";
           excessiveStrippingFiles.add(wfFileName);
+          const perFileHallucinated = report.issues.filter(
+            i => i.code === "EXCESSIVE_PROPERTIES_STRIPPED" && i.severity === "error"
+          );
+          for (const hi of perFileHallucinated) {
+            deferredHallucinatedRecoveries.push({
+              template: hi.activityTemplate,
+              displayName: hi.activityDisplayName,
+              file: wfFileName,
+            });
+          }
         }
 
         if (!specValidationReport) {
@@ -2305,14 +2445,20 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       if (totalExcessiveStripping > 0) {
         const affectedFileList = Array.from(excessiveStrippingFiles).join(", ");
+        if (deferredHallucinatedRecoveries.length > 0) {
+          console.log(`[UiPath Recovery] Identified ${deferredHallucinatedRecoveries.length} potentially hallucinated activit(ies) for targeted recovery:`);
+          for (const ha of deferredHallucinatedRecoveries) {
+            console.log(`  - ${ha.template} ("${ha.displayName}") in ${ha.file} — converted to Comment stub at spec-validator level`);
+          }
+        }
         dependencyWarnings.push({
           code: "EXCESSIVE_PROPERTY_STRIPPING",
-          message: `${totalExcessiveStripping} activit(ies) had 3+ non-catalog properties stripped in [${affectedFileList}] — indicates generation hallucination. Consider regenerating these activities.`,
+          message: `${totalExcessiveStripping} activit(ies) had 5+ non-catalog properties stripped (structural breaks only) in [${affectedFileList}] — indicates generation hallucination for uncataloged activity types. ${deferredHallucinatedRecoveries.length} converted to Comment stubs at spec-validator level.`,
           stage: "spec-validation",
-          recoverable: false,
+          recoverable: true,
           affectedFiles: Array.from(excessiveStrippingFiles),
         });
-        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${totalExcessiveStripping} activities exceeded the stripping threshold in ${affectedFileList} — generation quality may be degraded`);
+        console.warn(`[UiPath] EXCESSIVE PROPERTY STRIPPING: ${totalExcessiveStripping} activities exceeded the stripping threshold in ${affectedFileList} — ${deferredHallucinatedRecoveries.length} converted to Comment stubs via spec-level recovery`);
       }
 
       const mainWfName = generatedWorkflowNames.has("Main") ? "Main" : (generatedWorkflowNames.has("Process") ? "Process" : (enrichmentsToProcess[0]?.name || "Main").replace(/\s+/g, "_"));
@@ -2919,17 +3065,35 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[Structural Dedup] Reachability analysis: ${reachable.size} reachable, ${unreachable.size} unreachable out of ${reachable.size + unreachable.size} total XAML files`);
 
         if (unreachable.size > 0) {
-          const { removedFiles, reasons } = removeUnreachableFiles(deferredWrites, xamlEntries, unreachable, libPath);
-          for (const reason of reasons) {
-            console.log(`[Structural Dedup] ${reason}`);
-            dependencyWarnings.push({
-              code: "STRUCTURAL_DEDUP_REMOVED",
-              message: reason,
-              stage: "structural-deduplication",
-              recoverable: true,
+          const { trulyOrphaned, specRetained } = filterUnreachableBySpecDecomposition(unreachable, generatedWorkflowNames);
+
+          if (specRetained.size > 0) {
+            console.log(`[Structural Dedup] Retained ${specRetained.size} spec-decomposed workflow(s) despite being unreachable from fallback Main.xaml: ${Array.from(specRetained).join(", ")}`);
+            Array.from(specRetained).forEach(retained => {
+              dependencyWarnings.push({
+                code: "SPEC_WORKFLOW_NOT_WIRED",
+                message: `"${retained}" was generated from spec decomposition but is not reachable from current Main.xaml — flagged as "generated but not wired"`,
+                stage: "structural-deduplication",
+                recoverable: true,
+              });
             });
           }
-          console.log(`[Structural Dedup] Removed ${removedFiles.length} unreachable file(s): ${removedFiles.join(", ")}`);
+
+          if (trulyOrphaned.size > 0) {
+            const { removedFiles, reasons } = removeUnreachableFiles(deferredWrites, xamlEntries, trulyOrphaned, libPath);
+            for (const reason of reasons) {
+              console.log(`[Structural Dedup] ${reason}`);
+              dependencyWarnings.push({
+                code: "STRUCTURAL_DEDUP_REMOVED",
+                message: reason,
+                stage: "structural-deduplication",
+                recoverable: true,
+              });
+            }
+            console.log(`[Structural Dedup] Removed ${removedFiles.length} truly orphaned file(s): ${removedFiles.join(", ")}`);
+          } else {
+            console.log(`[Structural Dedup] All unreachable files are spec-decomposed — no files removed`);
+          }
         } else {
           console.log(`[Structural Dedup] All XAML files are reachable from Main.xaml — no orphaned files detected`);
         }
@@ -3496,6 +3660,22 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         estimatedEffortMinutes: 15,
       });
     }
+    if (deferredHallucinatedRecoveries.length > 0) {
+      for (const ha of deferredHallucinatedRecoveries) {
+        outcomeRemediations.push({
+          level: "activity",
+          file: ha.file,
+          remediationCode: "HALLUCINATED_ACTIVITY_STUBBED",
+          originalTag: ha.template,
+          originalDisplayName: ha.displayName,
+          reason: `Activity template "${ha.template}" had >50% properties stripped — likely hallucinated or wrong activity type`,
+          classifiedCheck: "EXCESSIVE_PROPERTIES_STRIPPED",
+          developerAction: `Replace "${ha.template}" ("${ha.displayName}") with the correct UiPath activity from the catalog. The generated activity template does not match any known catalog entry well enough to be used directly.`,
+          estimatedEffortMinutes: 15,
+        });
+      }
+      console.log(`[UiPath Recovery] Registered ${deferredHallucinatedRecoveries.length} hallucinated activity remediation(s) — targeted for per-activity recovery instead of package-level downgrade`);
+    }
     const outcomeAutoRepairs: AutoRepairEntry[] = [...placeholderCleanupRepairs];
     const structuralPreservationMetrics: StructuralPreservationMetrics[] = [];
 
@@ -3857,6 +4037,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     }
 
+    let qualityGateRunCount = 0;
+    const MAX_QUALITY_GATE_RUNS = 3;
     let qualityGateResult = runQualityGate({
       xamlEntries,
       projectJsonContent: projectJsonStr,
@@ -3867,6 +4049,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       archiveContentHashes: buildContentHashRecord(),
       automationPattern,
     });
+    qualityGateRunCount++;
+    const initialQGViolationCount = qualityGateResult.violations?.length || 0;
 
     const applyCatalogViolations = (result: typeof qualityGateResult) => {
       if (catalogViolations.length > 0) {
@@ -4034,17 +4218,22 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       const fixedProjectJsonStr = JSON.stringify(projectJson, null, 2);
 
-      qualityGateResult = runQualityGate({
-        xamlEntries,
-        projectJsonContent: fixedProjectJsonStr,
-        configData: configCsv,
-        orchestratorArtifacts,
-        targetFramework: tf,
-        archiveManifest: allArchivePaths,
-        archiveContentHashes: buildContentHashRecord(),
-        automationPattern,
-      });
-      applyCatalogViolations(qualityGateResult);
+      if (qualityGateRunCount < MAX_QUALITY_GATE_RUNS) {
+        qualityGateResult = runQualityGate({
+          xamlEntries,
+          projectJsonContent: fixedProjectJsonStr,
+          configData: configCsv,
+          orchestratorArtifacts,
+          targetFramework: tf,
+          archiveManifest: allArchivePaths,
+          archiveContentHashes: buildContentHashRecord(),
+          automationPattern,
+        });
+        qualityGateRunCount++;
+        applyCatalogViolations(qualityGateResult);
+      } else {
+        console.log(`[UiPath Quality Gate] Skipping post-fix rerun — already at max ${MAX_QUALITY_GATE_RUNS} runs`);
+      }
 
       if (!qualityGateResult.passed) {
         const reClassified = classifyQualityIssues(qualityGateResult);
@@ -4123,18 +4312,24 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             if (stubbedVariableNames.size > 0) {
               console.log(`[UiPath Escalation] Tracking ${stubbedVariableNames.size} stubbed variable(s) to suppress cascade: ${Array.from(stubbedVariableNames).join(", ")}`);
             }
-            const perActivityProjectJsonStr = JSON.stringify(projectJson, null, 2);
-            qualityGateResult = runQualityGate({
-              xamlEntries,
-              projectJsonContent: perActivityProjectJsonStr,
-              configData: configCsv,
-              orchestratorArtifacts,
-              targetFramework: tf,
-              archiveManifest: allArchivePaths,
-              archiveContentHashes: buildContentHashRecord(),
-              automationPattern,
-            });
-            applyCatalogViolations(qualityGateResult);
+            if (qualityGateRunCount < MAX_QUALITY_GATE_RUNS) {
+              const perActivityProjectJsonStr = JSON.stringify(projectJson, null, 2);
+              qualityGateResult = runQualityGate({
+                xamlEntries,
+                projectJsonContent: perActivityProjectJsonStr,
+                configData: configCsv,
+                orchestratorArtifacts,
+                targetFramework: tf,
+                archiveManifest: allArchivePaths,
+                archiveContentHashes: buildContentHashRecord(),
+                automationPattern,
+              });
+              qualityGateRunCount++;
+              applyCatalogViolations(qualityGateResult);
+            } else {
+              console.log(`[UiPath Quality Gate] Skipping post-activity-stub rerun — already at max ${MAX_QUALITY_GATE_RUNS} runs. Halting further escalation to prevent stale-result cascade.`);
+              usedFallback = true;
+            }
 
             if (stubbedVariableNames.size > 0 && qualityGateResult.violations) {
               const beforeCount = qualityGateResult.violations.length;
@@ -4165,7 +4360,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             }
           }
 
-          if (!qualityGateResult.passed && !hasOnlyWarnings(classifyQualityIssues(qualityGateResult))) {
+          if (!qualityGateResult.passed && !hasOnlyWarnings(classifyQualityIssues(qualityGateResult)) && qualityGateRunCount < MAX_QUALITY_GATE_RUNS) {
             console.log(`[UiPath Escalation] Level 2: Attempting per-sequence stub replacement`);
             const seqClassified = classifyQualityIssues(qualityGateResult);
             const seqBlockingFiles = getBlockingFiles(seqClassified);
@@ -4202,18 +4397,23 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             }
 
             if (perSequenceFixed) {
-              const seqProjectJsonStr = JSON.stringify(projectJson, null, 2);
-              qualityGateResult = runQualityGate({
-                xamlEntries,
-                projectJsonContent: seqProjectJsonStr,
-                configData: configCsv,
-                orchestratorArtifacts,
-                targetFramework: tf,
-                archiveManifest: allArchivePaths,
-                archiveContentHashes: buildContentHashRecord(),
-                automationPattern,
-              });
-              applyCatalogViolations(qualityGateResult);
+              if (qualityGateRunCount < MAX_QUALITY_GATE_RUNS) {
+                const seqProjectJsonStr = JSON.stringify(projectJson, null, 2);
+                qualityGateResult = runQualityGate({
+                  xamlEntries,
+                  projectJsonContent: seqProjectJsonStr,
+                  configData: configCsv,
+                  orchestratorArtifacts,
+                  targetFramework: tf,
+                  archiveManifest: allArchivePaths,
+                  archiveContentHashes: buildContentHashRecord(),
+                  automationPattern,
+                });
+                qualityGateRunCount++;
+                applyCatalogViolations(qualityGateResult);
+              } else {
+                console.log(`[UiPath Quality Gate] Skipping post-sequence-stub rerun — already at max ${MAX_QUALITY_GATE_RUNS} runs. No further escalation from stale results.`);
+              }
 
               if (qualityGateResult.passed || hasOnlyWarnings(classifyQualityIssues(qualityGateResult))) {
                 console.log(`[UiPath Escalation] Per-sequence stubs resolved all blocking issues`);
@@ -4223,7 +4423,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             }
           }
 
-          if (!qualityGateResult.passed && !hasOnlyWarnings(classifyQualityIssues(qualityGateResult))) {
+          if (!qualityGateResult.passed && !hasOnlyWarnings(classifyQualityIssues(qualityGateResult)) && qualityGateRunCount < MAX_QUALITY_GATE_RUNS) {
             console.log(`[UiPath Escalation] Level 3: Structural-preservation stub for remaining blocking files`);
             const wfClassified = classifyQualityIssues(qualityGateResult);
             const wfBlockingFiles = getBlockingFiles(wfClassified);
@@ -4384,17 +4584,22 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             projectJson.dependencies = { ...deps };
             const stubProjectJsonStr = JSON.stringify(projectJson, null, 2);
 
-            qualityGateResult = runQualityGate({
-              xamlEntries,
-              projectJsonContent: stubProjectJsonStr,
-              configData: configCsv,
-              orchestratorArtifacts,
-              targetFramework: tf,
-              archiveManifest: allArchivePaths,
-              archiveContentHashes: buildContentHashRecord(),
-              automationPattern,
-            });
-            applyCatalogViolations(qualityGateResult);
+            if (qualityGateRunCount < MAX_QUALITY_GATE_RUNS) {
+              qualityGateResult = runQualityGate({
+                xamlEntries,
+                projectJsonContent: stubProjectJsonStr,
+                configData: configCsv,
+                orchestratorArtifacts,
+                targetFramework: tf,
+                archiveManifest: allArchivePaths,
+                archiveContentHashes: buildContentHashRecord(),
+                automationPattern,
+              });
+              qualityGateRunCount++;
+              applyCatalogViolations(qualityGateResult);
+            } else {
+              console.log(`[UiPath Quality Gate] Skipping post-structural-stub rerun — already at max ${MAX_QUALITY_GATE_RUNS} runs. No further escalation from stale results.`);
+            }
 
             if (!qualityGateResult.passed) {
               const finalClassified = classifyQualityIssues(qualityGateResult);
@@ -4461,6 +4666,36 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (autoFixSummary.length > 0) {
         console.log(`[UiPath Auto-Remediation Summary] ${autoFixSummary.length} fix(es) applied:\n${autoFixSummary.map(s => `  - ${s}`).join("\n")}`);
       }
+
+      const totalActivities = xamlEntries.reduce((sum, e) => {
+        const matches = e.content.match(/<([\w:]+)\s[^>]*DisplayName="/g);
+        return sum + (matches ? matches.length : 0);
+      }, 0);
+      const stubbedActivities = outcomeRemediations.filter(r => r.level === "activity" || r.level === "structural-leaf").length;
+      const stubRatio = totalActivities > 0 ? stubbedActivities / totalActivities : 0;
+      const cascadeAmplification = initialQGViolationCount > 0
+        ? stubbedActivities / Math.max(1, initialQGViolationCount)
+        : 0;
+      const postComplianceDefectCount = totalPostComplianceReCorrections;
+
+      const dhgAccuracy = (stubRatio === 0 && !usedFallback) ? 1.0 : Math.max(0, 1 - stubRatio);
+      const convergenceMetrics = {
+        qualityGateRunCount,
+        maxQualityGateRuns: MAX_QUALITY_GATE_RUNS,
+        postComplianceDefectCount,
+        complianceIdempotencyRate: postComplianceDefectCount === 0 ? 1.0 : Math.max(0, 1 - (postComplianceDefectCount / Math.max(1, totalActivities))),
+        cascadeAmplificationRatio: Math.round(cascadeAmplification * 100) / 100,
+        stubRatio: Math.round(stubRatio * 100) / 100,
+        stubbedActivities,
+        totalActivities,
+        qualityGateStatus: status,
+        autoRepairsApplied: autoFixSummary.length,
+        initialViolationCount: initialQGViolationCount,
+        finalViolationCount: qualityGateResult.violations?.length || 0,
+        dhgAccuracy: Math.round(dhgAccuracy * 100) / 100,
+        usedFallbackStubs: usedFallback,
+      };
+      console.log(`[Pipeline Convergence Metrics] ${JSON.stringify(convergenceMetrics)}`);
     }
 
     if (orchestratorArtifacts?.agents?.length > 0) {

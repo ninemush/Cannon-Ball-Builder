@@ -171,7 +171,8 @@ export type RemediationCode =
   | "STUB_SEQUENCE_WELLFORMEDNESS"
   | "STUB_STRUCTURAL_LEAF"
   | "STUB_WORKFLOW_BLOCKING"
-  | "STUB_WORKFLOW_GENERATOR_FAILURE";
+  | "STUB_WORKFLOW_GENERATOR_FAILURE"
+  | "HALLUCINATED_ACTIVITY_STUBBED";
 
 export type RepairCode =
   | "REPAIR_ALIAS_NORMALIZE"
@@ -1042,6 +1043,13 @@ export async function compilePackageFromSpecs(
           }
         }
         templateComplianceScore = count > 0 ? Math.round((totalScore / count) * 100) / 100 : 1.0;
+        const hasStubs = buildResult.usedFallbackStubs || buildResult.outcomeReport?.remediations.some(
+          r => r.level === "activity" || r.level === "sequence" || r.level === "structural-leaf" || r.level === "workflow"
+        );
+        if (hasStubs && templateComplianceScore > 0.69) {
+          console.log(`[Pipeline] Capping templateComplianceScore from ${templateComplianceScore} to 0.69 — package contains stubs`);
+          templateComplianceScore = 0.69;
+        }
         console.log(`[Pipeline] Overall templateComplianceScore: ${templateComplianceScore}`);
       }
     } catch (err: any) {

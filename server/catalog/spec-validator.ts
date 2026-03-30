@@ -193,23 +193,49 @@ function validateActivityNode(
     filteredProperties[key] = value;
   }
 
-  const EXCESSIVE_STRIP_THRESHOLD = 3;
+  const EXCESSIVE_STRIP_THRESHOLD = 5;
   if (strippedNames.length > 0) {
     const isExcessive = strippedNames.length >= EXCESSIVE_STRIP_THRESHOLD;
-    if (isExcessive) {
+    const knownPropCount = knownProps.size + INHERITED_BASE_PROPERTIES.size;
+    const strippedRatio = knownPropCount > 0 ? strippedNames.length / (knownPropCount + strippedNames.length) : 0;
+    const isStructuralBreak = strippedRatio > 0.5 || !schema.activity;
+    if (isExcessive && isStructuralBreak) {
       report.excessiveStrippingCount++;
+      report.commentConversions++;
+      const stubMessage = `Hallucinated activity: ${node.template} "${node.displayName}" had ${Math.round(strippedRatio * 100)}% properties stripped (${strippedNames.length}/${strippedNames.length + knownPropCount}). Converted to Comment stub. Original properties: ${strippedNames.join(", ")}`;
+      report.issues.push({
+        severity: "error",
+        code: "EXCESSIVE_PROPERTIES_STRIPPED",
+        activityTemplate: node.template,
+        activityDisplayName: node.displayName,
+        message: stubMessage,
+        autoFixed: true,
+      });
+      console.log(`[SpecValidator] HALLUCINATION RECOVERY: ${stubMessage}`);
+      return {
+        kind: "activity",
+        template: "Comment",
+        displayName: `${node.displayName} (hallucinated — stub)`,
+        properties: {
+          Text: `Hallucinated activity: ${node.template}. Original display name: "${node.displayName}". ${Math.round(strippedRatio * 100)}% of properties were non-catalog (${strippedNames.join(", ")}). Manual implementation required with correct activity type.`,
+        },
+        outputVar: null,
+        outputType: null,
+        errorHandling: "none",
+      };
     }
+    const violationClass = isStructuralBreak ? "structural-break" : "property-noise";
     report.issues.push({
-      severity: isExcessive ? "error" : "warning",
+      severity: "warning",
       code: isExcessive ? "EXCESSIVE_PROPERTIES_STRIPPED" : "UNKNOWN_PROPERTIES_STRIPPED",
       activityTemplate: node.template,
       activityDisplayName: node.displayName,
       message: isExcessive
-        ? `Stripped ${strippedNames.length} non-catalog properties from ${node.template} "${node.displayName}" (threshold: ${EXCESSIVE_STRIP_THRESHOLD}): ${strippedNames.join(", ")} — indicates generation hallucination, should regenerate`
+        ? `Stripped ${strippedNames.length} non-catalog properties from ${node.template} "${node.displayName}" (threshold: ${EXCESSIVE_STRIP_THRESHOLD}, class: ${violationClass}): ${strippedNames.join(", ")}${isStructuralBreak ? " — structural break" : " — property-noise, non-blocking"}`
         : `Stripped ${strippedNames.length} non-catalog property(ies) from ${node.template} "${node.displayName}": ${strippedNames.join(", ")}`,
-      autoFixed: !isExcessive,
+      autoFixed: true,
     });
-    console.log(`[SpecValidator] ${isExcessive ? "EXCESSIVE stripping" : "Stripped properties"} from ${node.template} "${node.displayName}": ${strippedNames.join(", ")}${isExcessive ? ` — exceeds threshold of ${EXCESSIVE_STRIP_THRESHOLD}, flagged as blocking error` : ""}`);
+    console.log(`[SpecValidator] ${isExcessive ? "EXCESSIVE stripping" : "Stripped properties"} from ${node.template} "${node.displayName}": ${strippedNames.join(", ")} (class: ${violationClass})`);
   }
 
   const targetVersion = resolveTargetVersion(schema, studioProfile);

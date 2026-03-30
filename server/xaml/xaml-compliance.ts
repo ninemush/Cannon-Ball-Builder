@@ -670,6 +670,44 @@ function inferVariableTypeFromBindingContext(varName: string, xml: string): stri
   return null;
 }
 
+const KNOWN_DOTNET_TYPES = new Set([
+  "string", "stringcomparer", "integer", "int32", "int64", "boolean", "double",
+  "decimal", "byte", "char", "single", "object", "datetime", "timespan",
+  "datatable", "datarow", "datacolumn", "dataset", "exception", "guid",
+  "uri", "regex", "math", "convert", "environment", "path", "file",
+  "directory", "console", "array", "list", "dictionary", "hashset",
+  "queue", "stack", "tuple", "task", "thread", "encoding", "streamreader",
+  "streamwriter", "xmldocument", "xmlnode", "jsonconvert", "jtoken", "jobject",
+  "jarray", "activator", "type", "enumerable", "queryable",
+  "stringbuilder", "memorystream", "filestream", "stopwatch",
+  "cancellationtoken", "semaphore", "mutex",
+]);
+
+const DOMAIN_TERMS = new Set([
+  "birthdays", "home", "personal", "work", "calendar", "events",
+  "contacts", "settings", "inbox", "outbox", "drafts", "archive",
+  "favorites", "categories", "labels", "tags", "notes", "tasks",
+  "projects", "reports", "dashboard", "profile", "notifications",
+  "messages", "files", "folders", "documents", "templates",
+  "users", "groups", "roles", "permissions", "admin",
+  "dispatcher", "performer", "transaction", "queue", "status",
+  "config", "init", "setup", "cleanup", "process", "main",
+  "retry", "exhausted", "completed", "pending", "failed",
+  "yes", "no", "true", "false", "success", "error", "warning",
+  "start", "stop", "open", "close", "save", "delete", "update",
+  "input", "output", "result", "value", "item", "data", "name",
+  "email", "password", "username", "login", "logout", "submit",
+]);
+
+const CONSTANT_PATTERNS = /^[A-Z][A-Z0-9_]+$/;
+
+function isUnicodeEscapeFragment(token: string): boolean {
+  if (/^[0-9a-fA-F]{2,5}$/.test(token)) return true;
+  if (/^u[0-9a-fA-F]{4,5}$/.test(token)) return true;
+  if (/^[A-Fa-f][0-9a-fA-F]{3}$/.test(token)) return true;
+  return false;
+}
+
 function isExcludedToken(token: string): boolean {
   if (token.length <= 1) return true;
   const lower = token.toLowerCase();
@@ -678,6 +716,10 @@ function isExcludedToken(token: string): boolean {
   if (XML_PREFIXES.has(lower)) return true;
   if (/^\d/.test(token)) return true;
   if (/^[A-Z][a-z]+[A-Z]/.test(token) === false && /^[A-Z]{2,}$/.test(token)) return true;
+  if (isUnicodeEscapeFragment(token)) return true;
+  if (KNOWN_DOTNET_TYPES.has(lower)) return true;
+  if (DOMAIN_TERMS.has(lower)) return true;
+  if (CONSTANT_PATTERNS.test(token)) return true;
   return false;
 }
 
@@ -710,7 +752,16 @@ function ensureVariableDeclarations(xml: string): string {
   const propPattern = /<x:Property\s[^>]*Name="([^"]+)"/g;
   while ((m = propPattern.exec(xml)) !== null) declaredVars.add(m[1]);
 
+  const argBindingPattern = /<(?:In|Out|InOut)Argument[^>]*>\s*\[?([a-zA-Z_]\w*)\]?\s*<\/(?:In|Out|InOut)Argument>/g;
+  while ((m = argBindingPattern.exec(xml)) !== null) declaredVars.add(m[1]);
+
+  const classMatch = xml.match(/x:Class="([^"]+)"/);
+  const workflowSelfName = classMatch ? classMatch[1].split(".").pop() || "" : "";
+  if (workflowSelfName) declaredVars.add(workflowSelfName);
+
   const referencedVarsWithPos = new Map<string, number>();
+
+  const unicodeContextPattern = /[\\]u[0-9a-fA-F]{4,5}/;
 
   const bracketExprPattern = /\[([^\[\]]+)\]/g;
   let bracketMatch;
@@ -720,6 +771,8 @@ function ensureVariableDeclarations(xml: string): string {
     if (expr.includes("xmlns") || expr.includes("clr-namespace")) continue;
 
     const withoutStrings = expr.replace(/&quot;[^&]*&quot;/g, "").replace(/"[^"]*"/g, "");
+
+    if (unicodeContextPattern.test(expr) || /Regex|ChrW|Char|Replace.*u[0-9a-fA-F]/.test(expr)) continue;
 
     const tokens = withoutStrings.match(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g);
     if (!tokens) continue;
@@ -737,6 +790,8 @@ function ensureVariableDeclarations(xml: string): string {
         if (prevToken === "." || withoutStrings.includes(`.${token}`)) continue;
       }
 
+      if (token === "u" || /^u[0-9a-fA-F]{4,5}$/.test(token) || (token.length <= 5 && /^[0-9a-fA-F]+$/.test(token) && i > 0 && (tokens[i-1] === "u" || /^u[0-9a-fA-F]*$/.test(tokens[i-1])))) continue;
+
       if (!referencedVarsWithPos.has(token)) {
         referencedVarsWithPos.set(token, bracketMatch.index);
       }
@@ -752,8 +807,8 @@ function ensureVariableDeclarations(xml: string): string {
 
   if (missingVars.length === 0) return xml;
 
-  const classMatch = xml.match(/x:Class="([^"]+)"/);
-  const workflowName = classMatch ? classMatch[1] : "unknown";
+  const classMatch2 = xml.match(/x:Class="([^"]+)"/);
+  const workflowName = classMatch2 ? classMatch2[1] : "unknown";
 
   const declarableVars = missingVars.filter(v => v.type !== null);
   const undeclarableVars = missingVars.filter(v => v.type === null);
@@ -1576,8 +1631,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     xml = xml.replace(new RegExp(`<ui:${escaped}\\.`, "g"), `<${sysActivity}.`);
     xml = xml.replace(new RegExp(`<\\/ui:${escaped}\\.`, "g"), `</${sysActivity}.`);
   }
-
-  xml = ensureVariableDeclarations(xml);
 
   const aliasNormalization = normalizeNamespaceAliases(xml);
   if (aliasNormalization.warnings.length > 0) {
