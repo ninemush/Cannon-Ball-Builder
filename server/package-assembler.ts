@@ -2087,127 +2087,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       return result;
     }
 
-    let totalPostComplianceReCorrections = 0;
-    function postComplianceCatalogConformance(content: string, fileName: string): string {
-      if (!catalogService.isLoaded()) return content;
-      let result = content;
-      const elementRegex = /<((?:[\w]+:)?[\w]+)(\s[^>]*?|\s*)(\/?>)/g;
-      let elMatch;
-      let reCorrections = 0;
-      while ((elMatch = elementRegex.exec(content)) !== null) {
-        const fullTag = elMatch[1];
-        if (fullTag.includes(".") || fullTag.startsWith("x:") || fullTag.startsWith("sap") || fullTag.startsWith("mc:")) continue;
-        const className = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
-        const schema = catalogService.getActivitySchema(className);
-        if (!schema) continue;
-
-        const attrString = elMatch[2];
-        const attrs: Record<string, string> = {};
-        const attrRegex2 = /([\w]+(?:\.[\w]+)?)="([^"]*)"/g;
-        let attrMatch;
-        while ((attrMatch = attrRegex2.exec(attrString)) !== null) {
-          if (attrMatch[1].startsWith("xmlns") || attrMatch[1].includes(":")) continue;
-          attrs[attrMatch[1]] = attrMatch[2];
-        }
-
-        const childPropRegex = new RegExp(`<${className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\w+)[\\s>]`, "g");
-        const afterStart = content.slice(elMatch.index);
-        const closeTagRegex = new RegExp(`</${fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`);
-        const closeMatch = closeTagRegex.exec(afterStart);
-        const elementBlock = closeMatch ? afterStart.slice(0, closeMatch.index + closeMatch[0].length) : afterStart.slice(0, 500);
-        const children: string[] = [];
-        let cm;
-        while ((cm = childPropRegex.exec(elementBlock)) !== null) {
-          children.push(cm[1]);
-          children.push(`${className}.${cm[1]}`);
-        }
-
-        const validation = catalogService.validateEmittedActivity(fullTag, attrs, children);
-        if (!validation.valid || validation.corrections.length > 0) {
-          const attrsToRemove: string[] = [];
-          for (const correction of validation.corrections) {
-            if (correction.type === "remove-attribute") {
-              attrsToRemove.push(correction.property);
-              continue;
-            }
-            if (correction.type === "move-to-child-element") {
-              const propName = correction.property;
-              if (className === "Assign" && (propName === "To" || propName === "Value")) {
-                continue;
-              }
-              const ESSENTIAL_ACTIVITY_PROPERTIES: Record<string, Set<string>> = {
-                "ExcelApplicationScope": new Set(["WorkbookPath", "Visible"]),
-                "ExcelReadRange": new Set(["DataTable", "SheetName"]),
-                "ExcelWriteRange": new Set(["DataTable", "SheetName"]),
-                "ExcelWriteCell": new Set(["SheetName"]),
-                "ReadRange": new Set(["DataTable", "SheetName"]),
-                "WriteRange": new Set(["DataTable", "SheetName"]),
-                "UseExcel": new Set(["ExcelFile"]),
-              };
-              const essentialProps = ESSENTIAL_ACTIVITY_PROPERTIES[className];
-              if (essentialProps && essentialProps.has(propName)) {
-                continue;
-              }
-              const propVal = attrs[propName];
-              if (propVal === undefined) continue;
-              const wrapper = correction.argumentWrapper || "InArgument";
-              const xType = correction.typeArguments || clrToXamlType("System.String");
-              const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const wrappedVal = ensureBracketWrapped(propVal);
-              const childElement = `<${fullTag}.${propName}>\n            <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n          </${fullTag}.${propName}>`;
-
-              const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
-              const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*${propName}="${escapedVal}"([^>]*?>)`);
-
-              if (selfClosingRegex.test(result)) {
-                result = result.replace(selfClosingRegex, `$1$2>\n          ${childElement}\n        </${fullTag}>`);
-                reCorrections++;
-              } else if (openTagRegex.test(result)) {
-                const attrRemoveRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*${propName}="${escapedVal}"([^>]*?>)`);
-                result = result.replace(attrRemoveRegex, (match, before, after) => {
-                  const cleanBefore = before.replace(/\s+$/, ' ');
-                  return `${cleanBefore}${after}\n          ${childElement}`;
-                });
-                reCorrections++;
-              }
-            }
-          }
-          if (attrsToRemove.length > 0) {
-            const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const anchorAttrParts: string[] = [];
-            for (const propName of attrsToRemove) {
-              const propVal = attrs[propName];
-              if (propVal !== undefined) {
-                const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const escapedPropVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                anchorAttrParts.push(`${escapedPropName}="${escapedPropVal}"`);
-              }
-            }
-            if (anchorAttrParts.length > 0) {
-              const anchorRegex = new RegExp(`(<${escapedTag}\\s)([^>]*?(?:${anchorAttrParts.join("|")})[^>]*?)(\\s*\\/?>)`);
-              const tagMatch = anchorRegex.exec(result);
-              if (tagMatch) {
-                let tagAttrs = tagMatch[2];
-                for (const propName of attrsToRemove) {
-                  const attrRegex = new RegExp(`\\s*${propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}="[^"]*"`);
-                  tagAttrs = tagAttrs.replace(attrRegex, "");
-                }
-                result = result.slice(0, tagMatch.index) +
-                  tagMatch[1] + tagAttrs + tagMatch[3] +
-                  result.slice(tagMatch.index + tagMatch[0].length);
-                reCorrections += attrsToRemove.length;
-              }
-            }
-          }
-        }
-      }
-      if (reCorrections > 0) {
-        totalPostComplianceReCorrections += reCorrections;
-        console.log(`[Post-Compliance Catalog] ${fileName}: re-corrected ${reCorrections} property(ies) that were corrupted by compliance pass`);
-      }
-      return result;
-    }
+    const totalPostComplianceReCorrections = 0;
 
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
       const preCatalogSnapshot = catalogService.isLoaded() ? snapshotCatalogValidProperties(rawXaml) : null;
@@ -2215,7 +2095,6 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (preCatalogSnapshot && preCatalogSnapshot.size > 0) {
         compliant = enforcePreCompliancePropertyProtection(rawXaml, compliant, preCatalogSnapshot, fileName);
       }
-      compliant = postComplianceCatalogConformance(compliant, fileName);
       const { filtered, removed } = filterBlockedActivitiesFromXaml(compliant, automationPattern);
       compliant = filtered;
       if (removed.length > 0) {
@@ -2235,6 +2114,25 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       if (report.totalAutoFixed > 0) {
         console.log(`[UiPath Analyzer] ${fileName}: ${report.totalAutoFixed} auto-fixed, ${report.totalRemaining} remaining`);
       }
+
+      try {
+        const reCompliant = makeUiPathCompliant(fixed, tf);
+        if (reCompliant !== fixed) {
+          const diffLines: string[] = [];
+          const fixedLines = fixed.split("\n");
+          const reLines = reCompliant.split("\n");
+          const maxLen = Math.max(fixedLines.length, reLines.length);
+          for (let i = 0; i < maxLen && diffLines.length < 5; i++) {
+            if (fixedLines[i] !== reLines[i]) {
+              diffLines.push(`  line ${i + 1}: "${(fixedLines[i] || "").slice(0, 120)}" → "${(reLines[i] || "").slice(0, 120)}"`);
+            }
+          }
+          console.warn(`[Compliance Idempotency] ${fileName}: compliance pass is NOT idempotent — re-running changed the output. First differences:\n${diffLines.join("\n")}`);
+        }
+      } catch (idempotencyErr: any) {
+        console.warn(`[Compliance Idempotency] ${fileName}: re-run failed — ${idempotencyErr.message}`);
+      }
+
       return fixed;
     }
 

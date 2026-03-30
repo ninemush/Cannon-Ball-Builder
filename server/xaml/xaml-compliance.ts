@@ -1243,75 +1243,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   xml = xml.replace(/scg:DataTable/g, "scg2:DataTable");
   xml = xml.replace(/scg:DataRow/g, "scg2:DataRow");
 
-  xml = xml.replace(/(Message|Default|Value)="((?:[^"]*'[^']*'[^"]*(?:&amp;|\+)[^"]*)|(?:[^"]*(?:&amp;|\+)[^"]*'[^']*'[^"]*))"/g, (match, attr, content) => {
-    const canonical = content.replace(/'([^']*)'/g, "&quot;$1&quot;");
-    if (!canonical.startsWith("[")) {
-      return `${attr}="[${canonical}]"`;
-    }
-    return `${attr}="${canonical}"`;
-  });
-
-  xml = xml.replace(/(Message|Default)="'([^']*)'"/g, (match, attr, content) => {
-    return `${attr}="[&quot;${content}&quot;]"`;
-  });
-
-  xml = xml.replace(/Message="'([^"]*)"/g, (match, content) => {
-    if (content.endsWith("'")) return match;
-    return `Message="[&quot;${content}&quot;]"`;
-  });
-
-  let prevXml = "";
-  while (prevXml !== xml) {
-    prevXml = xml;
-    xml = xml.replace(/(Message|Default|Value)="(\[[^"]*?)'([^']*?)'([^"]*?\])"/g, (match, attr, pre, quoted, post) => {
-      return `${attr}="${pre}&quot;${quoted}&quot;${post}"`;
-    });
-  }
-
-  xml = xml.replace(/(Message|Default|Value)="([^"]*'[^"]*)"(?=\s|\/|>)/g, (match, attr, val) => {
-    if (val.startsWith("[")) return match;
-    const withoutApostrophes = val.replace(/[a-zA-Z]'[a-zA-Z]/g, "xxx");
-    if (!/'[^']*'/.test(withoutApostrophes)) return match;
-    const canonical = val.replace(/(?<![a-zA-Z])'([^']*)'(?![a-zA-Z])/g, "&quot;$1&quot;");
-    if (canonical === val) return match;
-    if (!canonical.startsWith("[")) {
-      return `${attr}="[${canonical}]"`;
-    }
-    return `${attr}="${canonical}"`;
-  });
-
-  xml = xml.replace(/Default="([^"[\]]+)"/g, (match, val, offset) => {
-    if (/^[0-9]+$/.test(val) || val === "True" || val === "False" || val === "Nothing" || val === "null" || val.startsWith("[") || val.startsWith("&quot;")) return match;
-    const precedingContext = xml.substring(Math.max(0, offset - 200), offset);
-    const isOnVariable = /<Variable\s[^>]*$/.test(precedingContext);
-    if (isOnVariable && /^[a-zA-Z_]\w*$/.test(val) && !/[.()=<>&|+\-*/^,]/.test(val)) {
-      const typeMatch = precedingContext.match(/x:TypeArguments="([^"]+)"/);
-      const typeArg = typeMatch ? typeMatch[1] : "";
-      const isStringType = typeArg.includes("String") && !typeArg.includes("Secure");
-      if (isStringType) {
-        return `Default="&quot;${val}&quot;"`;
-      }
-    }
-    if (/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*(\(.*\))?$/.test(val)) {
-      return `Default="[${val}]"`;
-    }
-    return match;
-  });
-
-  xml = xml.replace(/(Message|Value)="("")([^"]*)""/g, (match, attr, _q1, inner) => {
-    return `${attr}="[&quot;${inner}&quot;]"`;
-  });
-
-  xml = xml.replace(/(Message|Default|Value)="(\[[^"]*)"(?=\s|\/|>)/g, (match, attr, inner) => {
-    const withoutQuoted = inner.replace(/&quot;[^&]*&quot;/g, "");
-    const openBrackets = (withoutQuoted.match(/\[/g) || []).length;
-    const closeBrackets = (withoutQuoted.match(/\]/g) || []).length;
-    if (openBrackets > closeBrackets) {
-      const fixed = inner + "]".repeat(openBrackets - closeBrackets);
-      return `${attr}="${fixed}"`;
-    }
-    return match;
-  });
 
   xml = xml.replace(/<Variable\s+x:TypeArguments="([^"]*?)"\s+Name="(sec_[^"]*?)"\s*\/>/g, (match, typeArg, varName) => {
     if (typeArg !== "s:Security.SecureString") {
@@ -1331,16 +1262,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
   xml = xml.replace(/<sap:WorkflowViewState\.ViewStateManager>[\s\S]*?<\/sap:WorkflowViewState\.ViewStateManager>/g, "");
   xml = xml.replace(/<WorkflowViewState\.ViewStateManager>[\s\S]*?<\/WorkflowViewState\.ViewStateManager>/g, "");
 
-  const excelPrefixes = ["ui", "uexcel"];
-  for (const ep of excelPrefixes) {
-    xml = xml.replace(new RegExp(`<${ep}:ExcelApplicationScope\\.Body>\\s*(?!<ActivityAction)<Sequence\\s`, "g"), () => {
-      return `<${ep}:ExcelApplicationScope.Body>\n        <ActivityAction x:TypeArguments="x:Object">\n          <ActivityAction.Handler>\n            <Sequence `;
-    });
-    if (xml.includes(`<${ep}:ExcelApplicationScope.Body>`) && !xml.includes("<ActivityAction.Handler>")) {
-      xml = xml.replace(new RegExp(`<\\/Sequence>\\s*<\\/${ep}:ExcelApplicationScope\\.Body>`, "g"),
-        `</Sequence>\n          </ActivityAction.Handler>\n        </ActivityAction>\n      </${ep}:ExcelApplicationScope.Body>`);
-    }
-  }
 
   xml = xml.replace(/\.ToString(?!\()/g, ".ToString()");
 
@@ -1442,28 +1363,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
               </${tag}.Condition>
             </${tag}>`;
   });
-  xml = xml.replace(/<Assign\s+([^>]*?)To="([^"]*)"([^>]*?)Value="([^"]*)"([^>]*?)\s*\/>/g, (_match, before, toVal, mid, valVal, after) => {
-    const displayMatch = (before + mid + after).match(/DisplayName="([^"]*)"/);
-    const dispName = displayMatch ? displayMatch[1] : "Assign";
-    const cleanAttrs = (before + mid + after).replace(/\s*(To|Value|DisplayName)="[^"]*"/g, "").trim();
-    const wrappedTo = ensureBracketWrapped(toVal);
-    const wrappedVal = smartBracketWrap(valVal);
-    return `<Assign DisplayName="${dispName}"${cleanAttrs ? " " + cleanAttrs : ""}>
-              <Assign.To><OutArgument x:TypeArguments="x:String">${wrappedTo}</OutArgument></Assign.To>
-              <Assign.Value><InArgument x:TypeArguments="x:String">${wrappedVal}</InArgument></Assign.Value>
-            </Assign>`;
-  });
-  xml = xml.replace(/<Assign\s+([^>]*?)Value="([^"]*)"([^>]*?)To="([^"]*)"([^>]*?)\s*\/>/g, (_match, before, valVal, mid, toVal, after) => {
-    const displayMatch = (before + mid + after).match(/DisplayName="([^"]*)"/);
-    const dispName = displayMatch ? displayMatch[1] : "Assign";
-    const cleanAttrs = (before + mid + after).replace(/\s*(To|Value|DisplayName)="[^"]*"/g, "").trim();
-    const wrappedTo = ensureBracketWrapped(toVal);
-    const wrappedVal = smartBracketWrap(valVal);
-    return `<Assign DisplayName="${dispName}"${cleanAttrs ? " " + cleanAttrs : ""}>
-              <Assign.To><OutArgument x:TypeArguments="x:String">${wrappedTo}</OutArgument></Assign.To>
-              <Assign.Value><InArgument x:TypeArguments="x:String">${wrappedVal}</InArgument></Assign.Value>
-            </Assign>`;
-  });
 
   xml = xml.replace(/<(While)\s+([^>]*?)\/>/g, (match, tag, attrs) => {
     return `<${tag} ${attrs}>
@@ -1516,53 +1415,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `<ui:TakeScreenshot ${attrs} />`;
   });
 
-  const httpClientPrefixes = ["ui", "uweb"];
-  for (const hcp of httpClientPrefixes) {
-    xml = xml.replace(new RegExp(`<(${hcp}:HttpClient\\s)([^>]*?)>`, "g"), (match, prefix, attrs) => {
-      let fixed = attrs;
-      fixed = fixed.replace(/\bURL="([^"]*)"/g, (m: string, val: string) => {
-        if (val.startsWith("[")) return `Endpoint="${escapeXml(val)}"`;
-        if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
-        return `Endpoint="[&quot;${escapeXml(val).replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
-      });
-      fixed = fixed.replace(/\bEndPoint="([^"]*)"/g, (m: string, val: string) => {
-        if (val.startsWith("[")) return `Endpoint="${escapeXml(val)}"`;
-        if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
-        return `Endpoint="[&quot;${escapeXml(val).replace(/&quot;/g, '&quot;&quot;')}&quot;]"`;
-      });
-      if (/\bEndpoint=""/.test(fixed)) {
-        console.error(`[XAML Compliance] HttpClient has empty Endpoint="" — this indicates a generation error. The activity will not function correctly in UiPath Studio.`);
-      }
-      fixed = fixed.replace(/\bOutput="([^"]*)"/g, (m: string, val: string) => {
-        if (val.startsWith("[")) return `ResponseContent="${escapeXml(val)}"`;
-        if (/^[a-zA-Z_]\w*$/.test(val)) return `ResponseContent="[${val}]"`;
-        return `ResponseContent="[str_HttpResponse]"`;
-      });
-      fixed = fixed.replace(/\bEndpoint="([^"]*)"/g, (m: string, val: string) => {
-        if (!val) return m;
-        if (val.startsWith("[")) return m;
-        if (/^[a-zA-Z_]\w*$/.test(val)) return `Endpoint="[${val}]"`;
-        if (val.startsWith("&quot;") || val.startsWith("http")) return `Endpoint="[&quot;${escapeXml(val).replace(/&quot;/g, '')}&quot;]"`;
-        return m;
-      });
-      fixed = fixed.replace(/\bResponseType="[^"]*"/g, "");
-      fixed = fixed.replace(/\bHeaders="\{([^"]*)\}"/g, (hm: string, jsonContent: string) => {
-        const decoded = jsonContent.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
-        const pairs: string[] = [];
-        const pairPattern = /"([^"]+)"\s*:\s*"([^"]*)"/g;
-        let pm;
-        while ((pm = pairPattern.exec(decoded)) !== null) {
-          pairs.push(`{&quot;${escapeXml(pm[1])}&quot;, &quot;${escapeXml(pm[2])}&quot;}`);
-        }
-        if (pairs.length > 0) {
-          return `Headers="[New Dictionary(Of String, String) From {${pairs.join(", ")}}]"`;
-        }
-        return "";
-      });
-      fixed = fixed.replace(/\s{2,}/g, " ");
-      return `<${prefix}${fixed}>`;
-    });
-  }
 
 
   xml = xml.replace(/<(InArgument|OutArgument)([^>]*)>\s*<\1([^>]*)>([^<]*)<\/\1>\s*<\/\1>/g, (_m, tag, outerAttrs, innerAttrs, content) => {
@@ -1588,41 +1440,6 @@ export function makeUiPathCompliant(rawXaml: string, targetFramework: TargetFram
     return `WorkflowFileName="${cleaned}"`;
   });
 
-  xml = xml.replace(/<Assign\.To>\s*<OutArgument([^>]*)>([^<]*)<\/OutArgument>\s*<\/Assign\.To>/g, (_match, attrs, expr) => {
-    const wrappedExpr = ensureBracketWrapped(expr);
-    return `<Assign.To><OutArgument${attrs}>${wrappedExpr}</OutArgument></Assign.To>`;
-  });
-
-  xml = xml.replace(/<Assign\.Value>\s*<InArgument([^>]*)>([^<]*)<\/InArgument>\s*<\/Assign\.Value>/g, (_match, attrs, expr) => {
-    const wrappedExpr = smartBracketWrap(expr);
-    return `<Assign.Value><InArgument${attrs}>${wrappedExpr}</InArgument></Assign.Value>`;
-  });
-
-  xml = xml.replace(/<Assign\.To>\s*(?!<OutArgument[\s>])([\s\S]*?)\s*<\/Assign\.To>/g, (_match, content) => {
-    const trimmed = content.trim();
-    if (!trimmed || trimmed.startsWith("<OutArgument")) return _match;
-    const wrappedExpr = ensureBracketWrapped(trimmed);
-    return `<Assign.To><OutArgument x:TypeArguments="x:Object">${wrappedExpr}</OutArgument></Assign.To>`;
-  });
-
-  xml = xml.replace(/<Assign\.Value>\s*(?!<InArgument[\s>])([\s\S]*?)\s*<\/Assign\.Value>/g, (_match, content) => {
-    const trimmed = content.trim();
-    if (!trimmed || trimmed.startsWith("<InArgument")) return _match;
-    const wrappedExpr = smartBracketWrap(trimmed);
-    return `<Assign.Value><InArgument x:TypeArguments="x:Object">${wrappedExpr}</InArgument></Assign.Value>`;
-  });
-
-  xml = xml.replace(/<(\w+(?::\w+)?\.[\w.]+)>\s*<OutArgument([^>]*)>([^<]*)<\/OutArgument>\s*<\/\1>/g, (_match, propTag, attrs, expr) => {
-    if (propTag.startsWith("Assign.")) return _match;
-    const wrappedExpr = ensureBracketWrapped(expr);
-    return `<${propTag}><OutArgument${attrs}>${wrappedExpr}</OutArgument></${propTag}>`;
-  });
-
-  xml = xml.replace(/<(\w+(?::\w+)?\.[\w.]+)>\s*<InArgument([^>]*)>([^<]*)<\/InArgument>\s*<\/\1>/g, (_match, propTag, attrs, expr) => {
-    if (propTag.startsWith("Assign.")) return _match;
-    const wrappedExpr = smartBracketWrap(expr);
-    return `<${propTag}><InArgument${attrs}>${wrappedExpr}</InArgument></${propTag}>`;
-  });
 
   for (const sysActivity of Array.from(SYSTEM_ACTIVITIES_NO_PREFIX)) {
     const escaped = sysActivity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

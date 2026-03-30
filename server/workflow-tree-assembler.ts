@@ -512,6 +512,14 @@ export function resolveActivityTemplate(
     return applyCatalogConformance(resolveHttpClientTemplate(node));
   }
 
+  if (templateName === "ExcelApplicationScope") {
+    return applyCatalogConformance(resolveExcelApplicationScopeTemplate(node, allVariables, processType, emissionContext));
+  }
+
+  if (templateName === "UseExcel") {
+    return applyCatalogConformance(resolveUseExcelTemplate(node, allVariables, processType, emissionContext));
+  }
+
   if (templateName === "DeserializeJson") {
     const input = getPropString(props, "JsonString", "jsonString", "Input") || "";
     const outputVar = node.outputVar || "obj_Result";
@@ -781,6 +789,77 @@ function resolveHttpClientTemplate(node: ActivityNode): string {
   xml += `</${tag}>`;
 
   return xml;
+}
+
+function resolveExcelApplicationScopeTemplate(
+  node: ActivityNode,
+  allVariables: VariableDeclaration[],
+  processType: ProcessType,
+  emissionContext: EmissionContext,
+): string {
+  const props = node.properties || {};
+  const displayName = escapeXml(node.displayName);
+  const workbookPath = getPropString(props, "WorkbookPath", "workbookPath", "FilePath", "filePath") || "PLACEHOLDER_WorkbookPath";
+  const visible = getPropString(props, "Visible", "visible") || "False";
+  const tag = getActivityTag("ExcelApplicationScope");
+
+  const bodyChildren = (node as any).bodyChildren || (node as any).children || [];
+  let bodyXml = "";
+  if (Array.isArray(bodyChildren) && bodyChildren.length > 0) {
+    bodyXml = bodyChildren
+      .map((child: WorkflowNode) => assembleNode(child, allVariables, processType, 0, emissionContext))
+      .join("\n");
+  }
+  if (!bodyXml.trim()) {
+    bodyXml = `<ui:Comment Text="TODO: Add Excel activities here" DisplayName="Placeholder" />`;
+  }
+
+  return `<${tag} DisplayName="${displayName}" WorkbookPath="${escapeXml(smartBracketWrap(workbookPath))}" Visible="${escapeXml(visible)}">\n` +
+    `  <${tag}.Body>\n` +
+    `    <ActivityAction x:TypeArguments="x:Object">\n` +
+    `      <ActivityAction.Handler>\n` +
+    `        <Sequence DisplayName="Excel Scope Body">\n` +
+    `          ${bodyXml}\n` +
+    `        </Sequence>\n` +
+    `      </ActivityAction.Handler>\n` +
+    `    </ActivityAction>\n` +
+    `  </${tag}.Body>\n` +
+    `</${tag}>`;
+}
+
+function resolveUseExcelTemplate(
+  node: ActivityNode,
+  allVariables: VariableDeclaration[],
+  processType: ProcessType,
+  emissionContext: EmissionContext,
+): string {
+  const props = node.properties || {};
+  const displayName = escapeXml(node.displayName);
+  const excelFile = getPropString(props, "ExcelFile", "excelFile", "FilePath", "filePath") || "PLACEHOLDER_ExcelFile";
+  const tag = getActivityTag("UseExcel");
+
+  const bodyChildren = (node as any).bodyChildren || (node as any).children || [];
+  let bodyXml = "";
+  if (Array.isArray(bodyChildren) && bodyChildren.length > 0) {
+    bodyXml = bodyChildren
+      .map((child: WorkflowNode) => assembleNode(child, allVariables, processType, 0, emissionContext))
+      .join("\n");
+  }
+  if (!bodyXml.trim()) {
+    bodyXml = `<ui:Comment Text="TODO: Add Excel activities here" DisplayName="Placeholder" />`;
+  }
+
+  return `<${tag} DisplayName="${displayName}" ExcelFile="${escapeXml(smartBracketWrap(excelFile))}">\n` +
+    `  <${tag}.Body>\n` +
+    `    <ActivityAction x:TypeArguments="x:Object">\n` +
+    `      <ActivityAction.Handler>\n` +
+    `        <Sequence DisplayName="Excel Body">\n` +
+    `          ${bodyXml}\n` +
+    `        </Sequence>\n` +
+    `      </ActivityAction.Handler>\n` +
+    `    </ActivityAction>\n` +
+    `  </${tag}.Body>\n` +
+    `</${tag}>`;
 }
 
 function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, emissionContext: EmissionContext = "normal"): string {
