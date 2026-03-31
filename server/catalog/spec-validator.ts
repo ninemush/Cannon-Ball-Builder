@@ -433,6 +433,9 @@ function replaceVarRefsInValueIntent(intent: any, renameMap: Map<string, string>
   if (intent.type === "url_with_params" && typeof intent.baseUrl === "string") {
     return { ...intent, baseUrl: replaceVarRefsInString(intent.baseUrl, renameMap) };
   }
+  if (intent.type === "vb_expression" && typeof intent.value === "string") {
+    return { ...intent, value: replaceVarRefsInString(intent.value, renameMap) };
+  }
   return intent;
 }
 

@@ -997,6 +997,14 @@ function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean =
     return escapeXmlExpression(linted);
   }
 
+  if (intent.type === "vb_expression") {
+    if (linted.startsWith("[") && linted.endsWith("]")) {
+      const inner = linted.slice(1, -1);
+      return `[${escapeXmlExpression(inner)}]`;
+    }
+    return `[${escapeXmlExpression(linted)}]`;
+  }
+
   const wrapped = smartBracketWrap(linted);
   if (wrapped.startsWith("[") && wrapped.endsWith("]")) {
     const inner = wrapped.slice(1, -1);

@@ -11,7 +11,7 @@ const PropertyValueInputSchema = z.preprocess(
     if (typeof val === "string") return { type: "literal", value: val };
     if (typeof val === "object") {
       const obj = val as Record<string, unknown>;
-      if (obj.type === "literal" || obj.type === "variable" || obj.type === "url_with_params" || obj.type === "expression") {
+      if (obj.type === "literal" || obj.type === "variable" || obj.type === "url_with_params" || obj.type === "expression" || obj.type === "vb_expression") {
         return val;
       }
       return { type: "literal", value: JSON.stringify(val) };

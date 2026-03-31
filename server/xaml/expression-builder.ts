@@ -55,6 +55,11 @@ export const ValueIntentSchema = z.discriminatedUnion("type", [
     right: z.string().min(1),
     confidence: z.number().min(0).max(1).optional(),
   }),
+  z.object({
+    type: z.literal("vb_expression"),
+    value: z.string().min(1),
+    confidence: z.number().min(0).max(1).optional(),
+  }),
 ]);
 
 export type ValueIntent = z.infer<typeof ValueIntentSchema>;
@@ -77,6 +82,9 @@ export function buildExpression(intent: ValueIntent): string {
 
     case "expression":
       return buildComparisonExpression(intent.left, intent.operator, intent.right);
+
+    case "vb_expression":
+      return `[${escapeXmlInner(intent.value)}]`;
   }
 }
 
@@ -232,6 +240,8 @@ export function isValueIntent(value: unknown): value is ValueIntent {
       return typeof obj.left === "string" && obj.left !== ""
         && typeof obj.operator === "string" && ALLOWED_OPERATOR_SET.has(obj.operator)
         && typeof obj.right === "string" && obj.right !== "";
+    case "vb_expression":
+      return typeof obj.value === "string" && obj.value !== "";
     default:
       return false;
   }
@@ -241,6 +251,45 @@ function isEmptyOrInvalidOperand(val: unknown): boolean {
   if (val == null) return true;
   if (typeof val !== "string") return true;
   return val.trim() === "";
+}
+
+const VB_CONCAT_PATTERN = /(?:")\s*&\s*(?:[a-zA-Z_]\w*|\()|(?:[a-zA-Z_]\w*|\))\s*&\s*(?:")/;
+
+const VB_CODE_IN_LITERAL_PATTERNS = [
+  VB_CONCAT_PATTERN,
+  /String\.Format\s*\(/,
+  /Integer\.Parse\s*\(/,
+  /Boolean\.Parse\s*\(/,
+  /Double\.Parse\s*\(/,
+  /Decimal\.Parse\s*\(/,
+  /CStr\s*\(/,
+  /CInt\s*\(/,
+  /CDbl\s*\(/,
+  /CBool\s*\(/,
+  /CType\s*\(/,
+  /DirectCast\s*\(/,
+  /TryCast\s*\(/,
+  /New\s+Dictionary\s*\(/,
+  /New\s+List\s*\(/,
+  /New\s+With\b/,
+  /\.ToString\s*\(/,
+  /\.Contains\s*\(/,
+  /\.Replace\s*\(/,
+  /\.Trim\s*\(/,
+  /\.Substring\s*\(/,
+  /\.Split\s*\(/,
+  /\.Length\b/,
+  /\.Count\b/,
+];
+
+function looksLikeVbCode(value: string): boolean {
+  if (/^\[.*\]$/.test(value)) return false;
+  if (/^"[^"]*"$/.test(value)) return false;
+
+  for (const pattern of VB_CODE_IN_LITERAL_PATTERNS) {
+    if (pattern.test(value)) return true;
+  }
+  return false;
 }
 
 export function sanitizeValueIntentExpressions(obj: any): void {
@@ -258,6 +307,20 @@ export function sanitizeValueIntentExpressions(obj: any): void {
     if (isEmptyOrInvalidOperand(obj.right)) {
       obj.right = "Nothing";
     }
+
+    if (typeof obj.left === "string" && typeof obj.right === "string"
+        && obj.left === obj.right && obj.operator === "="
+        && looksLikeVbCode(obj.left)) {
+      obj.type = "vb_expression";
+      obj.value = obj.left;
+      delete obj.left;
+      delete obj.right;
+      delete obj.operator;
+    }
+  }
+
+  if (obj.type === "literal" && typeof obj.value === "string" && looksLikeVbCode(obj.value)) {
+    obj.type = "vb_expression";
   }
 
   for (const key of Object.keys(obj)) {

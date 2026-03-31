@@ -762,10 +762,14 @@ function runPostAssemblyValidation(
   }
 
   if (allXamlContent.includes("<ui:GetAsset")) {
-    const getAssetVarPattern = /ui:GetAsset\.AssetValue>[\s\S]*?<OutArgument[^>]*>\[([^\]]+)\]/g;
+    const getAssetVarPattern = /<ui:GetAsset\.AssetValue>\s*<OutArgument[^>]*>\[([^\]]+)\]\s*<\/OutArgument>\s*<\/ui:GetAsset\.AssetValue>/g;
     let gaMatch;
     while ((gaMatch = getAssetVarPattern.exec(allXamlContent)) !== null) {
-      const varName = gaMatch[1];
+      let varName = gaMatch[1];
+      const dictAccessMatch = varName.match(/^([a-zA-Z_]\w*)\s*\(/);
+      if (dictAccessMatch) {
+        varName = dictAccessMatch[1];
+      }
       const varDeclared = allXamlContent.includes(`Name="${varName}"`);
       if (!varDeclared) {
         warnings.push(`GetAsset output variable "${varName}" is not declared in workflow variables`);

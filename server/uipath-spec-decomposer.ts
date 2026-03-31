@@ -202,15 +202,19 @@ Output a JSON object with this exact shape:
 
 TYPED PROPERTY VALUES:
 Every value in "properties" MUST be a typed object — NOT a bare string. Use one of:
-- { "type": "literal", "value": "..." } — for text content, prompts, display strings, file paths, fixed config values, enum values, and any value that should be treated as a string literal in XAML
+- { "type": "literal", "value": "..." } — for text content, prompts, display strings, file paths, fixed config values, enum values, and any value that should be treated as a string literal in XAML. Do NOT use literal for values containing VB code like String.Format(...), concatenation with &, or method calls.
 - { "type": "variable", "name": "variableName" } — for VB variable or argument references (the name without brackets; the build system adds [brackets])
-- { "type": "expression", "left": "varName", "operator": "=", "right": "value" } — for conditions and comparisons. Allowed operators: =, <>, <, >, <=, >=, Is, IsNot, Like, AndAlso, OrElse
+- { "type": "expression", "left": "varName", "operator": "=", "right": "value" } — for conditions and comparisons ONLY. Allowed operators: =, <>, <, >, <=, >=, Is, IsNot, Like, AndAlso, OrElse. Do NOT use expression for string concatenation.
+- { "type": "vb_expression", "value": "..." } — for raw VB expressions including string concatenation with &, function calls like String.Format(...), and any compound VB code that is NOT a simple comparison. The build system will bracket-wrap the value.
 - { "type": "url_with_params", "baseUrl": "https://...", "params": { "key": "value" } } — for URLs with query parameters
 
 CORRECT Examples:
   "Prompt": { "type": "literal", "value": "Write a birthday email for the customer" }
   "To": { "type": "variable", "name": "recipientEmail" }
   "Condition": { "type": "expression", "left": "retryCount", "operator": "<", "right": "3" }
+  "Message": { "type": "vb_expression", "value": "\"[Init] RunId=\" & runId" }
+  "Value": { "type": "vb_expression", "value": "String.Format(\"run_summary_{0}.json\", in_RunId)" }
+  "DisplayName": { "type": "vb_expression", "value": "\"Processing: \" & in_FullName & \" (\" & str_Status & \")\"" }
   "Url": { "type": "url_with_params", "baseUrl": "https://api.example.com/users", "params": { "id": "userId" } }
   "FilePath": { "type": "literal", "value": "C:\\Data\\output.xlsx" }
   "Value": { "type": "variable", "name": "currentTransaction" }
@@ -224,6 +228,9 @@ WRONG (do NOT do this):
   ✗ "To": "str_Email"                    → MUST be { "type": "variable", "name": "str_Email" }
   ✗ "Message": "str_LogMessage"          → MUST be { "type": "variable", "name": "str_LogMessage" }
   ✗ "Priority": { "type": "variable", "name": "High" } → "High" is an enum value, not a variable — use { "type": "literal", "value": "High" }
+  ✗ "Message": { "type": "literal", "value": "\"text\" & varName & \"text\"" } → contains VB concatenation — use { "type": "vb_expression", "value": "\"text\" & varName & \"text\"" }
+  ✗ "Value": { "type": "literal", "value": "String.Format(\"x_{0}\", id)" } → contains VB function call — use { "type": "vb_expression", "value": "String.Format(\"x_{0}\", id)" }
+  ✗ "Message": { "type": "expression", "left": "\"text\" & var", "operator": "=", "right": "\"text\" & var" } → expression is for comparisons only — use { "type": "vb_expression", "value": "\"text\" & var" }
 
 IMPORTANT RULES:
 - Use SPECIFIC UiPath activity names in activityType

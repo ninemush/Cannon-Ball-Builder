@@ -815,6 +815,7 @@ function scorePropertyConfidence(key: string, value: PropertyValue): number {
       return 0.6;
     }
     if (intent.type === "expression") return 0.7;
+    if (intent.type === "vb_expression") return 0.7;
     return 0.5;
   }
 

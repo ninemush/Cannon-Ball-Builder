@@ -3,6 +3,7 @@ import {
   buildExpression,
   buildUrlExpression,
   isValueIntent,
+  sanitizeValueIntentExpressions,
   ValueIntentSchema,
   type ValueIntent,
 } from "../xaml/expression-builder";
@@ -587,6 +588,185 @@ describe("ValueIntent Expression Builder", () => {
       });
       expect(result).toContain("&amp;");
       expect(result).not.toMatch(/(?<![&])&(?!amp;)/);
+    });
+  });
+
+  describe("vb_expression type", () => {
+    it("schema parses a valid vb_expression intent", () => {
+      const result = ValueIntentSchema.safeParse({ type: "vb_expression", value: '"text" & varName' });
+      expect(result.success).toBe(true);
+    });
+
+    it("schema rejects vb_expression with empty value", () => {
+      const result = ValueIntentSchema.safeParse({ type: "vb_expression", value: "" });
+      expect(result.success).toBe(false);
+    });
+
+    it("isValueIntent recognizes vb_expression", () => {
+      expect(isValueIntent({ type: "vb_expression", value: "String.Format(\"x\", y)" })).toBe(true);
+    });
+
+    it("isValueIntent rejects vb_expression with empty value", () => {
+      expect(isValueIntent({ type: "vb_expression", value: "" })).toBe(false);
+    });
+
+    it("buildExpression bracket-wraps vb_expression value", () => {
+      const result = buildExpression({ type: "vb_expression", value: '"Hello " & in_Name' });
+      expect(result).toBe('["Hello " &amp; in_Name]');
+    });
+
+    it("buildExpression handles String.Format in vb_expression", () => {
+      const result = buildExpression({ type: "vb_expression", value: 'String.Format("run_{0}.json", in_RunId)' });
+      expect(result).toBe('[String.Format("run_{0}.json", in_RunId)]');
+    });
+
+    it("resolvePropertyValue routes vb_expression through bracket-wrapping", () => {
+      const intent: ValueIntent = { type: "vb_expression", value: '"[Init] RunId=" & runId' };
+      const result = resolvePropertyValue(intent);
+      expect(result).toContain("[");
+      expect(result).toContain("RunId=");
+      expect(result).toContain("runId");
+    });
+  });
+
+  describe("sanitizeValueIntentExpressions — degenerate expression recovery", () => {
+    it("converts degenerate expression (left == right, op '=') to vb_expression", () => {
+      const obj = {
+        type: "expression",
+        left: '"text" & varName & "more"',
+        operator: "=",
+        right: '"text" & varName & "more"',
+      };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("vb_expression");
+      expect((obj as any).value).toBe('"text" & varName & "more"');
+      expect((obj as any).left).toBeUndefined();
+      expect((obj as any).right).toBeUndefined();
+      expect((obj as any).operator).toBeUndefined();
+    });
+
+    it("does not convert non-degenerate expression (left != right)", () => {
+      const obj = {
+        type: "expression",
+        left: "int_Code",
+        operator: "=",
+        right: "200",
+      };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("expression");
+      expect(obj.left).toBe("int_Code");
+    });
+
+    it("does not convert expression when operator is not '='", () => {
+      const obj = {
+        type: "expression",
+        left: "x",
+        operator: "<>",
+        right: "x",
+      };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("expression");
+    });
+
+    it("does not convert degenerate expression with simple identifiers (left == right but not VB code)", () => {
+      const obj = {
+        type: "expression",
+        left: "x",
+        operator: "=",
+        right: "x",
+      };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("expression");
+      expect(obj.left).toBe("x");
+    });
+
+    it("recovers nested degenerate expressions in properties", () => {
+      const spec = {
+        properties: {
+          Message: {
+            type: "expression",
+            left: '"Log: " & in_Name',
+            operator: "=",
+            right: '"Log: " & in_Name',
+          },
+        },
+      };
+      sanitizeValueIntentExpressions(spec);
+      expect(spec.properties.Message.type).toBe("vb_expression");
+      expect((spec.properties.Message as any).value).toBe('"Log: " & in_Name');
+    });
+  });
+
+  describe("sanitizeValueIntentExpressions — VB code in literal detection", () => {
+    it("converts literal with & concatenation to vb_expression", () => {
+      const obj = { type: "literal", value: '"Write email..." & in_FullName & "..."' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("vb_expression");
+      expect(obj.value).toBe('"Write email..." & in_FullName & "..."');
+    });
+
+    it("converts literal with String.Format to vb_expression", () => {
+      const obj = { type: "literal", value: 'String.Format("run_summary_{0}.json", in_RunId)' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("vb_expression");
+    });
+
+    it("converts literal with Integer.Parse to vb_expression", () => {
+      const obj = { type: "literal", value: 'Integer.Parse(str_Count)' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("vb_expression");
+    });
+
+    it("converts literal with .ToString() to vb_expression", () => {
+      const obj = { type: "literal", value: 'int_Count.ToString()' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("vb_expression");
+    });
+
+    it("converts literal with New Dictionary to vb_expression", () => {
+      const obj = { type: "literal", value: 'New Dictionary(Of String, Object)' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("vb_expression");
+    });
+
+    it("does not convert plain text literal", () => {
+      const obj = { type: "literal", value: "Hello World" };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("literal");
+    });
+
+    it("does not convert literal with plain text ampersand (Terms & Conditions)", () => {
+      const obj = { type: "literal", value: "Terms & Conditions" };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("literal");
+    });
+
+    it("does not convert literal with ampersand in sentence context", () => {
+      const obj = { type: "literal", value: "Please read the rules & guidelines carefully" };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("literal");
+    });
+
+    it("does not convert simple quoted literal", () => {
+      const obj = { type: "literal", value: '"Just a string"' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("literal");
+    });
+
+    it("does not convert bracket-wrapped literal", () => {
+      const obj = { type: "literal", value: '[str_AssetValue]' };
+      sanitizeValueIntentExpressions(obj);
+      expect(obj.type).toBe("literal");
+    });
+
+    it("handles nested literals in arrays", () => {
+      const arr = [
+        { type: "literal", value: 'CStr(obj_Value)' },
+        { type: "literal", value: "plain text" },
+      ];
+      sanitizeValueIntentExpressions(arr);
+      expect(arr[0].type).toBe("vb_expression");
+      expect(arr[1].type).toBe("literal");
     });
   });
 });
