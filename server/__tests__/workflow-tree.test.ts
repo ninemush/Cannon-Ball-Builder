@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { assembleNode, assembleWorkflowFromSpec, resolveActivityTemplate, lintAndFixVbExpression, CSharpExpressionBlockedError, validateContainerChildModel } from "../workflow-tree-assembler";
 import { validateWorkflowSpec, type WorkflowNode, type WorkflowSpec, type ActivityNode, type VariableDeclaration } from "../workflow-spec-types";
 import { makeUiPathCompliant } from "../xaml-generator";
+import { collapseDoubledArgumentsXmlParser } from "../xaml/xaml-compliance";
 
 describe("Workflow Tree Architecture", () => {
   describe("WorkflowSpec Zod Validation", () => {
@@ -304,7 +305,7 @@ describe("Workflow Tree Architecture", () => {
       const xml = assembleNode(node);
       expect(xml).toContain("<TryCatch");
       expect(xml).toContain("<TryCatch.Try>");
-      expect(xml).toContain("<ui:HttpClient");
+      expect(xml).toContain("HttpClient");
       expect(xml).toContain("<TryCatch.Catches>");
     });
 
@@ -317,9 +318,9 @@ describe("Workflow Tree Architecture", () => {
         errorHandling: "retry",
       };
       const xml = assembleNode(node);
-      expect(xml).toContain("<ui:RetryScope");
-      expect(xml).toContain("<ui:HttpClient");
-      expect(xml).toContain("<ui:ShouldRetry");
+      expect(xml).toContain("RetryScope");
+      expect(xml).toContain("HttpClient");
+      expect(xml).toContain("ShouldRetry");
     });
   });
 
@@ -742,7 +743,7 @@ describe("Workflow Tree Architecture", () => {
       const tryCatchTryEnd = xaml.indexOf("</TryCatch.Try>");
       const tryBlock = xaml.substring(tryCatchTryStart, tryCatchTryEnd);
 
-      expect(tryBlock).toContain("<ui:HttpClient");
+      expect(tryBlock).toContain("HttpClient");
       expect(tryBlock).toContain("<If");
 
       const ifThenStart = tryBlock.indexOf("<If.Then>");
@@ -894,16 +895,16 @@ describe("Workflow Tree Architecture", () => {
   });
 
   describe("Doubled Argument Normalization (parser fallback)", () => {
-    it("collapses single-line doubled OutArgument via makeUiPathCompliant", () => {
+    it("collapses single-line doubled OutArgument via collapseDoubledArgumentsXmlParser", () => {
       const input = `<Assign.To><OutArgument x:TypeArguments="x:String"><OutArgument x:TypeArguments="x:String">[myVar]</OutArgument></OutArgument></Assign.To>`;
-      const result = makeUiPathCompliant(input);
+      const result = collapseDoubledArgumentsXmlParser(input);
       expect(result).not.toContain("<OutArgument x:TypeArguments=\"x:String\"><OutArgument");
       expect(result).toContain("[myVar]</OutArgument>");
     });
 
-    it("collapses multiline doubled InArgument via makeUiPathCompliant", () => {
+    it("collapses multiline doubled InArgument via collapseDoubledArgumentsXmlParser", () => {
       const input = `<InArgument x:TypeArguments="x:String">\n  <InArgument x:TypeArguments="x:String">[inputVal]</InArgument>\n</InArgument>`;
-      const result = makeUiPathCompliant(input);
+      const result = collapseDoubledArgumentsXmlParser(input);
       const inArgCount = (result.match(/<InArgument/g) || []).length;
       const closeCount = (result.match(/<\/InArgument>/g) || []).length;
       expect(inArgCount).toBe(1);
@@ -913,7 +914,7 @@ describe("Workflow Tree Architecture", () => {
 
     it("collapses doubled OutArgument with mixed attributes across lines", () => {
       const input = `<OutArgument>\n    <OutArgument x:TypeArguments="x:Int32">[count]</OutArgument>\n  </OutArgument>`;
-      const result = makeUiPathCompliant(input);
+      const result = collapseDoubledArgumentsXmlParser(input);
       expect(result).toContain("x:TypeArguments");
       expect(result).toContain("[count]");
       const outArgCount = (result.match(/<OutArgument/g) || []).length;

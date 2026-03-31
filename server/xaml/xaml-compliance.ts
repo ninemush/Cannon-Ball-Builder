@@ -339,11 +339,19 @@ export function smartBracketWrap(val: string): string {
   if (!trimmed) return trimmed;
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   if (trimmed.startsWith("<InArgument") || trimmed.startsWith("<OutArgument")) return trimmed;
-  if (/^".*"$/.test(trimmed)) return trimmed;
+  if (/^".*"$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1);
+    if (/^New\s+\w/.test(inner)) {
+      return `[${inner}]`;
+    }
+    return trimmed;
+  }
   if (/^'.*'$/.test(trimmed)) return trimmed;
   if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
   if (/^[0-9]+$/.test(trimmed)) return trimmed;
+  if (/^New\s+\w/.test(trimmed)) return `[${trimmed}]`;
+  if (/&quot;|&amp;|&lt;|&gt;/.test(trimmed)) return `[${trimmed}]`;
   if (looksLikePlainText(trimmed)) {
     const escaped = trimmed.replace(/"/g, '""');
     return `"${escaped}"`;
@@ -487,7 +495,7 @@ export function parseInvokeArgs(rawValue: string, direction: "In" | "Out" | "InO
   return result;
 }
 
-function collapseDoubledArgumentsXmlParser(xml: string): string {
+export function collapseDoubledArgumentsXmlParser(xml: string): string {
   const argTags = ["InArgument", "OutArgument", "InOutArgument"];
   const MAX_PASSES = 20;
 
@@ -1184,7 +1192,32 @@ export function validateXmlWellFormedness(xml: string): { valid: boolean; errors
   return { valid: errors.length === 0, errors };
 }
 
+export interface ComplianceFinding {
+  type: "expression-rewrite" | "attribute-restructure" | "variable-declaration" | "expression-fixup";
+  description: string;
+  severity: "info" | "warning";
+}
+
+const COMPLIANCE_ADDITIVE_ALLOWLIST = new Set([
+  "namespace-injection",
+  "assembly-reference-injection",
+  "namespace-import-injection",
+  "viewstate-id-assignment",
+  "vb-settings-injection",
+  "activity-alias-normalization",
+  "prefix-correction",
+  "xml-deduplication",
+  "argument-nesting-normalization",
+  "empty-container-fill",
+  "wellformedness-validation",
+]);
+
+let _lastComplianceFindings: ComplianceFinding[] = [];
+export function getLastComplianceFindings(): ComplianceFinding[] { return _lastComplianceFindings; }
+
 export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework = "Windows"): string {
+  const findings: ComplianceFinding[] = [];
+  _lastComplianceFindings = findings;
   let idCounter = 0;
   const viewStateEntries: { id: string; width: number; height: number }[] = [];
   const isCrossPlatform = targetFramework === "Portable";
@@ -1260,38 +1293,39 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
   xml = xml.replace(/scg:DataRow/g, "scg2:DataRow");
 
 
-  xml = xml.replace(/<Variable\s+x:TypeArguments="([^"]*?)"\s+Name="(sec_[^"]*?)"\s*\/>/g, (match, typeArg, varName) => {
-    if (typeArg !== "s:Security.SecureString") {
-      console.log(`[Compliance] Fixing sec_ variable ${varName} type from ${typeArg} to s:Security.SecureString`);
-      return `<Variable x:TypeArguments="s:Security.SecureString" Name="${varName}" />`;
+  const secVarPattern1 = /<Variable\s+x:TypeArguments="([^"]*?)"\s+Name="(sec_[^"]*?)"\s*\/>/g;
+  let secM;
+  while ((secM = secVarPattern1.exec(xml)) !== null) {
+    if (secM[1] !== "s:Security.SecureString") {
+      findings.push({ type: "attribute-restructure", description: `sec_ variable "${secM[2]}" has type "${secM[1]}" instead of s:Security.SecureString`, severity: "warning" });
+      console.log(`[Compliance READ-ONLY] sec_ variable ${secM[2]} type mismatch: ${secM[1]} (not mutated)`);
     }
-    return match;
-  });
-  xml = xml.replace(/<Variable\s+Name="(sec_[^"]*?)"\s+x:TypeArguments="([^"]*?)"\s*\/>/g, (match, varName, typeArg) => {
-    if (typeArg !== "s:Security.SecureString") {
-      console.log(`[Compliance] Fixing sec_ variable ${varName} type from ${typeArg} to s:Security.SecureString (reversed attrs)`);
-      return `<Variable x:TypeArguments="s:Security.SecureString" Name="${varName}" />`;
-    }
-    return match;
-  });
+  }
 
   xml = xml.replace(/<sap:WorkflowViewState\.ViewStateManager>[\s\S]*?<\/sap:WorkflowViewState\.ViewStateManager>/g, "");
   xml = xml.replace(/<WorkflowViewState\.ViewStateManager>[\s\S]*?<\/WorkflowViewState\.ViewStateManager>/g, "");
 
 
-  xml = xml.replace(/\.ToString(?!\()/g, ".ToString()");
-
-  if (isCrossPlatform) {
-    xml = xml.replace(/Condition="\[(\w+) IsNot Nothing\]"/g, 'Condition="[$1 != null]"');
-    xml = xml.replace(/Condition="\[(\w+) Is Nothing\]"/g, 'Condition="[$1 == null]"');
-    xml = xml.replace(/Condition="\[Not (\w+)\]"/g, 'Condition="[!$1]"');
-
-    xml = xml.replace(/Condition="\[(\w+) = &quot;([^&]*)&quot;\]"/g, 'Condition="[$1 == &quot;$2&quot;]"');
-
-    xml = xml.replace(/ &amp; /g, " + ");
+  const toStringMatches = xml.match(/\.ToString(?!\()/g);
+  if (toStringMatches && toStringMatches.length > 0) {
+    findings.push({ type: "expression-fixup", description: `${toStringMatches.length} .ToString without () detected`, severity: "info" });
+    console.log(`[Compliance READ-ONLY] ${toStringMatches.length} .ToString without () detected (not mutated)`);
   }
 
-  xml = sanitizeXmlArtifacts(xml);
+  if (isCrossPlatform) {
+    const vbConditions = (xml.match(/IsNot Nothing|Is Nothing|\bNot \w+| &amp; /g) || []).length;
+    if (vbConditions > 0) {
+      findings.push({ type: "expression-rewrite", description: `${vbConditions} VB-to-C# expression conversions needed for cross-platform`, severity: "warning" });
+      console.log(`[Compliance READ-ONLY] ${vbConditions} VB-to-C# expression conversions detected (not mutated)`);
+    }
+  }
+
+  const sanitizeBefore = xml;
+  const sanitized = sanitizeXmlArtifacts(xml);
+  if (sanitized !== sanitizeBefore) {
+    findings.push({ type: "expression-rewrite", description: "sanitizeXmlArtifacts would have modified XAML", severity: "info" });
+    console.log(`[Compliance READ-ONLY] sanitizeXmlArtifacts detected issues (not mutated)`);
+  }
 
   const KNOWN_PREFIXED_ACTIVITIES = [
     "InvokeWorkflowFile", "RetryScope", "AddQueueItem", "GetTransactionItem",
@@ -1445,9 +1479,19 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
 
   xml = collapseDoubledArgumentsXmlParser(xml);
 
-  xml = fixBareVariableRefsInExpressionAttributes(xml);
+  const bareVarBefore = xml;
+  const bareVarResult = fixBareVariableRefsInExpressionAttributes(xml);
+  if (bareVarResult !== bareVarBefore) {
+    findings.push({ type: "expression-rewrite", description: "Bare variable references detected in expression attributes", severity: "warning" });
+    console.log(`[Compliance READ-ONLY] fixBareVariableRefsInExpressionAttributes detected issues (not mutated)`);
+  }
 
-  xml = ensureVariableDeclarations(xml);
+  const varDeclBefore = xml;
+  const varDeclResult = ensureVariableDeclarations(xml);
+  if (varDeclResult !== varDeclBefore) {
+    findings.push({ type: "variable-declaration", description: "Missing variable declarations detected", severity: "warning" });
+    console.log(`[Compliance READ-ONLY] ensureVariableDeclarations detected issues (not mutated)`);
+  }
 
   xml = xml.replace(/WorkflowFileName="Workflows\\([^"]+)"/g, 'WorkflowFileName="$1"');
   xml = xml.replace(/WorkflowFileName="Workflows\/([^"]+)"/g, 'WorkflowFileName="$1"');

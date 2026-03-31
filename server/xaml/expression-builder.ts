@@ -127,12 +127,19 @@ export function normalizeStringToExpression(val: string): string {
   const trimmed = val.trim();
   if (!trimmed) return trimmed;
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
-  if (/^".*"$/.test(trimmed)) return trimmed;
+  if (/^".*"$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1);
+    if (/^New\s+\w/.test(inner)) {
+      return `[${inner}]`;
+    }
+    return trimmed;
+  }
   if (/^'.*'$/.test(trimmed)) return trimmed;
   if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
   if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) return trimmed;
 
+  if (/^New\s+\w/.test(trimmed)) return `[${trimmed}]`;
   if (/^[a-zA-Z_]\w*\(/.test(trimmed)) return `[${trimmed}]`;
   if (/^(str_|int_|bool_|dbl_|dec_|obj_|dt_|ts_|drow_|qi_|sec_)/i.test(trimmed)) return `[${trimmed}]`;
   if (/^[a-zA-Z_]\w*\.[a-zA-Z_]\w*/.test(trimmed) && !/[.,!?;:'"…\s]/.test(trimmed)) return `[${trimmed}]`;

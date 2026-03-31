@@ -248,14 +248,14 @@ describe("ValueIntent Expression Builder", () => {
       expect(result).toBe("[str_Test]");
     });
 
-    it("routes a plain string through smartBracketWrap", () => {
+    it("routes a plain string through smartBracketWrap (XML-escaped)", () => {
       const result = resolvePropertyValue("myVariable");
-      expect(result).toBe("[myVariable]");
+      expect(result).toBe("&quot;myVariable&quot;");
     });
 
-    it("preserves string literals via smartBracketWrap", () => {
+    it("preserves string literals via smartBracketWrap (XML-escaped)", () => {
       const result = resolvePropertyValue('"Hello"');
-      expect(result).toBe('"Hello"');
+      expect(result).toBe("&quot;Hello&quot;");
     });
 
     it("preserves boolean literals", () => {

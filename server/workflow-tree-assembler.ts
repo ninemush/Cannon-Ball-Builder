@@ -550,11 +550,18 @@ function smartBracketWrap(val: string): string {
   if (!trimmed) return trimmed;
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   if (trimmed.startsWith("<InArgument") || trimmed.startsWith("<OutArgument")) return trimmed;
-  if (/^".*"$/.test(trimmed)) return trimmed;
+  if (/^".*"$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1);
+    if (/^New\s+\w/.test(inner)) {
+      return `[${inner}]`;
+    }
+    return trimmed;
+  }
   if (/^'.*'$/.test(trimmed)) return trimmed;
   if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
   if (/^[0-9]+$/.test(trimmed)) return trimmed;
+  if (/^New\s+\w/.test(trimmed)) return `[${trimmed}]`;
   if (looksLikeStringLiteral(trimmed)) {
     const escaped = trimmed.replace(/"/g, '""');
     return `"${escaped}"`;
@@ -565,10 +572,22 @@ function smartBracketWrap(val: string): string {
 export function resolvePropertyValue(value: PropertyValue): string {
   if (isValueIntent(value)) {
     const built = buildExpression(value as ValueIntent);
-    return smartBracketWrap(lintAndFixVbExpression(built));
+    const linted = lintAndFixVbExpression(built);
+    const wrapped = smartBracketWrap(linted);
+    if (wrapped.startsWith("[") && wrapped.endsWith("]")) {
+      const inner = wrapped.slice(1, -1);
+      return `[${escapeXmlExpression(inner)}]`;
+    }
+    return escapeXmlExpression(wrapped);
   }
   const strVal = String(value);
-  return smartBracketWrap(lintAndFixVbExpression(strVal));
+  const linted = lintAndFixVbExpression(strVal);
+  const wrapped = smartBracketWrap(linted);
+  if (wrapped.startsWith("[") && wrapped.endsWith("]")) {
+    const inner = wrapped.slice(1, -1);
+    return `[${escapeXmlExpression(inner)}]`;
+  }
+  return escapeXmlExpression(wrapped);
 }
 
 export function resolvePropertyValueRaw(value: PropertyValue): string {
@@ -1562,7 +1581,13 @@ export function lintAndFixVbExpression(expr: string): string {
 function resolveConditionValue(condition: string | ValueIntent): string {
   if (isValueIntent(condition)) {
     const built = buildExpression(condition as ValueIntent);
-    return escapeXmlExpression(lintAndFixVbExpression(built));
+    const linted = lintAndFixVbExpression(built);
+    if (linted.startsWith("[") && linted.endsWith("]")) {
+      const inner = linted.slice(1, -1);
+      return `[${escapeXmlExpression(inner)}]`;
+    }
+    if (linted === "True" || linted === "False") return linted;
+    return `[${escapeXmlExpression(linted)}]`;
   }
   const trimmed = (condition as string).trim();
   if (!trimmed) return trimmed;
@@ -1573,10 +1598,7 @@ function resolveConditionValue(condition: string | ValueIntent): string {
   }
   if (trimmed === "True" || trimmed === "False") return trimmed;
   const linted = lintAndFixVbExpression(trimmed);
-  if (/[<>=]/.test(linted) || /\b(And|Or|Not|AndAlso|OrElse|Is|IsNot|Like)\b/.test(linted)) {
-    return `[${escapeXmlExpression(linted)}]`;
-  }
-  return escapeXmlExpression(linted);
+  return `[${escapeXmlExpression(linted)}]`;
 }
 
 function assembleIfNode(

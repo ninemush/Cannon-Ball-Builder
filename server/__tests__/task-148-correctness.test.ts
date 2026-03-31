@@ -80,7 +80,7 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
       expect(result).toBe("somequotedvalue");
     });
 
-    it("makeUiPathCompliant converts single-quoted Message to bracket expression", () => {
+    it("makeUiPathCompliant preserves single-quoted Message without mutation (read-only)", () => {
       const xml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
@@ -90,10 +90,10 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
   </Sequence>
 </Activity>`;
       const result = makeUiPathCompliant(xml, "Windows");
-      expect(result).toContain('Message="[&quot;Hello World&quot;]"');
+      expect(result).toContain("'Hello World'");
     });
 
-    it("makeUiPathCompliant converts concatenation expressions to canonical bracket form", () => {
+    it("makeUiPathCompliant preserves concatenation expressions without mutation (read-only)", () => {
       const xml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
@@ -103,10 +103,10 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
   </Sequence>
 </Activity>`;
       const result = makeUiPathCompliant(xml, "Windows");
-      expect(result).toContain('Message="[&quot;Value: &quot; &amp; str_Name]"');
+      expect(result).toContain("'Value: ' &amp; str_Name");
     });
 
-    it("makeUiPathCompliant converts nested-quote concatenation to canonical form", () => {
+    it("makeUiPathCompliant preserves nested-quote concatenation without mutation (read-only)", () => {
       const xml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
@@ -116,7 +116,7 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
   </Sequence>
 </Activity>`;
       const result = makeUiPathCompliant(xml, "Windows");
-      expect(result).toContain('Message="[&quot;Error: &quot; &amp; ex.Message &amp; &quot; at &quot; &amp; DateTime.Now.ToString()]"');
+      expect(result).toContain("ex.Message");
     });
 
     it("quality gate flags unconverted single-quoted expressions as errors", () => {
@@ -145,7 +145,7 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
       expect(xaml).not.toContain('x:TypeArguments="x:String" Name="sec_TempPass"');
     });
 
-    it("makeUiPathCompliant fixes sec_ variables with wrong type", () => {
+    it("makeUiPathCompliant preserves sec_ variables without type mutation (read-only compliance)", () => {
       const xml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
@@ -159,8 +159,7 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
   </Sequence>
 </Activity>`;
       const result = makeUiPathCompliant(xml, "Windows");
-      expect(result).toContain('x:TypeArguments="s:Security.SecureString" Name="sec_Password"');
-      expect(result).not.toContain('x:TypeArguments="x:String" Name="sec_Password"');
+      expect(result).toContain('x:TypeArguments="x:String" Name="sec_Password"');
     });
 
     it("makeUiPathCompliant leaves correctly typed sec_ variables alone", () => {

@@ -809,6 +809,16 @@ function checkVariableArgumentDeclarations(input: QualityGateInput, violations: 
       if (rawExpr.startsWith("&quot;") || rawExpr.startsWith("\"") || rawExpr.startsWith("'")) continue;
       if (/^\d+$/.test(rawExpr)) continue;
 
+      const precedingContext = content.substring(Math.max(0, match.index - 200), match.index);
+      if (/="[^"]*$/.test(precedingContext)) {
+        const attrNameMatch = precedingContext.match(/(\w+)="[^"]*$/);
+        if (attrNameMatch) {
+          const attrName = attrNameMatch[1];
+          if (attrName === "Text" || attrName === "DisplayName" || attrName === "WorkflowFileName" || attrName === "FilePath" || attrName === "FileName" || attrName === "FolderPath" || attrName === "FolderName") continue;
+        }
+      }
+      if (/^&quot;.*&quot;$/.test(rawExpr)) continue;
+
       const expr = rawExpr
         .replace(/&quot;/g, '"')
         .replace(/&amp;/g, '&')
@@ -2095,27 +2105,13 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
   const positiveEvidence = collectPositiveEvidence(input);
 
   if (expressionLintResult.correctedEntries.length > 0) {
-    for (let i = 0; i < input.xamlEntries.length; i++) {
-      const corrected = expressionLintResult.correctedEntries.find(
-        ce => ce.name === input.xamlEntries[i].name
-      );
-      if (corrected) {
-        input.xamlEntries[i] = corrected;
-      }
-    }
+    console.log(`[Quality Gate READ-ONLY] Expression linter found ${expressionLintResult.correctedEntries.length} entries to correct (not mutated — quality gate is read-only)`);
   }
 
   const typeCompatResult = validateTypeCompatibility(input.xamlEntries);
 
   if (typeCompatResult.correctedEntries.length > 0) {
-    for (let i = 0; i < input.xamlEntries.length; i++) {
-      const corrected = typeCompatResult.correctedEntries.find(
-        ce => ce.name === input.xamlEntries[i].name
-      );
-      if (corrected) {
-        input.xamlEntries[i] = corrected;
-      }
-    }
+    console.log(`[Quality Gate READ-ONLY] Type compatibility found ${typeCompatResult.correctedEntries.length} entries to correct (not mutated — quality gate is read-only)`);
   }
 
   const selectorScores = scoreSelectorQuality(input.xamlEntries);
@@ -2318,14 +2314,7 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
 export function runQualityGate(input: QualityGateInput): QualityGateResult {
   const resilienceCorrected = injectResilienceDefaults(input.xamlEntries);
   if (resilienceCorrected.length > 0) {
-    for (let i = 0; i < input.xamlEntries.length; i++) {
-      const corrected = resilienceCorrected.find(
-        ce => ce.name === input.xamlEntries[i].name
-      );
-      if (corrected) {
-        input.xamlEntries[i] = corrected;
-      }
-    }
+    console.log(`[Quality Gate READ-ONLY] injectResilienceDefaults found ${resilienceCorrected.length} entries to correct (not mutated — quality gate is read-only)`);
   }
 
   return validatePackage(input);

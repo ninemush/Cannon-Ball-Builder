@@ -62,55 +62,23 @@ describe("Task 105 — Expression bracketing and catalog validation", () => {
     });
   });
 
-  describe("makeUiPathCompliant — Assign expression bracketing (write points B, C, E, G)", () => {
-    it("brackets VB expressions with <> in self-closing Assign To-first (point B)", () => {
+  describe("makeUiPathCompliant — read-only compliance (no expression mutations)", () => {
+    it("compliance rejects XAML fragments without namespace declarations", () => {
       const input = `<Assign DisplayName="Check" To="result" Value="int_SeverityCode &lt;&gt; 10" />`;
-      const result = makeUiPathCompliant(input);
-      expect(result).toContain("<Assign.Value><InArgument");
-      expect(result).toContain("[int_SeverityCode &lt;&gt; 10]");
+      expect(() => makeUiPathCompliant(input)).toThrow();
     });
 
-    it("brackets VB expressions with <> in self-closing Assign Value-first (point C)", () => {
-      const input = `<Assign DisplayName="Check" Value="x &lt;&gt; 5" To="bool_Result" />`;
-      const result = makeUiPathCompliant(input);
-      expect(result).toContain("<Assign.Value><InArgument");
-      expect(result).toContain("[x &lt;&gt; 5]");
-    });
-
-    it("brackets expressions in expanded Assign.Value InArgument (point E)", () => {
-      const input = `<Assign DisplayName="Test">
-        <Assign.To><OutArgument x:TypeArguments="x:String">result</OutArgument></Assign.To>
-        <Assign.Value><InArgument x:TypeArguments="x:String">x + 1</InArgument></Assign.Value>
-      </Assign>`;
-      const result = makeUiPathCompliant(input);
-      expect(result).toContain("[x + 1]");
-    });
-
-    it("brackets expressions in generic InArgument properties (point G)", () => {
-      const input = `<ui:SendMail.Body>
-        <InArgument x:TypeArguments="x:String">str_Body + " suffix"</InArgument>
-      </ui:SendMail.Body>`;
-      const result = makeUiPathCompliant(input);
-      expect(result).toContain('[str_Body + " suffix"]');
-    });
-
-    it("preserves string literals in Assign.Value", () => {
-      const input = `<Assign DisplayName="Set" To="str_Name" Value="&quot;Hello&quot;" />`;
-      const result = makeUiPathCompliant(input);
-      expect(result).toContain("&quot;Hello&quot;");
-      expect(result).not.toContain("[&quot;Hello&quot;]");
-    });
-
-    it("preserves True/False in Assign.Value", () => {
-      const input = `<Assign DisplayName="Set Flag" To="bool_Flag" Value="True" />`;
-      const result = makeUiPathCompliant(input);
-      expect(result).toContain(">True<");
-      expect(result).not.toContain("[True]");
+    it("smartBracketWrap still brackets expressions correctly in isolation", () => {
+      expect(smartBracketWrap("int_SeverityCode &lt;&gt; 10")).toBe("[int_SeverityCode &lt;&gt; 10]");
+      expect(smartBracketWrap("x &lt;&gt; 5")).toBe("[x &lt;&gt; 5]");
+      expect(smartBracketWrap("&quot;Hello&quot;")).toBe("&quot;Hello&quot;");
+      expect(smartBracketWrap("True")).toBe("True");
+      expect(smartBracketWrap("False")).toBe("False");
     });
   });
 
   describe("workflow-tree-assembler — resolveAssignTemplate (write point N)", () => {
-    it("brackets VB expressions with operators in Assign value", () => {
+    it("brackets VB expressions with operators in Assign value (XML-escaped)", () => {
       const node = {
         id: "1",
         template: "Assign",
@@ -121,11 +89,11 @@ describe("Task 105 — Expression bracketing and catalog validation", () => {
         },
       };
       const result = resolveActivityTemplate(node as any, []);
-      expect(result).toContain("[int_SeverityCode <> 10]");
+      expect(result).toContain("[int_SeverityCode &lt;&gt; 10]");
       expect(result).toContain("[bool_IsSevere]");
     });
 
-    it("preserves string literals in Assign value", () => {
+    it("preserves string literals in Assign value (in element content)", () => {
       const node = {
         id: "1",
         template: "Assign",

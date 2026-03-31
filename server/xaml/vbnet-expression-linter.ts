@@ -881,6 +881,8 @@ function decodeXmlEntities(s: string): string {
 
 export function findUndeclaredVariables(expression: string, declaredVars: Set<string>): string[] {
   const undeclared: string[] = [];
+  const trimmedExpr = expression.trim();
+  if (/^"[^"]*"$/.test(trimmedExpr) || /^&quot;.*&quot;$/.test(trimmedExpr)) return undeclared;
   const decoded = decodeXmlEntities(expression);
   const stringPattern = /"(?:[^"\\]|\\.)*"/g;
   const exprWithoutStrings = decoded.replace(stringPattern, (m) => " ".repeat(m.length));
