@@ -18,7 +18,7 @@ import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml, escapeXmlExpression, normalizeXmlExpression, escapeXmlTextContent } from "./lib/xml-utils";
 import { XMLValidator } from "fast-xml-parser";
 import { buildExpression, isValueIntent, normalizeStringToExpression, normalizePropertyToValueIntent, type ValueIntent } from "./xaml/expression-builder";
-import { getActivityTag, getActivityPrefixStrict } from "./xaml/xaml-compliance";
+import { getActivityTag, getActivityPrefixStrict, injectMissingNamespaceDeclarations } from "./xaml/xaml-compliance";
 import { lintExpression } from "./xaml/vbnet-expression-linter";
 import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
 import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
@@ -249,6 +249,10 @@ function mapClrType(type: string): string {
   if (arrayBracketMatch) {
     const itemType = mapClrType(arrayBracketMatch[1].trim());
     return `scg:List(${itemType})`;
+  }
+
+  if (trimmed.includes("clr-namespace:")) {
+    return trimmed;
   }
 
   return "x:Object";
@@ -862,6 +866,7 @@ function looksLikeVariableRef(expr: string): boolean {
 function looksLikeVbExpression(val: string): boolean {
   const trimmed = val.trim();
   if (!trimmed) return false;
+  if (/:\/\//.test(trimmed) || /^https?:\/\//i.test(trimmed)) return false;
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return true;
   if (trimmed.startsWith('"') || trimmed.startsWith("&quot;")) return true;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return true;
@@ -880,7 +885,7 @@ function looksLikeStringLiteral(val: string, isDeclared?: (name: string) => bool
   const trimmed = val.trim();
   if (!trimmed) return false;
   if (/\b[\w_]+\.(json|xml|xlsx|csv|txt|log|config|pdf|html|xaml|dll|exe|zip|png|jpg)\b/i.test(trimmed)) return true;
-  if (/\w+\/\w+\/\w+/.test(trimmed) && !/[()=<>]/.test(trimmed)) return true;
+  if ((/[A-Z]\w*\/[A-Z]\w*/.test(trimmed) || /\w+\/\w+\/\w+/.test(trimmed)) && !/[()=<>]/.test(trimmed)) return true;
   if (/\u2014/.test(trimmed)) return true;
   if (looksLikeVbExpression(trimmed)) return false;
   if (isDeclared && /^[a-zA-Z_]\w*$/.test(trimmed) && isDeclared(trimmed)) {
@@ -892,6 +897,7 @@ function looksLikeStringLiteral(val: string, isDeclared?: (name: string) => bool
 function isVbExpression(val: string): boolean {
   const trimmed = val.trim();
   if (!trimmed) return false;
+  if (/:\/\//.test(trimmed) || /^https?:\/\//i.test(trimmed)) return false;
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return true;
   if (trimmed.startsWith("\"") || trimmed.startsWith("&quot;")) return true;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return true;
@@ -951,6 +957,16 @@ function smartBracketWrap(val: string, isDeclared?: (name: string) => boolean): 
   return `[${trimmed}]`;
 }
 
+const ENCODING_MAP: Record<string, string> = {
+  "utf-8": "System.Text.Encoding.UTF8",
+  "utf8": "System.Text.Encoding.UTF8",
+  "utf-16": "System.Text.Encoding.Unicode",
+  "unicode": "System.Text.Encoding.Unicode",
+  "ascii": "System.Text.Encoding.ASCII",
+  "utf-32": "System.Text.Encoding.UTF32",
+  "utf32": "System.Text.Encoding.UTF32",
+};
+
 export function resolvePropertyValue(
   value: PropertyValue,
   activityClassName?: string,
@@ -966,10 +982,18 @@ export function resolvePropertyValue(
     clrType = catalogService.getPropertyClrType(activityClassName, propertyName) || undefined;
   }
 
+  const strVal = String(isValueIntent(value) ? buildExpression(value as ValueIntent) : value).trim();
+
+  if (clrType && (clrType === "System.Text.Encoding" || clrType.includes("Encoding"))) {
+    const encodingExpr = ENCODING_MAP[strVal.toLowerCase().replace(/^"+|"+$/g, "")];
+    if (encodingExpr) {
+      return `[${encodingExpr}]`;
+    }
+  }
+
   if (isValueIntent(value)) {
     return resolveValueIntentToXaml(value as ValueIntent, isEnumProperty);
   }
-  const strVal = String(value);
   const normalized = normalizePropertyToValueIntent(
     strVal,
     activityClassName,
@@ -1711,6 +1735,20 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
     const propClrType = schema ? (schema.activity.properties.find((p: any) => p.name === key)?.clrType) : undefined;
     let value = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : normalizeStringToExpression(String(rawValue), _activeDeclarationLookup || undefined, propClrType);
 
+    if (propClrType && /Boolean/i.test(propClrType)) {
+      const stripped = value.replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "").replace(/&quot;/g, "").trim();
+      if (/^(yes|true)$/i.test(stripped)) value = "True";
+      else if (/^(no|false)$/i.test(stripped)) value = "False";
+    }
+
+    if (propClrType && (propClrType === "System.Text.Encoding" || propClrType.includes("Encoding"))) {
+      const rawEncoding = value.replace(/^"+|"+$/g, "").replace(/&quot;/g, "").trim();
+      const encodingExpr = ENCODING_MAP[rawEncoding.toLowerCase()];
+      if (encodingExpr) {
+        value = `[${encodingExpr}]`;
+      }
+    }
+
     const enumMap = KNOWN_ENUM_PROPERTIES[key];
     if (enumMap) {
       const stripped = value.replace(/&quot;/g, "").replace(/^"+|"+$/g, "").trim();
@@ -1770,7 +1808,17 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
       if (propDef && propDef.xamlSyntax === "child-element") {
         isChildElement = true;
         const wrapper = propDef.argumentWrapper || "InArgument";
-        const typeArg = propDef.typeArguments ? ` x:TypeArguments="${propDef.typeArguments}"` : "";
+        let resolvedTypeArg = propDef.typeArguments || "";
+        if (!resolvedTypeArg && propDef.clrType && /^[0-9]+(\.[0-9]+)?$/.test(effectiveValue.trim())) {
+          const numericTypeMap: Record<string, string> = {
+            "system.int32": "x:Int32", "int32": "x:Int32",
+            "system.int64": "x:Int64", "int64": "x:Int64",
+            "system.double": "x:Double", "double": "x:Double",
+            "system.decimal": "x:Decimal", "decimal": "x:Decimal",
+          };
+          resolvedTypeArg = numericTypeMap[propDef.clrType.toLowerCase()] || "";
+        }
+        const typeArg = resolvedTypeArg ? ` x:TypeArguments="${resolvedTypeArg}"` : "";
         let wrappedValue = validationResult ? effectiveValue : (isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : smartBracketWrap(lintAndFixVbExpression(effectiveValue), _activeDeclarationLookup || undefined));
         if (propDef.typeArguments === "x:Boolean") {
           const stripped = wrappedValue.replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "").trim();
@@ -2473,7 +2521,11 @@ function buildVariablesBlock(variables: VariableDeclaration[]): string {
         defaultAttr = ` Default="${escapeXml(wrappedDefault)}"`;
       }
     }
-    xml += `      <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}"${defaultAttr} />\n`;
+    if (v.type && v.type.includes("clr-namespace:")) {
+      xml += `      <Variable x:TypeArguments="${v.type}" Name="${escapeXml(v.name)}"${defaultAttr} />\n`;
+    } else {
+      xml += `      <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}"${defaultAttr} />\n`;
+    }
   }
   xml += "    </Sequence.Variables>";
   return xml;
@@ -3207,6 +3259,12 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
   }
 
   xaml = sanitizeUnescapedAmpersands(xaml);
+
+  const nsResult = injectMissingNamespaceDeclarations(xaml);
+  if (nsResult.injected.length > 0) {
+    xaml = nsResult.xml;
+    console.log(`[Tree Assembler] Injected missing namespace declarations for prefixes: ${nsResult.injected.join(", ")}`);
+  }
 
   const validationResult = XMLValidator.validate(xaml, { allowBooleanAttributes: true });
   if (validationResult !== true) {

@@ -1295,6 +1295,20 @@ function checkAccuracy(input: QualityGateInput): QualityGateViolation[] {
         detail: `Line ${lineNum}: <Sequence> "${displayName}" has only an empty Variables block — no actual activities`,
       });
     }
+
+    const hasActivityRoot = /<Activity\b[^.]/i.test(content);
+    if (hasActivityRoot) {
+      const implPattern = /<(?:Sequence|Flowchart|StateMachine)\b(?!\.)(?:\s|>|\/)/i;
+      if (!implPattern.test(content)) {
+        violations.push({
+          category: "accuracy",
+          severity: "error",
+          check: "missing-implementation-container",
+          file: shortName,
+          detail: `XAML has <Activity> root but no <Sequence>, <Flowchart>, or <StateMachine> child — Studio will report DynamicActivity.Implementation is null`,
+        });
+      }
+    }
   }
 
   checkVariableArgumentDeclarations(input, violations);

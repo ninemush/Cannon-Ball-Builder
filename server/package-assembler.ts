@@ -47,7 +47,7 @@ import archiver from "archiver";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
-  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness } from "./xaml/xaml-compliance";
+  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
@@ -4333,6 +4333,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     }
 
+    for (let i = 0; i < xamlEntries.length; i++) {
+      const entry = xamlEntries[i];
+      const loadResult = checkStudioLoadability(entry.content);
+      if (!loadResult.loadable && loadResult.repairable) {
+        const repair = repairMissingImplementation(entry.content, entry.name.split("/").pop() || entry.name);
+        if (repair.repaired) {
+          xamlEntries[i] = { name: entry.name, content: repair.content };
+          const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
+          if (archivePath) deferredWrites.set(archivePath, repair.content);
+        }
+      }
+    }
+
     const qualityGateRunCount = 1;
     let qualityGateResult = runQualityGate({
       xamlEntries,
@@ -4753,6 +4766,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     for (const entry of xamlEntries) {
       const shortName = (entry.name.split("/").pop() || entry.name).replace(/\.xaml$/i, "");
       if (stubRemediationFiles.has(shortName) || earlyStubFallbacks.includes(shortName + ".xaml")) continue;
+      const nsFixResult = injectMissingNamespaceDeclarations(entry.content);
+      if (nsFixResult.injected.length > 0) {
+        entry.content = nsFixResult.xml;
+        const archivePathNs = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
+        if (archivePathNs) deferredWrites.set(archivePathNs, nsFixResult.xml);
+        console.log(`[Package Assembler] Injected missing xmlns for ${shortName}: ${nsFixResult.injected.join(", ")}`);
+      }
+
       let loadability = checkStudioLoadability(entry.content);
       if (!loadability.loadable && loadability.repairable) {
         const repair = repairMissingImplementation(entry.content, entry.name.split("/").pop() || entry.name);

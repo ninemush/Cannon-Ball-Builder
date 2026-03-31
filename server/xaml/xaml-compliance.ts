@@ -117,6 +117,78 @@ const SYSTEM_ACTIVITIES_NO_PREFIX = new Set([
   "State", "StateMachine", "Transition",
 ]);
 
+const PREFIX_TO_XMLNS: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const info of Object.values(PACKAGE_NAMESPACE_MAP)) {
+    if (info.prefix && !map[info.prefix]) {
+      map[info.prefix] = info.xmlns;
+    }
+  }
+  return map;
+})();
+
+export function validateImplementationContainer(xaml: string): { valid: boolean; reason?: string } {
+  if (!xaml || xaml.trim().length === 0) {
+    return { valid: false, reason: "Empty XAML content" };
+  }
+  const hasActivityRoot = /<Activity\b[^.]/i.test(xaml);
+  if (!hasActivityRoot) {
+    return { valid: false, reason: "Missing root <Activity> element" };
+  }
+  const implPattern = /<(?:Sequence|Flowchart|StateMachine)\b(?!\.)(?:\s|>|\/)/i;
+  if (!implPattern.test(xaml)) {
+    return { valid: false, reason: "No <Sequence>, <Flowchart>, or <StateMachine> child — DynamicActivity.Implementation is null" };
+  }
+  return { valid: true };
+}
+
+export function injectMissingNamespaceDeclarations(xaml: string): { xml: string; injected: string[] } {
+  const injected: string[] = [];
+
+  const declaredPrefixes = new Set<string>();
+  const xmlnsPattern = /xmlns:(\w+)="[^"]+"/g;
+  let dm;
+  while ((dm = xmlnsPattern.exec(xaml)) !== null) {
+    declaredPrefixes.add(dm[1]);
+  }
+
+  const usedPrefixes = new Set<string>();
+  const usagePattern = /<(\w+):/g;
+  let um;
+  while ((um = usagePattern.exec(xaml)) !== null) {
+    if (um[1] !== "xmlns" && um[1] !== "xml") {
+      usedPrefixes.add(um[1]);
+    }
+  }
+
+  const missingPrefixes: string[] = [];
+  for (const prefix of usedPrefixes) {
+    if (!declaredPrefixes.has(prefix)) {
+      missingPrefixes.push(prefix);
+    }
+  }
+
+  if (missingPrefixes.length === 0) {
+    return { xml: xaml, injected };
+  }
+
+  let result = xaml;
+  for (const prefix of missingPrefixes) {
+    const xmlns = PREFIX_TO_XMLNS[prefix];
+    if (!xmlns) continue;
+
+    const declaration = `xmlns:${prefix}="${xmlns}"`;
+    const activityTagMatch = result.match(/<Activity\s/);
+    if (activityTagMatch) {
+      const insertPos = activityTagMatch.index! + activityTagMatch[0].length;
+      result = result.substring(0, insertPos) + `${declaration}\n  ` + result.substring(insertPos);
+      injected.push(prefix);
+    }
+  }
+
+  return { xml: result, injected };
+}
+
 export function getActivityPrefix(templateName: string): string {
   const result = getActivityPrefixStrict(templateName);
   if (result !== null) return result;

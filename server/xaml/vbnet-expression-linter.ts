@@ -25,7 +25,7 @@ const VB_KEYWORDS = new Set([
   "End", "Sub", "Function", "Dim", "As", "Of", "In", "To", "Step",
   "For", "Each", "Next", "While", "Do", "Loop", "Until", "Wend",
   "Select", "Case", "With", "Using", "Try", "Catch", "Finally", "Throw",
-  "Return", "Exit", "Continue", "GoTo", "ReDim", "Preserve",
+  "Return", "Exit", "Continue", "GoTo", "ReDim", "Preserve", "From",
   "ByVal", "ByRef", "Optional", "ParamArray",
   "Public", "Private", "Protected", "Friend", "Shared", "Static",
   "ReadOnly", "WriteOnly", "Overrides", "Overridable", "MustOverride",
@@ -1193,6 +1193,36 @@ export function findUndeclaredVariables(expression: string, declaredVars: Set<st
     }
   }
 
+  const dictKeyParts = new Set<string>();
+  const dictInitPattern = /New\s+Dictionary\b[\s\S]*?From\s*\{([\s\S]*?)\}/gi;
+  let dk;
+  while ((dk = dictInitPattern.exec(decoded)) !== null) {
+    const body = dk[1];
+    const keyPattern = /\{\s*"([^"]+)"/g;
+    let km;
+    while ((km = keyPattern.exec(body)) !== null) {
+      for (const part of km[1].split(/[\s._\-]/)) {
+        if (part) dictKeyParts.add(part);
+      }
+    }
+  }
+
+  const jsonConcatKeyParts = new Set<string>();
+  const jsonKeyPattern = /"\s*&\s*"([^"]*?)"\s*:/g;
+  let jk;
+  const decodedFull = decoded;
+  while ((jk = jsonKeyPattern.exec(decodedFull)) !== null) {
+    for (const part of jk[1].split(/[\s._\-]/)) {
+      if (part) jsonConcatKeyParts.add(part);
+    }
+  }
+  const jsonKeyPattern2 = /"([^"]*?)":\s*"/g;
+  while ((jk = jsonKeyPattern2.exec(stringContent)) !== null) {
+    for (const part of jk[1].split(/[\s._\-]/)) {
+      if (part) jsonConcatKeyParts.add(part);
+    }
+  }
+
   const identPattern = /\b([a-zA-Z_]\w*)\b/g;
   let m;
   const seen = new Set<string>();
@@ -1210,6 +1240,8 @@ export function findUndeclaredVariables(expression: string, declaredVars: Set<st
     if (lambdaParams.has(ident)) continue;
 
     if (COMPLIANCE_XML_ENTITY_NAMES.has(ident)) continue;
+    if (dictKeyParts.has(ident)) continue;
+    if (jsonConcatKeyParts.has(ident)) continue;
 
     if (ident === "c" && m.index > 0) {
       const precedingInDecoded = decoded.substring(Math.max(0, m.index - 3), m.index);

@@ -140,6 +140,10 @@ export function normalizeStringToExpression(val: string, isDeclared?: (name: str
   }
   if (/^'.*'$/.test(trimmed)) return trimmed;
   if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
+  if (/:\/\//.test(trimmed) || /^https?:\/\//i.test(trimmed)) {
+    const escaped = trimmed.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
   if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) return trimmed;
 
@@ -148,6 +152,10 @@ export function normalizeStringToExpression(val: string, isDeclared?: (name: str
   if (/^(str_|int_|bool_|dbl_|dec_|obj_|dt_|ts_|drow_|qi_|sec_)/i.test(trimmed)) return `[${trimmed}]`;
   if (/^(in_|out_|io_)/i.test(trimmed)) return `[${trimmed}]`;
   if (/^[a-zA-Z_]\w*\.[a-zA-Z_]\w*/.test(trimmed) && !/[.,!?;:'"…\s]/.test(trimmed)) return `[${trimmed}]`;
+  if ((/[A-Z]\w*\/[A-Z]\w*/.test(trimmed) || /\w+\/\w+\/\w+/.test(trimmed)) && !/[()=<>]/.test(trimmed)) {
+    const escaped = trimmed.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
   if (/[+\-*/&=<>]/.test(trimmed) && !/[.,!?;:'"…\s]/.test(trimmed)) return `[${trimmed}]`;
 
   const isStringTyped = clrType === "System.String" || clrType === "String";
@@ -204,8 +212,8 @@ export function normalizePropertyToValueIntent(
 
   if (isBooleanTyped) {
     const lower = trimmed.toLowerCase().replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
-    if (lower === "true") return { type: "literal", value: "True" };
-    if (lower === "false") return { type: "literal", value: "False" };
+    if (lower === "true" || lower === "yes") return { type: "literal", value: "True" };
+    if (lower === "false" || lower === "no") return { type: "literal", value: "False" };
   }
 
   if (activityClassName && propertyName && getEnumValues) {
@@ -240,6 +248,14 @@ export function normalizePropertyToValueIntent(
   }
 
   if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) {
+    return { type: "literal", value: trimmed };
+  }
+
+  if (/:\/\//.test(trimmed) || /^https?:\/\//i.test(trimmed)) {
+    return { type: "literal", value: trimmed };
+  }
+
+  if ((/[A-Z]\w*\/[A-Z]\w*/.test(trimmed) || /\w+\/\w+\/\w+/.test(trimmed)) && !/[()=<>]/.test(trimmed)) {
     return { type: "literal", value: trimmed };
   }
 
