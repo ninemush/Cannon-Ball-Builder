@@ -1,0 +1,100 @@
+Please step back and redesign the next task around the actual systemic issues we’ve now validated. I do NOT want another broad auto-declare-everything fix, and I do NOT want another late-stage mutation pass layered on top of a noisy scanner.
+
+I want you to produce a revised task proposal based on the following principles.
+
+What I think is actually happening
+1. The undeclared-variable/reference scanner is too noisy to be used as a declaration source of truth.
+It is pulling in:
+- English words from log messages and GenAI prompt text
+- date/time format tokens
+- XML/entity fragments
+- CLR type names / namespace segments
+- email addresses / filenames / URLs
+This means “extract all identifiers and auto-declare them” is not a safe fix. It will create garbage declarations and more type corruption.
+
+2. The real declaration bugs appear to be contract bugs, not missing-regex-coverage bugs.
+Examples:
+- TryCatch exception variable naming mismatch:
+  - shallow registry path registers `exception`
+  - body expressions reference `ex_Init`, `genAIEx`, `parseEx`, etc.
+- ForEach iterator naming mismatch:
+  - body references `currentEventRow`
+  - emitted iterator may still be `item`
+So the fix needs to be:
+- one authoritative declaration/name-resolution path
+- consistent before emission
+- not a second late-stage declaration pass
+
+3. Catalog gaps are real and are causing destructive stripping of valid properties.
+This includes legitimate properties such as:
+- AddLogFields.Fields
+- BuildDataTable.Columns
+- IntegrationServiceHTTPRequest.ConnectionId / Endpoint / Output / etc.
+- MultipleAssign.Assignments
+- SerializeJson.Result
+These need catalog-level fixes, not downstream compensation.
+
+4. InvokeWorkflowFile argument stripping appears partly cosmetic/noisy rather than full data loss.
+There is a side-channel through _convertedInputArgs / _convertedOutputArgs, so this should be analyzed carefully and not over-corrected blindly.
+
+5. The GenAI package/dependency model appears outdated.
+UiPath.GenAI.Activities seems not to be resolving as a normal NuGet package in the target environment. This needs a dependency/model correction, not a downstream workaround.
+
+What I do NOT want
+- Do NOT propose:
+  - “extract ALL identifier references and auto-declare them”
+  - “default all unprefixed identifiers to x:String”
+  - a “last resort” late-stage undeclared-variable auto-fix pass based on the same noisy detector
+These are not safe and will likely create more garbage declarations and type bugs.
+
+What I want instead
+Please produce a revised task proposal centered on these four systemic areas:
+
+A. Declaration/name-resolution correctness
+- Fix TryCatch exception variable registration so the same name used in body expressions is the one registered and emitted
+- Fix ForEach iterator registration so the body and emitted iterator use the same authoritative name
+- Ensure declarations are resolved from authoritative workflow/spec structures before emission, not from noisy post-hoc token extraction
+
+B. Reference-scanner precision
+- Narrow the identifier/reference scanner so it no longer treats these as candidate variables:
+  - text inside string literals and escaped literals
+  - XML/entity fragments
+  - date/time format tokens
+  - CLR type names / namespaces
+  - email addresses, filenames, URLs
+  - ordinary English words in GenAI prompts and log messages
+- The scanner must become safe enough to use as a validation signal before it is used for any declaration logic
+
+C. Catalog completeness for valid properties
+- Identify the real activity/property gaps currently causing destructive stripping
+- Propose catalog fixes for those legitimate properties rather than accepting stripping as hallucination detection
+
+D. GenAI dependency correction
+- Propose the correct package/connector model for GenAI in the current UiPath environment
+- Ensure generated dependencies are based on what actually resolves in Studio/NuGet for the target profile
+
+Output format I want
+1. A short correction of the current #350 direction
+Explain clearly why “auto-declare from all linter identifiers” is unsafe.
+
+2. A revised task proposal
+Give me a rewritten task with:
+- title
+- what & why
+- done looks like
+- out of scope
+- tasks
+- relevant files
+
+3. Be explicit about what is blocking vs warning-level
+For example:
+- declaration/name mismatch is blocking
+- scanner-noise cleanup may be warning-reduction unless it currently causes bad auto-fixes
+- catalog gaps are blocking if they strip required properties
+- GenAI dependency mismatch is blocking if Studio restore fails
+
+Important
+- Ground your proposal in the latest forensic findings
+- Treat this as a systemic fix task, not a symptom patch
+- Do not broaden scope unnecessarily
+- Do not propose late-stage mutation on top of noisy detection
