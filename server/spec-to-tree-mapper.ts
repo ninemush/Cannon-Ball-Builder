@@ -1,7 +1,8 @@
-import type { WorkflowSpec, WorkflowNode, VariableDeclaration, ActivityNode } from "./workflow-spec-types";
+import type { WorkflowSpec, WorkflowNode, VariableDeclaration, ActivityNode, PropertyValue } from "./workflow-spec-types";
 import type { UiPathPackageSpec } from "./types/uipath-package";
 import type { ProcessType } from "./catalog/catalog-service";
 import type { TreeEnrichmentResult } from "./ai-xaml-enricher";
+import { isValueIntent } from "./xaml/expression-builder";
 
 type FlatWorkflow = UiPathPackageSpec["workflows"][number];
 type FlatStep = FlatWorkflow["steps"][number];
@@ -19,17 +20,28 @@ function mapVariable(v: FlatVariable): VariableDeclaration {
   };
 }
 
-function mapProperties(props: Record<string, unknown>): Record<string, string> {
-  const result: Record<string, string> = {};
+function mapProperties(props: Record<string, unknown>): Record<string, PropertyValue> {
+  const result: Record<string, PropertyValue> = {};
   for (const [key, val] of Object.entries(props)) {
     if (val === null || val === undefined) continue;
-    if (typeof val === "object") {
+    if (isValueIntent(val)) {
+      result[key] = val;
+    } else if (typeof val === "object") {
       result[key] = JSON.stringify(val);
     } else {
       result[key] = String(val);
     }
   }
   return result;
+}
+
+function propertyToString(val: PropertyValue): string {
+  if (typeof val === "string") return val;
+  if (val.type === "literal") return val.value;
+  if (val.type === "variable") return val.name;
+  if (val.type === "expression") return `${val.left} ${val.operator} ${val.right}`;
+  if (val.type === "url_with_params") return val.baseUrl;
+  return String(val);
 }
 
 function isControlFlowActivity(activityType: string): boolean {
@@ -43,7 +55,7 @@ function mapStepToNode(step: FlatStep): WorkflowNode {
   const displayName = step.activity || bare;
 
   if (bare === "If") {
-    const condition = props.Condition || props.condition || "True";
+    const condition = props.Condition ? propertyToString(props.Condition) : props.condition ? propertyToString(props.condition) : "True";
     delete props.Condition;
     delete props.condition;
     return {
@@ -56,11 +68,11 @@ function mapStepToNode(step: FlatStep): WorkflowNode {
   }
 
   if (bare === "ForEach") {
-    const values = props.Values || props.values || props.Collection || "{}";
+    const values = props.Values ? propertyToString(props.Values) : props.values ? propertyToString(props.values) : props.Collection ? propertyToString(props.Collection) : "{}";
     delete props.Values;
     delete props.values;
     delete props.Collection;
-    const itemType = props.TypeArgument || props.typeArgument || "x:Object";
+    const itemType = props.TypeArgument ? propertyToString(props.TypeArgument) : props.typeArgument ? propertyToString(props.typeArgument) : "x:Object";
     delete props.TypeArgument;
     delete props.typeArgument;
     return {
@@ -68,13 +80,13 @@ function mapStepToNode(step: FlatStep): WorkflowNode {
       displayName,
       itemType,
       valuesExpression: values,
-      iteratorName: props.IteratorName || "item",
+      iteratorName: props.IteratorName ? propertyToString(props.IteratorName) : "item",
       bodyChildren: [],
     };
   }
 
   if (bare === "While" || bare === "DoWhile") {
-    const condition = props.Condition || props.condition || "True";
+    const condition = props.Condition ? propertyToString(props.Condition) : props.condition ? propertyToString(props.condition) : "True";
     delete props.Condition;
     delete props.condition;
     return {
@@ -96,8 +108,9 @@ function mapStepToNode(step: FlatStep): WorkflowNode {
   }
 
   if (bare === "RetryScope") {
-    const retries = parseInt(props.NumberOfRetries || props.numberOfRetries || "3", 10);
-    const interval = props.RetryInterval || props.retryInterval || "00:00:05";
+    const retriesStr = props.NumberOfRetries ? propertyToString(props.NumberOfRetries) : props.numberOfRetries ? propertyToString(props.numberOfRetries) : "3";
+    const retries = parseInt(retriesStr, 10);
+    const interval = props.RetryInterval ? propertyToString(props.RetryInterval) : props.retryInterval ? propertyToString(props.retryInterval) : "00:00:05";
     delete props.NumberOfRetries;
     delete props.numberOfRetries;
     delete props.RetryInterval;

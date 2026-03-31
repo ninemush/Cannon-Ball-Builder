@@ -107,7 +107,7 @@ Based on the approved SDD and any PDD/process map context provided, generate a p
       "description": "string (what this workflow does)",
       "invokes": ["OtherWorkflowName (names of workflows this one calls via InvokeWorkflowFile)"],
       "sharedArguments": [
-        { "name": "string", "direction": "in|out|in_out", "type": "String|Int32|Boolean|DataTable|Object" }
+        { "name": "string (PascalCase)", "direction": "in|out|in_out", "type": "String|Int32|Boolean|DataTable|Dictionary<String,Object>|Array<String>|DateTime|SecureString" }
       ],
       "sharedAssets": ["asset names referenced by this workflow"]
     }
@@ -122,7 +122,8 @@ IMPORTANT RULES:
 - Only create a dedicated utility/helper workflow when the logic is genuinely reused by 2+ caller workflows (e.g., a shared login sequence)
 - Separate workflows ARE appropriate for: dispatcher/performer patterns, REFramework structure (Init/Process/End), Action Center / HITL boundaries, and genuinely distinct business sub-processes
 - The invokes array defines the invocation graph: which workflows call which via InvokeWorkflowFile
-- sharedArguments are input/output arguments that cross workflow boundaries
+- sharedArguments are input/output arguments that cross workflow boundaries. Use CONCRETE types (String, Int32, Boolean, DataTable, etc.) — never "Object" unless genuinely polymorphic. Every argument MUST specify name, direction, and type.
+- When workflow A invokes workflow B, every argument that A passes MUST be declared in B's sharedArguments with matching name, compatible direction, and same type. Callers and callees must agree exactly on argument contracts.
 - executionOrder should be topological: invoked (dependency) workflows should come BEFORE the workflows that call them, so dependencies are generated first
 - List ALL required UiPath package dependencies
 - Keep it concise — this is the project skeleton, not full workflow details
@@ -183,7 +184,11 @@ Output a JSON object with this exact shape:
       "activity": "string (human-readable step description)",
       "activityType": "string (exact UiPath activity name, e.g. ui:TypeInto, ui:Click, ui:GetText, ui:OpenBrowser, ui:ExcelApplicationScope, ui:ReadRange, ui:WriteRange, ui:SendSmtpMailMessage, ui:HttpClient, ui:Assign, If, ForEach, While, TryCatch, RetryScope, InvokeWorkflowFile)",
       "activityPackage": "string (UiPath package namespace)",
-      "properties": { "key": "value (activity-specific properties)" },
+      "properties": {
+        "PropertyName": { "type": "literal", "value": "some text or prompt content" },
+        "VariableRef": { "type": "variable", "name": "myVariable" },
+        "ConditionExpr": { "type": "expression", "left": "variableName", "operator": "=", "right": "expectedValue" }
+      },
       "selectorHint": "string or null (placeholder UI selector for UI activities)",
       "errorHandling": "retry|catch|escalate|none",
       "notes": "string (implementation notes)"
@@ -191,24 +196,36 @@ Output a JSON object with this exact shape:
   ]
 }
 
+TYPED PROPERTY VALUES:
+Every value in "properties" MUST be a typed object — NOT a bare string. Use one of:
+- { "type": "literal", "value": "..." } — for text content, prompts, display strings, file paths, fixed config values, and any value that should be treated as a string literal in XAML
+- { "type": "variable", "name": "variableName" } — for VB variable or argument references (the name without brackets; the build system adds [brackets])
+- { "type": "expression", "left": "varName", "operator": "=", "right": "value" } — for conditions and comparisons. Allowed operators: =, <>, <, >, <=, >=, Is, IsNot, Like, AndAlso, OrElse
+- { "type": "url_with_params", "baseUrl": "https://...", "params": { "key": "value" } } — for URLs with query parameters
+
+Examples:
+  "Prompt": { "type": "literal", "value": "Write a birthday email for the customer" }
+  "To": { "type": "variable", "name": "recipientEmail" }
+  "Condition": { "type": "expression", "left": "retryCount", "operator": "<", "right": "3" }
+  "Url": { "type": "url_with_params", "baseUrl": "https://api.example.com/users", "params": { "id": "userId" } }
+  "FilePath": { "type": "literal", "value": "C:\\Data\\output.xlsx" }
+  "Value": { "type": "variable", "name": "currentTransaction" }
+
 IMPORTANT RULES:
 - Use SPECIFIC UiPath activity names in activityType
 - For UI automation steps, include a selectorHint with a realistic placeholder selector
 - For system interaction steps, set errorHandling to "retry" or "catch"
 - Include ALL variables needed by the workflow
-- Include specific properties for each activity
+- Include specific properties for each activity using the typed format above
 - Map decision points to If/Switch activities
 - Map loops to ForEach/While activities
 - Be as specific and production-ready as possible
 
-ACTIVITY TREE DEPTH & INLINE ERROR HANDLING:
-- Build DEEP nested activity trees — do NOT flatten everything to a single-level sequence. Group related steps into nested Sequence activities (3-4 levels deep when appropriate).
-- Wrap error-prone operations (UI interactions, API calls, DB queries, file I/O) in inline TryCatch blocks directly at the point of use — NOT at the top level of the workflow. Each TryCatch catch block must contain a LogMessage activity with the exception details.
-- Use RetryScope around flaky operations (selector-dependent UI steps, network calls) with NumberOfRetries=3 and RetryInterval=00:00:05. Nest the target activity inside the RetryScope body.
+ERROR HANDLING:
+- Use the "errorHandling" field on each step to declare retry/catch intent. The build system handles TryCatch/RetryScope wrapping automatically.
+- Prefer flat step sequences over deeply nested control flow. Do NOT manually nest TryCatch or RetryScope activities — the builder does this for you based on the errorHandling field.
 - Wire arguments explicitly: every InvokeWorkflowFile must specify all required in/out/in_out arguments in its properties with correct variable references.
-- For multi-step business transactions, nest related activities inside a parent TryCatch so the catch block can perform cleanup/rollback of the entire sub-transaction.
-- Example deep structure: Sequence → TryCatch → Try: Sequence → RetryScope → target activity; Catch: Sequence → LogMessage + compensating action.
-- Do NOT create separate error-handler .xaml files — all error handling must be inline within the workflow using TryCatch/RetryScope activities.
+- Do NOT create separate error-handler .xaml files — all error handling belongs inline within the workflow.
 
 Return ONLY the JSON object, no other text.`;
 }
@@ -267,6 +284,69 @@ function makeStubWorkflow(entry: ScaffoldWorkflowEntry): UiPathPackageSpec["work
     variables: [],
     steps: [],
   };
+}
+
+function validateScaffoldArgumentContracts(scaffold: ScaffoldResult): string[] {
+  const errors: string[] = [];
+  const workflowNames = new Set(scaffold.workflows.map(w => w.name));
+  const argsByWorkflow = new Map<string, Map<string, { direction: string; type: string }>>();
+
+  for (const wf of scaffold.workflows) {
+    const argMap = new Map<string, { direction: string; type: string }>();
+    for (const arg of wf.sharedArguments || []) {
+      if (arg.type === "Object") {
+        errors.push(`Generic type: "${wf.name}" argument "${arg.name}" uses "Object" — specify a concrete type (String, Int32, DataTable, etc.)`);
+      }
+      argMap.set(arg.name, { direction: arg.direction, type: arg.type });
+    }
+    argsByWorkflow.set(wf.name, argMap);
+  }
+
+  for (const caller of scaffold.workflows) {
+    if (!caller.invokes?.length) continue;
+    for (const calleeName of caller.invokes) {
+      if (!workflowNames.has(calleeName)) {
+        errors.push(`"${caller.name}" invokes undeclared workflow "${calleeName}" — add it to the scaffold or remove the reference`);
+        continue;
+      }
+
+      const calleeArgs = argsByWorkflow.get(calleeName);
+      if (!calleeArgs) continue;
+      const callerArgs = argsByWorkflow.get(caller.name);
+      if (!callerArgs) continue;
+
+      for (const [argName, calleeArg] of Array.from(calleeArgs)) {
+        const callerArg = callerArgs.get(argName);
+        if (!callerArg) {
+          if (calleeArg.direction === "in" || calleeArg.direction === "in_out") {
+            errors.push(`Argument mismatch: "${caller.name}" invokes "${calleeName}" but does not declare argument "${argName}" (required ${calleeArg.direction} ${calleeArg.type})`);
+          }
+          continue;
+        }
+        if (callerArg.type !== calleeArg.type && calleeArg.type !== "Object" && callerArg.type !== "Object") {
+          errors.push(`Type mismatch: argument "${argName}" is "${callerArg.type}" in "${caller.name}" but "${calleeArg.type}" in "${calleeName}"`);
+        }
+        const directionCompatible = (
+          (calleeArg.direction === "in" && (callerArg.direction === "in" || callerArg.direction === "in_out")) ||
+          (calleeArg.direction === "out" && (callerArg.direction === "out" || callerArg.direction === "in_out")) ||
+          (calleeArg.direction === "in_out" && callerArg.direction === "in_out")
+        );
+        if (!directionCompatible) {
+          errors.push(`Direction mismatch: argument "${argName}" is "${callerArg.direction}" in "${caller.name}" but "${calleeArg.direction}" in "${calleeName}"`);
+        }
+      }
+
+      for (const [argName, callerArg] of Array.from(callerArgs)) {
+        if (!calleeArgs.has(argName)) {
+          if (callerArg.direction === "out" || callerArg.direction === "in_out") {
+            errors.push(`Argument mismatch: "${caller.name}" declares argument "${argName}" (${callerArg.direction} ${callerArg.type}) but callee "${calleeName}" does not declare it — caller cannot write to undeclared callee argument`);
+          }
+        }
+      }
+    }
+  }
+
+  return errors;
 }
 
 function parseScaffold(rawText: string): ScaffoldResult {
@@ -376,7 +456,9 @@ function mergeSpec(
     if (wf.steps) {
       for (const step of wf.steps) {
         if (step.activityType === "InvokeWorkflowFile" && step.properties?.["WorkflowFileName"]) {
-          const targetName = String(step.properties["WorkflowFileName"]).replace(/\.xaml$/i, "");
+          const wfProp = step.properties["WorkflowFileName"];
+          const wfFileName = typeof wfProp === "string" ? wfProp : (wfProp && typeof wfProp === "object" && "type" in wfProp && wfProp.type === "literal" && "value" in wfProp ? String(wfProp.value) : String(wfProp));
+          const targetName = wfFileName.replace(/\.xaml$/i, "");
           if (!scaffoldNameSet.has(targetName)) {
             warnings.push(`Workflow "${wf.name}" references undeclared workflow "${targetName}" via InvokeWorkflowFile`);
           }
@@ -493,6 +575,20 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     runLogger.stageEnd("spec_scaffold", "failed", undefined, err?.message);
     onPipelineProgress?.({ type: "failed", stage: "spec_scaffold", message: "Failed to parse scaffold" });
     throw new Error(`Scaffold parse failed: ${err?.message}`);
+  }
+
+  const argumentErrors = validateScaffoldArgumentContracts(scaffold);
+  if (argumentErrors.length > 0) {
+    const errorSummary = argumentErrors.join("; ");
+    console.error(`[SpecDecomposer] Run ${runId}: Scaffold argument contract violations (${argumentErrors.length}): ${errorSummary}`);
+    runLogger.stageEnd("spec_scaffold", "failed", undefined, `Argument contract violations: ${errorSummary}`);
+    onPipelineProgress?.({
+      type: "failed",
+      stage: "spec_scaffold",
+      message: `Scaffold has ${argumentErrors.length} argument contract violation(s) — halting before detail generation`,
+      context: { errors: argumentErrors },
+    });
+    throw new Error(`Scaffold argument contract violations (${argumentErrors.length}): ${errorSummary}`);
   }
 
   let executionOrder: string[];

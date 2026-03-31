@@ -1478,7 +1478,8 @@ function assembleTryCatchNode(
     const targetSystemHints: string[] = [];
     for (const child of node.tryChildren) {
       if (child.kind === "activity" && child.properties) {
-        const sys = child.properties.Application || child.properties.BrowserType || child.properties.Target || child.properties.WorkflowFileName || "";
+        const sysRaw = child.properties.Application || child.properties.BrowserType || child.properties.Target || child.properties.WorkflowFileName || "";
+        const sys = typeof sysRaw === "string" ? sysRaw : (isValueIntent(sysRaw) ? (sysRaw.type === "literal" ? sysRaw.value : sysRaw.type === "variable" ? sysRaw.name : String(sysRaw)) : String(sysRaw));
         if (sys) targetSystemHints.push(sys);
       }
     }

@@ -1,7 +1,25 @@
 import { z } from "zod";
 import type { EnrichmentResult } from "../ai-xaml-enricher";
+import { ValueIntentSchema } from "../xaml/expression-builder";
 
 const VALID_ERROR_HANDLING = new Set(["retry", "catch", "escalate", "none"]);
+
+const PropertyValueInputSchema = z.preprocess(
+  (val) => {
+    if (val === null || val === undefined) return { type: "literal", value: "" };
+    if (typeof val === "number" || typeof val === "boolean") return { type: "literal", value: String(val) };
+    if (typeof val === "string") return { type: "literal", value: val };
+    if (typeof val === "object") {
+      const obj = val as Record<string, unknown>;
+      if (obj.type === "literal" || obj.type === "variable" || obj.type === "url_with_params" || obj.type === "expression") {
+        return val;
+      }
+      return { type: "literal", value: JSON.stringify(val) };
+    }
+    return { type: "literal", value: String(val) };
+  },
+  ValueIntentSchema,
+);
 
 export const uipathPackageSchema = z.object({
   projectName: z.string().default("UiPathPackage"),
@@ -20,7 +38,7 @@ export const uipathPackageSchema = z.object({
       activity: z.string().default("Activity"),
       activityType: z.string().optional().default("ui:Comment"),
       activityPackage: z.string().optional().default("UiPath.System.Activities"),
-      properties: z.record(z.unknown()).default({}),
+      properties: z.record(PropertyValueInputSchema).default({}),
       selectorHint: z.preprocess(
         v => typeof v === "object" && v !== null ? JSON.stringify(v) : v,
         z.string().nullable().optional().default(null)

@@ -413,6 +413,8 @@ Generate the enriched workflow specification. For each node, provide the specifi
             if (typeof propVal !== "string") {
               if (propVal === null || propVal === undefined) {
                 delete act.properties[propKey];
+              } else if (isValueIntent(propVal)) {
+                continue;
               } else if (typeof propVal === "object") {
                 if (propKey.toLowerCase().includes("header")) {
                   const entries = Object.entries(propVal as Record<string, any>);
