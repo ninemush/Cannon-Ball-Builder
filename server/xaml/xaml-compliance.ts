@@ -989,6 +989,13 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
   const additionalAssemblyRefs = buildDynamicAssemblyRefs(usedPackages, xml);
   const additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages);
 
+  if (usedPackages.size > 0) {
+    const packageList = Array.from(usedPackages).filter(p => p !== "UiPath.System.Activities" && p !== "UiPath.UIAutomation.Activities");
+    if (packageList.length > 0) {
+      console.log(`[XAML Compliance] Dynamic namespace injection: detected packages [${packageList.join(", ")}]`);
+    }
+  }
+
   if (additionalXmlns) {
     const xmlnsInsertPoint = xml.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
     if (xmlnsInsertPoint >= 0) {
@@ -998,18 +1005,16 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
   }
 
   if (additionalAssemblyRefs) {
-    const refsCloseTag = "</sco:Collection>\n  </TextExpression.ReferencesForImplementation>";
-    const refsIdx = xml.indexOf(refsCloseTag);
-    if (refsIdx >= 0) {
-      xml = xml.slice(0, refsIdx) + additionalAssemblyRefs + "\n" + xml.slice(refsIdx);
+    const refsMatch = xml.match(/<\/sco:Collection>\s*<\/TextExpression\.ReferencesForImplementation>/);
+    if (refsMatch && refsMatch.index !== undefined) {
+      xml = xml.slice(0, refsMatch.index) + additionalAssemblyRefs + "\n" + xml.slice(refsMatch.index);
     }
   }
 
   if (additionalNamespaceImports) {
-    const importsCloseTag = "</sco:Collection>\n  </TextExpression.NamespacesForImplementation>";
-    const importsIdx = xml.indexOf(importsCloseTag);
-    if (importsIdx >= 0) {
-      xml = xml.slice(0, importsIdx) + additionalNamespaceImports + "\n" + xml.slice(importsIdx);
+    const importsMatch = xml.match(/<\/sco:Collection>\s*<\/TextExpression\.NamespacesForImplementation>/);
+    if (importsMatch && importsMatch.index !== undefined) {
+      xml = xml.slice(0, importsMatch.index) + additionalNamespaceImports + "\n" + xml.slice(importsMatch.index);
     }
   }
 

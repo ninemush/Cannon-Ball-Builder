@@ -2582,11 +2582,13 @@ export function generateRichXamlFromNodes(
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(workflowName.replace(/\s+/g, "_"))}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
@@ -2784,11 +2786,13 @@ export function generateRichXamlFromSpec(
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(wfName.replace(/\s+/g, "_"))}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 ${xMembersBlockSpec}  <Sequence DisplayName="${escapeXml(wfName)}">
@@ -2858,6 +2862,7 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
 
   const nsS = isCSharp ? "System.Runtime" : "mscorlib";
   const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
   const sq = `&quot;`;
 
   const excelBlock = isCSharp
@@ -2886,11 +2891,13 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
 <Activity mc:Ignorable="sap sap2010" x:Class="InitAllSettings"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <x:Members>
@@ -3170,10 +3177,12 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
 <Activity mc:Ignorable="sap sap2010" x:Class="GetTransactionData"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <x:Members>
@@ -3206,6 +3215,7 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
   const concat = isCSharp ? " + " : " &amp; ";
   const nsS = isCSharp ? "System.Runtime" : "mscorlib";
   const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
   const screenshotDefault = isCSharp
     ? `&quot;Screenshots/Error_&quot; + DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;) + &quot;.png&quot;`
     : `&quot;Screenshots/Error_&quot; &amp; DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;) &amp; &quot;.png&quot;`;
@@ -3216,10 +3226,12 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
 <Activity mc:Ignorable="sap sap2010" x:Class="SetTransactionStatus"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <x:Members>
@@ -3268,6 +3280,7 @@ export function generateCloseAllApplicationsXaml(targetFramework: TargetFramewor
   const isCrossPlatform = targetFramework === "Portable";
   const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
   const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
+  const nsSco = isCrossPlatform ? "System.Runtime" : "mscorlib";
 
   const closeBody = isCrossPlatform
     ? `<ui:LogMessage Level="Info" Message="[&quot;Closing all applications (Cross-Platform mode)...&quot;]" DisplayName="Log Cleanup Start" />
@@ -3285,10 +3298,12 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not ava
 <Activity mc:Ignorable="sap sap2010" x:Class="CloseAllApplications"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Close All Applications">
@@ -3332,6 +3347,7 @@ export function generateKillAllProcessesXaml(targetFramework: TargetFramework = 
   const isCrossPlatform = targetFramework === "Portable";
   const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
   const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
+  const nsSco = isCrossPlatform ? "System.Runtime" : "mscorlib";
 
   const killBody = isCrossPlatform
     ? `<ui:LogMessage Level="Warn" Message="[&quot;Process cleanup requested (Cross-Platform mode — KillProcess not available on Serverless)&quot;]" DisplayName="Log Kill Start" />
@@ -3349,10 +3365,12 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — KillProcess not availabl
 <Activity mc:Ignorable="sap sap2010" x:Class="KillAllProcesses"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=${nsS}"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Kill All Processes">
