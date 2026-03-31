@@ -41,6 +41,7 @@ import {
 } from "./meta-validation";
 import { classifyComplexity, estimateComplexityFromContext, type ComplexityTier, type ComplexityClassification } from "./complexity-classifier";
 import { recordPipelineHealth, computePipelineHealthFromResult } from "./pipeline-health";
+import { runFinalArtifactValidation, type FinalQualityReport } from "./final-artifact-validation";
 
 export type { GenerationMode };
 export type { ComplexityTier, ComplexityClassification };
@@ -313,6 +314,7 @@ export interface PipelineResult {
   templateComplianceScore?: number;
   metaValidationResult?: MetaValidationResult;
   outcomeReport?: PipelineOutcomeReport;
+  finalQualityReport?: FinalQualityReport;
 }
 
 export interface DhgResult {
@@ -481,6 +483,7 @@ function buildDhgFromBuildResult(
   buildResult: BuildResult,
   overrideXamlEntries?: { name: string; content: string }[],
   generationMode?: GenerationMode,
+  finalQualityReport?: FinalQualityReport,
 ): DhgResult {
   const sddContent = ctx.sdd?.content || "";
   const workflows = pkg.workflows || [];
@@ -491,11 +494,16 @@ function buildDhgFromBuildResult(
     return baseName.replace(/\.xaml$/i, "");
   });
 
-  const analysisReports: Array<{ fileName: string; report: AnalysisReport }> = [];
-  for (const entry of xamlEntries) {
-    const { report } = analyzeAndFix(entry.content);
-    analysisReports.push({ fileName: entry.name, report });
-  }
+  const analysisReports: Array<{ fileName: string; report: AnalysisReport }> = finalQualityReport
+    ? finalQualityReport.analysisReports
+    : (() => {
+        const reports: Array<{ fileName: string; report: AnalysisReport }> = [];
+        for (const entry of xamlEntries) {
+          const { report } = analyzeAndFix(entry.content);
+          reports.push({ fileName: entry.name, report });
+        }
+        return reports;
+      })();
 
   const enrichment = pkg.internal?.enrichment || null;
   const useReFramework = enrichment?.useReFramework ?? pkg.internal?.useReFramework ?? false;
@@ -509,28 +517,46 @@ function buildDhgFromBuildResult(
 
   let dhgContent = "";
 
-  if (buildResult.outcomeReport) {
-    const qualityWarningCount = buildResult.outcomeReport.qualityWarnings.length;
-    const remediationCount = buildResult.outcomeReport.remediations.length + buildResult.outcomeReport.propertyRemediations.length;
+  const effectiveOutcomeReport = finalQualityReport?.outcomeContext || buildResult.outcomeReport;
+
+  if (effectiveOutcomeReport) {
+    const qualityWarningCount = effectiveOutcomeReport.qualityWarnings.length;
+    const remediationCount = effectiveOutcomeReport.remediations.length + effectiveOutcomeReport.propertyRemediations.length;
 
     const plannedWfNames = workflows.map((wf: { name?: string }) => (wf.name || "Workflow").replace(/\s+/g, "_"));
     const archiveWfNames = new Set(effectiveWfNames);
-    const stubRemediations = buildResult.outcomeReport.remediations.filter(r => r.remediationCode === "STUB_WORKFLOW_BLOCKING");
-    const stubFileNames = new Set(stubRemediations.map(r => r.file.replace(/\.xaml$/i, "")));
-    const entryPointStubbed = stubFileNames.has("Main");
-    const plannedButMissingCount = plannedWfNames.filter(n => !archiveWfNames.has(n)).length;
 
-    const pipelineStudioBlocked = buildResult.outcomeReport?.studioCompatibility?.filter(
-      sc => sc.level === "studio-blocked"
-    ).length ?? stubFileNames.size;
-    const pipelineStudioLoadable = archiveWfNames.size - pipelineStudioBlocked;
+    let entryPointStubbed: boolean;
+    let stubCount: number;
+    let studioBlockedCount: number;
+    let studioLoadableCount: number;
+
+    if (finalQualityReport) {
+      entryPointStubbed = finalQualityReport.perFileResults.some(
+        r => r.file === "Main.xaml" && (r.studioCompatibilityLevel === "studio-blocked" || r.hasStubContent)
+      );
+      stubCount = finalQualityReport.perFileResults.filter(r => r.hasStubContent).length;
+      studioBlockedCount = finalQualityReport.aggregatedStats.studioBlockedCount;
+      studioLoadableCount = Math.max(0, archiveWfNames.size - studioBlockedCount);
+    } else {
+      const stubRemediations = effectiveOutcomeReport.remediations.filter(r => r.remediationCode === "STUB_WORKFLOW_BLOCKING");
+      const stubFileNames = new Set(stubRemediations.map(r => r.file.replace(/\.xaml$/i, "")));
+      entryPointStubbed = stubFileNames.has("Main");
+      stubCount = stubFileNames.size;
+      studioBlockedCount = effectiveOutcomeReport?.studioCompatibility?.filter(
+        sc => sc.level === "studio-blocked"
+      ).length ?? stubFileNames.size;
+      studioLoadableCount = Math.max(0, archiveWfNames.size - studioBlockedCount);
+    }
+
+    const plannedButMissingCount = plannedWfNames.filter(n => !archiveWfNames.has(n)).length;
     const stubAwareness = {
       entryPointStubbed,
-      stubCount: stubFileNames.size,
+      stubCount,
       totalWorkflowCount: archiveWfNames.size,
       plannedButMissingCount,
-      studioLoadableCount: Math.max(0, pipelineStudioLoadable),
-      studioBlockedCount: pipelineStudioBlocked,
+      studioLoadableCount,
+      studioBlockedCount,
     };
 
     const upstreamContext: UpstreamContext = {
@@ -539,9 +565,9 @@ function buildDhgFromBuildResult(
       automationTypeRationale: ctx.idea.automationTypeRationale || undefined,
       feasibilityComplexity: ctx.idea.feasibilityComplexity || undefined,
       feasibilityEffortEstimate: ctx.idea.feasibilityEffortEstimate || undefined,
-      qualityWarnings: buildResult.outcomeReport.qualityWarnings.map(w => ({
-        code: w.code,
-        message: w.message,
+      qualityWarnings: effectiveOutcomeReport.qualityWarnings.map(w => ({
+        code: w.check,
+        message: w.detail,
         severity: w.severity,
       })),
     };
@@ -615,7 +641,7 @@ function buildDhgFromBuildResult(
       sddArtifacts = parseArtifactBlockAsObject(ctx.sdd.content);
     }
 
-    const pipelineEmptyContainerCount = buildResult.outcomeReport.qualityWarnings.filter(
+    const pipelineEmptyContainerCount = effectiveOutcomeReport.qualityWarnings.filter(
       w => w.check === "empty-container"
     ).length;
     const analysis = runDhgAnalysis(
@@ -629,16 +655,19 @@ function buildDhgFromBuildResult(
       stubAwareness,
       pipelineEmptyContainerCount,
     );
-    analysis.hasBlockedWorkflows = buildResult.outcomeReport?.studioCompatibility?.some(
-      sc => sc.level === "studio-blocked"
-    ) ?? false;
+    analysis.hasBlockedWorkflows = finalQualityReport
+      ? finalQualityReport.aggregatedStats.studioBlockedCount > 0
+      : (effectiveOutcomeReport?.studioCompatibility?.some(
+          sc => sc.level === "studio-blocked"
+        ) ?? false);
     const dhgContext: DhgContext = {
       projectName,
       workflowNames: effectiveWfNames,
       generationMode: generationMode || undefined,
       analysis,
+      finalQualityReport: finalQualityReport || undefined,
     };
-    dhgContent = generateDhgFromOutcomeReport(buildResult.outcomeReport, dhgContext);
+    dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
     const syntheticReport: PipelineOutcomeReport = {
       remediations: [],
@@ -1369,9 +1398,41 @@ export async function compilePackageFromSpecs(
       } catch (e) { /* best-effort */ }
     }
 
+    tracker.start("final_artifact_validation", "Running final artifact truth gate");
+    let finalQualityReport: FinalQualityReport | undefined;
+    try {
+      finalQualityReport = runFinalArtifactValidation({
+        xamlEntries: finalXamlEntries,
+        projectJsonContent: buildResult.projectJsonContent || "{}",
+        targetFramework: "Windows",
+        archiveManifest: buildResult.archiveManifest,
+        archiveContentHashes: {},
+        hasNupkg,
+        contextMetadata: {
+          downgrades,
+          usedAIFallback,
+          pipelineWarnings,
+          metaValidationFlatStructureWarnings: metaValidationResult?.flatStructureWarnings,
+          outcomeReport: buildResult.outcomeReport,
+        },
+      });
+      console.log(`[Pipeline] Final artifact validation: status=${finalQualityReport.derivedStatus}, reason="${finalQualityReport.statusReason}", files=${finalQualityReport.aggregatedStats.totalFiles}, errors=${finalQualityReport.aggregatedStats.totalErrors}, warnings=${finalQualityReport.aggregatedStats.totalWarnings}`);
+      tracker.complete("final_artifact_validation", `Final validation: ${finalQualityReport.derivedStatus}`, {
+        status: finalQualityReport.derivedStatus,
+        totalFiles: finalQualityReport.aggregatedStats.totalFiles,
+        studioBlocked: finalQualityReport.aggregatedStats.studioBlockedCount,
+        studioWarnings: finalQualityReport.aggregatedStats.studioWarningsCount,
+      });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Pipeline] Final artifact validation failed: ${errMsg}`);
+      tracker.warn("final_artifact_validation", `Validation error: ${errMsg}`);
+      tracker.complete("final_artifact_validation", "Final validation fell back to intermediate signals");
+    }
+
     tracker.start("packaging_dhg_guide", "Generating Developer Handoff Guide");
     tracker.heartbeat("packaging_dhg_guide", () => "Analyzing workflows and writing guide");
-    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode);
+    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport);
     tracker.complete("packaging_dhg_guide", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
@@ -1382,23 +1443,24 @@ export async function compilePackageFromSpecs(
       }
     }
 
-    const entryPointIsStubbed = buildResult.outcomeReport?.remediations.some(
-      r => (r.remediationCode === "STUB_WORKFLOW_BLOCKING" || r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE") && (r.file === "Main.xaml" || r.file === "Main")
-    ) ?? false;
-    const hasStructuralBlockers = buildResult.outcomeReport?.studioCompatibility?.some(
-      sc => sc.level === "studio-blocked"
-    ) ?? false;
-    const hasDegradation = downgrades.length > 0 || usedAIFallback || entryPointIsStubbed || hasStructuralBlockers;
-    const hasStructuralWarnings = buildResult.outcomeReport?.studioCompatibility?.some(
-      sc => sc.level === "studio-warnings"
-    ) ?? false;
-    const finalStatus: PackageStatus = !hasNupkg
-      ? "FAILED"
-      : hasDegradation
-        ? "FALLBACK_READY"
-        : (hasStructuralWarnings || pipelineWarnings.length > 0 || metaValidationResult?.flatStructureWarnings)
-          ? "READY_WITH_WARNINGS"
-          : "READY";
+    const finalStatus: PackageStatus = finalQualityReport
+      ? finalQualityReport.derivedStatus
+      : (() => {
+          const entryPointIsStubbed = buildResult.outcomeReport?.remediations.some(
+            r => (r.remediationCode === "STUB_WORKFLOW_BLOCKING" || r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE") && (r.file === "Main.xaml" || r.file === "Main")
+          ) ?? false;
+          const hasStructuralBlockers = buildResult.outcomeReport?.studioCompatibility?.some(
+            sc => sc.level === "studio-blocked"
+          ) ?? false;
+          const hasDegradation = downgrades.length > 0 || usedAIFallback || entryPointIsStubbed || hasStructuralBlockers;
+          const hasStructuralWarnings = buildResult.outcomeReport?.studioCompatibility?.some(
+            sc => sc.level === "studio-warnings"
+          ) ?? false;
+          if (!hasNupkg) return "FAILED" as PackageStatus;
+          if (hasDegradation) return "FALLBACK_READY" as PackageStatus;
+          if (hasStructuralWarnings || pipelineWarnings.length > 0 || metaValidationResult?.flatStructureWarnings) return "READY_WITH_WARNINGS" as PackageStatus;
+          return "READY" as PackageStatus;
+        })();
 
     if (options?.runId) {
       try {
@@ -1420,7 +1482,7 @@ export async function compilePackageFromSpecs(
       packageBuffer: finalPackageBuffer,
       gaps: buildResult.gaps,
       usedPackages: buildResult.usedPackages,
-      qualityGateResult: postCorrectionQualityGate || buildResult.qualityGateResult,
+      qualityGateResult: finalQualityReport?.qualityGateResult || postCorrectionQualityGate || buildResult.qualityGateResult,
       cacheHit: buildResult.cacheHit,
       dhgContent: dhgResult.dhgContent,
       projectName: dhgResult.projectName,
@@ -1439,6 +1501,7 @@ export async function compilePackageFromSpecs(
       templateComplianceScore,
       metaValidationResult,
       outcomeReport: buildResult.outcomeReport,
+      finalQualityReport,
     };
 
     evictOldestPipelineCacheEntry();
@@ -1653,26 +1716,30 @@ export async function generateDhg(
   const cached = getCachedPipelineResult(ideaId);
   if (cached) {
     console.log(`[Pipeline] Serving cached DHG for ${ideaId}`);
+    const cachedReports = cached.finalQualityReport?.analysisReports
+      || cached.xamlEntries.map(e => {
+        const { report } = analyzeAndFix(e.content);
+        return { fileName: e.name, report };
+      });
     return {
       dhgContent: cached.dhgContent,
       projectName: cached.projectName,
-      analysisReports: cached.xamlEntries.map(e => {
-        const { report } = analyzeAndFix(e.content);
-        return { fileName: e.name, report };
-      }),
+      analysisReports: cachedReports,
     };
   }
 
   console.log(`[Pipeline] No cached result for DHG — running full pipeline for ${ideaId}`);
   const pipelineResult = await generateUiPathPackage(ideaId, pkg);
 
+  const reports = pipelineResult.finalQualityReport?.analysisReports
+    || pipelineResult.xamlEntries.map(e => {
+      const { report } = analyzeAndFix(e.content);
+      return { fileName: e.name, report };
+    });
   return {
     dhgContent: pipelineResult.dhgContent,
     projectName: pipelineResult.projectName,
-    analysisReports: pipelineResult.xamlEntries.map(e => {
-      const { report } = analyzeAndFix(e.content);
-      return { fileName: e.name, report };
-    }),
+    analysisReports: reports,
   };
 }
 

@@ -4,6 +4,7 @@ import type {
   PerWorkflowStudioCompatibility,
 } from "./uipath-pipeline";
 import type { DhgAnalysisResult, SddArtifactCrossReference } from "./xaml/dhg-analyzers";
+import type { FinalQualityReport } from "./final-artifact-validation";
 
 export interface DhgContext {
   projectName: string;
@@ -12,6 +13,7 @@ export interface DhgContext {
   generationModeReason?: string;
   generatedDate?: string;
   analysis?: DhgAnalysisResult;
+  finalQualityReport?: FinalQualityReport;
 }
 
 export function generateDhgFromOutcomeReport(
@@ -40,10 +42,14 @@ export function generateDhgFromOutcomeReport(
   const totalWorkflowRemediations = report.remediations.filter(r => r.level === "workflow").length;
   const totalRemediations = totalPropertyRemediations + report.remediations.length;
 
-  const hasStubs = totalWorkflowRemediations > 0 || totalActivityRemediations > 0 || totalSequenceRemediations > 0 || totalStructuralLeafRemediations > 0;
-  const hasStructuralDefects = report.studioCompatibility?.some(
-    (sc: PerWorkflowStudioCompatibility) => sc.level === "studio-blocked"
-  ) ?? false;
+  const hasStubs = context.finalQualityReport
+    ? context.finalQualityReport.perFileResults.some(r => r.hasStubContent)
+    : (totalWorkflowRemediations > 0 || totalActivityRemediations > 0 || totalSequenceRemediations > 0 || totalStructuralLeafRemediations > 0);
+  const hasStructuralDefects = context.finalQualityReport
+    ? context.finalQualityReport.aggregatedStats.studioBlockedCount > 0
+    : (report.studioCompatibility?.some(
+        (sc: PerWorkflowStudioCompatibility) => sc.level === "studio-blocked"
+      ) ?? false);
   const transitiveDependencyWarnings = report.qualityWarnings.filter(
     w => w.check === "transitive-dependency-missing" || w.check === "error-activity-reference" || w.check === "unresolved-type-argument"
   );
@@ -83,30 +89,55 @@ export function generateDhgFromOutcomeReport(
     md += `No workflows were generated without remediation.\n\n`;
   }
 
+  const fqr = context.finalQualityReport;
+
   if (context.workflowNames.length > 0) {
     md += `### Workflow Inventory\n\n`;
     md += `| # | Workflow | Status |\n`;
     md += `|---|----------|--------|\n`;
     const studioCompat = report.studioCompatibility || [];
     context.workflowNames.forEach((wf, i) => {
-      const isStubbed = report.remediations.some(
-        r => (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE" || r.remediationCode === "STUB_WORKFLOW_BLOCKING") && (r.file === `${wf}.xaml` || r.file === wf)
-      );
-      const isFullyGenerated = report.fullyGeneratedFiles.some(f => f === `${wf}.xaml` || f === wf);
-      const hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
-        r => r.file === `${wf}.xaml` || r.file === wf
-      );
-      const hasPlaceholders = report.qualityWarnings.some(
-        w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
-      );
-      const studioEntry = studioCompat.find(
-        (s: PerWorkflowStudioCompatibility) => s.file === `${wf}.xaml` || s.file === wf
-      );
-      const isStudioBlocked = studioEntry && studioEntry.level === "studio-blocked";
+      let isStubbed: boolean;
+      let isStudioBlocked = false;
+      let failureSummary: string | undefined;
+      let isFullyGenerated: boolean;
+      let hasRemediation: boolean;
+      let hasPlaceholders: boolean;
+
+      if (fqr) {
+        const fqrEntry = fqr.perFileResults.find(r => r.file === `${wf}.xaml` || r.file === wf);
+        isStubbed = fqrEntry?.hasStubContent ?? false;
+        isStudioBlocked = fqrEntry?.studioCompatibilityLevel === "studio-blocked";
+        if (isStudioBlocked && fqrEntry) {
+          failureSummary = fqrEntry.blockers.slice(0, 2).join("; ");
+        }
+        isFullyGenerated = fqrEntry ? !fqrEntry.hasStubContent && fqrEntry.studioCompatibilityLevel !== "studio-blocked" : false;
+        hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
+          r => r.file === `${wf}.xaml` || r.file === wf
+        );
+        hasPlaceholders = report.qualityWarnings.some(
+          w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
+        );
+      } else {
+        isStubbed = report.remediations.some(
+          r => (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE" || r.remediationCode === "STUB_WORKFLOW_BLOCKING") && (r.file === `${wf}.xaml` || r.file === wf)
+        );
+        const studioEntry = studioCompat.find(
+          (s: PerWorkflowStudioCompatibility) => s.file === `${wf}.xaml` || s.file === wf
+        );
+        isStudioBlocked = studioEntry?.level === "studio-blocked";
+        failureSummary = studioEntry?.failureSummary;
+        isFullyGenerated = report.fullyGeneratedFiles.some(f => f === `${wf}.xaml` || f === wf);
+        hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
+          r => r.file === `${wf}.xaml` || r.file === wf
+        );
+        hasPlaceholders = report.qualityWarnings.some(
+          w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
+        );
+      }
 
       let status: string;
       if (isStubbed || isStudioBlocked) {
-        const failureSummary = studioEntry?.failureSummary;
         status = failureSummary
           ? `Structurally invalid — ${failureSummary}`
           : "Structurally invalid (not Studio-loadable)";
@@ -124,27 +155,37 @@ export function generateDhgFromOutcomeReport(
     md += `\n`;
   }
 
-  if (report.studioCompatibility && report.studioCompatibility.length > 0) {
+  const studioCompatData = fqr
+    ? fqr.perFileResults.map(r => ({
+        file: r.file,
+        level: r.studioCompatibilityLevel,
+        blockers: r.blockers,
+        failureCategory: undefined as string | undefined,
+        failureSummary: r.blockers.length > 0 ? r.blockers.slice(0, 2).join("; ") : undefined,
+      }))
+    : (report.studioCompatibility || []);
+
+  if (studioCompatData.length > 0) {
     md += `### Studio Compatibility\n\n`;
     md += `| # | Workflow | Compatibility | Failure Category | Blockers |\n`;
     md += `|---|----------|--------------|-----------------|----------|\n`;
-    report.studioCompatibility.forEach((sc, i) => {
+    studioCompatData.forEach((sc, i) => {
       const levelLabel = sc.level === "studio-clean"
         ? "Studio-openable"
         : sc.level === "studio-warnings"
           ? "Openable with warnings"
           : "Structurally invalid — not Studio-loadable";
       const categoryLabel = sc.failureCategory
-        ? sc.failureCategory.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+        ? sc.failureCategory.replace(/-/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
         : sc.level === "studio-clean" ? "—" : "Unclassified";
       const blockerSummary = sc.blockers.length > 0
-        ? sc.blockers.slice(0, 3).map(b => b.length > 80 ? b.slice(0, 77) + "..." : b).join("; ").replace(/\|/g, "\\|")
+        ? sc.blockers.slice(0, 3).map((b: string) => b.length > 80 ? b.slice(0, 77) + "..." : b).join("; ").replace(/\|/g, "\\|")
         : "—";
       md += `| ${i + 1} | \`${sc.file}\` | ${levelLabel} | ${categoryLabel} | ${blockerSummary} |\n`;
     });
-    const blocked = report.studioCompatibility.filter(sc => sc.level === "studio-blocked");
-    const warnings = report.studioCompatibility.filter(sc => sc.level === "studio-warnings");
-    const clean = report.studioCompatibility.filter(sc => sc.level === "studio-clean");
+    const blocked = studioCompatData.filter(sc => sc.level === "studio-blocked");
+    const warnings = studioCompatData.filter(sc => sc.level === "studio-warnings");
+    const clean = studioCompatData.filter(sc => sc.level === "studio-clean");
     md += `\n`;
     md += `**Summary:** ${clean.length} Studio-loadable, ${warnings.length} with warnings, ${blocked.length} not Studio-loadable\n\n`;
     if (blocked.length > 0) {
