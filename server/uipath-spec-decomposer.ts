@@ -5,6 +5,7 @@ import { repairTruncatedPackageJson } from "./uipath-prompts";
 import { storage } from "./storage";
 import { RunLogger } from "./lib/run-logger";
 import { sanitizeValueIntentExpressions } from "./xaml/expression-builder";
+import { buildCompactCatalogSummary } from "./catalog/xaml-template-builder";
 
 const SCAFFOLD_MAX_TOKENS = 4096;
 const SCAFFOLD_RETRY_LIMIT = 3;
@@ -168,6 +169,7 @@ WORKFLOW PURPOSE:
 ${workflow.description}
 ${workflow.invokes?.length ? `This workflow invokes: ${workflow.invokes.join(", ")}` : ""}
 
+${buildCompactCatalogSummary() || ""}
 Output a JSON object with this exact shape:
 {
   "name": "${workflow.name}",
@@ -183,7 +185,7 @@ Output a JSON object with this exact shape:
   "steps": [
     {
       "activity": "string (human-readable step description)",
-      "activityType": "string (exact UiPath activity name, e.g. ui:TypeInto, ui:Click, ui:GetText, ui:OpenBrowser, ui:ExcelApplicationScope, ui:ReadRange, ui:WriteRange, ui:SendSmtpMailMessage, ui:HttpClient, ui:Assign, If, ForEach, While, TryCatch, RetryScope, InvokeWorkflowFile)",
+      "activityType": "string (exact UiPath activity name from the AVAILABLE ACTIVITIES catalog below)",
       "activityPackage": "string (UiPath package namespace)",
       "properties": {
         "PropertyName": { "type": "literal", "value": "some text or prompt content" },
@@ -200,18 +202,28 @@ Output a JSON object with this exact shape:
 
 TYPED PROPERTY VALUES:
 Every value in "properties" MUST be a typed object — NOT a bare string. Use one of:
-- { "type": "literal", "value": "..." } — for text content, prompts, display strings, file paths, fixed config values, and any value that should be treated as a string literal in XAML
+- { "type": "literal", "value": "..." } — for text content, prompts, display strings, file paths, fixed config values, enum values, and any value that should be treated as a string literal in XAML
 - { "type": "variable", "name": "variableName" } — for VB variable or argument references (the name without brackets; the build system adds [brackets])
 - { "type": "expression", "left": "varName", "operator": "=", "right": "value" } — for conditions and comparisons. Allowed operators: =, <>, <, >, <=, >=, Is, IsNot, Like, AndAlso, OrElse
 - { "type": "url_with_params", "baseUrl": "https://...", "params": { "key": "value" } } — for URLs with query parameters
 
-Examples:
+CORRECT Examples:
   "Prompt": { "type": "literal", "value": "Write a birthday email for the customer" }
   "To": { "type": "variable", "name": "recipientEmail" }
   "Condition": { "type": "expression", "left": "retryCount", "operator": "<", "right": "3" }
   "Url": { "type": "url_with_params", "baseUrl": "https://api.example.com/users", "params": { "id": "userId" } }
   "FilePath": { "type": "literal", "value": "C:\\Data\\output.xlsx" }
   "Value": { "type": "variable", "name": "currentTransaction" }
+  "Level": { "type": "literal", "value": "Info" }
+  "Priority": { "type": "literal", "value": "Normal" }
+
+ENUM PROPERTIES — enum-typed properties (LogMessage Level, AddQueueItem Priority, etc.) MUST use { "type": "literal", "value": "ValidEnumValue" } with ONLY catalog-valid values. Never use a bare string for enum values.
+
+WRONG (do NOT do this):
+  ✗ "Level": "Info"                      → MUST be { "type": "literal", "value": "Info" }
+  ✗ "To": "str_Email"                    → MUST be { "type": "variable", "name": "str_Email" }
+  ✗ "Message": "str_LogMessage"          → MUST be { "type": "variable", "name": "str_LogMessage" }
+  ✗ "Priority": { "type": "variable", "name": "High" } → "High" is an enum value, not a variable — use { "type": "literal", "value": "High" }
 
 IMPORTANT RULES:
 - Use SPECIFIC UiPath activity names in activityType

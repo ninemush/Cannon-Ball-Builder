@@ -153,6 +153,71 @@ export function normalizeStringToExpression(val: string): string {
   return `"${escaped}"`;
 }
 
+export function normalizePropertyToValueIntent(
+  value: string,
+  activityClassName?: string,
+  propertyName?: string,
+  getEnumValues?: (className: string, propName: string) => string[] | null,
+): ValueIntent {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { type: "literal", value: "" };
+  }
+
+  if (activityClassName && propertyName && getEnumValues) {
+    const validValues = getEnumValues(activityClassName, propertyName);
+    if (validValues && validValues.length > 0) {
+      if (validValues.includes(trimmed)) {
+        return { type: "literal", value: trimmed };
+      }
+      const lowerMap = new Map(validValues.map(v => [v.toLowerCase(), v]));
+      const matched = lowerMap.get(trimmed.toLowerCase());
+      if (matched) {
+        return { type: "literal", value: matched };
+      }
+    }
+  }
+
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const inner = trimmed.slice(1, -1).trim();
+    if (VARIABLE_NAME_ONLY.test(inner)) {
+      return { type: "variable", name: inner };
+    }
+    return { type: "literal", value: trimmed };
+  }
+
+  if (/^".*"$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1).replace(/""/g, '"');
+    return { type: "literal", value: inner };
+  }
+
+  if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") {
+    return { type: "literal", value: trimmed };
+  }
+
+  if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) {
+    return { type: "literal", value: trimmed };
+  }
+
+  if (/^(str_|int_|bool_|dbl_|dec_|obj_|dt_|ts_|drow_|qi_|sec_|in_|out_|io_|arr_|dict_|list_)/i.test(trimmed) && VARIABLE_NAME_ONLY.test(trimmed)) {
+    return { type: "variable", name: trimmed };
+  }
+
+  if (/^[a-zA-Z_]\w*\.[a-zA-Z_]\w*/.test(trimmed) && !/\s/.test(trimmed)) {
+    return { type: "variable", name: trimmed };
+  }
+
+  if (/^[a-zA-Z_]\w*\(/.test(trimmed)) {
+    return { type: "literal", value: `[${trimmed}]` };
+  }
+
+  if (/[+\-*/&=<>]/.test(trimmed) && !/[.,!?;:'"…]/.test(trimmed)) {
+    return { type: "literal", value: `[${trimmed}]` };
+  }
+
+  return { type: "literal", value: trimmed };
+}
+
 export function isValueIntent(value: unknown): value is ValueIntent {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;

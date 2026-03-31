@@ -17,7 +17,7 @@ import { buildTemplateBlock } from "./catalog/xaml-template-builder";
 import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml, escapeXmlExpression, normalizeXmlExpression, escapeXmlTextContent } from "./lib/xml-utils";
 import { XMLValidator } from "fast-xml-parser";
-import { buildExpression, isValueIntent, normalizeStringToExpression, type ValueIntent } from "./xaml/expression-builder";
+import { buildExpression, isValueIntent, normalizeStringToExpression, normalizePropertyToValueIntent, type ValueIntent } from "./xaml/expression-builder";
 import { getActivityTag, getActivityPrefixStrict } from "./xaml/xaml-compliance";
 import { lintExpression } from "./xaml/vbnet-expression-linter";
 import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
@@ -946,19 +946,57 @@ function smartBracketWrap(val: string): string {
   return `[${trimmed}]`;
 }
 
-export function resolvePropertyValue(value: PropertyValue): string {
-  if (isValueIntent(value)) {
-    const built = buildExpression(value as ValueIntent);
-    const linted = lintAndFixVbExpression(built);
-    const wrapped = smartBracketWrap(linted);
-    if (wrapped.startsWith("[") && wrapped.endsWith("]")) {
-      const inner = wrapped.slice(1, -1);
-      return `[${escapeXmlExpression(inner)}]`;
+export function resolvePropertyValue(
+  value: PropertyValue,
+  activityClassName?: string,
+  propertyName?: string,
+): string {
+  let isEnumProperty = false;
+  if (activityClassName && propertyName) {
+    const enumValues = catalogService.getEnumValues(activityClassName, propertyName);
+    if (enumValues && enumValues.length > 0) {
+      isEnumProperty = true;
     }
-    return escapeXmlExpression(wrapped);
+  }
+
+  if (isValueIntent(value)) {
+    return resolveValueIntentToXaml(value as ValueIntent, isEnumProperty);
   }
   const strVal = String(value);
-  const linted = lintAndFixVbExpression(strVal);
+  const normalized = normalizePropertyToValueIntent(
+    strVal,
+    activityClassName,
+    propertyName,
+    (cls, prop) => catalogService.getEnumValues(cls, prop),
+  );
+  return resolveValueIntentToXaml(normalized, isEnumProperty);
+}
+
+function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean = false): string {
+  if (intent.type === "literal" && isEnumProperty) {
+    return intent.value;
+  }
+
+  const built = buildExpression(intent);
+  const linted = lintAndFixVbExpression(built);
+
+  if (intent.type === "literal") {
+    if (linted === "True" || linted === "False" || linted === "Nothing" || linted === "null") {
+      return linted;
+    }
+    if (/^[0-9]+(\.[0-9]+)?$/.test(linted)) {
+      return linted;
+    }
+    if (linted.startsWith('"') && linted.endsWith('"')) {
+      return escapeXmlExpression(linted);
+    }
+    if (linted.startsWith("[") && linted.endsWith("]")) {
+      const inner = linted.slice(1, -1);
+      return `[${escapeXmlExpression(inner)}]`;
+    }
+    return escapeXmlExpression(linted);
+  }
+
   const wrapped = smartBracketWrap(linted);
   if (wrapped.startsWith("[") && wrapped.endsWith("]")) {
     const inner = wrapped.slice(1, -1);
@@ -2831,11 +2869,105 @@ function hasNodeReference(nodes: WorkflowNode[], name: string): boolean {
   return false;
 }
 
+interface ValueIntentMetrics {
+  structuredCount: number;
+  flatStringCount: number;
+}
+
+function countPropertyMetrics(node: WorkflowNode, metrics: ValueIntentMetrics): void {
+  if (node.kind === "activity") {
+    for (const [, value] of Object.entries(node.properties || {})) {
+      if (isValueIntent(value)) {
+        metrics.structuredCount++;
+      } else {
+        metrics.flatStringCount++;
+      }
+    }
+  }
+  if (node.kind === "sequence") {
+    for (const child of node.children) countPropertyMetrics(child, metrics);
+  }
+  if (node.kind === "tryCatch") {
+    for (const child of node.tryChildren) countPropertyMetrics(child, metrics);
+    for (const child of node.catchChildren) countPropertyMetrics(child, metrics);
+    for (const child of node.finallyChildren) countPropertyMetrics(child, metrics);
+  }
+  if (node.kind === "if") {
+    for (const child of node.thenChildren) countPropertyMetrics(child, metrics);
+    for (const child of node.elseChildren) countPropertyMetrics(child, metrics);
+  }
+  if (node.kind === "while") {
+    for (const child of node.bodyChildren) countPropertyMetrics(child, metrics);
+  }
+  if (node.kind === "forEach") {
+    for (const child of node.bodyChildren) countPropertyMetrics(child, metrics);
+  }
+  if (node.kind === "retryScope") {
+    for (const child of node.bodyChildren) countPropertyMetrics(child, metrics);
+  }
+}
+
+function normalizeSpecProperties(node: WorkflowNode): void {
+  if (node.kind === "activity") {
+    const templateName = node.template || "";
+    for (const [key, value] of Object.entries(node.properties || {})) {
+      if (!isValueIntent(value) && typeof value === "string") {
+        const normalized = normalizePropertyToValueIntent(
+          value,
+          templateName,
+          key,
+          (cls, prop) => catalogService.getEnumValues(cls, prop),
+        );
+        (node.properties as Record<string, any>)[key] = normalized;
+      }
+    }
+  }
+  if (node.kind === "sequence") {
+    for (const child of node.children) normalizeSpecProperties(child);
+  }
+  if (node.kind === "tryCatch") {
+    for (const child of node.tryChildren) normalizeSpecProperties(child);
+    for (const child of node.catchChildren) normalizeSpecProperties(child);
+    for (const child of node.finallyChildren) normalizeSpecProperties(child);
+  }
+  if (node.kind === "if") {
+    for (const child of node.thenChildren) normalizeSpecProperties(child);
+    for (const child of node.elseChildren) normalizeSpecProperties(child);
+  }
+  if (node.kind === "while") {
+    for (const child of node.bodyChildren) normalizeSpecProperties(child);
+  }
+  if (node.kind === "forEach") {
+    for (const child of node.bodyChildren) normalizeSpecProperties(child);
+  }
+  if (node.kind === "retryScope") {
+    for (const child of node.bodyChildren) normalizeSpecProperties(child);
+  }
+}
+
 export function assembleWorkflowFromSpec(
   spec: WorkflowSpec,
   processType: ProcessType = "general",
 ): { xaml: string; variables: VariableDeclaration[] } {
   const workflowName = (spec.name || "Workflow").replace(/"/g, "").replace(/&quot;/g, "").replace(/\s+/g, "_");
+
+  const metrics: ValueIntentMetrics = { structuredCount: 0, flatStringCount: 0 };
+  for (const child of spec.rootSequence.children) {
+    countPropertyMetrics(child, metrics);
+  }
+
+  const totalProps = metrics.structuredCount + metrics.flatStringCount;
+  if (totalProps > 0) {
+    const structuredPct = ((metrics.structuredCount / totalProps) * 100).toFixed(1);
+    console.log(`[ValueIntent Metrics] "${workflowName}": ${metrics.structuredCount}/${totalProps} properties arrived as structured ValueIntent (${structuredPct}%), ${metrics.flatStringCount} flat strings`);
+    if (metrics.flatStringCount > 0 && metrics.flatStringCount > metrics.structuredCount) {
+      console.warn(`[ValueIntent Migration] "${workflowName}": high flat-string rate (${metrics.flatStringCount}/${totalProps}) — consider migrating to structured ValueIntent format`);
+    }
+  }
+
+  for (const child of spec.rootSequence.children) {
+    normalizeSpecProperties(child);
+  }
 
   const renameMap = new Map<string, string>();
   const sanitizedTopVars = sanitizeVariableDeclarations(spec.variables || [], renameMap);

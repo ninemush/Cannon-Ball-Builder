@@ -1,4 +1,4 @@
-import { catalogService, type ProcessType, type CatalogActivity, type CatalogProperty } from "./catalog-service";
+import { catalogService, type ProcessType, type CatalogActivity, type CatalogProperty, type PaletteEntry } from "./catalog-service";
 import { getActivityPrefix } from "../xaml/xaml-compliance";
 
 export interface TemplateEntry {
@@ -462,6 +462,66 @@ export function formatCompactTemplateBlockForPrompt(block: TemplateBlock): strin
     const reqStr = t.requiredProperties.length > 0 ? ` [required: ${t.requiredProperties.join(", ")}]` : "";
     lines.push(`- ${t.name}${reqStr}`);
   }
+
+  return lines.join("\n");
+}
+
+export function buildCompactCatalogSummary(): string {
+  if (!catalogService.isLoaded()) {
+    return "";
+  }
+
+  const palette = catalogService.buildWidePalette();
+  if (palette.length === 0) return "";
+
+  const byPackage: Record<string, PaletteEntry[]> = {};
+  for (const entry of palette) {
+    if (!byPackage[entry.packageId]) {
+      byPackage[entry.packageId] = [];
+    }
+    byPackage[entry.packageId].push(entry);
+  }
+
+  const lines: string[] = [
+    "=== AVAILABLE ACTIVITIES (catalog summary) ===",
+    "",
+  ];
+
+  for (const packageId of Object.keys(byPackage)) {
+    const entries = byPackage[packageId];
+    lines.push(`## ${packageId}`);
+    for (const entry of entries) {
+      const requiredProps = entry.properties.filter((p: PaletteEntry["properties"][0]) => p.required && p.direction !== "Out");
+      const enumProps = entry.properties.filter((p: PaletteEntry["properties"][0]) => p.validValues && p.validValues.length > 0);
+
+      let line = `- ${entry.className}`;
+      if (requiredProps.length > 0) {
+        line += ` [required: ${requiredProps.map((p: PaletteEntry["properties"][0]) => p.name).join(", ")}]`;
+      }
+      if (enumProps.length > 0) {
+        const enumParts = enumProps.map((p: PaletteEntry["properties"][0]) => `${p.name}: ${p.validValues!.join("|")}`);
+        line += ` | enums: ${enumParts.join("; ")}`;
+      }
+      lines.push(line);
+    }
+    lines.push("");
+  }
+
+  const builtInActivities = [
+    "- Assign [required: To, Value]",
+    "- If [required: Condition]",
+    "- ForEach [required: Values]",
+    "- While [required: Condition]",
+    "- TryCatch",
+    "- RetryScope [required: NumberOfRetries]",
+    "- InvokeWorkflowFile [required: WorkflowFileName]",
+    "- LogMessage [required: Message] | enums: Level: Trace|Info|Warn|Error|Fatal",
+    "- Delay [required: Duration]",
+  ];
+
+  lines.push("## Built-in Activities");
+  lines.push(...builtInActivities);
+  lines.push("");
 
   return lines.join("\n");
 }

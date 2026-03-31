@@ -178,24 +178,36 @@ VARIABLE PRE-DECLARATION: ALL variables MUST be listed in the top-level "variabl
 IMPORTANT: Respond with ONLY the JSON object. No markdown fences, no explanation.
 
 === SECTION 5: STRUCTURED VALUE DESCRIPTIONS (ValueIntent) ===
-For TWO specific high-risk patterns, you MAY use structured ValueIntent objects instead of plain strings in activity "properties" values. All other values MUST remain plain strings.
+Property values SHOULD use structured ValueIntent objects to declare intent explicitly. This eliminates ambiguity between variable references, literals, and expressions.
 
-1. URL endpoints with query parameters — use type "url_with_params":
+Types:
+1. Literal string — for text content, prompts, display strings, file paths, config values, AND enum values:
+   { "type": "literal", "value": "Hello World" }
+   { "type": "literal", "value": "Info" }  ← for enum properties like LogMessage.Level
+
+2. Variable reference — for VB variable or argument references:
+   { "type": "variable", "name": "str_MyVar" }
+
+3. URL endpoints with query parameters:
    { "type": "url_with_params", "baseUrl": "https://api.example.com/data", "params": { "city": "str_CityName", "units": "metric" } }
-   This avoids & characters in URLs being incorrectly XML-escaped.
 
-2. Conditions with comparison operators (<, >, <>, >=, <=) — use type "expression":
+4. Conditions with comparison operators (<, >, <>, >=, <=):
    { "type": "expression", "left": "int_StatusCode", "operator": "<>", "right": "200" }
-   This avoids <> being incorrectly XML-escaped to &lt;&gt;.
 
-Additional types (use sparingly):
-- Literal string: { "type": "literal", "value": "Hello World" }
-- Variable reference: { "type": "variable", "name": "str_MyVar" }
+ENUM PROPERTY RULES:
+- Enum-typed properties (e.g., LogMessage Level, AddQueueItem Priority) MUST use { "type": "literal", "value": "ValidEnumValue" }
+- Only use values from the catalog's validValues list — any other value is a generation failure
+- Do NOT use bare strings for enum properties — always wrap in a literal ValueIntent
+
+NEGATIVE EXAMPLES (do NOT do this):
+  ✗ "Level": "Info"              → use { "type": "literal", "value": "Info" }
+  ✗ "To": "str_Email"            → use { "type": "variable", "name": "str_Email" }
+  ✗ "Message": "str_LogMessage"  → if this is a variable, use { "type": "variable", "name": "str_LogMessage" }
 
 Rules:
 - "expression" left/right fields must be simple variable names or literals only.
 - "expression" left and right fields must NEVER be empty strings. Always provide a meaningful variable name or literal value (e.g. "0", "Nothing", "True").
-- All other property values should remain plain strings — do NOT convert everything to ValueIntent.
+- Plain strings are accepted as a legacy fallback but structured ValueIntent is preferred.
 
 OUTPUT FORMAT RULES (strict):
 - Property values must NEVER be wrapped in quotes unless they are genuine string literals. For example, use Info not "Info".
