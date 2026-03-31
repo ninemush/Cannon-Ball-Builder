@@ -40,6 +40,7 @@ export const UIPATH_PACKAGE_ALIAS_MAP: Record<string, string> = {
   "UiPath.Storage.Activities": "UiPath.Persistence.Activities",
   "UiPath.DB.Activities": "UiPath.Database.Activities",
   "UiPath.SQL.Activities": "UiPath.Database.Activities",
+  "UiPath.GenAI.Activities": "UiPath.IntegrationService.Activities",
 };
 
 export const FRAMEWORK_ASSEMBLIES = new Set<string>([

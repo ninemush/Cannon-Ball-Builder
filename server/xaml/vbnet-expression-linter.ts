@@ -753,23 +753,57 @@ export function lintExpression(expression: string): LintResult {
   const closeParens = (exprWithoutStrings.match(/\)/g) || []).length;
   if (openParens !== closeParens) {
     const diff = openParens - closeParens;
-    if (diff > 0 && diff <= 2) {
-      corrected = corrected + ")".repeat(diff);
-      issues.push({ code: "UNBALANCED_PARENS", message: `Added ${diff} missing closing parenthesis(es)`, autoFixed: true });
-      wasModified = true;
-    } else if (diff < 0 && diff >= -2) {
-      const toRemove = Math.abs(diff);
-      for (let i = 0; i < toRemove; i++) {
-        const lastIdx = corrected.lastIndexOf(")");
-        if (lastIdx >= 0) {
-          corrected = corrected.substring(0, lastIdx) + corrected.substring(lastIdx + 1);
+    let contextDetail = "";
+    let depthTrack = 0;
+    let maxDepth = 0;
+    let firstUnbalancedPos = -1;
+    for (let ci = 0; ci < exprWithoutStrings.length; ci++) {
+      if (exprWithoutStrings[ci] === "(") {
+        depthTrack++;
+        if (depthTrack > maxDepth) maxDepth = depthTrack;
+      } else if (exprWithoutStrings[ci] === ")") {
+        depthTrack--;
+        if (depthTrack < 0 && firstUnbalancedPos === -1) {
+          firstUnbalancedPos = ci;
         }
       }
-      issues.push({ code: "UNBALANCED_PARENS", message: `Removed ${toRemove} extra closing parenthesis(es)`, autoFixed: true });
-      wasModified = true;
-    } else {
-      reportOnly("UNBALANCED_PARENS", `Unbalanced parentheses: ${openParens} open vs ${closeParens} close — cannot auto-fix`);
     }
+    if (firstUnbalancedPos === -1 && depthTrack > 0) {
+      firstUnbalancedPos = exprWithoutStrings.length;
+    }
+    const fragmentStart = Math.max(0, firstUnbalancedPos - 30);
+    const fragmentEnd = Math.min(exprWithoutStrings.length, firstUnbalancedPos + 30);
+    const fragment = exprWithoutStrings.substring(fragmentStart, fragmentEnd).trim();
+    contextDetail = ` | max nesting depth: ${maxDepth}, first imbalance near position ${firstUnbalancedPos}`;
+    if (fragment) {
+      contextDetail += `, fragment: "${fragment}"`;
+    }
+    reportOnly("UNBALANCED_PARENS", `Unbalanced parentheses: ${openParens} open vs ${closeParens} close (diff: ${diff > 0 ? "+" : ""}${diff})${contextDetail}`);
+  }
+
+  const openBrackets = (exprWithoutStrings.match(/\[/g) || []).length;
+  const closeBrackets = (exprWithoutStrings.match(/\]/g) || []).length;
+  if (openBrackets !== closeBrackets && openBrackets > 0) {
+    const bracketDiff = openBrackets - closeBrackets;
+    let bracketContext = "";
+    let bDepth = 0;
+    let firstBracketImbalance = -1;
+    for (let bi = 0; bi < exprWithoutStrings.length; bi++) {
+      if (exprWithoutStrings[bi] === "[") bDepth++;
+      else if (exprWithoutStrings[bi] === "]") {
+        bDepth--;
+        if (bDepth < 0 && firstBracketImbalance === -1) firstBracketImbalance = bi;
+      }
+    }
+    if (firstBracketImbalance === -1 && bDepth > 0) firstBracketImbalance = exprWithoutStrings.length;
+    if (firstBracketImbalance >= 0) {
+      const bFragStart = Math.max(0, firstBracketImbalance - 30);
+      const bFragEnd = Math.min(exprWithoutStrings.length, firstBracketImbalance + 30);
+      const bFragment = exprWithoutStrings.substring(bFragStart, bFragEnd).trim();
+      bracketContext = ` | first imbalance near position ${firstBracketImbalance}`;
+      if (bFragment) bracketContext += `, fragment: "${bFragment}"`;
+    }
+    reportOnly("UNBALANCED_BRACKETS", `Unbalanced brackets: ${openBrackets} open vs ${closeBrackets} close (diff: ${bracketDiff > 0 ? "+" : ""}${bracketDiff})${bracketContext}`);
   }
 
   const openQuotes = (corrected.match(/(?<![\\])"/g) || []).length;

@@ -314,8 +314,17 @@ export function applyCorrections(
         result = applyLiteralExpression(entry.content, correction);
         break;
       case "UNDECLARED_VARIABLES":
-        result = applyUndeclaredVariable(entry.content, correction);
-        break;
+        skipped++;
+        details.push({
+          workflowName: correction.workflowName,
+          category: correction.category,
+          confidence: correction.confidence,
+          status: "skipped",
+          reason: "UNDECLARED_VARIABLES auto-fix disabled — scanner is not precise enough for safe declaration insertion",
+          description: correction.description,
+        });
+        console.log(`[Meta-Validation] UNDECLARED_VARIABLES auto-fix skipped (diagnostic only): ${correction.description.substring(0, 120)}`);
+        continue;
       case "MISSING_PROPERTIES":
         result = applyMissingProperty(entry.content, correction);
         break;
@@ -337,13 +346,7 @@ export function applyCorrections(
     } else {
       failed++;
       let failReason = "Could not locate target text in XAML";
-      if (correction.category === "UNDECLARED_VARIABLES") {
-        const hasSequence = /<Sequence[\s>]/.test(entry.content);
-        const hasFlowchart = /<Flowchart[\s>]/.test(entry.content);
-        const hasVarsBlock = /\.Variables[>\s]/.test(entry.content);
-        const hasDynActivity = /DynamicActivity\.Implementation/.test(entry.content);
-        failReason = `Variable insertion failed — Sequence:${hasSequence}, Flowchart:${hasFlowchart}, VarsBlock:${hasVarsBlock}, DynActivity:${hasDynActivity}`;
-      } else if (correction.category === "ENUM_VIOLATIONS") {
+      if (correction.category === "ENUM_VIOLATIONS") {
         const hasOriginal = correction.original ? entry.content.includes(correction.original) : false;
         failReason = `Enum correction failed — original text ${hasOriginal ? "found" : "NOT found"} in XAML (original: "${(correction.original || "").substring(0, 60)}")`;
       }

@@ -615,21 +615,9 @@ function registerImplicitOutputVariables(children: WorkflowNode[], registry: Dec
 }
 
 function resolveTryCatchExceptionName(tryCatchNode: TryCatchNode): string {
-  const defaultName = "exception";
-  for (const child of tryCatchNode.catchChildren) {
-    if (child.kind === "activity") {
-      const actNode = child as ActivityNode;
-      for (const [, val] of Object.entries(actNode.properties || {})) {
-        if (typeof val === "string") {
-          const exVarMatch = val.match(/\b([a-zA-Z_]\w*)\.(?:Message|GetType|StackTrace|InnerException|ToString)\b/);
-          if (exVarMatch && exVarMatch[1] !== defaultName) {
-            return exVarMatch[1];
-          }
-        }
-      }
-    }
-  }
-  return defaultName;
+  const deepResult = inferExceptionVariableName(tryCatchNode.catchChildren);
+  if (deepResult) return deepResult;
+  return tryCatchNode.catchVariableName || "exception";
 }
 
 function resolveForEachIteratorName(node: ForEachNode, registry?: DeclarationRegistry): string {
@@ -645,7 +633,7 @@ function registerScopedDeclarations(children: WorkflowNode[], registry: Declarat
   function scanNode(node: WorkflowNode, pathPrefix: string): void {
     if (node.kind === "forEach") {
       const forEachNode = node as ForEachNode;
-      const iteratorName = forEachNode.iteratorName || "item";
+      const iteratorName = inferForEachIteratorFromBody(forEachNode, []);
       const idx = scopeCounters.forEach++;
       const scopeId = `forEach[${idx}]::${pathPrefix}/${forEachNode.displayName}`;
       registry.registerScopedVariable({
@@ -2098,10 +2086,7 @@ function assembleTryCatchNode(
 ): string {
   const displayName = escapeXml(node.displayName);
 
-  const exceptionVarName = node.catchVariableName || inferExceptionVariableName(node.catchChildren) || "exception";
-  const resolvedExceptionName = registry
-    ? (registry.findScopedVariableByTypeAndName("tryCatch", node.displayName)?.name ?? exceptionVarName)
-    : exceptionVarName;
+  const resolvedExceptionName = resolveTryCatchExceptionName(node);
 
   let tryXml = node.tryChildren
     .map(child => assembleNode(child, allVariables, processType, depthLevel + 1, "inside-trycatch", registry))

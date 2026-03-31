@@ -148,10 +148,15 @@ function validateActivityNode(
   const strippedNames: string[] = [];
 
   const isAddQueueItem = node.template === "AddQueueItem";
+  const isInvokeWorkflowFile = node.template === "InvokeWorkflowFile";
 
   for (const [key, value] of Object.entries(node.properties || {})) {
     if (!knownProps.has(key) && !INHERITED_BASE_PROPERTIES.has(key)) {
       if (isAddQueueItem && (key === "ItemInformation" || key.startsWith("ItemInformation_"))) {
+        filteredProperties[key] = value;
+        continue;
+      }
+      if (isInvokeWorkflowFile && /^(in_|out_|io_)/i.test(key)) {
         filteredProperties[key] = value;
         continue;
       }

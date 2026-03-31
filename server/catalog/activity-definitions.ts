@@ -715,6 +715,29 @@ const WEBAPI_ACTIVITIES: PackageActivityDefs = {
         COMMON_TIMEOUT,
       ],
     },
+    {
+      className: "SerializeJson",
+      displayName: "Serialize JSON",
+      browsable: true,
+      processTypes: ["general", "api-integration"],
+      properties: [
+        childProp("JsonObject", { type: "System.Object", wrapper: "InArgument", typeArgs: "x:Object", required: true }),
+        childProp("JsonString", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
+        childProp("Result", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
+        prop("Formatting", { validValues: ["None", "Indented"], default: "None" }),
+      ],
+    },
+    {
+      className: "DeserializeJson",
+      displayName: "Deserialize JSON",
+      browsable: true,
+      processTypes: ["general", "api-integration"],
+      properties: [
+        childProp("JsonString", { required: true }),
+        childProp("JsonObject", { dir: "Out", type: "Newtonsoft.Json.Linq.JObject", wrapper: "OutArgument", typeArgs: "x:Object" }),
+        childProp("Result", { dir: "Out", type: "Newtonsoft.Json.Linq.JObject", wrapper: "OutArgument", typeArgs: "x:Object" }),
+      ],
+    },
   ],
 };
 
@@ -726,7 +749,9 @@ const COMPLEX_SCENARIOS_ACTIVITIES: PackageActivityDefs = {
       displayName: "Multiple Assign",
       browsable: true,
       processTypes: ["general"],
-      properties: [],
+      properties: [
+        childProp("Assignments", { type: "System.Collections.Generic.List`1[System.Activities.Statements.AssignBase]", wrapper: "InArgument", typeArgs: "x:Object" }),
+      ],
     },
     {
       className: "WaitForDownload",
@@ -757,6 +782,7 @@ const COMPLEX_SCENARIOS_ACTIVITIES: PackageActivityDefs = {
       properties: [
         childProp("DataTable", { dir: "Out", type: "System.Data.DataTable", wrapper: "OutArgument", typeArgs: "scg2:DataTable" }),
         prop("TableInfo"),
+        childProp("Columns", { type: "System.Data.DataColumn[]", wrapper: "InArgument", typeArgs: "scg:List(x:Object)" }),
       ],
     },
     {
@@ -1794,7 +1820,7 @@ const DOCUMENT_UNDERSTANDING_ACTIVITIES: PackageActivityDefs = {
 };
 
 const GENAI_ACTIVITIES: PackageActivityDefs = {
-  packageId: "UiPath.GenAI.Activities",
+  packageId: "UiPath.IntegrationService.Activities",
   activities: [
     {
       className: "UseGenAI",
@@ -1808,6 +1834,7 @@ const GENAI_ACTIVITIES: PackageActivityDefs = {
         prop("MaxTokens", { type: "System.Int32", default: "4096" }),
         prop("Temperature", { type: "System.Double", default: "0.7" }),
         childProp("Response", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
+        childProp("Result", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
       ],
     },
     {
@@ -1865,10 +1892,14 @@ const INTEGRATION_SERVICE_ACTIVITIES: PackageActivityDefs = {
       browsable: true,
       processTypes: ["api-integration"],
       properties: [
+        prop("ConnectionId", { required: true }),
         childProp("Endpoint", { required: true }),
         prop("Method", { validValues: ["GET", "POST", "PUT", "DELETE", "PATCH"], default: "GET", required: true }),
         childProp("Body"),
+        childProp("QueryParameters", { type: "System.Collections.Generic.Dictionary`2[System.String,System.String]", wrapper: "InArgument", typeArgs: "scg:Dictionary(x:String, x:String)" }),
         childProp("ResponseContent", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
+        childProp("ResponseOutput", { dir: "Out", type: "System.Object", wrapper: "OutArgument", typeArgs: "x:Object" }),
+        childProp("Output", { dir: "Out", type: "System.Object", wrapper: "OutArgument", typeArgs: "x:Object" }),
         childProp("StatusCode", { dir: "Out", type: "System.Int32", wrapper: "OutArgument", typeArgs: "x:Int32" }),
       ],
     },
@@ -2107,6 +2138,7 @@ const SYSTEM_ACTIVITIES_ENRICHED: PackageActivityDefs = {
       properties: [
         prop("AssetName", { required: false }),
         childProp("AssetValue", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
+        childProp("Value", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
         COMMON_CONTINUE_ON_ERROR,
       ],
     },
@@ -2117,6 +2149,7 @@ const SYSTEM_ACTIVITIES_ENRICHED: PackageActivityDefs = {
       processTypes: ["general", "orchestration"],
       propertiesComplete: true,
       properties: [
+        childProp("Fields", { type: "System.Collections.Generic.Dictionary`2[System.String,System.Object]", wrapper: "InArgument", typeArgs: "scg:Dictionary(x:String, x:Object)" }),
         COMMON_CONTINUE_ON_ERROR,
       ],
     },
