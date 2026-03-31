@@ -1,0 +1,35 @@
+I think #331 + #332 is the strongest holistic plan we’ve had so far, and it aligns well with the actual goal for CannonBall and package generation.
+
+My understanding of the goal:
+CannonBall should generate UiPath packages that are structurally valid in Studio, faithful to the intended business process, typed and contract-consistent across workflows, and honest about what is complete versus what still needs developer work. The package should carry most of the implementation, and the DHG should cover the remaining real last-mile work rather than compensate for pipeline breakage.
+
+Why I support this split:
+- #331 addresses the deepest upstream problem: the LLM-to-builder contract for property values is too ambiguous. Moving property values toward a typed ValueIntent contract, simplifying the detail prompt, and strengthening scaffold argument contracts is the right systemic upstream fix.
+- #332 then addresses the next layer: concrete builder serialization bugs, overly broad undeclared-variable checking, and mutational repair layers that are currently creating more defects while trying to fix them.
+
+That means this is not just another bug-bashing cycle:
+- #331 is the contract fix
+- #332 is the compiler/builder stabilization and pipeline simplification step
+
+What I especially agree with:
+- typed property values as the upstream foundation
+- preserving ValueIntent through spec-to-tree-mapper
+- simplifying Phase 3 so the LLM produces flatter, more serializable output
+- strengthening scaffold argument contracts before the detail phase
+- fixing bracket wrapping, entity handling, and VB New-expression emission in the builder
+- scoping undeclared-variable checks to expression/variable contexts
+- making compliance/quality much more observational and less mutational
+
+Two small refinements I want:
+
+1. For #331:
+Please make the scaffold argument validation fail fast before the detail phase when caller/callee contracts are inconsistent. I want contract mismatches surfaced early, not deferred into later inference and repair.
+
+2. For #332:
+Please phrase compliance normalization / quality gate changes as:
+- read-only by default
+- with only a very small allowlist of proven-safe additive fixes remaining mutational (for example namespace injection if needed)
+I do not want all safe additive normalization accidentally removed if it is still valuable.
+
+Overall verdict:
+I support proceeding with #331 first and #332 immediately after it. This is the clearest systemic path we’ve identified so far toward Studio-stable package generation and the 80/20 package-to-DHG goal.
