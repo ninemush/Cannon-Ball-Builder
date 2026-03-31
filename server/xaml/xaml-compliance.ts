@@ -987,7 +987,27 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
 
   const additionalXmlns = buildDynamicXmlnsDeclarations(usedPackages, isCrossPlatform, xml);
   const additionalAssemblyRefs = buildDynamicAssemblyRefs(usedPackages, xml);
-  const additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages);
+  let additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages);
+
+  const hasStateMachine = /<StateMachine[\s>]|<State[\s>]|<Transition[\s>]/.test(xml);
+  if (hasStateMachine && !xml.includes("System.Activities.Statements")) {
+    additionalNamespaceImports += `\n      <x:String>System.Activities.Statements</x:String>`;
+    if (!xml.includes('xmlns:sads=')) {
+      const sadsXmlns = isCrossPlatform
+        ? `  xmlns:sads="clr-namespace:System.Activities.Statements;assembly=System.Activities"`
+        : `  xmlns:sads="clr-namespace:System.Activities.Statements;assembly=System.Activities"`;
+      const xmlnsInsert = xml.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
+      if (xmlnsInsert >= 0) {
+        const insertAfter = xmlnsInsert + 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'.length;
+        xml = xml.slice(0, insertAfter) + "\n" + sadsXmlns + xml.slice(insertAfter);
+      }
+    }
+  }
+
+  const hasMailActivities = /<umail:|<ui:SendSmtpMailMessage|<ui:SendOutlookMailMessage|<ui:GetImapMailMessage|<ui:GetOutlookMailMessages|<ui:SendMail[\s>]|<ui:GetMail[\s>]|System\.Net\.Mail\.MailMessage/.test(xml);
+  if (hasMailActivities && !xml.includes("System.Net.Mail")) {
+    additionalNamespaceImports += `\n      <x:String>System.Net.Mail</x:String>`;
+  }
 
   if (usedPackages.size > 0) {
     const packageList = Array.from(usedPackages).filter(p => p !== "UiPath.System.Activities" && p !== "UiPath.UIAutomation.Activities");
@@ -1032,6 +1052,7 @@ const APPROVED_XMLNS_MAPPINGS: Record<string, { validUris: string[] }> = {
   "scg2": { validUris: ["clr-namespace:System.Data;assembly=System.Data", "clr-namespace:System.Data;assembly=System.Data.Common"] },
   "sco": { validUris: ["clr-namespace:System.Collections.ObjectModel;assembly=mscorlib", "clr-namespace:System.Collections.ObjectModel;assembly=System.Runtime"] },
   "mva": { validUris: ["clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"] },
+  "sads": { validUris: ["clr-namespace:System.Activities.Statements;assembly=System.Activities"] },
 };
 
 for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {

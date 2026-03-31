@@ -295,7 +295,36 @@ function splitFormatArgs(body: string): string[] {
   return args;
 }
 
+function canSafelyDecomposeStringFormat(formatStr: string, args: string[]): boolean {
+  let raw = formatStr.trim();
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    raw = raw.substring(1, raw.length - 1);
+  } else if (raw.startsWith('&quot;') && raw.endsWith('&quot;')) {
+    raw = raw.substring(6, raw.length - 6);
+  }
+
+  for (const arg of args) {
+    const trimmed = arg.trim();
+    let depth = 0;
+    for (const ch of trimmed) {
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+    }
+    if (depth !== 0) return false;
+  }
+
+  const escaped = raw.replace(/\{\{/g, "").replace(/\}\}/g, "");
+  const unmatched = escaped.replace(/\{(\d+)(?:,(-?\d+))?(?::([^}]*))?\}/g, "");
+  if (unmatched.includes("{") || unmatched.includes("}")) return false;
+
+  return true;
+}
+
 function buildConcatFromStringFormat(formatStr: string, args: string[]): string {
+  if (!canSafelyDecomposeStringFormat(formatStr, args)) {
+    throw new Error(`Cannot safely decompose String.Format: unbalanced parens in arguments or unmatched braces in format string`);
+  }
+
   let raw = formatStr.trim();
   if (raw.startsWith('"') && raw.endsWith('"')) {
     raw = raw.substring(1, raw.length - 1);
@@ -965,12 +994,20 @@ export function lintExpression(expression: string): LintResult {
             });
             wasModified = true;
           }
-        } catch {
-          reportOnly("STRING_FORMAT_OVERFLOW", `String.Format has ${argCount} total arguments with highest placeholder index {${maxPlaceholder}} — UiPath Studio may have issues with >10 format arguments. Consider splitting into multiple Format calls or using string concatenation.`);
+        } catch (sfErr: any) {
+          issues.push({
+            code: "STRING_FORMAT_OVERFLOW_BLOCKING",
+            message: `BLOCKING: String.Format with ${argCount} arguments (highest placeholder {${maxPlaceholder}}) cannot be safely decomposed — ${sfErr?.message || "parse error"}. Rewrite manually using string concatenation (&).`,
+            autoFixed: false,
+          });
           break;
         }
       } else {
-        reportOnly("STRING_FORMAT_OVERFLOW", `String.Format has ${argCount} total arguments with highest placeholder index {${maxPlaceholder}} — UiPath Studio may have issues with >10 format arguments. Consider splitting into multiple Format calls or using string concatenation.`);
+        issues.push({
+          code: "STRING_FORMAT_OVERFLOW_BLOCKING",
+          message: `BLOCKING: String.Format with ${argCount} arguments (highest placeholder {${maxPlaceholder}}) cannot be parsed — insufficient arguments for decomposition. Rewrite manually using string concatenation (&).`,
+          autoFixed: false,
+        });
         break;
       }
     }

@@ -777,50 +777,45 @@ function runPostAssemblyValidation(
     }
   }
 
-  const activityFamilyChecks = [
-    {
-      tag: "ui:GetTransactionItem",
-      requiredProps: ["QueueName"],
-      outputProps: ["TransactionItem"],
-      desc: "GetTransactionItem",
-    },
-    {
-      tag: "ui:AddQueueItem",
-      requiredProps: ["QueueName", "ItemInformation"],
-      outputProps: [],
-      desc: "AddQueueItem",
-    },
-    {
-      tag: "ui:SetTransactionStatus",
-      requiredProps: ["TransactionItem", "Status"],
-      outputProps: [],
-      desc: "SetTransactionStatus",
-    },
-    {
-      tag: "ui:GetCredential",
-      requiredProps: ["AssetName"],
-      outputProps: ["Username", "Password"],
-      desc: "GetCredential",
-    },
-    {
-      tag: "ui:GetAsset",
-      requiredProps: ["AssetName"],
-      outputProps: ["AssetValue"],
-      desc: "GetAsset",
-    },
-  ];
-
-  for (const check of activityFamilyChecks) {
-    const tagPattern = new RegExp(`<${check.tag}\\s[^>]*>`, "g");
-    let familyMatch;
-    while ((familyMatch = tagPattern.exec(allXamlContent)) !== null) {
-      const tagStr = familyMatch[0];
-      for (const reqProp of check.requiredProps) {
-        if (!tagStr.includes(`${reqProp}="`)) {
-          const endIdx = allXamlContent.indexOf(`</${check.tag}>`, familyMatch.index);
-          const bodySection = endIdx > 0 ? allXamlContent.substring(familyMatch.index, endIdx) : tagStr;
-          if (!bodySection.includes(`${check.tag}.${reqProp}`)) {
-            warnings.push(`${check.desc} activity is missing required property "${reqProp}"`);
+  if (!catalogService.isLoaded()) {
+    console.warn(`[Package Assembler] WARNING: Activity catalog not loaded — required-property validation skipped. Build may produce packages with missing required properties.`);
+    warnings.push("Activity catalog not loaded — required-property validation was skipped");
+  }
+  if (catalogService.isLoaded()) {
+    const activityTagPattern = /<((?:[a-z]+:)?[A-Z][A-Za-z]+)\s([^>]*?)(?:\/>|>)/g;
+    let actFamilyMatch;
+    const checkedActivities = new Set<string>();
+    while ((actFamilyMatch = activityTagPattern.exec(allXamlContent)) !== null) {
+      const activityTag = actFamilyMatch[1];
+      if (checkedActivities.has(activityTag)) {
+        const tagStr = actFamilyMatch[0];
+        const schema = catalogService.getActivitySchema(activityTag);
+        if (!schema) continue;
+        for (const propDef of schema.activity.properties) {
+          if (!propDef.required) continue;
+          if (!tagStr.includes(`${propDef.name}="`)) {
+            const closeTag = `</${activityTag}>`;
+            const endIdx = allXamlContent.indexOf(closeTag, actFamilyMatch.index);
+            const bodySection = endIdx > 0 ? allXamlContent.substring(actFamilyMatch.index, endIdx) : tagStr;
+            if (!bodySection.includes(`${activityTag}.${propDef.name}`)) {
+              warnings.push(`${schema.activity.displayName || activityTag} activity is missing required property "${propDef.name}"`);
+            }
+          }
+        }
+        continue;
+      }
+      checkedActivities.add(activityTag);
+      const tagStr = actFamilyMatch[0];
+      const schema = catalogService.getActivitySchema(activityTag);
+      if (!schema) continue;
+      for (const propDef of schema.activity.properties) {
+        if (!propDef.required) continue;
+        if (!tagStr.includes(`${propDef.name}="`)) {
+          const closeTag = `</${activityTag}>`;
+          const endIdx = allXamlContent.indexOf(closeTag, actFamilyMatch.index);
+          const bodySection = endIdx > 0 ? allXamlContent.substring(actFamilyMatch.index, endIdx) : tagStr;
+          if (!bodySection.includes(`${activityTag}.${propDef.name}`)) {
+            warnings.push(`${schema.activity.displayName || activityTag} activity is missing required property "${propDef.name}"`);
           }
         }
       }

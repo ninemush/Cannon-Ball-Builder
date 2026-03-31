@@ -16,6 +16,7 @@ import { lintXamlExpressions } from "./xaml/vbnet-expression-linter";
 import { validateTypeCompatibility } from "./xaml/type-compatibility-validator";
 import { scoreSelectorQuality, generateSelectorWarnings, injectResilienceDefaults } from "./xaml/selector-quality-scorer";
 import { XAML_INFRASTRUCTURE_TYPE_ARGUMENTS } from "./xaml/xaml-compliance";
+import { UIPATH_PACKAGE_ALIAS_MAP } from "./uipath-shared";
 
 const KNOWN_ACTIVITIES = ACTIVITY_REGISTRY;
 
@@ -2092,20 +2093,24 @@ function checkTransitiveDependencies(input: QualityGateInput): QualityGateViolat
     const shortName = entry.name.split("/").pop() || entry.name;
     const requiredPackages = scanXamlForRequiredPackages(entry.content);
 
-    for (const pkg of requiredPackages) {
+    for (const rawPkg of requiredPackages) {
+      const pkg = UIPATH_PACKAGE_ALIAS_MAP[rawPkg] || rawPkg;
       if (pkg === "UiPath.System.Activities") continue;
       const exactMatch = declaredPackages.has(pkg);
       if (!exactMatch) {
         const fuzzyMatch = Array.from(declaredPackages).some(d =>
           d.toLowerCase() === pkg.toLowerCase()
         );
-        if (!fuzzyMatch) {
+        const aliasMatch = !fuzzyMatch && Array.from(declaredPackages).some(d =>
+          UIPATH_PACKAGE_ALIAS_MAP[d] === pkg || UIPATH_PACKAGE_ALIAS_MAP[pkg] === d
+        );
+        if (!fuzzyMatch && !aliasMatch) {
           violations.push({
             category: "accuracy",
             severity: "warning",
             check: "transitive-dependency-missing",
             file: shortName,
-            detail: `Activity requires package "${pkg}" but it is not declared in project.json dependencies`,
+            detail: `Activity requires package "${pkg}"${rawPkg !== pkg ? ` (canonicalized from "${rawPkg}")` : ""} but it is not declared in project.json dependencies`,
           });
         }
       }

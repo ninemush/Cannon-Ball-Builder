@@ -400,6 +400,88 @@ const VBNET_RESERVED = new Set([
   "xor",
 ]);
 
+function cascadeTypeRepairs(
+  content: string,
+  fileName: string,
+  varName: string,
+  oldClrType: string,
+  newClrType: string,
+  allBindings: PropertyBinding[],
+  violations: QualityGateViolation[],
+  repairs: TypeRepairAction[],
+): { content: string; changed: boolean } {
+  let changed = false;
+
+  const downstreamBindings = allBindings
+    .filter(b => b.boundVariable === varName && b.direction === "In")
+    .sort((a, b) => b.matchStart - a.matchStart);
+
+  for (const binding of downstreamBindings) {
+    const schema = catalogService.getActivitySchema(binding.activityTag);
+    if (!schema) continue;
+
+    const propDef = schema.activity.properties.find(p => p.name === binding.propertyName);
+    if (!propDef) continue;
+
+    const expectedNorm = normalizeClrType(propDef.clrType);
+    if (isGenericCatalogType(expectedNorm)) continue;
+
+    if (areTypesCompatible(newClrType, expectedNorm)) continue;
+
+    const conversion = getConversion(newClrType, expectedNorm);
+    if (!conversion) {
+      violations.push({
+        category: "accuracy",
+        severity: propDef.required ? "error" : "warning",
+        check: "TYPE_MISMATCH_CASCADE_UNKNOWN",
+        file: fileName,
+        detail: `Line ${binding.line}: Cascaded type mismatch — variable "${varName}" (now ${newClrType}) bound to ${binding.activityTag}.${binding.propertyName} (expects ${expectedNorm}). No known conversion available.`,
+      });
+      continue;
+    }
+
+    if (conversion.kind === "wrap" && conversion.wrapper) {
+      content = applyConversionWrapAtPosition(
+        content, varName, conversion.wrapper, binding.matchStart, binding.matchEnd
+      );
+      changed = true;
+
+      console.log(`[Type Cascade] Applied conversion ${conversion.wrapper} for "${varName}" at ${binding.activityTag}.${binding.propertyName} (${newClrType}→${expectedNorm})`);
+
+      repairs.push({
+        file: fileName,
+        line: binding.line,
+        activity: binding.activityTag,
+        property: binding.propertyName,
+        expectedType: propDef.clrType,
+        actualType: newClrType,
+        repairKind: "conversion-wrap",
+        boundVariable: varName,
+        detail: `Cascaded repair: ${conversion.detail.replace("[var]", varName)} (triggered by upstream type change from ${oldClrType} to ${newClrType})`,
+      });
+
+      violations.push({
+        category: "accuracy",
+        severity: "warning",
+        check: "TYPE_MISMATCH_CASCADE",
+        file: fileName,
+        detail: `Line ${binding.line}: Cascaded type repair — applied ${conversion.wrapper} to "${varName}" for ${binding.activityTag}.${binding.propertyName} (variable type changed from ${oldClrType} to ${newClrType})`,
+      });
+    } else {
+      const severity = propDef.required ? "error" : "warning";
+      violations.push({
+        category: "accuracy",
+        severity: severity as "error" | "warning",
+        check: "TYPE_MISMATCH_CASCADE_UNRESOLVED",
+        file: fileName,
+        detail: `Line ${binding.line}: Cascaded type mismatch — variable "${varName}" (now ${newClrType}) bound to ${binding.activityTag}.${binding.propertyName} (expects ${expectedNorm}). ${conversion.detail}`,
+      });
+    }
+  }
+
+  return { content, changed };
+}
+
 export function validateTypeCompatibility(
   xamlEntries: { name: string; content: string }[],
 ): TypeMismatchResult {
@@ -519,6 +601,16 @@ export function validateTypeCompatibility(
             file: shortName,
             detail: `Line ${binding.line}: Auto-repaired — changed variable "${binding.boundVariable}" type from ${oldType} to ${targetTypeArg} to match ${binding.activityTag}.${binding.propertyName} (${binding.expectedClrType})`,
           });
+
+          const cascadeResults = cascadeTypeRepairs(
+            patchedContent, shortName, binding.boundVariable,
+            oldClrType, normalizedExpectedOut, bindings, violations, repairs
+          );
+          if (cascadeResults.changed) {
+            patchedContent = cascadeResults.content;
+            changed = true;
+            madeChangesThisPass = true;
+          }
         }
       }
 
@@ -861,6 +953,81 @@ export function validateTypeCompatibility(
           });
         }
       }
+    }
+
+    const bareTokenPattern = /(\w+)="([^"]+)"/g;
+    let bareTokenMatch;
+    while ((bareTokenMatch = bareTokenPattern.exec(patchedContent)) !== null) {
+      const propNameCandidate = bareTokenMatch[1];
+      const rawValue = bareTokenMatch[2];
+
+      if (rawValue.startsWith("[") || rawValue.startsWith("{") || rawValue.startsWith("<")) continue;
+      if (/^\d/.test(rawValue) || rawValue === "True" || rawValue === "False" || rawValue === "Nothing") continue;
+
+      const decoded = rawValue
+        .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'");
+
+      if (!/^[A-Za-z_][A-Za-z0-9_/]*$/.test(decoded)) continue;
+
+      if (decoded.length <= 1) continue;
+
+      const parentTagMatch = patchedContent.substring(
+        Math.max(0, bareTokenMatch.index - 200), bareTokenMatch.index
+      ).match(/<((?:[a-z]+:)?[A-Z][A-Za-z]+)\s[^>]*$/);
+      if (!parentTagMatch) continue;
+
+      const parentTag = parentTagMatch[1];
+      const schema = catalogService.getActivitySchema(parentTag);
+      if (!schema) continue;
+
+      const propDef = schema.activity.properties.find(p => p.name === propNameCandidate);
+      if (!propDef) continue;
+
+      const normalizedExpected = normalizeClrType(propDef.clrType);
+      if (normalizedExpected !== "System.String") continue;
+
+      const allVars = extractVariableDeclarations(patchedContent);
+      const isVar = allVars.some(v => v.name === decoded);
+      if (isVar) continue;
+
+      const lowerDecoded = decoded.toLowerCase();
+      if (VBNET_RESERVED.has(lowerDecoded)) continue;
+
+      const VB_BUILTIN_TYPES_CHECK = new Set([
+        "string", "integer", "boolean", "datetime", "timespan", "object",
+        "int32", "int64", "double", "decimal", "byte", "sbyte", "short",
+        "ushort", "uinteger", "ulong", "long", "single", "char", "date",
+        "datatable", "datarow", "datacolumn",
+      ]);
+      if (VB_BUILTIN_TYPES_CHECK.has(lowerDecoded)) continue;
+
+      if (/^(DisplayName|sap2010:|sap:|mc:|xmlns|x:Class|x:TypeArguments|Annotation\.)/.test(propNameCandidate)) continue;
+      if (propDef.validValues && propDef.validValues.includes(decoded)) continue;
+
+      const KNOWN_ARGUMENT_NAMES = new Set([
+        "in_", "out_", "io_", "arg_", "param_",
+      ]);
+      const lowerPrefixed = decoded.toLowerCase();
+      if (KNOWN_ARGUMENT_NAMES.has(lowerPrefixed) || 
+          [...KNOWN_ARGUMENT_NAMES].some(prefix => lowerPrefixed.startsWith(prefix))) continue;
+
+      if (decoded.includes("/") && !decoded.startsWith("PLACEHOLDER_")) continue;
+
+      const quotedValue = `"${decoded}"`;
+      const fullMatch = bareTokenMatch[0];
+      const replacement = `${propNameCandidate}="[${quotedValue}]"`;
+      patchedContent = patchedContent.substring(0, bareTokenMatch.index) + replacement + patchedContent.substring(bareTokenMatch.index + fullMatch.length);
+      changed = true;
+
+      violations.push({
+        category: "accuracy",
+        severity: "warning",
+        check: "BARE_TOKEN_QUOTED",
+        file: shortName,
+        detail: `Auto-quoted bare token "${decoded}" for ${parentTag}.${propNameCandidate} (expected String type) — wrapped in VB string quotes`,
+      });
+
+      console.log(`[Type Compatibility] Auto-quoted bare token "${decoded}" for ${parentTag}.${propNameCandidate}`);
     }
 
     const varNamePattern = /<Variable\s+[^>]*Name="([^"]+)"/g;
