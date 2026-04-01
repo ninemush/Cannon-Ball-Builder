@@ -47,6 +47,7 @@ import archiver from "archiver";
   import type { StudioProfile } from "./catalog/metadata-service";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
+  import { runEmissionGate, type EmissionGateResult } from "./emission-gate";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
   import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, buildDynamicXmlnsDeclarations, buildDynamicAssemblyRefs, buildDynamicNamespaceImports, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
@@ -4822,6 +4823,27 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
     }
 
+    const emissionGateResult = runEmissionGate(xamlEntries);
+    if (emissionGateResult.violations.length > 0) {
+      console.log(`[Emission Gate] Post-generation emission contract: ${emissionGateResult.summary.totalViolations} violation(s) — ${emissionGateResult.summary.stubbed} stubbed, ${emissionGateResult.summary.corrected} corrected, ${emissionGateResult.summary.blocked} blocked`);
+      for (const entry of xamlEntries) {
+        const basename = entry.name.split("/").pop() || entry.name;
+        const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === basename);
+        if (archivePath) {
+          deferredWrites.set(archivePath, entry.content);
+        }
+      }
+      if (emissionGateResult.blocked) {
+        const blockedViolations = emissionGateResult.violations.filter(v => v.resolution === "blocked");
+        const diagnostics = blockedViolations.map(v => `  ${v.file}${v.line ? `:${v.line}` : ""} — ${v.detail}`).join("\n");
+        console.error(`[Emission Gate] BLOCKING: ${blockedViolations.length} emission contract violation(s) cannot be safely remediated:\n${diagnostics}`);
+        throw new QualityGateError(
+          `[Emission Gate] Packaging blocked: ${blockedViolations.length} emission contract violation(s) cannot be safely remediated. ` +
+          blockedViolations.map(v => `${v.file}${v.line ? `:${v.line}` : ""}: ${v.detail}`).join("; ")
+        );
+      }
+    }
+
     const normalizedFields = finalNormalize(xamlEntries, deferredWrites);
     if (normalizedFields.size > 0) {
       console.log(`[Final Normalization] Normalized fields before quality gate: ${Array.from(normalizedFields).join(", ")}`);
@@ -5467,6 +5489,19 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       qualityWarnings: dhgQualityWarnings,
       totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
       studioCompatibility: dhgStudioCompatibility,
+      emissionGateViolations: emissionGateResult.violations.length > 0 ? {
+        totalViolations: emissionGateResult.summary.totalViolations,
+        stubbed: emissionGateResult.summary.stubbed,
+        corrected: emissionGateResult.summary.corrected,
+        blocked: emissionGateResult.summary.blocked,
+        details: emissionGateResult.violations.map(v => ({
+          file: v.file,
+          line: v.line,
+          type: v.type,
+          detail: v.detail,
+          resolution: v.resolution,
+        })),
+      } : undefined,
     };
 
     if (xamlEntries.length > 0) {
@@ -6254,6 +6289,19 @@ ${depEntries}
     totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
     structuralPreservationMetrics: structuralPreservationMetrics.length > 0 ? structuralPreservationMetrics : undefined,
     studioCompatibility,
+    emissionGateViolations: emissionGateResult.violations.length > 0 ? {
+      totalViolations: emissionGateResult.summary.totalViolations,
+      stubbed: emissionGateResult.summary.stubbed,
+      corrected: emissionGateResult.summary.corrected,
+      blocked: emissionGateResult.summary.blocked,
+      details: emissionGateResult.violations.map(v => ({
+        file: v.file,
+        line: v.line,
+        type: v.type,
+        detail: v.detail,
+        resolution: v.resolution,
+      })),
+    } : undefined,
     preEmissionValidation: specValidationReport ? {
       totalActivities: specValidationReport.totalActivities,
       validActivities: specValidationReport.validActivities,

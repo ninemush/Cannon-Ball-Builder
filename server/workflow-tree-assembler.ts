@@ -18,6 +18,7 @@ import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml, escapeXmlExpression, normalizeXmlExpression, escapeXmlTextContent } from "./lib/xml-utils";
 import { XMLValidator } from "fast-xml-parser";
 import { buildExpression, isValueIntent, normalizeStringToExpression, normalizePropertyToValueIntent, type ValueIntent } from "./xaml/expression-builder";
+import { validateMapClrTypeOutput, reportCriticalTypeDiagnostic } from "./emission-gate";
 import { getActivityTag, getActivityPrefixStrict, injectMissingNamespaceDeclarations } from "./xaml/xaml-compliance";
 import { lintExpression } from "./xaml/vbnet-expression-linter";
 import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
@@ -209,7 +210,9 @@ export function isUnsafeVariableName(name: string): string | null {
   return null;
 }
 
-function mapClrType(type: string): string {
+type MapClrTypeContext = "critical" | "non-critical";
+
+function mapClrType(type: string, context: MapClrTypeContext = "non-critical"): string {
   const trimmed = type.trim();
   const lower = trimmed.toLowerCase();
   if (lower === "string" || lower === "system.string" || lower === "x:string") return "x:String";
@@ -229,33 +232,62 @@ function mapClrType(type: string): string {
 
   const dictMatch = trimmed.match(/^Dictionary\s*<\s*([^,]+)\s*,\s*([^>]+)\s*>$/i);
   if (dictMatch) {
-    const keyType = mapClrType(dictMatch[1].trim());
-    const valType = mapClrType(dictMatch[2].trim());
+    const keyType = mapClrType(dictMatch[1].trim(), context);
+    const valType = mapClrType(dictMatch[2].trim(), context);
     return `scg:Dictionary(${keyType}, ${valType})`;
   }
 
   const listMatch = trimmed.match(/^List\s*<\s*([^>]+)\s*>$/i);
   if (listMatch) {
-    const itemType = mapClrType(listMatch[1].trim());
+    const itemType = mapClrType(listMatch[1].trim(), context);
     return `scg:List(${itemType})`;
   }
 
   const arrayMatch = trimmed.match(/^Array\s*<\s*([^>]+)\s*>$/i);
   if (arrayMatch) {
-    const itemType = mapClrType(arrayMatch[1].trim());
+    const itemType = mapClrType(arrayMatch[1].trim(), context);
     return `scg:List(${itemType})`;
   }
 
   const arrayBracketMatch = trimmed.match(/^(\w+)\[\]$/);
   if (arrayBracketMatch) {
-    const itemType = mapClrType(arrayBracketMatch[1].trim());
+    const itemType = mapClrType(arrayBracketMatch[1].trim(), context);
     return `scg:List(${itemType})`;
   }
 
   if (trimmed.includes("clr-namespace:")) {
+    if (/\[/.test(trimmed)) {
+      const reason = "clr-namespace type with leaked brackets";
+      if (context === "critical") {
+        console.error(`[mapClrType] CRITICAL: ${reason} in critical context: "${trimmed}" — blocking`);
+        reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason, context, source: "workflow-tree-assembler" });
+      } else {
+        console.warn(`[mapClrType] ${reason}: "${trimmed}" — falling back to x:Object`);
+      }
+      return "x:Object";
+    }
+    if (!/assembly=/.test(trimmed)) {
+      const reason = "clr-namespace type without assembly qualification";
+      if (context === "critical") {
+        console.error(`[mapClrType] CRITICAL: ${reason} in critical context: "${trimmed}" — blocking`);
+        reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason, context, source: "workflow-tree-assembler" });
+      } else {
+        console.warn(`[mapClrType] ${reason}: "${trimmed}" — falling back to x:Object`);
+      }
+      return "x:Object";
+    }
     return trimmed;
   }
 
+  const validation = validateMapClrTypeOutput(type, type, context);
+  if (!validation.valid) {
+    if (context === "critical") {
+      console.error(`[mapClrType] CRITICAL: ${validation.diagnostic}`);
+      reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason: validation.diagnostic || "unrecognized type", context, source: "workflow-tree-assembler" });
+    } else if (validation.diagnostic) {
+      console.warn(`[mapClrType] ${validation.diagnostic}`);
+    }
+  }
   return "x:Object";
 }
 
@@ -1976,7 +2008,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
     const outputType = node.outputType || "x:Object";
     childParts.push(
       `  <${tag}.Result>\n` +
-      `    <OutArgument x:TypeArguments="${mapClrType(outputType)}">${escapeXmlTextContent(ensureBracketWrapped(node.outputVar, _activeDeclarationLookup || undefined))}</OutArgument>\n` +
+      `    <OutArgument x:TypeArguments="${mapClrType(outputType, "critical")}">${escapeXmlTextContent(ensureBracketWrapped(node.outputVar, _activeDeclarationLookup || undefined))}</OutArgument>\n` +
       `  </${tag}.Result>`
     );
   }
@@ -2665,7 +2697,7 @@ function buildXMembersBlock(
   const lines: string[] = [];
   lines.push("  <x:Members>");
   for (const arg of args) {
-    const clrType = mapClrType(arg.type);
+    const clrType = mapClrType(arg.type, "critical");
     const dir = arg.direction || "InArgument";
     lines.push(`    <x:Property Name="${escapeXml(arg.name)}" Type="${dir}(${clrType})" />`);
   }

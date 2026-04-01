@@ -289,6 +289,19 @@ export interface PipelineOutcomeReport {
     commentConversions: number;
     issueCount: number;
   };
+  emissionGateViolations?: {
+    totalViolations: number;
+    stubbed: number;
+    corrected: number;
+    blocked: number;
+    details: Array<{
+      file: string;
+      line?: number;
+      type: string;
+      detail: string;
+      resolution: string;
+    }>;
+  };
 }
 
 export interface PipelineResult {
