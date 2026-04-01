@@ -1,0 +1,39 @@
+#368 - Benchmark-critical catalog coverage fix
+What & Why
+The activity catalog's GSuite package is missing Google Calendar and Google Contacts activities. These are core operations in the BirthdayGreetingsV12 benchmark flow (and likely other Google Workspace automations). Without catalog entries, the AI enricher has no template for these operations and improvises with generic IntegrationServiceHTTPRequest calls, manual JSON parsing, and extra intermediate variables — which amplifies downstream undeclared-variable and expression-syntax failures. This task adds only the missing activities actually required by active benchmark flows, with correct property schemas and package mappings so the AI palette can use them directly.
+
+Done looks like
+BirthdayGreetingsV12 regeneration uses GoogleCalendarGetEvents and GoogleContactsSearchContacts (or equivalent catalog class names) instead of falling back to generic HTTP requests or LogMessage TODO stubs
+The AI enricher's Section 2 activity template list includes the new activities with proper property placeholders
+The deterministic scaffold no longer emits "TODO: Configure Google Calendar activity" / "TODO: Configure Google Contacts activity" stubs for processes that reference these Google services — it maps to the real catalog activities instead
+The new catalog entries have correct property schemas (required/optional, types, direction), package mappings (UiPath.GSuite.Activities), and output contracts (e.g., output DataTable for calendar events, output collection for contacts)
+Existing regression tests still pass; new entries don't break pipeline or quality gate
+Out of scope
+Broad catalog expansion beyond what benchmark flows need
+Adding activities for services not used by any active benchmark (e.g., Google Slides, Google Forms)
+Variable auto-injection or expression linter changes (covered by Task #367)
+Changes to the AI enricher prompt structure or WorkflowSpec format
+Changes to the quality gate or validation logic
+Tasks
+Add GoogleCalendarGetEvents activity definition to activity-definitions.ts under the existing GSUITE_ACTIVITIES block with correct property schema — at minimum: ConnectionId (or scope reference), CalendarName (String, required), TimeMin (String), TimeMax (String), MaxResults (Int32), and an output property for the results collection (DataTable or JSON string). Use real UiPath GSuite package property naming conventions.
+
+Add GoogleContactsSearchContacts activity definition with properties: ConnectionId, Query/SearchQuery (String, required), MaxResults (Int32), and output property for matched contacts. Add a companion GoogleContactsGetContact or equivalent if the API separates search from detail retrieval (check the actual UiPath GSuite package API surface).
+
+Regenerate the catalog JSON (catalog/activity-catalog.json) to include the new entries. Verify they appear in the built catalog with correct package ID, prefix, namespace, and assembly.
+
+Update deterministic-scaffold.ts (lines 190-199) to map Google Calendar and Google Contacts operations to the new catalog activity templates instead of emitting LogMessage TODO stubs.
+
+Verify the new activities appear in the AI enricher's template block by running buildTemplateBlock("api-integration", true) and confirming the new entries are present with property placeholders. No prompt changes needed — the template builder already pulls from the catalog dynamically.
+
+Run the existing pipeline regression tests to confirm nothing breaks. If a BirthdayGreetingsV12 regression fixture exists, verify it now uses the new catalog activities instead of generic fallbacks.
+
+Relevant files
+server/catalog/activity-definitions.ts:239-328
+catalog/activity-catalog.json:6280-6286
+catalog/generation-metadata.json:95
+server/deterministic-scaffold.ts:185-200
+server/catalog/xaml-template-builder.ts:327-349
+server/catalog/catalog-service.ts:295-324,326-345
+server/ai-xaml-enricher.ts:365
+server/xaml/xaml-compliance.ts:35,221
+server/__tests__/pipeline-regression.test.ts
