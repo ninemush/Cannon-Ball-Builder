@@ -260,6 +260,35 @@ const GUARANTEED_ACTIVITY_PREFIX_MAP: Record<string, string> = {
   "BoxScope": "ubox", "BoxUploadFile": "ubox", "BoxDownloadFile": "ubox", "BoxDeleteFile": "ubox", "BoxSearchFiles": "ubox",
 };
 
+export function resolveActivityToPackage(activityName: string): string | null {
+  const prefix = GUARANTEED_ACTIVITY_PREFIX_MAP[activityName];
+  if (prefix === undefined) {
+    if (SYSTEM_ACTIVITIES_NO_PREFIX.has(activityName)) return "System.Activities";
+    if (catalogService.isLoaded()) {
+      const schema = catalogService.getActivitySchema(activityName);
+      if (schema) return schema.packageId;
+    }
+    return null;
+  }
+
+  const matchingPackages: string[] = [];
+  const pkgEntries = Object.entries(PACKAGE_NAMESPACE_MAP);
+  for (let i = 0; i < pkgEntries.length; i++) {
+    if (pkgEntries[i][1].prefix === prefix) {
+      matchingPackages.push(pkgEntries[i][0]);
+    }
+  }
+
+  if (matchingPackages.length === 1) return matchingPackages[0];
+
+  if (catalogService.isLoaded()) {
+    const schema = catalogService.getActivitySchema(activityName);
+    if (schema) return schema.packageId;
+  }
+
+  return matchingPackages.length > 0 ? matchingPackages[0] : null;
+}
+
 export function getActivityPrefixStrict(templateName: string): string | null {
   if (SYSTEM_ACTIVITIES_NO_PREFIX.has(templateName)) return "";
 
@@ -293,7 +322,7 @@ export function getActivityTag(templateName: string): string {
   return strictPrefix ? `${strictPrefix}:${templateName}` : templateName;
 }
 
-function resolvePackageNamespaceInfo(packageId: string): PackageNamespaceInfo | null {
+export function resolvePackageNamespaceInfo(packageId: string): PackageNamespaceInfo | null {
   if (catalogService.isLoaded()) {
     const catalogInfo = catalogService.getPackageNamespaceInfo(packageId);
     if (catalogInfo) {
@@ -1627,6 +1656,8 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
 
   xml = collapseDoubledArgumentsXmlParser(xml);
 
+  xml = injectInArgumentTypeArguments(xml);
+
   const bareVarBefore = xml;
   const bareVarResult = fixBareVariableRefsInExpressionAttributes(xml);
   if (bareVarResult !== bareVarBefore) {
@@ -1732,6 +1763,23 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
     throw new Error(`XAML XML well-formedness validation failed: ${xmlValidation.errors.join("; ")}`);
   }
 
+  return xml;
+}
+
+export function injectInArgumentTypeArguments(xml: string): string {
+  xml = xml.replace(/<(InArgument|OutArgument)(?![^>]*x:TypeArguments)(\s[^>]*)?>([^<]+)<\/\1>/g, (match: string, tag: string, attrs: string, content: string) => {
+    const trimmed = content.trim();
+    if (/^-?\d+$/.test(trimmed)) {
+      return `<${tag} x:TypeArguments="x:Int32"${attrs || ""}>${content}</${tag}>`;
+    }
+    if (/^-?\d+\.\d+(?:[eE][+-]?\d+)?$/.test(trimmed) || /^-?\d+[eE][+-]?\d+$/.test(trimmed)) {
+      return `<${tag} x:TypeArguments="x:Double"${attrs || ""}>${content}</${tag}>`;
+    }
+    if (/^(True|False)$/i.test(trimmed)) {
+      return `<${tag} x:TypeArguments="x:Boolean"${attrs || ""}>${content}</${tag}>`;
+    }
+    return match;
+  });
   return xml;
 }
 

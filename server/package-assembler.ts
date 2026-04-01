@@ -48,7 +48,7 @@ import archiver from "archiver";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
-  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations } from "./xaml/xaml-compliance";
+  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, buildDynamicXmlnsDeclarations, buildDynamicAssemblyRefs, buildDynamicNamespaceImports, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
@@ -391,6 +391,39 @@ export function canonicalizeWorkflowName(name: string): string {
     result = result.slice(0, -5);
   }
   return result.trim().toLowerCase();
+}
+
+export function detectFinalDedupCollisions(
+  paths: string[],
+): { dupsToRemove: string[]; collisionDetails: string[] } {
+  const canonicalSeen = new Map<string, string>();
+  const dupsToRemove: string[] = [];
+  const collisionDetails: string[] = [];
+  for (const path of paths) {
+    if (!path.endsWith(".xaml")) continue;
+    const fileName = path.split("/").pop() || path;
+    const canonical = canonicalizeWorkflowName(fileName.replace(/\.xaml$/i, ""));
+    const existing = canonicalSeen.get(canonical);
+    if (existing) {
+      const existingFileName = existing.split("/").pop() || existing;
+      const isBracketNamed = /[\[\]"]/.test(fileName) || fileName.indexOf("&quot;") >= 0;
+      const existingIsBracketNamed = /[\[\]"]/.test(existingFileName) || existingFileName.indexOf("&quot;") >= 0;
+      if (isBracketNamed && !existingIsBracketNamed) {
+        dupsToRemove.push(path);
+        collisionDetails.push(`Rejected bracket-named "${fileName}" — canonical match with "${existingFileName}"`);
+      } else if (!isBracketNamed && existingIsBracketNamed) {
+        dupsToRemove.push(existing);
+        canonicalSeen.set(canonical, path);
+        collisionDetails.push(`Rejected bracket-named "${existingFileName}" — canonical match with "${fileName}"`);
+      } else {
+        dupsToRemove.push(path);
+        collisionDetails.push(`Rejected duplicate "${fileName}" — canonical collision with "${existingFileName}"`);
+      }
+    } else {
+      canonicalSeen.set(canonical, path);
+    }
+  }
+  return { dupsToRemove, collisionDetails };
 }
 
 function isCanonicalInfrastructureName(name: string): boolean {
@@ -1214,6 +1247,180 @@ function buildAssemblyToPackageMap(): Map<string, string> {
     }
   }
   return map;
+}
+
+function runAuthoritativeNamespaceInjection(
+  deferredWrites: Map<string, string>,
+  deps: Record<string, string>,
+  isCrossPlatform: boolean,
+): { injectedCount: number; warnings: string[] } {
+  const warnings: string[] = [];
+  let injectedCount = 0;
+
+  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+    if (!path.endsWith(".xaml")) return;
+    const fileName = path.split("/").pop() || path;
+
+    const usedPackages = collectUsedPackages(content);
+    const prefixPattern = /<(\w+):/g;
+    let pm;
+    const usedPrefixes = new Set<string>();
+    while ((pm = prefixPattern.exec(content)) !== null) {
+      if (pm[1] !== "xmlns" && pm[1] !== "xml" && pm[1] !== "x" && pm[1] !== "sap" && pm[1] !== "sap2010" && pm[1] !== "mc") {
+        usedPrefixes.add(pm[1]);
+      }
+    }
+
+    for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+      if (!info.prefix || info.prefix === "") continue;
+      if (usedPrefixes.has(info.prefix)) {
+        usedPackages.add(packageId);
+      }
+    }
+
+    let updated = content;
+    const additionalXmlns = buildDynamicXmlnsDeclarations(usedPackages, isCrossPlatform, updated);
+    const additionalAssemblyRefs = buildDynamicAssemblyRefs(usedPackages, updated);
+    const additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages);
+
+    if (additionalXmlns) {
+      const xmlnsInsertPoint = updated.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
+      if (xmlnsInsertPoint >= 0) {
+        const insertAfter = xmlnsInsertPoint + 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'.length;
+        updated = updated.slice(0, insertAfter) + "\n" + additionalXmlns + updated.slice(insertAfter);
+        injectedCount++;
+      }
+    }
+
+    if (additionalAssemblyRefs) {
+      const refsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.ReferencesForImplementation>/);
+      if (refsMatch && refsMatch.index !== undefined) {
+        updated = updated.slice(0, refsMatch.index) + additionalAssemblyRefs + "\n" + updated.slice(refsMatch.index);
+        injectedCount++;
+      }
+    }
+
+    if (additionalNamespaceImports) {
+      const importsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.NamespacesForImplementation>/);
+      if (importsMatch && importsMatch.index !== undefined) {
+        updated = updated.slice(0, importsMatch.index) + additionalNamespaceImports + "\n" + updated.slice(importsMatch.index);
+        injectedCount++;
+      }
+    }
+
+    Array.from(usedPrefixes).forEach(prefix => {
+      const hasXmlns = new RegExp(`xmlns:${prefix}=`).test(updated);
+      if (!hasXmlns) {
+        let foundPkg = false;
+        for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+          if (info.prefix === prefix) {
+            foundPkg = true;
+            break;
+          }
+        }
+        if (!foundPkg) {
+          warnings.push(`[${fileName}] Activity prefix "${prefix}:" used but has no catalog entry — may be unresolvable in Studio`);
+        }
+      }
+    });
+
+    if (updated !== content) {
+      deferredWrites.set(path, updated);
+    }
+  });
+
+  return { injectedCount, warnings };
+}
+
+export function runStudioResolutionSmokeTest(
+  deferredWrites: Map<string, string>,
+  deps: Record<string, string>,
+): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const depPackages = new Set(Object.keys(deps));
+  const assemblyToPackage = buildAssemblyToPackageMap();
+
+  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+    if (!path.endsWith(".xaml")) return;
+    const fileName = path.split("/").pop() || path;
+
+    const declaredPrefixes = new Set<string>();
+    const xmlnsPattern = /xmlns:(\w+)="([^"]+)"/g;
+    let xm;
+    while ((xm = xmlnsPattern.exec(content)) !== null) {
+      declaredPrefixes.add(xm[1]);
+    }
+
+    const declaredAssemblies = new Set<string>();
+    const asmRefPattern = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+    let arm;
+    while ((arm = asmRefPattern.exec(content)) !== null) {
+      declaredAssemblies.add(arm[1].trim());
+    }
+
+    const declaredNamespaces = new Set<string>();
+    const nsImportPattern = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+    let nsm;
+    while ((nsm = nsImportPattern.exec(content)) !== null) {
+      const val = nsm[1].trim();
+      declaredNamespaces.add(val);
+      const clrMatch = val.match(/^clr-namespace:([^;]+)/);
+      if (clrMatch) {
+        declaredNamespaces.add(clrMatch[1].trim());
+      }
+    }
+
+    const checkedActivities = new Set<string>();
+    const activityTagPattern = /<(\w+):(\w+)[\s>\/]/g;
+    let atm;
+    while ((atm = activityTagPattern.exec(content)) !== null) {
+      const prefix = atm[1];
+      const activityName = atm[2];
+      if (prefix === "xmlns" || prefix === "xml" || prefix === "x" || prefix === "sap" || prefix === "sap2010" || prefix === "mc" || prefix === "s" || prefix === "scg" || prefix === "sco" || prefix === "mva" || prefix === "sads" || prefix === "scg2") continue;
+
+      if (!declaredPrefixes.has(prefix)) {
+        errors.push(`[${fileName}] Activity tag "${prefix}:${activityName}" uses undeclared namespace prefix "${prefix}:" — will be unresolvable in Studio`);
+      }
+
+      const activityKey = prefix + ":" + activityName;
+      if (checkedActivities.has(activityKey)) continue;
+      checkedActivities.add(activityKey);
+
+      const resolvedPackage = resolveActivityToPackage(activityName);
+
+      let matchedPackage = resolvedPackage;
+      if (!matchedPackage) {
+        for (const [pkgId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+          if (info.prefix === prefix) {
+            matchedPackage = pkgId;
+            break;
+          }
+        }
+      }
+
+      if (matchedPackage && !depPackages.has(matchedPackage)) {
+        errors.push(`[${fileName}] Activity "${prefix}:${activityName}" requires package "${matchedPackage}" which is not in project.json dependencies`);
+      }
+
+      if (matchedPackage) {
+        const info = PACKAGE_NAMESPACE_MAP[matchedPackage];
+        if (info && info.assembly && info.assembly !== "UiPath.Core.Activities" && info.assembly !== "System.Activities") {
+          if (!declaredAssemblies.has(info.assembly)) {
+            errors.push(`[${fileName}] Activity "${prefix}:${activityName}" requires assembly "${info.assembly}" which is not in AssemblyReference list`);
+          }
+        }
+
+        if (info && info.clrNamespace) {
+          if (!declaredNamespaces.has(info.clrNamespace)) {
+            errors.push(`[${fileName}] Activity "${prefix}:${activityName}" missing namespace import "${info.clrNamespace}" in NamespacesForImplementation — activity will be unresolvable`);
+          }
+        }
+      }
+    }
+  });
+
+  return { errors, warnings };
 }
 
 function extractXamlNamespaceAndAssemblyPackages(allXamlContent: string): Set<string> {
@@ -2806,6 +3013,63 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       if (hasMain) {
         console.log(`[UiPath] Multi-workflow tree assembly complete: ${generatedWorkflowNames.size} workflow(s) assembled (${nonMainWorkflowNames.length} non-Main)`);
+      }
+    }
+
+    if (!specValidationReport && enrichmentsToProcess.length === 0) {
+      const deferredXamlCount = Array.from(deferredWrites.keys()).filter(k => k.endsWith(".xaml")).length;
+      if (deferredXamlCount > 0) {
+        specValidationReport = {
+          totalActivities: 0,
+          validActivities: 0,
+          unknownActivities: 0,
+          strippedProperties: 0,
+          enumCorrections: 0,
+          missingRequiredFilled: 0,
+          commentConversions: 0,
+          excessiveStrippingCount: 0,
+          issues: [{
+            activityType: "PIPELINE_HEALTH",
+            property: "specValidation",
+            issue: `Pre-emission validation bypassed: ${deferredXamlCount} XAML file(s) with zero activity coverage`,
+            severity: "error" as const,
+          }],
+        };
+        dependencyWarnings.push({
+          code: "PRE_EMISSION_VALIDATION_BYPASSED",
+          message: `Pre-emission spec validation did not run despite ${deferredXamlCount} generated XAML file(s) — build health is degraded`,
+          stage: "pre-emission-spec-validation",
+          recoverable: false,
+        });
+        throw new Error(`[Pre-Emission Spec Validation] BLOCKED: ${deferredXamlCount} XAML file(s) generated but pre-emission validation produced zero activity coverage — cannot certify build health`);
+      } else {
+        console.warn(`[Pre-Emission Spec Validation] No enrichments and no XAML files — initializing empty report`);
+        specValidationReport = {
+          totalActivities: 0,
+          validActivities: 0,
+          unknownActivities: 0,
+          strippedProperties: 0,
+          enumCorrections: 0,
+          missingRequiredFilled: 0,
+          commentConversions: 0,
+          excessiveStrippingCount: 0,
+          issues: [],
+        };
+      }
+    }
+
+    if (specValidationReport) {
+      console.log(`[Pre-Emission Spec Validation] Report: ${specValidationReport.totalActivities} total activities, ${specValidationReport.validActivities} valid, ${specValidationReport.unknownActivities} unknown, ${specValidationReport.strippedProperties} stripped properties, ${specValidationReport.issues.length} issues`);
+
+      const deferredXamlCount = Array.from(deferredWrites.keys()).filter(k => k.endsWith(".xaml")).length;
+      if (specValidationReport.totalActivities === 0 && deferredXamlCount > 0 && enrichmentsToProcess.length > 0) {
+        dependencyWarnings.push({
+          code: "PRE_EMISSION_ZERO_COVERAGE",
+          message: `Pre-emission validation ran but covered 0 activities across ${deferredXamlCount} XAML file(s) and ${enrichmentsToProcess.length} enrichment(s) — build health is degraded`,
+          stage: "pre-emission-spec-validation",
+          recoverable: false,
+        });
+        throw new Error(`[Pre-Emission Spec Validation] BLOCKED: validation ran but covered 0 activities across ${deferredXamlCount} XAML file(s) — cannot certify build health`);
       }
     }
 
@@ -5486,6 +5750,64 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           console.log(`[Post-Repair Dependency Reconciliation] Removing unused dependency: ${rd}`);
           delete deps[rd];
         }
+      }
+    }
+
+    {
+      console.log(`[Authoritative Namespace Injection] Running single authoritative pass across all XAML files...`);
+      const isCrossPlatform = tf === "Portable";
+      const nsInjectionResult = runAuthoritativeNamespaceInjection(deferredWrites, deps, isCrossPlatform);
+      if (nsInjectionResult.injectedCount > 0) {
+        console.log(`[Authoritative Namespace Injection] Injected namespace declarations in ${nsInjectionResult.injectedCount} location(s)`);
+      }
+      for (const warn of nsInjectionResult.warnings) {
+        console.warn(`[Authoritative Namespace Injection] ${warn}`);
+        dependencyWarnings.push({
+          code: "NAMESPACE_INJECTION_WARNING",
+          message: warn,
+          stage: "authoritative-namespace-injection",
+          recoverable: true,
+        });
+      }
+    }
+
+    {
+      console.log(`[Studio Resolution Smoke Test] Scanning all XAML files for unresolvable activities...`);
+      const smokeTestResult = runStudioResolutionSmokeTest(deferredWrites, deps);
+      for (const warn of smokeTestResult.warnings) {
+        console.warn(`[Studio Resolution Smoke Test] WARNING: ${warn}`);
+        dependencyWarnings.push({
+          code: "STUDIO_RESOLUTION_WARNING",
+          message: warn,
+          stage: "studio-resolution-smoke-test",
+          recoverable: true,
+        });
+      }
+      if (smokeTestResult.errors.length > 0) {
+        for (const err of smokeTestResult.errors) {
+          console.error(`[Studio Resolution Smoke Test] ERROR: ${err}`);
+          dependencyWarnings.push({
+            code: "STUDIO_RESOLUTION_FAILURE",
+            message: err,
+            stage: "studio-resolution-smoke-test",
+            recoverable: false,
+          });
+        }
+        throw new Error(`[Studio Resolution Smoke Test] BLOCKED: ${smokeTestResult.errors.length} unresolvable activity error(s) — package would fail in Studio:\n${smokeTestResult.errors.join("\n")}`);
+      } else {
+        console.log(`[Studio Resolution Smoke Test] PASSED — all activity prefixes map to declared namespaces and project.json dependencies`);
+      }
+    }
+
+    {
+      console.log(`[Final Dedup Gate] Checking for bracket-named duplicate files...`);
+      const deferredPaths = Array.from(deferredWrites.keys());
+      const { collisionDetails } = detectFinalDedupCollisions(deferredPaths);
+      if (collisionDetails.length > 0) {
+        for (const detail of collisionDetails) {
+          console.error(`[Final Dedup Gate] ${detail}`);
+        }
+        throw new Error(`[Final Dedup Gate] BLOCKED: ${collisionDetails.length} canonical name collision(s) detected — bracket-named duplicates would create ambiguous workflows in Studio:\n${collisionDetails.join("\n")}`);
       }
     }
 

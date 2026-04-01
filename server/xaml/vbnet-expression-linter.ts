@@ -532,10 +532,34 @@ function validateFunctionCalls(expression: string, issues: LintIssue[]): void {
   }
 }
 
+export function isComplexExpression(expression: string): boolean {
+  const stripped = expression.replace(/"(?:[^"\\]|\\.)*"/g, (m) => " ".repeat(m.length))
+    .replace(/&quot;[^&]*&quot;/g, (m) => " ".repeat(m.length));
+  if (/\bFunction\s*\(/.test(stripped) || /\bSub\s*\(/.test(stripped)) return true;
+  if (/\bFrom\s+\w+\s+In\b/i.test(stripped) && /\b(Select|Where|Aggregate|Group|Order\s+By|Join|Let)\b/i.test(stripped)) return true;
+  const operators = stripped.match(/(\bAndAlso\b|\bOrElse\b|\bAnd\b|\bOr\b|\bXor\b|[+\-*\/&<>=])/g) || [];
+  if (operators.length >= 3) {
+    const funcCallDepth = (stripped.match(/\w+\s*\(/g) || []).length;
+    if (funcCallDepth >= 3) return true;
+  }
+  const nestedCalls = stripped.match(/\w+\s*\([^)]*\w+\s*\(/g);
+  if (nestedCalls && nestedCalls.length >= 2 && operators.length >= 3) return true;
+  return false;
+}
+
 export function lintExpression(expression: string): LintResult {
   const issues: LintIssue[] = [];
   let corrected = expression;
   let wasModified = false;
+
+  if (isComplexExpression(expression)) {
+    issues.push({ code: "COMPLEX_EXPRESSION_PASSTHROUGH", message: "Complex expression (lambdas, LINQ, nested calls, or 3+ operators) — emitting as-is to avoid regex corruption", autoFixed: false });
+    return {
+      original: expression,
+      corrected: null,
+      issues,
+    };
+  }
 
   const applyFix = (code: string, message: string, pattern: RegExp, replacement: string | ((...args: string[]) => string)) => {
     if (testOutsideStrings(corrected, pattern)) {
@@ -807,7 +831,29 @@ export function lintExpression(expression: string): LintResult {
     if (fragment) {
       contextDetail += `, fragment: "${fragment}"`;
     }
-    reportOnly("UNBALANCED_PARENS", `Unbalanced parentheses: ${openParens} open vs ${closeParens} close (diff: ${diff > 0 ? "+" : ""}${diff})${contextDetail}`);
+    if (diff > 0 && diff <= 2) {
+      corrected = corrected + ")".repeat(diff);
+      wasModified = true;
+      issues.push({ code: "UNBALANCED_PARENS", message: `Unbalanced parentheses: ${openParens} open vs ${closeParens} close — appended ${diff} closing paren(s)${contextDetail}`, autoFixed: true });
+    } else if (diff < 0 && diff >= -2) {
+      let fixedExpr = corrected;
+      let remaining = Math.abs(diff);
+      for (let ri = fixedExpr.length - 1; ri >= 0 && remaining > 0; ri--) {
+        if (fixedExpr[ri] === ")") {
+          fixedExpr = fixedExpr.slice(0, ri) + fixedExpr.slice(ri + 1);
+          remaining--;
+        }
+      }
+      if (remaining === 0) {
+        corrected = fixedExpr;
+        wasModified = true;
+        issues.push({ code: "UNBALANCED_PARENS", message: `Unbalanced parentheses: ${openParens} open vs ${closeParens} close — removed ${Math.abs(diff)} extra closing paren(s)${contextDetail}`, autoFixed: true });
+      } else {
+        reportOnly("UNBALANCED_PARENS", `Unbalanced parentheses: ${openParens} open vs ${closeParens} close (diff: ${diff > 0 ? "+" : ""}${diff})${contextDetail}`);
+      }
+    } else {
+      reportOnly("UNBALANCED_PARENS", `Unbalanced parentheses: ${openParens} open vs ${closeParens} close (diff: ${diff > 0 ? "+" : ""}${diff})${contextDetail}`);
+    }
   }
 
   const openBrackets = (exprWithoutStrings.match(/\[/g) || []).length;

@@ -1,7 +1,7 @@
 {
   "catalogVersion": "2.0.0",
-  "generatedAt": "2026-04-01T05:39:21.230Z",
-  "lastVerifiedAt": "2026-04-01T05:39:21.230Z",
+  "generatedAt": "2026-04-01T07:59:25.699Z",
+  "lastVerifiedAt": "2026-04-01T07:59:25.699Z",
   "studioVersion": "25.10.0",
   "packages": [
     {
@@ -1243,9 +1243,9 @@
     },
     {
       "packageId": "UiPath.UIAutomation.Activities",
-      "version": "25.10.29",
+      "version": "25.10.28",
       "feedStatus": "verified",
-      "preferredVersion": "25.10.29",
+      "preferredVersion": "25.10.28",
       "prefix": "ui",
       "clrNamespace": "UiPath.Core.Activities",
       "assembly": "UiPath.UIAutomation.Activities",
@@ -6725,6 +6725,15 @@
           ],
           "properties": [
             {
+              "name": "ConnectionId",
+              "direction": "In",
+              "clrType": "System.String",
+              "xamlSyntax": "attribute",
+              "argumentWrapper": null,
+              "typeArguments": null,
+              "required": true
+            },
+            {
               "name": "Endpoint",
               "direction": "In",
               "clrType": "System.String",
@@ -6760,12 +6769,39 @@
               "required": false
             },
             {
+              "name": "QueryParameters",
+              "direction": "In",
+              "clrType": "System.Collections.Generic.Dictionary`2[System.String,System.String]",
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "InArgument",
+              "typeArguments": "scg:Dictionary(x:String, x:String)",
+              "required": false
+            },
+            {
               "name": "ResponseContent",
               "direction": "Out",
               "clrType": "System.String",
               "xamlSyntax": "child-element",
               "argumentWrapper": "OutArgument",
               "typeArguments": "x:String",
+              "required": false
+            },
+            {
+              "name": "ResponseOutput",
+              "direction": "Out",
+              "clrType": "System.Object",
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "OutArgument",
+              "typeArguments": "x:Object",
+              "required": false
+            },
+            {
+              "name": "Output",
+              "direction": "Out",
+              "clrType": "System.Object",
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "OutArgument",
+              "typeArguments": "x:Object",
               "required": false
             },
             {
