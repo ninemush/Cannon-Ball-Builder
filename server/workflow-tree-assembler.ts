@@ -469,12 +469,12 @@ function registerImplicitOutputVariables(children: WorkflowNode[], registry: Dec
         const varNames: string[] = [];
 
         if (templateName === "GetAsset" || templateName === "GetRobotAsset") {
-          const rawOutputVar = actNode.outputVar || (props.AssetValue as string) || (props.Value as string) || "";
+          const rawOutputVar = actNode.outputVar || coercePropToString(props.AssetValue) || coercePropToString(props.Value) || "";
           if (rawOutputVar && isValidOutputVariableName(rawOutputVar)) {
             varNames.push(rawOutputVar);
           } else {
-            const assetName = (props.AssetName as string) || (props.assetName as string) || "";
-            const assetType = (props.AssetType as string) || (props.assetType as string) || "String";
+            const assetName = coercePropToString(props.AssetName) || coercePropToString(props.assetName) || "";
+            const assetType = coercePropToString(props.AssetType) || coercePropToString(props.assetType) || "String";
             if (assetName && !assetName.startsWith("PLACEHOLDER_")) {
               varNames.push(deriveAssetOutputVariable(assetName, assetType));
             } else {
@@ -1192,6 +1192,23 @@ function applyCatalogConformance(xml: string): string {
   return corrected;
 }
 
+function coercePropToString(val: unknown): string {
+  if (val == null) return "";
+  if (typeof val === "string") return val;
+  if (isValueIntent(val)) {
+    const vi = val as ValueIntent;
+    if (vi.type === "literal" || vi.type === "vb_expression") return vi.value;
+    if (vi.type === "variable") return vi.name;
+    return buildExpression(vi);
+  }
+  if (typeof val === "object") {
+    const obj = val as Record<string, unknown>;
+    if (typeof obj.value === "string") return obj.value;
+    if (typeof obj.name === "string") return obj.name;
+  }
+  return String(val);
+}
+
 function getPropString(props: Record<string, PropertyValue>, ...keys: string[]): string {
   for (const key of keys) {
     if (props[key] !== undefined) {
@@ -1436,9 +1453,10 @@ function isValidOutputVariableName(val: string): boolean {
   return /^[a-zA-Z_]\w*$/.test(val);
 }
 
-function deriveAssetOutputVariable(assetName: string, assetType: string = "String"): string {
-  if (!assetName || assetName.startsWith("PLACEHOLDER_")) return "str_REVIEW_AssetOutput";
-  let cleanName = assetName;
+function deriveAssetOutputVariable(assetName: string | unknown, assetType: string = "String"): string {
+  const name = coercePropToString(assetName);
+  if (!name || name.startsWith("PLACEHOLDER_")) return "str_REVIEW_AssetOutput";
+  let cleanName = name;
   const dotIdx = cleanName.indexOf(".");
   if (dotIdx >= 0) {
     cleanName = cleanName.substring(dotIdx + 1);
