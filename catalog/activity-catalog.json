@@ -1,7 +1,7 @@
 {
   "catalogVersion": "2.0.0",
-  "generatedAt": "2026-04-01T15:24:23.919Z",
-  "lastVerifiedAt": "2026-04-01T15:24:23.919Z",
+  "generatedAt": "2026-04-01T16:49:30.930Z",
+  "lastVerifiedAt": "2026-04-01T16:49:30.930Z",
   "studioVersion": "25.10.0",
   "packages": [
     {
@@ -905,7 +905,7 @@
               "default": "False"
             }
           ],
-          "emissionApproved": false,
+          "emissionApproved": true,
           "propertiesComplete": true
         },
         {
@@ -955,7 +955,7 @@
               "default": "False"
             }
           ],
-          "emissionApproved": false,
+          "emissionApproved": true,
           "propertiesComplete": true
         },
         {

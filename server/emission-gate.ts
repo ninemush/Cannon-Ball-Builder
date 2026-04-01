@@ -279,6 +279,7 @@ function enforceActivityEmission(
             continue;
           }
           const contextLabel = isOrch ? "orchestration node" : "control-flow/retry container";
+          console.warn(`[Emission Gate] No containing block found for "${activityName}" at ${fileName}:${line} inside ${contextLabel} — cannot perform block-level replacement in baseline mode`);
           violations.push({
             file: fileName,
             line,
@@ -388,14 +389,16 @@ function enforceActivityEmission(
           containedActivities: rep.containedActivities,
         });
       } else {
-        console.warn(`[Emission Gate] Block replacement produced invalid XML for ${rep.block.blockType} in ${fileName}: ${xmlValidation.errors.join("; ")}`);
+        console.warn(`[Emission Gate] Block replacement produced invalid XML for ${rep.block.blockType} in ${fileName}:${rep.line}: ${xmlValidation.errors.join("; ")}. Containing block type: ${rep.block.blockType}, contained activities: [${rep.containedActivities.join(", ")}], block range: ${rep.block.start}-${rep.block.end}`);
         violations.push({
           file: fileName,
           line: rep.line,
           type: "unapproved-activity",
-          detail: `Unapproved activity "${rep.activityName}" (${rep.reason}) inside control-flow/retry container — block-level replacement produced invalid XML, blocking`,
+          detail: `Unapproved activity "${rep.activityName}" (${rep.reason}) inside ${rep.block.blockType} — block-level replacement produced invalid XML (${xmlValidation.errors.join("; ")}), blocking. Contained activities: [${rep.containedActivities.join(", ")}]`,
           resolution: "blocked",
           context: "control-flow-container",
+          containingBlockType: rep.block.blockType,
+          containedActivities: rep.containedActivities,
         });
         blocked = true;
       }
