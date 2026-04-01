@@ -1,0 +1,45 @@
+{
+  "endpoints": {
+    "HUB": {
+      "reachabilityStatus": "limited",
+      "lastVerifiedAt": "2026-03-31T18:16:08.697Z"
+    },
+    "PIMS": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:13.058Z"
+    },
+    "TM": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:13.059Z"
+    },
+    "OR": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:13.058Z"
+    },
+    "AGENTS": {
+      "reachabilityStatus": "limited",
+      "lastVerifiedAt": "2026-03-31T18:16:13.059Z"
+    },
+    "IDENTITY": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:13.059Z"
+    },
+    "IXP": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:10.300Z"
+    },
+    "AI": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:11.022Z"
+    },
+    "REINFER": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:10.839Z"
+    },
+    "DU": {
+      "reachabilityStatus": "reachable",
+      "lastVerifiedAt": "2026-03-31T18:16:09.772Z"
+    }
+  },
+  "lastRefreshedAt": "2026-03-31T18:16:13.059Z"
+}

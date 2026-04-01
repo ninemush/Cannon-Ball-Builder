@@ -560,7 +560,7 @@ class CatalogService {
       }
 
       if (hasAttribute && prop.validValues && prop.validValues.length > 0) {
-        const currentVal = attributes[prop.name];
+        const currentVal = this.stripEnumQuotes(attributes[prop.name]);
         if (currentVal && !prop.validValues.includes(currentVal)) {
           const normalized = this.normalizeEnumValue(currentVal, prop.validValues);
           if (normalized) {
@@ -588,6 +588,10 @@ class CatalogService {
     return result;
   }
 
+  private stripEnumQuotes(value: string): string {
+    return value.replace(/&quot;/g, "").replace(/^["']+|["']+$/g, "").trim();
+  }
+
   private normalizeEnumValue(value: string, validValues: string[]): string | null {
     const SYNONYM_MAP: Record<string, string> = {
       "information": "Info",
@@ -612,7 +616,8 @@ class CatalogService {
       "text/html": "HTML",
     };
 
-    const lowerVal = value.toLowerCase();
+    const stripped = this.stripEnumQuotes(value);
+    const lowerVal = stripped.toLowerCase();
     for (const valid of validValues) {
       if (valid.toLowerCase() === lowerVal) return valid;
     }

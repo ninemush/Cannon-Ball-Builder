@@ -784,6 +784,72 @@ describe("Activity Catalog", () => {
       );
       expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
     });
+
+    it("strips &quot; XML entities from enum values: &quot;GET&quot; → GET", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:HttpClientRequest",
+        { Method: "&quot;GET&quot;", EndPoint: "http://example.com" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
+
+    it('strips surrounding double quotes from enum values: "POST" → POST', () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:HttpClientRequest",
+        { Method: '"POST"', EndPoint: "http://example.com" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
+
+    it("strips &quot; from enum values and matches exact: &quot;Info&quot; → Info", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:LogMessage",
+        { Level: "&quot;Info&quot;", Message: "test" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
+
+    it("strips &quot; from enum values via normalizeEnumValue synonym: &quot;Information&quot; → Info", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:LogMessage",
+        { Level: "&quot;Information&quot;", Message: "test" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+      const correction = result.corrections.find(c => c.property === "Level");
+      expect(correction).toBeDefined();
+      expect(correction!.correctedValue).toBe("Info");
+    });
+
+    it("strips single quotes from enum values: 'GET' → GET", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:HttpClientRequest",
+        { Method: "'GET'", EndPoint: "http://example.com" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
+
+    it("strips &quot; from Algorithm enum: &quot;SHA256&quot; → SHA256", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:HashText",
+        { Algorithm: "&quot;SHA256&quot;", Input: "test" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
+
+    it("strips &quot; from Encoding enum: &quot;UTF-8&quot; → UTF-8", () => {
+      const result = catalogService.validateEmittedActivity(
+        "ui:HashText",
+        { Encoding: "&quot;UTF-8&quot;", Input: "test", Algorithm: "SHA256" },
+        []
+      );
+      expect(result.violations.filter(v => v.includes("ENUM_VIOLATION"))).toHaveLength(0);
+    });
   });
 
   describe("ENUM_VIOLATION is a blocking quality gate error", () => {
