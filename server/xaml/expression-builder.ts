@@ -3,6 +3,21 @@ import { z } from "zod";
 
 const VARIABLE_NAME_ONLY = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
+const PLACEHOLDER_SENTINEL_PREFIX = "PLACEHOLDER_";
+
+const PROMPT_PROPERTY_NAMES = new Set([
+  "Prompt", "SystemPrompt", "UserPrompt", "AssistantPrompt",
+  "prompt", "systemPrompt", "userPrompt", "assistantPrompt",
+]);
+
+const TIMEZONE_PATTERN = /^[A-Z][a-zA-Z]+\/[A-Z][a-zA-Z_]+$/;
+const FILE_PATH_PATTERN = /^[A-Za-z]:\\|^\\\\|^\/[a-zA-Z]|^\.\//;
+const CONFIG_VALUE_PATTERN = /^[a-zA-Z0-9_.:-]+\.[a-zA-Z]{2,}$|^[a-zA-Z]+[_-][a-zA-Z]+$/;
+
+export function isPlaceholderSentinel(value: string): boolean {
+  return value.startsWith(PLACEHOLDER_SENTINEL_PREFIX);
+}
+
 const SIMPLE_LITERAL = /^(".*"|'.*'|\d+(\.\d+)?|True|False|Nothing|null)$/;
 
 function isVariableName(val: string): boolean {
@@ -60,9 +75,21 @@ export const ValueIntentSchema = z.discriminatedUnion("type", [
 
 export type ValueIntent = z.infer<typeof ValueIntentSchema>;
 
-export function buildExpression(intent: ValueIntent): string {
+export function buildExpression(intent: ValueIntent, options?: { clrType?: string; propertyName?: string }): string {
+  const clrType = options?.clrType;
+  const propertyName = options?.propertyName;
+  const isStringTyped = clrType === "System.String" || clrType === "String";
+  const isPromptProperty = propertyName ? PROMPT_PROPERTY_NAMES.has(propertyName) : false;
+
   switch (intent.type) {
     case "literal": {
+      if (isPlaceholderSentinel(intent.value)) {
+        throw new Error(`PLACEHOLDER sentinel "${intent.value}" cannot be emitted — resolve to a valid default or emit a blocking diagnostic`);
+      }
+      const isBoolType = clrType === "System.Boolean" || clrType === "Boolean";
+      if (isBoolType && /^(true|false)$/i.test(intent.value)) {
+        return intent.value.charAt(0).toUpperCase() + intent.value.slice(1).toLowerCase();
+      }
       const escaped = intent.value.replace(/"/g, '""');
       if (/[&<>"']/.test(intent.value)) {
         return `["${escaped}"]`;
@@ -79,8 +106,20 @@ export function buildExpression(intent: ValueIntent): string {
     case "expression":
       return buildComparisonExpression(intent.left, intent.operator, intent.right);
 
-    case "vb_expression":
+    case "vb_expression": {
+      if (isPlaceholderSentinel(intent.value)) {
+        throw new Error(`PLACEHOLDER sentinel "${intent.value}" cannot be emitted — resolve to a valid default or emit a blocking diagnostic`);
+      }
+      if (isPromptProperty) {
+        const escaped = intent.value.replace(/"/g, '""');
+        return `"${escaped}"`;
+      }
+      if (isStringTyped && !looksLikeVbCodePattern(intent.value) && !VARIABLE_NAME_ONLY.test(intent.value)) {
+        const escaped = intent.value.replace(/"/g, '""');
+        return `"${escaped}"`;
+      }
       return `[${intent.value}]`;
+    }
   }
 }
 
@@ -127,9 +166,21 @@ function buildComparisonExpression(left: string, operator: string, right: string
 
 const ALLOWED_OPERATOR_SET = new Set<string>(ALLOWED_OPERATORS);
 
-export function normalizeStringToExpression(val: string, isDeclared?: (name: string) => boolean, clrType?: string): string {
+export function normalizeStringToExpression(val: string, isDeclared?: (name: string) => boolean, clrType?: string, propertyName?: string): string {
   const trimmed = val.trim();
   if (!trimmed) return trimmed;
+
+  if (isPlaceholderSentinel(trimmed)) {
+    console.warn(`[Expression Builder] PLACEHOLDER sentinel "${trimmed}" blocked from emission for property "${propertyName || "unknown"}"`);
+    return `""`;
+  }
+
+  const isPromptProp = propertyName ? PROMPT_PROPERTY_NAMES.has(propertyName) : false;
+  if (isPromptProp && !trimmed.startsWith("[") && !/^".*"$/.test(trimmed)) {
+    const escaped = trimmed.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   if (/^".*"$/.test(trimmed)) {
     const inner = trimmed.slice(1, -1);
@@ -156,11 +207,22 @@ export function normalizeStringToExpression(val: string, isDeclared?: (name: str
     const escaped = trimmed.replace(/"/g, '""');
     return `"${escaped}"`;
   }
+
+  if (TIMEZONE_PATTERN.test(trimmed) || FILE_PATH_PATTERN.test(trimmed)) {
+    const escaped = trimmed.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
   if (/[+\-*/&=<>]/.test(trimmed) && !/[.,!?;:'"…\s]/.test(trimmed)) return `[${trimmed}]`;
 
   const isStringTyped = clrType === "System.String" || clrType === "String";
 
   if (isStringTyped && /\s/.test(trimmed) && !looksLikeVbCodePattern(trimmed)) {
+    const escaped = trimmed.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
+  if (isStringTyped && CONFIG_VALUE_PATTERN.test(trimmed) && !looksLikeVbCodePattern(trimmed)) {
     const escaped = trimmed.replace(/"/g, '""');
     return `"${escaped}"`;
   }
@@ -205,6 +267,16 @@ export function normalizePropertyToValueIntent(
   const trimmed = value.trim();
   if (!trimmed) {
     return { type: "literal", value: "" };
+  }
+
+  if (isPlaceholderSentinel(trimmed)) {
+    return { type: "literal", value: trimmed };
+  }
+
+  const isPromptProp = propertyName ? PROMPT_PROPERTY_NAMES.has(propertyName) : false;
+  if (isPromptProp) {
+    const unquoted = trimmed.replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "");
+    return { type: "literal", value: unquoted };
   }
 
   const isStringTyped = clrType === "System.String" || clrType === "String";

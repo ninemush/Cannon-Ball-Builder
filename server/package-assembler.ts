@@ -43,7 +43,7 @@ import archiver from "archiver";
   import { computeDhgAccuracy } from "./pipeline-health";
   import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName, NAMESPACE_PREFIX_TO_PACKAGE, getActivityPackage } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
-  import { catalogService, type ProcessType } from "./catalog/catalog-service";
+  import { catalogService, type ProcessType, type ValidationCorrection } from "./catalog/catalog-service";
   import type { StudioProfile } from "./catalog/metadata-service";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
   import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
@@ -52,6 +52,161 @@ import archiver from "archiver";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
+  import { XMLParser, XMLBuilder } from "fast-xml-parser";
+
+interface DomCorrectionResult {
+  content: string;
+  correctedProperties: Set<string>;
+  applied: number;
+  fallbackUsed: boolean;
+}
+
+function applyDomBasedCatalogCorrections(
+  xmlContent: string,
+  corrections: Array<{ fullTag: string; correction: ValidationCorrection; attrs: Record<string, string> }>,
+  fileName: string,
+): DomCorrectionResult {
+  const ATTR_PREFIX = "@_";
+  const parserOpts = {
+    preserveOrder: true,
+    ignoreAttributes: false,
+    attributeNamePrefix: ATTR_PREFIX,
+    allowBooleanAttributes: true,
+    processEntities: true,
+    htmlEntities: true,
+    trimValues: false,
+    parseTagValue: false,
+    commentPropName: "#comment",
+  };
+  const builderOpts = {
+    preserveOrder: true,
+    ignoreAttributes: false,
+    attributeNamePrefix: ATTR_PREFIX,
+    format: true,
+    indentBy: "  ",
+    suppressEmptyNode: true,
+    commentPropName: "#comment",
+    processEntities: true,
+  };
+
+  let tree: any[];
+  try {
+    const parser = new XMLParser(parserOpts);
+    tree = parser.parse(xmlContent);
+  } catch (parseErr) {
+    console.warn(`[Activity Catalog DOM] Failed to parse ${fileName} for DOM corrections — falling back to regex path`);
+    return { content: xmlContent, correctedProperties: new Set(), applied: 0, fallbackUsed: true };
+  }
+
+  const correctedProperties = new Set<string>();
+  let applied = 0;
+
+  function getTagName(node: any): string {
+    for (const key of Object.keys(node)) {
+      if (key !== ":@" && key !== "#text" && key !== "#comment") return key;
+    }
+    return "";
+  }
+
+  function walkAndCorrect(nodes: any[]): void {
+    for (const node of nodes) {
+      const tagName = getTagName(node);
+      if (!tagName) continue;
+
+      const nodeAttrs = node[":@"] || {};
+      const shortTag = tagName.includes(":") ? tagName.split(":").pop()! : tagName;
+
+      for (const corr of corrections) {
+        const corrShortTag = corr.fullTag.includes(":") ? corr.fullTag.split(":").pop()! : corr.fullTag;
+        if (shortTag !== corrShortTag && tagName !== corr.fullTag) continue;
+
+        const attrKey = `${ATTR_PREFIX}${corr.correction.property}`;
+
+        if (corr.correction.type === "fix-invalid-value" && corr.correction.correctedValue) {
+          if (attrKey in nodeAttrs) {
+            nodeAttrs[attrKey] = corr.correction.correctedValue;
+            correctedProperties.add(corr.correction.property);
+            applied++;
+          }
+        } else if (corr.correction.type === "move-to-child-element") {
+          const propName = corr.correction.property;
+          if (shortTag === "Assign" && (propName === "To" || propName === "Value")) continue;
+          if (attrKey in nodeAttrs) {
+            const propVal = nodeAttrs[attrKey];
+            delete nodeAttrs[attrKey];
+            const wrapper = corr.correction.argumentWrapper || "InArgument";
+            const xType = corr.correction.typeArguments || "x:String";
+            const wrappedVal = ensureBracketWrapped(propVal);
+            const childPropTag = `${tagName}.${propName}`;
+            const children = node[tagName] || [];
+            children.push({
+              [childPropTag]: [{
+                [wrapper]: [{ "#text": wrappedVal }],
+                ":@": { [`${ATTR_PREFIX}x:TypeArguments`]: xType }
+              }]
+            });
+            node[tagName] = children;
+            correctedProperties.add(propName);
+            applied++;
+          }
+        } else if (corr.correction.type === "wrap-in-argument" && corr.correction.argumentWrapper) {
+          const propName = corr.correction.property;
+          if (shortTag === "Assign" && (propName === "To" || propName === "Value")) continue;
+          const childPropTag = `${tagName}.${propName}`;
+          const children = node[tagName] || [];
+          for (const child of children) {
+            const childTag = getTagName(child);
+            if (childTag === childPropTag) {
+              const innerChildren = child[childTag] || [];
+              const alreadyWrapped = innerChildren.some((ic: any) => {
+                const t = getTagName(ic);
+                return t === "InArgument" || t === "OutArgument" || t === "InOutArgument";
+              });
+              if (!alreadyWrapped && innerChildren.length > 0) {
+                const wrapper = corr.correction.argumentWrapper;
+                const xType = corr.correction.typeArguments || "x:String";
+                child[childTag] = [{
+                  [wrapper]: innerChildren,
+                  ":@": { [`${ATTR_PREFIX}x:TypeArguments`]: xType }
+                }];
+                correctedProperties.add(propName);
+                applied++;
+              }
+            }
+          }
+        }
+      }
+
+      const children = node[tagName];
+      if (Array.isArray(children)) {
+        walkAndCorrect(children);
+      }
+    }
+  }
+
+  walkAndCorrect(tree);
+
+  if (applied === 0) {
+    return { content: xmlContent, correctedProperties, applied: 0, fallbackUsed: false };
+  }
+
+  try {
+    const builder = new XMLBuilder(builderOpts);
+    let result = builder.build(tree);
+    if (typeof result === "string") {
+      result = result.replace(/^\s*\n/, "");
+    }
+    const wellFormed = validateXmlWellFormedness(result);
+    if (!wellFormed.valid) {
+      console.warn(`[Activity Catalog DOM] DOM-serialized result for ${fileName} is malformed — rolling back`);
+      return { content: xmlContent, correctedProperties: new Set(), applied: 0, fallbackUsed: true };
+    }
+    return { content: result, correctedProperties, applied, fallbackUsed: false };
+  } catch (buildErr) {
+    console.warn(`[Activity Catalog DOM] Failed to serialize ${fileName} after DOM corrections — rolling back`);
+    return { content: xmlContent, correctedProperties: new Set(), applied: 0, fallbackUsed: true };
+  }
+}
 
 async function getProbeCache() {
   const { getProbeCache: _getProbeCache } = await import("./uipath-integration");
@@ -219,6 +374,200 @@ function isVersionFromValidatedSource(
 
 function normalizeXamlPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^[./]+/, "");
+}
+
+const CANONICAL_INFRASTRUCTURE_NAMES = new Set([
+  "main", "init", "initallsettings", "dispatcher", "performer",
+  "finalise", "finalize", "process", "closeallapplications",
+  "gettransactiondata", "settransactionstatus", "killallprocesses",
+]);
+
+export function canonicalizeWorkflowName(name: string): string {
+  let result = name
+    .replace(/[\[\]"]/g, "")
+    .replace(/&quot;/g, "")
+    .trim();
+  while (result.toLowerCase().endsWith(".xaml")) {
+    result = result.slice(0, -5);
+  }
+  return result.trim().toLowerCase();
+}
+
+function isCanonicalInfrastructureName(name: string): boolean {
+  return CANONICAL_INFRASTRUCTURE_NAMES.has(canonicalizeWorkflowName(name));
+}
+
+/**
+ * Final authoritative normalization stage (closed class list).
+ * Runs after convergence loop and before pre-package validation.
+ * 
+ * EXHAUSTIVE SET OF NORMALIZATION CLASSES (do not expand without deliberate review):
+ * 1. Boolean child-element InArgument normalization
+ * 2. Final enum literal normalization
+ * 3. Final prompt/string literal coercion
+ * 4. Final deterministic String.Format overflow handling
+ * 
+ * Fields touched by this stage are marked normalized:true and must not be
+ * reprocessed by downstream stages.
+ */
+function finalNormalize(
+  xamlEntries: Array<{ name: string; content: string }>,
+  deferredWrites: Map<string, string>,
+): Set<string> {
+  const normalizedFieldSet = new Set<string>();
+  let totalNormalized = 0;
+
+  for (let i = 0; i < xamlEntries.length; i++) {
+    let content = xamlEntries[i].content;
+    let modified = false;
+    const fileName = xamlEntries[i].name;
+
+    const boolNormalized = normalizeBooleanInArguments(content);
+    if (boolNormalized !== content) {
+      content = boolNormalized;
+      modified = true;
+      normalizedFieldSet.add(`${fileName}:boolean-inargument`);
+      totalNormalized++;
+    }
+
+    const enumNormalized = normalizeEnumLiterals(content);
+    if (enumNormalized !== content) {
+      content = enumNormalized;
+      modified = true;
+      normalizedFieldSet.add(`${fileName}:enum-literal`);
+      totalNormalized++;
+    }
+
+    const stringNormalized = normalizeStringLiterals(content);
+    if (stringNormalized !== content) {
+      content = stringNormalized;
+      modified = true;
+      normalizedFieldSet.add(`${fileName}:string-literal`);
+      totalNormalized++;
+    }
+
+    const formatNormalized = normalizeStringFormatOverflow(content);
+    if (formatNormalized !== content) {
+      content = formatNormalized;
+      modified = true;
+      normalizedFieldSet.add(`${fileName}:string-format`);
+      totalNormalized++;
+    }
+
+    if (modified) {
+      xamlEntries[i] = { name: fileName, content };
+      const archivePath = Array.from(deferredWrites.keys()).find(
+        p => (p.split("/").pop() || p) === (fileName.split("/").pop() || fileName)
+      );
+      if (archivePath) {
+        deferredWrites.set(archivePath, content);
+      }
+    }
+  }
+
+  if (totalNormalized > 0) {
+    console.log(`[Final Normalization] Applied ${totalNormalized} normalization(s) across ${xamlEntries.length} file(s)`);
+  }
+
+  return normalizedFieldSet;
+}
+
+function normalizeBooleanInArguments(xml: string): string {
+  return xml.replace(
+    /<(InArgument|OutArgument)\s+x:TypeArguments="x:Boolean">"(True|False)"<\/(InArgument|OutArgument)>/g,
+    (_match, openTag, boolVal, closeTag) => {
+      if (openTag !== closeTag) return _match;
+      return `<${openTag} x:TypeArguments="x:Boolean">${boolVal}</${closeTag}>`;
+    }
+  );
+}
+
+function normalizeEnumLiterals(xml: string): string {
+  const ENUM_NORMALIZE: Record<string, string> = {
+    "information": "Info", "warning": "Warn", "debug": "Trace",
+    "critical": "Fatal", "verbose": "Trace",
+  };
+
+  return xml.replace(
+    /Level="\[If\([^"]*\)\]"/g,
+    (_match) => {
+      console.warn(`[Final Normalization] Skipping conditional Level expression (preserving runtime logic): ${_match}`);
+      return _match;
+    }
+  ).replace(
+    /Level="([^"]+)"/g,
+    (_match, level) => {
+      const normalized = ENUM_NORMALIZE[level.toLowerCase()];
+      if (normalized) {
+        return `Level="${normalized}"`;
+      }
+      return _match;
+    }
+  );
+}
+
+function normalizeStringLiterals(xml: string): string {
+  let result = xml.replace(
+    /(<InArgument\s+x:TypeArguments="x:String">)\[([A-Z][a-zA-Z]+\/[A-Z][a-zA-Z_]+)\](<\/InArgument>)/g,
+    (_match, open, tz, close) => {
+      return `${open}"${tz}"${close}`;
+    }
+  );
+
+  result = result.replace(
+    /(<InArgument\s+x:TypeArguments="x:String">)\[([A-Z]:\\[^\]]+)\](<\/InArgument>)/g,
+    (_match, open, path, close) => {
+      return `${open}"${path}"${close}`;
+    }
+  );
+
+  result = result.replace(
+    /(<InArgument\s+x:TypeArguments="x:String">)\[([a-zA-Z]+(?:\s+[a-zA-Z]+){2,})\](<\/InArgument>)/g,
+    (_match, open, text, close) => {
+      if (/^[A-Z][a-z]+\s/.test(text) && !/\(/.test(text) && !/\./.test(text)) {
+        return `${open}"${text}"${close}`;
+      }
+      return _match;
+    }
+  );
+
+  return result;
+}
+
+function normalizeStringFormatOverflow(xml: string): string {
+  return xml.replace(
+    /String\.Format\s*\("([^"]*)"((?:\s*,\s*[^,)]+)*)\)/g,
+    (_match, formatStr, argsStr) => {
+      const placeholders = formatStr.match(/\{(\d+)\}/g) || [];
+      const maxIndex = placeholders.reduce((max: number, p: string) => {
+        const idx = parseInt(p.replace(/[{}]/g, ""), 10);
+        return Math.max(max, idx);
+      }, -1);
+
+      const args = argsStr ? argsStr.split(",").filter((s: string) => s.trim()).map((s: string) => s.trim()) : [];
+
+      if (maxIndex >= 0 && args.length > maxIndex + 1) {
+        const trimmedArgs = args.slice(0, maxIndex + 1);
+        return `String.Format("${formatStr}", ${trimmedArgs.join(", ")})`;
+      }
+
+      if (maxIndex >= 0 && args.length <= maxIndex) {
+        const missingCount = maxIndex + 1 - args.length;
+        if (missingCount > 2) {
+          console.error(`[Final Normalization] BLOCKED: String.Format has ${maxIndex + 1} placeholder(s) but only ${args.length} arg(s) — gap too large (${missingCount}) for safe repair`);
+          return `"HANDOFF_STRING_FORMAT_UNSAFE: ${_match.replace(/"/g, '&quot;')}"`;
+        }
+        console.warn(`[Final Normalization] String.Format has ${maxIndex + 1} placeholder(s) but only ${args.length} arg(s) — padding with empty strings`);
+        const paddedArgs = [...args];
+        while (paddedArgs.length <= maxIndex) {
+          paddedArgs.push('""');
+        }
+        return `String.Format("${formatStr}", ${paddedArgs.join(", ")})`;
+      }
+
+      return _match;
+    }
+  );
 }
 
 export interface StudioLoadabilityResult {
@@ -2081,6 +2430,21 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
     let totalPostComplianceReCorrections = 0;
 
+    /**
+     * STAGE-OWNERSHIP CONTRACT: Compliance Pass
+     * 
+     * This stage MAY mutate:
+     * - Namespace declarations and prefix normalization
+     * - Activity tag prefixes (adding ui: etc.)
+     * - XML structural well-formedness repairs
+     * - Activity policy filtering
+     * 
+     * This stage MUST NOT mutate:
+     * - Boolean InArgument values that have been normalized (no re-quoting True → "True")
+     * - Enum literal values that have been normalized
+     * - String literal values that have been normalized to quoted form
+     * - Any field marked as normalized:true by the final normalization stage
+     */
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
       const preCatalogSnapshot = catalogService.isLoaded() ? snapshotCatalogValidProperties(rawXaml) : null;
       let compliant = makeUiPathCompliant(rawXaml, tf);
@@ -2284,7 +2648,21 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[UiPath] WorkflowSpec tree (validated) before assembly for "${enrichEntry.name}":\n${truncatedSpec}`);
         console.log(`[UiPath] Using tree-based assembly for "${spec.name}"`);
 
-        const wfName = (spec.name || enrichEntry.name || projectName).replace(/"/g, "").replace(/&quot;/g, "").replace(/\s+/g, "_");
+        const rawWfName = (spec.name || enrichEntry.name || projectName);
+        const wfName = rawWfName.replace(/"/g, "").replace(/&quot;/g, "").replace(/\[/g, "").replace(/\]/g, "").replace(/\s+/g, "_").replace(/\.xaml$/i, "");
+        if (isCanonicalInfrastructureName(wfName) && generatedWorkflowNames.has(wfName)) {
+          console.log(`[UiPath] Skipping duplicate infrastructure workflow "${wfName}" (canonical match) — already generated`);
+          continue;
+        }
+        if (isCanonicalInfrastructureName(wfName)) {
+          const existingCanonical = Array.from(generatedWorkflowNames).find(
+            existing => canonicalizeWorkflowName(existing) === canonicalizeWorkflowName(wfName)
+          );
+          if (existingCanonical) {
+            console.log(`[UiPath] Skipping duplicate infrastructure workflow "${wfName}" — canonical match with existing "${existingCanonical}"`);
+            continue;
+          }
+        }
         if (priorCompliantMap.has(wfName)) {
           const priorContent = priorCompliantMap.get(wfName)!;
           deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
@@ -2644,13 +3022,12 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[UiPath] Generated deterministic Init.xaml template`);
 
         if (!deferredWrites.has(`${libPath}/Process.xaml`)) {
-          const infrastructureFiles = new Set(["main", "initallsettings", "closeallapplications", "gettransactiondata", "settransactionstatus", "killallprocesses", "process", "init"]);
           let processInvocations = "";
           const invokedInProcess = new Set<string>();
           if (enrichment?.decomposition?.length) {
             for (const decomp of enrichment.decomposition) {
               const wfName = decomp.name.replace(/\s+/g, "_");
-              if (infrastructureFiles.has(wfName.toLowerCase())) continue;
+              if (isCanonicalInfrastructureName(wfName)) continue;
               if (invokedInProcess.has(wfName)) continue;
               invokedInProcess.add(wfName);
               processInvocations += `
@@ -2658,7 +3035,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             }
           }
           Array.from(generatedWorkflowNames).forEach(gwfName => {
-            if (infrastructureFiles.has(gwfName.toLowerCase())) return;
+            if (isCanonicalInfrastructureName(gwfName)) return;
             if (invokedInProcess.has(gwfName)) return;
             invokedInProcess.add(gwfName);
             processInvocations += `
@@ -2743,12 +3120,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(gwfName)}" WorkflowFileName="${gwfName}.xaml" />`;
       }
 
-      const infrastructureFiles = new Set(["main", "initallsettings", "closeallapplications", "gettransactiondata", "settransactionstatus", "killallprocesses", "init"]);
+      const infrastructureFiles = CANONICAL_INFRASTRUCTURE_NAMES;
       for (const deferredKey of deferredWrites.keys()) {
         const deferredMatch = deferredKey.match(/([^/]+)\.xaml$/i);
         if (!deferredMatch) continue;
         const deferredBasename = deferredMatch[1];
-        if (infrastructureFiles.has(deferredBasename.toLowerCase())) continue;
+        const canonicalBasename = canonicalizeWorkflowName(deferredBasename);
+        if (infrastructureFiles.has(canonicalBasename)) continue;
         if (invokedNames.has(deferredBasename)) continue;
         invokedNames.add(deferredBasename);
         mainActivities += `
@@ -3537,17 +3915,33 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const placeholderCleanupRepairs: { repairCode: "REPAIR_PLACEHOLDER_CLEANUP"; file: string; description: string; developerAction: string; estimatedEffortMinutes: number }[] = [];
     for (let i = 0; i < xamlEntries.length; i++) {
       const content = xamlEntries[i].content;
-      if (content.includes("PLACEHOLDER_") || content.includes("TODO_")) {
-        const placeholderCount = (content.match(/PLACEHOLDER_|TODO_/g) || []).length;
+      if (content.includes("PLACEHOLDER_") || content.includes("TODO_") || /\bTODO\b/.test(content) || /\bPLACEHOLDER\b/.test(content)) {
+        const placeholderCount = (content.match(/\bPLACEHOLDER\b|\bTODO\b|PLACEHOLDER_|TODO_/g) || []).length;
         const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
         const afterTagSafety = content
           .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
           .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
-        const cleaned = afterTagSafety
+        let cleaned = afterTagSafety
           .replace(/\[(?:PLACEHOLDER_\w*|TODO_\w*)\]/g, '[Nothing]')
-          .replace(/="(?:PLACEHOLDER_\w*|TODO_\w*)"/g, '="[Nothing]"')
-          .replace(/PLACEHOLDER_\w*/g, '')
-          .replace(/TODO_\w*/g, '');
+          .replace(/="(?:PLACEHOLDER_\w*|TODO_\w*)"/g, '="[Nothing]"');
+
+        cleaned = cleaned.replace(/="([^"]*\b(?:TODO|PLACEHOLDER)\b[^"]*)"/g, (_match, val) => {
+          if (/^PLACEHOLDER_\w*$/.test(val) || /^TODO_\w*$/.test(val)) {
+            return '="[Nothing]"';
+          }
+          return `="HANDOFF: ${val.replace(/\bTODO\b/g, "HANDOFF_TODO").replace(/\bPLACEHOLDER\b/g, "HANDOFF_PLACEHOLDER")}"`;
+        });
+
+        cleaned = cleaned.replace(/>([^<]*\b(?:TODO|PLACEHOLDER)\b[^<]*)</g, (_match, textContent) => {
+          const sanitized = textContent
+            .replace(/\bTODO\b/g, "HANDOFF_TODO")
+            .replace(/\bPLACEHOLDER\b/g, "HANDOFF_PLACEHOLDER");
+          return `>${sanitized}<`;
+        });
+
+        cleaned = cleaned
+          .replace(/(?<!HANDOFF_)PLACEHOLDER_\w*/g, '')
+          .replace(/(?<!HANDOFF_)TODO_\w*/g, '');
         xamlEntries[i] = { ...xamlEntries[i], content: cleaned };
         const archivePath = Array.from(deferredWrites.keys()).find(
           p => (p.split("/").pop() || p) === (xamlEntries[i].name.split("/").pop() || xamlEntries[i].name)
@@ -3748,6 +4142,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             return children;
           };
 
+          interface BatchedCorrection {
+            fullTag: string;
+            correction: ValidationCorrection;
+            attrs: Record<string, string>;
+          }
+          const batchedCorrections: BatchedCorrection[] = [];
+          const allCorrectedProperties = new Set<string>();
+
           const elementRegex = /<((?:[\w]+:)?[\w]+)(\s[^>]*?|\s*)(\/?>)/g;
           let elMatch;
 
@@ -3779,9 +4181,41 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             const validation = catalogService.validateEmittedActivity(fullTag, attrs, children);
 
             if (validation.corrections.length > 0 || !validation.valid) {
-              const correctedProperties = new Set<string>();
-
               for (const correction of validation.corrections) {
+                batchedCorrections.push({ fullTag, correction, attrs: { ...attrs } });
+              }
+
+              for (const v of validation.violations) {
+                const propMatch = v.match(/"([^"]+)"/);
+                const violationProp = propMatch ? propMatch[1] : null;
+                if (!violationProp) {
+                  catalogViolations.push({ file: fileName, detail: v });
+                }
+              }
+            }
+          }
+
+          if (batchedCorrections.length > 0) {
+            const domResult = applyDomBasedCatalogCorrections(content, batchedCorrections, fileName);
+
+            if (!domResult.fallbackUsed && domResult.applied > 0) {
+              content = domResult.content;
+              modified = true;
+              for (const prop of domResult.correctedProperties) {
+                allCorrectedProperties.add(prop);
+              }
+              for (const corr of batchedCorrections) {
+                if (domResult.correctedProperties.has(corr.correction.property)) {
+                  autoFixSummary.push(`Catalog (DOM): ${corr.correction.type} ${corr.fullTag}.${corr.correction.property} in ${fileName}`);
+                }
+              }
+              console.log(`[Activity Catalog DOM] Applied ${domResult.applied} correction(s) to ${fileName} via DOM parse/serialize`);
+            } else if (domResult.fallbackUsed) {
+              const preCorrectionsSnapshot = content;
+              for (const { fullTag, correction, attrs } of batchedCorrections) {
+                const beforeThisCorrection = content;
+                let correctionApplied = false;
+
                 if (correction.type === "move-to-child-element") {
                   const propName = correction.property;
                   const className2 = fullTag.includes(":") ? fullTag.split(":").pop()! : fullTag;
@@ -3801,21 +4235,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                     const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?)(\\s*\\/>)`);
                     const openTagRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedVal}"([^>]*?>)`);
 
-                    const contentLenBefore = content.length;
                     if (selfClosingRegex.test(content)) {
                       content = content.replace(selfClosingRegex, `$1 $2>\n          ${childElement}\n        </${fullTag}>`);
-                      correctedProperties.add(propName);
-                      modified = true;
-                      autoFixSummary.push(`Catalog: Moved ${fullTag}.${propName} from attribute to child-element in ${fileName}`);
-                      const contentLenDelta = content.length - contentLenBefore;
-                      elementRegex.lastIndex = Math.max(0, elementRegex.lastIndex + contentLenDelta);
+                      correctionApplied = true;
+                      autoFixSummary.push(`Catalog (fallback): Moved ${fullTag}.${propName} from attribute to child-element in ${fileName}`);
                     } else if (openTagRegex.test(content)) {
                       content = content.replace(openTagRegex, `$1 $2\n          ${childElement}`);
-                      correctedProperties.add(propName);
-                      modified = true;
-                      autoFixSummary.push(`Catalog: Moved ${fullTag}.${propName} from attribute to child-element in ${fileName}`);
-                      const contentLenDelta = content.length - contentLenBefore;
-                      elementRegex.lastIndex = Math.max(0, elementRegex.lastIndex + contentLenDelta);
+                      correctionApplied = true;
+                      autoFixSummary.push(`Catalog (fallback): Moved ${fullTag}.${propName} from attribute to child-element in ${fileName}`);
                     }
                   }
                 } else if (correction.type === "fix-invalid-value" && correction.correctedValue) {
@@ -3824,18 +4251,12 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                   if (oldVal !== undefined) {
                     const escapedTag = fullTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const escapedOldVal = oldVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const attrRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedOldVal}"`, "g");
-                    const contentLenBefore2 = content.length;
-                    const newContent = content.replace(attrRegex, `$1${propName}="${correction.correctedValue}"`);
+                    const attrFixRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)${propName}="${escapedOldVal}"`, "g");
+                    const newContent = content.replace(attrFixRegex, `$1${propName}="${correction.correctedValue}"`);
                     if (newContent !== content) {
                       content = newContent;
-                      correctedProperties.add(propName);
-                      modified = true;
-                      autoFixSummary.push(`Catalog: Corrected ${fullTag}.${propName} value from "${oldVal}" to "${correction.correctedValue}" in ${fileName}`);
-                      const contentLenDelta2 = content.length - contentLenBefore2;
-                      if (contentLenDelta2 !== 0) {
-                        elementRegex.lastIndex = Math.max(0, elementRegex.lastIndex + contentLenDelta2);
-                      }
+                      correctionApplied = true;
+                      autoFixSummary.push(`Catalog (fallback): Corrected ${fullTag}.${propName} value in ${fileName}`);
                     }
                   }
                 } else if (correction.type === "wrap-in-argument" && correction.argumentWrapper) {
@@ -3857,25 +4278,49 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
                     `<${escapedClassName}\\.${propName}>[\\s\\n]*<(?:InArgument|OutArgument|InOutArgument)[\\s>]`,
                   );
                   if (childTagRegex.test(content) && !alreadyWrappedRegex.test(content)) {
-                    const contentLenBefore3 = content.length;
                     content = content.replace(childTagRegex,
                       `$1\n            <${wrapper} x:TypeArguments="${xType}">$2</${wrapper}>\n          $3`
                     );
-                    correctedProperties.add(propName);
+                    correctionApplied = true;
+                    autoFixSummary.push(`Catalog (fallback): Wrapped ${fullTag}.${propName} in <${wrapper}> in ${fileName}`);
+                  }
+                }
+
+                if (correctionApplied) {
+                  const stepCheck = validateXmlWellFormedness(content);
+                  if (!stepCheck.valid) {
+                    console.warn(`[Activity Catalog Fallback] Correction ${correction.type} for ${fullTag}.${correction.property} in ${fileName} produced malformed XML — rolling back this step`);
+                    content = beforeThisCorrection;
+                  } else {
+                    allCorrectedProperties.add(correction.property);
                     modified = true;
-                    autoFixSummary.push(`Catalog: Wrapped ${fullTag}.${propName} child content in <${wrapper}> in ${fileName}`);
-                    const contentLenDelta3 = content.length - contentLenBefore3;
-                    if (contentLenDelta3 !== 0) {
-                      elementRegex.lastIndex = Math.max(0, elementRegex.lastIndex + contentLenDelta3);
-                    }
                   }
                 }
               }
 
+              if (modified) {
+                const xmlWellFormedCheck = validateXmlWellFormedness(content);
+                if (!xmlWellFormedCheck.valid) {
+                  console.warn(`[Activity Catalog Fallback] Final corrections for ${fileName} still malformed — rolling back`);
+                  content = preCorrectionsSnapshot;
+                  modified = false;
+                  allCorrectedProperties.clear();
+                }
+              }
+            }
+
+            for (const bc of batchedCorrections) {
+              const freshAttrs: Record<string, string> = { ...bc.attrs };
+              for (const corr of batchedCorrections) {
+                if (corr.fullTag === bc.fullTag && corr.correction) {
+                  freshAttrs[corr.correction.property] = corr.correction.correctedValue;
+                }
+              }
+              const validation = catalogService.validateEmittedActivity(bc.fullTag, freshAttrs, []);
               for (const v of validation.violations) {
                 const propMatch = v.match(/"([^"]+)"/);
                 const violationProp = propMatch ? propMatch[1] : null;
-                if (!violationProp || !correctedProperties.has(violationProp)) {
+                if (!violationProp || !allCorrectedProperties.has(violationProp)) {
                   catalogViolations.push({ file: fileName, detail: v });
                 }
               }
@@ -4075,6 +4520,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           if (archivePath) deferredWrites.set(archivePath, repair.content);
         }
       }
+    }
+
+    const normalizedFields = finalNormalize(xamlEntries, deferredWrites);
+    if (normalizedFields.size > 0) {
+      console.log(`[Final Normalization] Normalized fields before quality gate: ${Array.from(normalizedFields).join(", ")}`);
     }
 
     const qualityGateRunCount = 1;

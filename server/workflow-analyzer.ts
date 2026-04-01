@@ -880,6 +880,21 @@ function deduplicateVariableDeclarations(xaml: string): string {
   });
 }
 
+/**
+ * STAGE-OWNERSHIP CONTRACT: Analyzer Pass
+ * 
+ * This stage MAY mutate:
+ * - Bare arguments (adding missing InArgument/OutArgument wrappers)
+ * - Expression syntax fixes (bracket wrapping, escaping)
+ * - Invalid selector repair
+ * - Continue-on-error boolean normalization
+ * 
+ * This stage MUST NOT mutate:
+ * - String literals that have been normalized to quoted form (no re-wrapping in brackets)
+ * - Enum literal values that have been finalized
+ * - Boolean InArgument values that have been normalized
+ * - Any field marked as normalized:true by the final normalization stage
+ */
 export function analyzeAndFix(xamlContent: string): { fixed: string; report: AnalysisReport } {
   const allViolations: AnalysisViolation[] = [];
 

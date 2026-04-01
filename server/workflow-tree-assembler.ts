@@ -51,6 +51,7 @@ export interface AssemblyRemediationContext {
 
 let _activeRemediationContext: AssemblyRemediationContext | null = null;
 let _activeDeclarationLookup: ((name: string) => boolean) | null = null;
+let _lateDiscoveredVariables: VariableDeclaration[] = [];
 
 export function setRemediationContext(ctx: AssemblyRemediationContext): void {
   _activeRemediationContext = ctx;
@@ -1432,6 +1433,26 @@ function resolveAssignTemplate(node: ActivityNode, allVariables: VariableDeclara
       safeValExpr = `[${valContent}]`;
       console.warn(`[Argument Guard] Bracket-wrapping literal value "${valContent}" for x:Object Assign "${displayName}"`);
     }
+  }
+
+  const rawExpr = safeValExpr.startsWith("[") && safeValExpr.endsWith("]")
+    ? safeValExpr.slice(1, -1) : safeValExpr;
+  const decomposed = decomposeComplexExpression(rawExpr, toVarName, node.displayName);
+  if (decomposed.intermediateAssigns.length > 0) {
+    console.log(`[Expression Decomposition] Decomposed complex expression in "${displayName}" into ${decomposed.intermediateAssigns.length} intermediate step(s)`);
+    for (const iv of decomposed.intermediateVariables) {
+      _lateDiscoveredVariables.push(iv);
+    }
+    const finalExpr = decomposed.finalExpression.startsWith("[") ? decomposed.finalExpression : `[${decomposed.finalExpression}]`;
+    const finalAssign = `<Assign DisplayName="${displayName}">\n` +
+      `  <Assign.To>\n` +
+      `    <OutArgument x:TypeArguments="${typeArg}">${safeToExpr}</OutArgument>\n` +
+      `  </Assign.To>\n` +
+      `  <Assign.Value>\n` +
+      `    <InArgument x:TypeArguments="${typeArg}">${escapeXmlTextContent(normalizeXmlExpression(finalExpr))}</InArgument>\n` +
+      `  </Assign.Value>\n` +
+      `</Assign>`;
+    return decomposed.intermediateAssigns.join("\n") + "\n" + finalAssign;
   }
 
   return `<Assign DisplayName="${displayName}">\n` +
@@ -3178,12 +3199,22 @@ export function assembleWorkflowFromSpec(
   const wfArgs = registry.getAllArgumentsAsSpec();
 
   _activeDeclarationLookup = (name: string) => registry.hasName(name);
+  _lateDiscoveredVariables = [];
 
   let activitiesXml: string;
   try {
     activitiesXml = sanitizedRootChildren
       .map(child => assembleNode(child, finalVariables, processType, 0, "normal", registry))
       .join("\n    ");
+    if (_lateDiscoveredVariables.length > 0) {
+      for (const lv of _lateDiscoveredVariables) {
+        if (!registry.hasName(lv.name)) {
+          registry.registerVariable({ name: lv.name, type: lv.type || "x:Object", source: "discovered-reference" });
+          finalVariables.push(lv);
+        }
+      }
+      console.log(`[Expression Decomposition] Registered ${_lateDiscoveredVariables.length} intermediate variable(s) from expression decomposition`);
+    }
   } catch (e) {
     if (e instanceof CSharpExpressionBlockedError) {
       console.error(`[VB Lint FATAL] Workflow "${workflowName}" blocked due to unconvertible C# expression: ${e.message}`);
@@ -3206,6 +3237,7 @@ export function assembleWorkflowFromSpec(
     throw e;
   } finally {
     _activeDeclarationLookup = null;
+    _lateDiscoveredVariables = [];
   }
 
   activitiesXml = demoteUndeclaredBracketReferences(activitiesXml, registry);
@@ -3565,4 +3597,72 @@ function sanitizeObjectLiteralArguments(xaml: string): string {
       return `${openTag}${content}${closeTag}`;
     }
   );
+}
+
+const HIGH_RISK_EXPRESSION_THRESHOLD = 3;
+
+function countNestedCalls(expr: string): number {
+  let depth = 0;
+  let maxDepth = 0;
+  for (const ch of expr) {
+    if (ch === '(') { depth++; maxDepth = Math.max(maxDepth, depth); }
+    else if (ch === ')') { depth--; }
+  }
+  return maxDepth;
+}
+
+function countChainedIndexers(expr: string): number {
+  const matches = expr.match(/\)\s*\(/g);
+  const indexerMatches = expr.match(/\([^)]*\)\s*\(/g);
+  return (matches?.length || 0) + (indexerMatches?.length || 0);
+}
+
+function isHighRiskExpression(expr: string): boolean {
+  if (countNestedCalls(expr) >= HIGH_RISK_EXPRESSION_THRESHOLD) return true;
+  if (countChainedIndexers(expr) >= HIGH_RISK_EXPRESSION_THRESHOLD) return true;
+  if (/CType\s*\(.*CType\s*\(/s.test(expr)) return true;
+  if (/CStr\s*\(.*CStr\s*\(/s.test(expr)) return true;
+  return false;
+}
+
+export function decomposeComplexExpression(
+  expr: string,
+  targetVariable: string,
+  displayNamePrefix: string,
+): { intermediateAssigns: string[]; finalExpression: string; intermediateVariables: VariableDeclaration[] } {
+  if (!isHighRiskExpression(expr)) {
+    return { intermediateAssigns: [], finalExpression: expr, intermediateVariables: [] };
+  }
+
+  const intermediateAssigns: string[] = [];
+  const intermediateVariables: VariableDeclaration[] = [];
+  let currentExpr = expr;
+  let stepCount = 0;
+
+  const innerPattern = /CType\s*\(([^,]+(?:\([^)]*\))*[^,]*),\s*([^)]+)\)/;
+  while (countNestedCalls(currentExpr) >= HIGH_RISK_EXPRESSION_THRESHOLD && stepCount < 5) {
+    const match = innerPattern.exec(currentExpr);
+    if (!match) break;
+
+    stepCount++;
+    const innerExpr = match[1].trim();
+    const targetType = match[2].trim();
+    const intermediateVarName = `obj_Intermediate_${displayNamePrefix.replace(/\s+/g, "_")}_${stepCount}`;
+
+    intermediateVariables.push({
+      name: intermediateVarName,
+      type: "x:Object",
+    });
+
+    intermediateAssigns.push(
+      `<Assign DisplayName="Extract ${displayNamePrefix} Step ${stepCount}">\n` +
+      `  <Assign.To><OutArgument x:TypeArguments="x:Object">[${intermediateVarName}]</OutArgument></Assign.To>\n` +
+      `  <Assign.Value><InArgument x:TypeArguments="x:Object">[${escapeXmlExpression(innerExpr)}]</InArgument></Assign.Value>\n` +
+      `</Assign>`
+    );
+
+    currentExpr = currentExpr.replace(match[0], `CType(${intermediateVarName}, ${targetType})`);
+  }
+
+  return { intermediateAssigns, finalExpression: currentExpr, intermediateVariables };
 }

@@ -59,12 +59,26 @@ function createEmptyReport(): SpecValidationReport {
   };
 }
 
+const PLACEHOLDER_SENTINEL_PREFIX = "PLACEHOLDER_";
+
+function isPlaceholderSentinel(value: string): boolean {
+  return value.startsWith(PLACEHOLDER_SENTINEL_PREFIX);
+}
+
 function getDefaultForType(clrType: string): string {
   if (clrType.includes("Boolean") || clrType === "bool") return "False";
   if (clrType.includes("Int") || clrType.includes("Double") || clrType.includes("Decimal") || clrType === "int") return "0";
   if (clrType.includes("TimeSpan")) return "00:00:00";
+  if (clrType.includes("String") || clrType === "string") return "";
   return `PLACEHOLDER_${clrType.replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
+
+const CRITICAL_REQUIRED_PROPERTIES: Record<string, Set<string>> = {
+  "IntegrationServiceHTTPRequest": new Set(["Endpoint"]),
+  "UseGenAI": new Set(["Prompt"]),
+  "DeserializeJson": new Set(["JsonString", "Result"]),
+  "SerializeJson": new Set(["JsonString"]),
+};
 
 function resolveTargetVersion(schema: { packageId: string; packageVersion: string }, _studioProfile: StudioProfile | null): string {
   const preferred = metadataService.getPreferredVersion(schema.packageId);
@@ -321,18 +335,48 @@ function validateActivityNode(
       }
 
       const defaultValue = prop.default || (prop.validValues && prop.validValues.length > 0 ? prop.validValues[0] : getDefaultForType(prop.clrType));
-      filteredProperties[prop.name] = defaultValue;
-      report.missingRequiredFilled++;
-      report.issues.push({
-        severity: "warning",
-        code: "MISSING_REQUIRED_FILLED",
-        activityTemplate: node.template,
-        activityDisplayName: node.displayName,
-        property: prop.name,
-        message: `Missing required property "${prop.name}" on ${node.template} — filled with default: "${defaultValue}".`,
-        autoFixed: true,
-      });
-      console.log(`[SpecValidator] Filled missing required ${node.template}."${prop.name}" with default: "${defaultValue}"`);
+
+      const activityCriticalProps = CRITICAL_REQUIRED_PROPERTIES[node.template];
+      const isCriticalProperty = activityCriticalProps?.has(prop.name);
+
+      if (isCriticalProperty && (isPlaceholderSentinel(defaultValue) || defaultValue === "")) {
+        report.issues.push({
+          severity: "error",
+          code: "CRITICAL_REQUIRED_UNFILLED",
+          activityTemplate: node.template,
+          activityDisplayName: node.displayName,
+          property: prop.name,
+          message: `Critical required property "${prop.name}" on ${node.template} has no valid default — cannot emit PLACEHOLDER sentinel. Resolve upstream or provide a valid value.`,
+          autoFixed: false,
+        });
+        console.warn(`[SpecValidator] CRITICAL: ${node.template}."${prop.name}" unfilled — blocking emission`);
+      } else {
+        filteredProperties[prop.name] = defaultValue;
+        report.missingRequiredFilled++;
+        if (isPlaceholderSentinel(defaultValue)) {
+          report.issues.push({
+            severity: "warning",
+            code: "MISSING_REQUIRED_FILLED_PLACEHOLDER",
+            activityTemplate: node.template,
+            activityDisplayName: node.displayName,
+            property: prop.name,
+            message: `Missing required property "${prop.name}" on ${node.template} — filled with PLACEHOLDER sentinel: "${defaultValue}". Review before deployment.`,
+            autoFixed: true,
+          });
+          console.warn(`[SpecValidator] Filled ${node.template}."${prop.name}" with PLACEHOLDER sentinel: "${defaultValue}" — needs review`);
+        } else {
+          report.issues.push({
+            severity: "warning",
+            code: "MISSING_REQUIRED_FILLED",
+            activityTemplate: node.template,
+            activityDisplayName: node.displayName,
+            property: prop.name,
+            message: `Missing required property "${prop.name}" on ${node.template} — filled with default: "${defaultValue}".`,
+            autoFixed: true,
+          });
+          console.log(`[SpecValidator] Filled missing required ${node.template}."${prop.name}" with default: "${defaultValue}"`);
+        }
+      }
     }
   }
 
