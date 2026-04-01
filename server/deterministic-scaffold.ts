@@ -223,11 +223,11 @@ export function selectSystemActivity(system: string, description: string): Syste
     return { template: "ExecuteQuery", displayName: `Query Database - ${system || "Database"}`, properties: { Sql: '"SELECT * FROM table"', ConnectionString: '""' } };
   }
 
-  if (sysLower.includes("coupa") || combined.includes("coupa")) {
-    return { template: "HttpClient", displayName: `Coupa API - ${system || "Coupa"}`, properties: { Method: "GET", Endpoint: '"https://TODO.coupahost.com/api/v1/"', AcceptFormat: "JSON" } };
+  if (sysLower.includes("coupa") || sysLower.includes("erp") || sysLower.includes("procurement") || combined.includes("coupa") || combined.includes("purchase order") || combined.includes("procurement")) {
+    return { template: "HttpClient", displayName: `ERP/Procurement API - ${system || "Coupa"}`, properties: { Method: "GET", Endpoint: '"https://TODO.coupahost.com/api/v1/"', AcceptFormat: "JSON" } };
   }
 
-  if (sysLower.includes("document understanding") || combined.includes("document understanding") || combined.includes("intelligent ocr")) {
+  if (sysLower.includes("document understanding") || combined.includes("document understanding") || combined.includes("intelligent ocr") || sysLower.includes("ocr") || combined.includes("digitize") || combined.includes("classify document") || combined.includes("extract data from document")) {
     return { template: "LogMessage", displayName: `Document Understanding - ${system || "DU"}`, properties: { Level: "Info", Message: '"TODO: Configure Document Understanding taxonomy and extractors — install UiPath.DocumentUnderstanding.ML.Activities"' } };
   }
 
@@ -235,15 +235,15 @@ export function selectSystemActivity(system: string, description: string): Syste
     return { template: "LogMessage", displayName: `Integration Service - ${system || "Integration Service"}`, properties: { Level: "Info", Message: '"TODO: Configure Integration Service connector — select connector from Orchestrator"' } };
   }
 
-  if (sysLower.includes("servicenow") || sysLower.includes("service now")) {
+  if (sysLower.includes("servicenow") || sysLower.includes("service now") || sysLower.includes("snow") || combined.includes("servicenow") || combined.includes("incident ticket") || combined.includes("snow record")) {
     return { template: "HttpClient", displayName: `ServiceNow API - ${system || "ServiceNow"}`, properties: { Method: "GET", Endpoint: '"https://TODO.service-now.com/api/now/table/"', AcceptFormat: "JSON" } };
   }
 
-  if (sysLower.includes("workday")) {
+  if (sysLower.includes("workday") || combined.includes("workday") || combined.includes("hcm system")) {
     return { template: "HttpClient", displayName: `Workday API - ${system || "Workday"}`, properties: { Method: "GET", Endpoint: '"https://TODO.workday.com/api/v1/"', AcceptFormat: "JSON" } };
   }
 
-  if (sysLower.includes("salesforce") || sysLower.includes("sfdc")) {
+  if (sysLower.includes("salesforce") || sysLower.includes("sfdc") || combined.includes("salesforce") || combined.includes("sfdc")) {
     return { template: "HttpClient", displayName: `Salesforce API - ${system || "Salesforce"}`, properties: { Method: "GET", Endpoint: '"https://TODO.salesforce.com/services/data/v58.0/"', AcceptFormat: "JSON" } };
   }
 
@@ -257,6 +257,14 @@ export function selectSystemActivity(system: string, description: string): Syste
 
   if (sysLower.includes("dynamics") || sysLower.includes("d365")) {
     return { template: "HttpClient", displayName: `Dynamics 365 API - ${system || "Dynamics 365"}`, properties: { Method: "GET", Endpoint: '"https://TODO.crm.dynamics.com/api/data/v9.2/"', AcceptFormat: "JSON" } };
+  }
+
+  if (sysLower.includes("pdf") || combined.includes("pdf") || combined.includes("read pdf") || combined.includes("extract pdf") || combined.includes("generate pdf")) {
+    return { template: "ReadPdfText", displayName: `Read PDF - ${system || "PDF"}`, properties: { FileName: '"C:\\\\Data\\\\Document.pdf"', Range: '"All"' } };
+  }
+
+  if (sysLower.includes("desktop") || sysLower.includes("citrix") || sysLower.includes("mainframe") || sysLower.includes("terminal") || combined.includes("desktop app") || combined.includes("citrix") || combined.includes("remote app") || combined.includes("mainframe")) {
+    return { template: "UseApplication", displayName: `Desktop App - ${system || "Desktop"}`, properties: { ApplicationPath: '""', Selector: '"<wnd app=\'app.exe\' />"' } };
   }
 
   if (descLower.includes("click") || descLower.includes("type") || descLower.includes("enter") || descLower.includes("input") || descLower.includes("fill")) {
