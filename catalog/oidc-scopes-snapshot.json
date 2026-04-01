@@ -1,9 +1,5 @@
 {
-<<<<<<< HEAD
-  "fetchedAt": "2026-04-01T03:55:40.892Z",
-=======
-  "fetchedAt": "2026-04-01T03:56:08.240Z",
->>>>>>> d60d622 (Git commit prior to rebase)
+  "fetchedAt": "2026-04-01T04:13:55.303Z",
   "source": "https://cloud.uipath.com/identity_/.well-known/openid-configuration",
   "scopeFamilies": {
     "DataService": {
