@@ -2335,9 +2335,10 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
       xPropNames.add(xpm[1]);
     }
     const argRefPattern = /\b(in_[A-Za-z]\w*|out_[A-Za-z]\w*|io_[A-Za-z]\w*)\b/g;
+    const contentWithoutInvokeArgs = entry.content.replace(/<ui:InvokeWorkflowFile\.Arguments>[\s\S]*?<\/ui:InvokeWorkflowFile\.Arguments>/g, "");
     const allArgRefs = new Set<string>();
     let argRefM;
-    while ((argRefM = argRefPattern.exec(entry.content)) !== null) {
+    while ((argRefM = argRefPattern.exec(contentWithoutInvokeArgs)) !== null) {
       allArgRefs.add(argRefM[1]);
     }
     for (const argRef of allArgRefs) {

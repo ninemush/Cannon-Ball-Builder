@@ -4819,9 +4819,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           }
         }
         const fileName = _path.split("/").pop() || _path;
+        const contentWithoutInvokeArgs = content.replace(/<ui:InvokeWorkflowFile\.Arguments>[\s\S]*?<\/ui:InvokeWorkflowFile\.Arguments>/g, "");
         const bodyArgRefs = /\b(in_[A-Za-z]\w*|out_[A-Za-z]\w*|io_[A-Za-z]\w*)\b/g;
         let bodyArg;
-        while ((bodyArg = bodyArgRefs.exec(content)) !== null) {
+        while ((bodyArg = bodyArgRefs.exec(contentWithoutInvokeArgs)) !== null) {
           const xMemberCheck = new RegExp(`<x:Property\\s+Name="${bodyArg[1]}"`);
           const varCheck = new RegExp(`<Variable[^>]*\\bName="${bodyArg[1]}"`);
           if (!xMemberCheck.test(content) && !varCheck.test(content)) {
@@ -4951,9 +4952,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         while ((vpm = vp.exec(content)) !== null) {
           varNames.add(vpm[1]);
         }
+        const contentWithoutInvokeArgsForScan = content.replace(/<ui:InvokeWorkflowFile\.Arguments>[\s\S]*?<\/ui:InvokeWorkflowFile\.Arguments>/g, "");
         const argRefs = /\b(in_[A-Za-z]\w*|out_[A-Za-z]\w*|io_[A-Za-z]\w*)\b/g;
         let arm;
-        while ((arm = argRefs.exec(content)) !== null) {
+        while ((arm = argRefs.exec(contentWithoutInvokeArgsForScan)) !== null) {
           if (!xPropNames.has(arm[1]) && !varNames.has(arm[1])) {
             postRepairViolations.push({ category: "accuracy", severity: "error", check: "UNDECLARED_ARGUMENT", file: shortName, detail: `Post-repair: Argument "${arm[1]}" referenced but not declared in x:Members or Variables` });
             break;
