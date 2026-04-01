@@ -206,6 +206,10 @@ export interface RemediationEntry {
   classifiedCheck: string;
   developerAction: string;
   estimatedEffortMinutes: number;
+  businessDescription?: string;
+  businessRule?: string;
+  expectedInputs?: string;
+  expectedOutputs?: string;
 }
 
 export interface AutoRepairEntry {
@@ -304,6 +308,10 @@ export interface PipelineOutcomeReport {
       containingBlockType?: string;
       containedActivities?: string[];
       isIntegrityFailure?: boolean;
+      businessDescription?: string;
+      businessRule?: string;
+      expectedInputs?: string;
+      expectedOutputs?: string;
     }>;
   };
 }
@@ -796,6 +804,9 @@ function buildDhgFromBuildResult(
           sc => sc.level === "studio-blocked"
         ) ?? false);
     const bindPointSummary = summarizeBindPoints(xamlEntries);
+    const sddBusinessStepsByWorkflow = computeSddBusinessStepsByWorkflow(
+      effectiveWfNames, analysis, effectiveOutcomeReport,
+    );
     const dhgContext: DhgContext = {
       projectName,
       workflowNames: effectiveWfNames,
@@ -803,6 +814,7 @@ function buildDhgFromBuildResult(
       analysis,
       finalQualityReport: finalQualityReport || undefined,
       bindPointSummary: bindPointSummary.totalCount > 0 ? bindPointSummary : undefined,
+      sddBusinessStepsByWorkflow: sddBusinessStepsByWorkflow.size > 0 ? sddBusinessStepsByWorkflow : undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
@@ -1906,6 +1918,50 @@ export function getCachedPipelineResult(ideaId: string, mode?: GenerationMode): 
     }
   }
   return bestMatch;
+}
+
+function computeSddBusinessStepsByWorkflow(
+  workflowNames: string[],
+  analysis: ReturnType<typeof runDhgAnalysis> | null | undefined,
+  outcomeReport: PipelineOutcomeReport,
+): Map<string, number> {
+  const result = new Map<string, number>();
+
+  const processSteps = analysis?.upstreamContext?.processSteps;
+  if (!processSteps || processSteps.length === 0) return result;
+
+  const totalSddSteps = processSteps.length;
+
+  if (workflowNames.length === 0) return result;
+
+  if (workflowNames.length === 1) {
+    result.set(workflowNames[0], totalSddSteps);
+    return result;
+  }
+
+  const spMetrics = outcomeReport.structuralPreservationMetrics || [];
+  const totalActivities = spMetrics.reduce((sum, m) => sum + m.totalActivities, 0);
+
+  if (totalActivities > 0 && spMetrics.length > 0) {
+    for (const wf of workflowNames) {
+      const wfFile = `${wf}.xaml`;
+      const metric = spMetrics.find(m => m.file === wfFile || m.file === wf);
+      if (metric && metric.totalActivities > 0) {
+        const proportion = metric.totalActivities / totalActivities;
+        result.set(wf, Math.max(1, Math.round(totalSddSteps * proportion)));
+      } else {
+        const baseLine = Math.max(1, Math.round(totalSddSteps / workflowNames.length));
+        result.set(wf, baseLine);
+      }
+    }
+  } else {
+    const perWorkflow = Math.max(1, Math.round(totalSddSteps / workflowNames.length));
+    for (const wf of workflowNames) {
+      result.set(wf, perWorkflow);
+    }
+  }
+
+  return result;
 }
 
 export async function generateDhg(

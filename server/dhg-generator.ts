@@ -6,6 +6,21 @@ import type {
 import type { DhgAnalysisResult, SddArtifactCrossReference } from "./xaml/dhg-analyzers";
 import type { FinalQualityReport } from "./final-artifact-validation";
 
+export interface HandoffBlockEntry {
+  file: string;
+  blockType: string;
+  displayName: string;
+  businessDescription: string;
+  businessRule: string;
+  expectedInputs: string;
+  expectedOutputs: string;
+  developerAction: string;
+  estimatedEffortMinutes: number;
+  containedActivities: string;
+  remediationCode?: string;
+  line?: number;
+}
+
 export interface BindPointEntry {
   file: string;
   displayName: string;
@@ -91,6 +106,138 @@ export interface DhgContext {
   analysis?: DhgAnalysisResult;
   finalQualityReport?: FinalQualityReport;
   bindPointSummary?: BindPointSummary;
+  sddBusinessStepsByWorkflow?: Map<string, number>;
+}
+
+interface WorkflowTierClassification {
+  name: string;
+  tier: "generated" | "handoff" | "stub";
+  isFullyGenerated: boolean;
+  isStubbed: boolean;
+  isStudioBlocked: boolean;
+  hasHandoffBlocks: boolean;
+  hasRemediations: boolean;
+  hasPlaceholders: boolean;
+  failureSummary?: string;
+  studioLevel?: string;
+  remediationCount: number;
+  handoffBlockCount: number;
+  propertyRemediationCount: number;
+  bindPointCount: number;
+  preservedSteps: number;
+  degradedSteps: number;
+  manualSteps: number;
+  totalSteps: number;
+}
+
+function classifyWorkflows(
+  report: PipelineOutcomeReport,
+  context: DhgContext,
+): WorkflowTierClassification[] {
+  const fqr = context.finalQualityReport;
+  const studioCompat = report.studioCompatibility || [];
+  const activityRemediations = report.remediations.filter(r => r.level === "activity");
+  const sequenceRemediations = report.remediations.filter(r => r.level === "sequence");
+  const structuralLeafRemediations = report.remediations.filter(r => r.level === "structural-leaf");
+  const workflowRemediations = report.remediations.filter(r => r.level === "workflow");
+  const degradedItems = report.emissionGateViolations?.details.filter(v => v.resolution === "degraded") || [];
+  const stubbedEmissions = report.emissionGateViolations?.details.filter(v => v.resolution === "stubbed") || [];
+
+  return context.workflowNames.map(wf => {
+    const wfFile = `${wf}.xaml`;
+    let isStubbed: boolean;
+    let isStudioBlocked = false;
+    let failureSummary: string | undefined;
+    let isFullyGenerated: boolean;
+    let hasRemediation: boolean;
+    let hasPlaceholders: boolean;
+    let studioLevel: string | undefined;
+
+    if (fqr) {
+      const fqrEntry = fqr.perFileResults.find(r => r.file === wfFile || r.file === wf);
+      isStubbed = fqrEntry?.hasStubContent ?? false;
+      isStudioBlocked = fqrEntry?.studioCompatibilityLevel === "studio-blocked";
+      studioLevel = fqrEntry?.studioCompatibilityLevel;
+      if (isStudioBlocked && fqrEntry) {
+        failureSummary = fqrEntry.blockers.slice(0, 2).join("; ");
+      }
+      isFullyGenerated = fqrEntry ? !fqrEntry.hasStubContent && fqrEntry.studioCompatibilityLevel !== "studio-blocked" : false;
+      hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
+        r => r.file === wfFile || r.file === wf
+      );
+      hasPlaceholders = report.qualityWarnings.some(
+        w => w.check === "placeholder-value" && (w.file === wfFile || w.file === wf)
+      );
+    } else {
+      isStubbed = report.remediations.some(
+        r => (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE" || r.remediationCode === "STUB_WORKFLOW_BLOCKING") && (r.file === wfFile || r.file === wf)
+      );
+      const studioEntry = studioCompat.find(
+        (s: PerWorkflowStudioCompatibility) => s.file === wfFile || s.file === wf
+      );
+      isStudioBlocked = studioEntry?.level === "studio-blocked";
+      studioLevel = studioEntry?.level;
+      failureSummary = studioEntry?.failureSummary;
+      isFullyGenerated = report.fullyGeneratedFiles.some(f => f === wfFile || f === wf);
+      hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
+        r => r.file === wfFile || r.file === wf
+      );
+      hasPlaceholders = report.qualityWarnings.some(
+        w => w.check === "placeholder-value" && (w.file === wfFile || w.file === wf)
+      );
+    }
+
+    const wfActivityRems = activityRemediations.filter(r => r.file === wfFile || r.file === wf);
+    const wfSequenceRems = sequenceRemediations.filter(r => r.file === wfFile || r.file === wf);
+    const wfStructuralLeafRems = structuralLeafRemediations.filter(r => r.file === wfFile || r.file === wf);
+    const wfWorkflowRems = workflowRemediations.filter(r => r.file === wfFile || r.file === wf);
+    const wfDegraded = degradedItems.filter(d => d.file === wfFile || d.file === wf);
+    const wfStubbedEmissions = stubbedEmissions.filter(s => s.file === wfFile || s.file === wf);
+    const wfPropertyRems = report.propertyRemediations.filter(r => r.file === wfFile || r.file === wf);
+    const wfBindPoints = context.bindPointSummary?.byWorkflow.get(wf) || [];
+
+    const handoffBlockCount = wfDegraded.length + wfActivityRems.length + wfSequenceRems.length + wfStructuralLeafRems.length + wfStubbedEmissions.length;
+    const hasHandoffBlocks = handoffBlockCount > 0;
+
+    const isWorkflowStub = wfWorkflowRems.length > 0 || (isStubbed && !hasHandoffBlocks);
+
+    const spMetrics = report.structuralPreservationMetrics?.find(m => m.file === wfFile || m.file === wf);
+    const sddStepCount = context.sddBusinessStepsByWorkflow?.get(wf);
+    const totalSteps = sddStepCount ?? spMetrics?.totalActivities ?? (hasRemediation ? handoffBlockCount + wfPropertyRems.length + 1 : 1);
+    const degradedSteps = handoffBlockCount;
+    const manualSteps = isWorkflowStub ? totalSteps : handoffBlockCount + wfPropertyRems.length + wfBindPoints.length;
+    const preservedSteps = Math.max(0, totalSteps - degradedSteps - (isWorkflowStub ? totalSteps : 0));
+
+    let tier: "generated" | "handoff" | "stub";
+    if (isWorkflowStub || isStudioBlocked) {
+      tier = "stub";
+    } else if (hasHandoffBlocks) {
+      tier = "handoff";
+    } else {
+      tier = "generated";
+    }
+
+    return {
+      name: wf,
+      tier,
+      isFullyGenerated: isFullyGenerated && !hasHandoffBlocks,
+      isStubbed: isWorkflowStub,
+      isStudioBlocked,
+      hasHandoffBlocks,
+      hasRemediations: hasRemediation,
+      hasPlaceholders,
+      failureSummary,
+      studioLevel,
+      remediationCount: wfActivityRems.length + wfSequenceRems.length + wfStructuralLeafRems.length + wfWorkflowRems.length,
+      handoffBlockCount,
+      propertyRemediationCount: wfPropertyRems.length,
+      bindPointCount: wfBindPoints.length,
+      preservedSteps,
+      degradedSteps,
+      manualSteps,
+      totalSteps,
+    };
+  });
 }
 
 export function generateDhgFromOutcomeReport(
@@ -158,90 +305,144 @@ export function generateDhgFromOutcomeReport(
 
   md += `\n`;
 
+  const wfClassifications = classifyWorkflows(report, context);
+  const fullyGeneratedCount = wfClassifications.filter(c => c.tier === "generated").length;
+  const handoffCount = wfClassifications.filter(c => c.tier === "handoff").length;
+  const workflowStubCount = wfClassifications.filter(c => c.isStubbed).length;
+  const studioBlockedOnly = wfClassifications.filter(c => c.tier === "stub" && c.isStudioBlocked && !c.isStubbed).length;
+  const totalWorkflows = wfClassifications.length;
+
+  let tierSummary = `**${totalWorkflows} workflow${totalWorkflows !== 1 ? "s" : ""}: ${fullyGeneratedCount} fully generated, ${handoffCount} with handoff blocks, ${workflowStubCount} workflow-level stub${workflowStubCount !== 1 ? "s" : ""}`;
+  if (studioBlockedOnly > 0) {
+    tierSummary += `, ${studioBlockedOnly} Studio-blocked`;
+  }
+  tierSummary += `**\n`;
+  md += tierSummary;
   md += `**Total Estimated Effort: ~${report.totalEstimatedEffortMinutes} minutes (${(report.totalEstimatedEffortMinutes / 60).toFixed(1)} hours)**\n`;
   md += `**Remediations:** ${totalRemediations} total (${totalPropertyRemediations} property, ${totalActivityRemediations} activity, ${totalSequenceRemediations} sequence, ${totalStructuralLeafRemediations} structural-leaf, ${totalWorkflowRemediations} workflow)\n`;
   md += `**Auto-Repairs:** ${report.autoRepairs.length}\n`;
   md += `**Quality Warnings:** ${report.qualityWarnings.length}\n`;
   md += `\n---\n\n`;
 
-  sectionNum++;
-  md += `## ${sectionNum}. Completed Work\n\n`;
-  if (report.fullyGeneratedFiles.length > 0) {
-    md += `The following ${report.fullyGeneratedFiles.length} workflow(s) were fully generated without any stub replacements or remediation:\n\n`;
-    for (const f of report.fullyGeneratedFiles) {
-      md += `- \`${f}\`\n`;
-    }
-    md += `\n`;
-  } else {
-    md += `No workflows were generated without remediation.\n\n`;
-  }
-
-  const fqr = context.finalQualityReport;
-
-  if (context.workflowNames.length > 0) {
-    md += `### Workflow Inventory\n\n`;
-    md += `| # | Workflow | Status |\n`;
-    md += `|---|----------|--------|\n`;
-    const studioCompat = report.studioCompatibility || [];
-    context.workflowNames.forEach((wf, i) => {
-      let isStubbed: boolean;
-      let isStudioBlocked = false;
-      let failureSummary: string | undefined;
-      let isFullyGenerated: boolean;
-      let hasRemediation: boolean;
-      let hasPlaceholders: boolean;
-
-      if (fqr) {
-        const fqrEntry = fqr.perFileResults.find(r => r.file === `${wf}.xaml` || r.file === wf);
-        isStubbed = fqrEntry?.hasStubContent ?? false;
-        isStudioBlocked = fqrEntry?.studioCompatibilityLevel === "studio-blocked";
-        if (isStudioBlocked && fqrEntry) {
-          failureSummary = fqrEntry.blockers.slice(0, 2).join("; ");
-        }
-        isFullyGenerated = fqrEntry ? !fqrEntry.hasStubContent && fqrEntry.studioCompatibilityLevel !== "studio-blocked" : false;
-        hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
-          r => r.file === `${wf}.xaml` || r.file === wf
-        );
-        hasPlaceholders = report.qualityWarnings.some(
-          w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
-        );
-      } else {
-        isStubbed = report.remediations.some(
-          r => (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE" || r.remediationCode === "STUB_WORKFLOW_BLOCKING") && (r.file === `${wf}.xaml` || r.file === wf)
-        );
-        const studioEntry = studioCompat.find(
-          (s: PerWorkflowStudioCompatibility) => s.file === `${wf}.xaml` || s.file === wf
-        );
-        isStudioBlocked = studioEntry?.level === "studio-blocked";
-        failureSummary = studioEntry?.failureSummary;
-        isFullyGenerated = report.fullyGeneratedFiles.some(f => f === `${wf}.xaml` || f === wf);
-        hasRemediation = [...report.remediations, ...report.propertyRemediations].some(
-          r => r.file === `${wf}.xaml` || r.file === wf
-        );
-        hasPlaceholders = report.qualityWarnings.some(
-          w => w.check === "placeholder-value" && (w.file === `${wf}.xaml` || w.file === wf)
-        );
-      }
-
-      let status: string;
-      if (isStubbed || isStudioBlocked) {
-        status = failureSummary
-          ? `Structurally invalid — ${failureSummary}`
-          : "Structurally invalid (not Studio-loadable)";
-      } else if (isFullyGenerated) {
-        status = "Fully Generated";
-      } else if (hasPlaceholders) {
-        status = "Generated with Placeholders";
-      } else if (hasRemediation) {
-        status = "Generated with Remediations";
-      } else {
-        status = "Generated";
-      }
-      md += `| ${i + 1} | \`${wf}.xaml\` | ${status} |\n`;
+  if (wfClassifications.length > 0) {
+    const hasSddSteps = context.sddBusinessStepsByWorkflow && context.sddBusinessStepsByWorkflow.size > 0;
+    const stepsLabel = hasSddSteps ? "Business Steps (SDD)" : "Total Steps";
+    md += `### Per-Workflow Preservation Summary\n\n`;
+    md += `| # | Workflow | Tier | ${stepsLabel} | Preserved | Degraded (Handoff) | Manual | Bind Points |\n`;
+    md += `|---|----------|------|-------------|-----------|-------------------|--------|-------------|\n`;
+    wfClassifications.forEach((wfc, i) => {
+      const tierLabel = wfc.tier === "generated" ? "Generated" : wfc.tier === "handoff" ? "Handoff" : "Stub";
+      md += `| ${i + 1} | \`${wfc.name}.xaml\` | ${tierLabel} | ${wfc.totalSteps} | ${wfc.preservedSteps} | ${wfc.degradedSteps} | ${wfc.manualSteps} | ${wfc.bindPointCount} |\n`;
     });
     md += `\n`;
   }
 
+  sectionNum++;
+  md += `## ${sectionNum}. Generated Logic (ready to use)\n\n`;
+  md += `Generated XAML that is Studio-openable and does not contain handoff blocks or workflow-level stubs. May include auto-resolved property remediations or placeholders for fine-tuning.\n\n`;
+
+  const generatedWorkflows = wfClassifications.filter(c => c.tier === "generated");
+  if (generatedWorkflows.length > 0) {
+    md += `The following ${generatedWorkflows.length} workflow(s) were fully generated and are ready to use:\n\n`;
+    md += `| # | Workflow | Status | Studio Compatibility |\n`;
+    md += `|---|----------|--------|---------------------|\n`;
+    generatedWorkflows.forEach((wfc, i) => {
+      let status: string;
+      if (wfc.isFullyGenerated && !wfc.hasPlaceholders && !wfc.hasRemediations) {
+        status = "Fully Generated";
+      } else if (wfc.hasPlaceholders) {
+        status = "Generated with Placeholders";
+      } else if (wfc.hasRemediations) {
+        status = "Generated with Remediations";
+      } else {
+        status = "Generated";
+      }
+      const studioLabel = wfc.studioLevel === "studio-clean"
+        ? "Studio-openable"
+        : wfc.studioLevel === "studio-warnings"
+          ? "Openable with warnings"
+          : "Studio-openable";
+      md += `| ${i + 1} | \`${wfc.name}.xaml\` | ${status} | ${studioLabel} |\n`;
+    });
+    md += `\n`;
+
+    const spMetrics = report.structuralPreservationMetrics || [];
+    if (spMetrics.length > 0) {
+      md += `**Preserved Capabilities per Workflow:**\n\n`;
+      md += `| Workflow | Boundaries | Sequence Ordering | Branching | Config Reads | Infrastructure |\n`;
+      md += `|----------|-----------|-------------------|-----------|-------------|----------------|\n`;
+      for (const wfc of generatedWorkflows) {
+        const wfFile = `${wfc.name}.xaml`;
+        const metric = spMetrics.find(m => m.file === wfFile || m.file === wfc.name);
+        const structures = metric?.preservedStructures || [];
+        const hasBoundaries = structures.some(s => /boundary|scope|try|catch/i.test(s)) ? "Yes" : "—";
+        const hasSequencing = structures.some(s => /sequence|flowchart|flow/i.test(s)) ? "Yes" : "—";
+        const hasBranching = structures.some(s => /if|switch|decision|branch|condition/i.test(s)) ? "Yes" : "—";
+        const hasConfig = structures.some(s => /config|setting|read|argument|variable/i.test(s)) ? "Yes" : "—";
+        const hasInfra = structures.some(s => /assign|log|invoke|delay|retry/i.test(s)) ? "Yes" : "—";
+        md += `| \`${wfc.name}.xaml\` | ${hasBoundaries} | ${hasSequencing} | ${hasBranching} | ${hasConfig} | ${hasInfra} |\n`;
+      }
+      md += `\n`;
+    }
+  } else {
+    md += `No workflows were generated without handoff blocks or stubs.\n\n`;
+  }
+
+  if (report.autoRepairs.length > 0) {
+    md += `### AI-Resolved with Smart Defaults (${report.autoRepairs.length})\n\n`;
+    md += `The following issue(s) were automatically corrected during the build pipeline. **No developer action required.**\n\n`;
+    md += `| # | Code | File | Description | Est. Minutes Saved |\n`;
+    md += `|---|------|------|-------------|-------------------|\n`;
+    report.autoRepairs.forEach((r, i) => {
+      const desc = (r.description || "").length > 100 ? (r.description || "").slice(0, 97) + "..." : (r.description || "—");
+      md += `| ${i + 1} | \`${r.repairCode}\` | \`${r.file}\` | ${desc.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (report.downgradeEvents.length > 0) {
+    md += `### Downgraded Components\n\n`;
+    md += `| # | File | From | To | Reason | Developer Action | Est. Minutes |\n`;
+    md += `|---|------|------|----|--------|-----------------|-------------|\n`;
+    report.downgradeEvents.forEach((d, i) => {
+      const reason = (d.triggerReason || "").length > 80 ? (d.triggerReason || "").slice(0, 77) + "..." : (d.triggerReason || "—");
+      md += `| ${i + 1} | ${d.file || "—"} | \`${d.fromMode}\` | \`${d.toMode}\` | ${reason.replace(/\|/g, "\\|")} | ${d.developerAction} | ${d.estimatedEffortMinutes} |\n`;
+    });
+    md += `\n`;
+  }
+
+  if (report.structuralPreservationMetrics && report.structuralPreservationMetrics.length > 0) {
+    md += `### Structural Preservation Metrics\n\n`;
+    md += `| File | Total Activities | Preserved | Stubbed | Preservation Rate | Studio-Loadable | Preserved Structures |\n`;
+    md += `|------|-----------------|-----------|---------|-------------------|----------------|---------------------|\n`;
+    for (const m of report.structuralPreservationMetrics) {
+      const rate = m.totalActivities > 0 ? Math.round((m.preservedActivities / m.totalActivities) * 100) : 0;
+      const structures = m.preservedStructures.length > 3
+        ? m.preservedStructures.slice(0, 3).join(", ") + `... (+${m.preservedStructures.length - 3})`
+        : m.preservedStructures.join(", ");
+      const loadableLabel = m.studioLoadable === false
+        ? "No"
+        : m.studioLoadable === true
+          ? "Yes"
+          : "Unknown";
+      md += `| \`${m.file}\` | ${m.totalActivities} | ${m.preservedActivities} | ${m.stubbedActivities} | ${rate}% | ${loadableLabel} | ${structures} |\n`;
+    }
+    md += `\n`;
+    const nonLoadable = report.structuralPreservationMetrics.filter(m => m.studioLoadable === false);
+    if (nonLoadable.length > 0) {
+      md += `> **⚠ ${nonLoadable.length} structurally-preserved file(s) are not Studio-loadable** despite high preservation rates. `;
+      md += `XML structure is intact but Studio cannot load these files (missing Implementation/DynamicActivity). `;
+      md += `These require rebuilding from scratch.\n\n`;
+      for (const m of nonLoadable) {
+        if (m.studioLoadableNote) {
+          md += `> - \`${m.file}\`: ${m.studioLoadableNote}\n`;
+        }
+      }
+      if (nonLoadable.some(m => m.studioLoadableNote)) md += `\n`;
+    }
+  }
+
+  const fqr = context.finalQualityReport;
   const studioCompatData = fqr
     ? fqr.perFileResults.map(r => ({
         file: r.file,
@@ -293,288 +494,351 @@ export function generateDhgFromOutcomeReport(
   }
 
   sectionNum++;
-  md += `## ${sectionNum}. AI-Resolved with Smart Defaults\n\n`;
-  if (report.autoRepairs.length > 0) {
-    md += `The following ${report.autoRepairs.length} issue(s) were automatically corrected during the build pipeline. **No developer action required.**\n\n`;
-    md += `| # | Code | File | Description | Est. Minutes |\n`;
-    md += `|---|------|------|-------------|-------------|\n`;
-    report.autoRepairs.forEach((r, i) => {
-      const desc = (r.description || "").length > 100 ? (r.description || "").slice(0, 97) + "..." : (r.description || "—");
-      md += `| ${i + 1} | \`${r.repairCode}\` | \`${r.file}\` | ${desc.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+  md += `## ${sectionNum}. Handoff Blocks (business logic preserved, implementation required)\n\n`;
+  md += `Blocks where business logic is preserved as documentation but implementation requires manual Studio work. Each entry includes the workflow file, block type, business description from the SDD (when available), expected inputs/outputs, and the developer action required.\n\n`;
+
+  const activityRemediations = report.remediations.filter(r => r.level === "activity");
+  const sequenceRemediations = report.remediations.filter(r => r.level === "sequence");
+  const structuralLeafRemediations = report.remediations.filter(r => r.level === "structural-leaf");
+  const degradedItems = report.emissionGateViolations?.details.filter(v => v.resolution === "degraded") || [];
+  const stubbedEmissionItems = report.emissionGateViolations?.details.filter(v => v.resolution === "stubbed") || [];
+
+  const handoffEntries: HandoffBlockEntry[] = [];
+
+  for (const v of degradedItems) {
+    handoffEntries.push({
+      file: v.file,
+      blockType: v.containingBlockType || "control-flow",
+      displayName: `${v.containingBlockType || "Control-flow"} block`,
+      businessDescription: v.businessDescription || "",
+      businessRule: v.businessRule || "",
+      expectedInputs: v.expectedInputs || "",
+      expectedOutputs: v.expectedOutputs || "",
+      developerAction: `Implement entire ${v.containingBlockType || "block"} manually in Studio`,
+      estimatedEffortMinutes: 30,
+      containedActivities: v.containedActivities?.join(", ") || "—",
+      line: v.line,
     });
-    md += `\n`;
-  } else {
-    md += `No auto-repairs were applied.\n\n`;
   }
 
-  if (report.downgradeEvents.length > 0) {
-    md += `### Downgraded Components\n\n`;
-    md += `| # | File | From | To | Reason | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|------|----|--------|-----------------|-------------|\n`;
-    report.downgradeEvents.forEach((d, i) => {
-      const reason = (d.triggerReason || "").length > 80 ? (d.triggerReason || "").slice(0, 77) + "..." : (d.triggerReason || "—");
-      md += `| ${i + 1} | ${d.file || "—"} | \`${d.fromMode}\` | \`${d.toMode}\` | ${reason.replace(/\|/g, "\\|")} | ${d.developerAction} | ${d.estimatedEffortMinutes} |\n`;
+  for (const v of stubbedEmissionItems) {
+    handoffEntries.push({
+      file: v.file,
+      blockType: "emission-stub",
+      displayName: (v.detail || "Unapproved activity").slice(0, 80),
+      businessDescription: v.businessDescription || "",
+      businessRule: v.businessRule || "",
+      expectedInputs: v.expectedInputs || "",
+      expectedOutputs: v.expectedOutputs || "",
+      developerAction: "Implement approved activity replacement in Studio",
+      estimatedEffortMinutes: 15,
+      containedActivities: "—",
+      line: v.line,
     });
-    md += `\n`;
+  }
+
+  for (const r of activityRemediations) {
+    handoffEntries.push({
+      file: r.file,
+      blockType: "activity",
+      displayName: r.originalDisplayName || r.originalTag || "—",
+      businessDescription: r.businessDescription || "",
+      businessRule: r.businessRule || "",
+      expectedInputs: r.expectedInputs || "",
+      expectedOutputs: r.expectedOutputs || "",
+      developerAction: r.developerAction || "Implement activity in Studio",
+      estimatedEffortMinutes: r.estimatedEffortMinutes,
+      containedActivities: r.originalTag || "—",
+      remediationCode: r.remediationCode,
+    });
+  }
+
+  for (const r of sequenceRemediations) {
+    handoffEntries.push({
+      file: r.file,
+      blockType: "sequence",
+      displayName: r.originalDisplayName || "—",
+      businessDescription: r.businessDescription || "",
+      businessRule: r.businessRule || "",
+      expectedInputs: r.expectedInputs || "",
+      expectedOutputs: r.expectedOutputs || "",
+      developerAction: r.developerAction || "Implement sequence in Studio",
+      estimatedEffortMinutes: r.estimatedEffortMinutes,
+      containedActivities: "—",
+      remediationCode: r.remediationCode,
+    });
+  }
+
+  for (const r of structuralLeafRemediations) {
+    handoffEntries.push({
+      file: r.file,
+      blockType: "structural-leaf",
+      displayName: r.originalDisplayName || "—",
+      businessDescription: r.businessDescription || "",
+      businessRule: r.businessRule || "",
+      expectedInputs: r.expectedInputs || "",
+      expectedOutputs: r.expectedOutputs || "",
+      developerAction: r.developerAction || "Implement activity in Studio",
+      estimatedEffortMinutes: r.estimatedEffortMinutes,
+      containedActivities: r.originalTag || "—",
+      remediationCode: r.remediationCode,
+    });
+  }
+
+  if (handoffEntries.length === 0) {
+    md += `No handoff blocks — all logic was fully generated.\n\n`;
+  } else {
+    md += `**${handoffEntries.length} handoff block(s) requiring manual implementation**\n\n`;
+    handoffEntries.forEach((entry, i) => {
+      md += `#### ${i + 1}. \`${entry.file}\` — ${entry.displayName} (${entry.blockType})\n\n`;
+      md += `- **Workflow File:** \`${entry.file}\`\n`;
+      md += `- **Block Type:** ${entry.blockType}\n`;
+      md += `- **Business Description (SDD):** ${entry.businessDescription || "—"}\n`;
+      md += `- **Business Rule:** ${entry.businessRule || "—"}\n`;
+      md += `- **Expected Inputs:** ${entry.expectedInputs || "—"}\n`;
+      md += `- **Expected Outputs:** ${entry.expectedOutputs || "—"}\n`;
+      md += `- **Contained Activities:** ${entry.containedActivities}\n`;
+      if (entry.remediationCode) {
+        md += `- **Remediation Code:** \`${entry.remediationCode}\`\n`;
+      }
+      if (entry.line) {
+        md += `- **Line:** ${entry.line}\n`;
+      }
+      md += `- **Developer Action:** ${entry.developerAction}\n`;
+      md += `- **Estimated Effort:** ${entry.estimatedEffortMinutes} minutes\n\n`;
+    });
   }
 
   sectionNum++;
-  md += `## ${sectionNum}. Manual Action Required\n\n`;
+  md += `## ${sectionNum}. Manual Work Remaining\n\n`;
+  md += `Consolidated developer TODO list organized by workflow, with estimated effort per item.\n\n`;
 
-  const allRemediations = [
-    ...report.propertyRemediations,
-    ...report.remediations,
-  ];
+  interface TodoItem {
+    workflow: string;
+    category: string;
+    description: string;
+    developerAction: string;
+    estimatedMinutes: number;
+    priority: number;
+  }
+  const todoItems: TodoItem[] = [];
 
-  if (allRemediations.length === 0 && report.qualityWarnings.length === 0) {
-    md += `No manual developer action is required.\n\n`;
+  const workflowRemediations = report.remediations.filter(r => r.level === "workflow");
+  for (const r of workflowRemediations) {
+    const wfName = (r.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Workflow Stub",
+      description: `Entire workflow \`${r.file}\` replaced with Studio-openable stub`,
+      developerAction: r.developerAction || "Rebuild workflow from scratch in Studio",
+      estimatedMinutes: r.estimatedEffortMinutes,
+      priority: 1,
+    });
   }
 
-  if (report.propertyRemediations.length > 0) {
-    md += `### Property-Level Remediations (${report.propertyRemediations.length})\n\n`;
-    md += `Individual properties were replaced with safe defaults/placeholders. The rest of the activity is intact.\n\n`;
-    md += `| # | File | Activity | Property | Code | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|----------|----------|------|-----------------|-------------|\n`;
-    report.propertyRemediations.forEach((r, i) => {
-      const actName = r.originalDisplayName || r.originalTag || "—";
-      const propName = r.propertyName || "—";
-      const action = (r.developerAction || "").length > 80
-        ? (r.developerAction || "").slice(0, 77) + "..."
-        : (r.developerAction || "—");
-      md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${propName}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+  for (const v of degradedItems) {
+    const wfName = (v.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Degraded Block",
+      description: `${v.containingBlockType || "Unknown"} block degraded — ${(v.detail || "").slice(0, 100)}`,
+      developerAction: `Implement entire ${v.containingBlockType || "block"} manually in Studio`,
+      estimatedMinutes: 30,
+      priority: 2,
     });
-    md += `\n`;
   }
 
-  const activityRemediations = report.remediations.filter(r => r.level === "activity");
-  if (activityRemediations.length > 0) {
-    md += `### Activity-Level Stubs (${activityRemediations.length})\n\n`;
-    md += `Entire activities were replaced with TODO stubs. The surrounding workflow structure is preserved.\n\n`;
-    md += `| # | File | Activity | Code | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|----------|------|-----------------|-------------|\n`;
-    activityRemediations.forEach((r, i) => {
-      const actName = r.originalDisplayName || r.originalTag || "—";
-      const action = (r.developerAction || "").length > 80
-        ? (r.developerAction || "").slice(0, 77) + "..."
-        : (r.developerAction || "—");
-      md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+  for (const r of activityRemediations) {
+    const wfName = (r.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Activity Stub",
+      description: `Activity "${r.originalDisplayName || r.originalTag || "unknown"}" stubbed`,
+      developerAction: r.developerAction || "Implement activity in Studio",
+      estimatedMinutes: r.estimatedEffortMinutes,
+      priority: 3,
     });
-    md += `\n`;
   }
 
-  const sequenceRemediations = report.remediations.filter(r => r.level === "sequence");
-  if (sequenceRemediations.length > 0) {
-    md += `### Sequence-Level Stubs (${sequenceRemediations.length})\n\n`;
-    md += `Sequence children were replaced with a single TODO stub because multiple activities in the sequence had issues.\n\n`;
-    md += `| # | File | Sequence | Code | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|----------|------|-----------------|-------------|\n`;
-    sequenceRemediations.forEach((r, i) => {
-      const seqName = r.originalDisplayName || "—";
-      const action = (r.developerAction || "").length > 80
-        ? (r.developerAction || "").slice(0, 77) + "..."
-        : (r.developerAction || "—");
-      md += `| ${i + 1} | \`${r.file}\` | ${seqName} | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+  for (const r of sequenceRemediations) {
+    const wfName = (r.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Sequence Stub",
+      description: `Sequence "${r.originalDisplayName || "unknown"}" stubbed`,
+      developerAction: r.developerAction || "Implement sequence in Studio",
+      estimatedMinutes: r.estimatedEffortMinutes,
+      priority: 3,
     });
-    md += `\n`;
   }
 
-  const structuralLeafRemediations = report.remediations.filter(r => r.level === "structural-leaf");
-  if (structuralLeafRemediations.length > 0) {
-    md += `### Structural-Leaf Stubs (${structuralLeafRemediations.length})\n\n`;
-    md += `Individual leaf activities were stubbed while preserving the workflow skeleton (sequences, branches, try/catch, loops, invocations).\n\n`;
-    md += `| # | File | Activity | Original Tag | Code | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|----------|-------------|------|-----------------|-------------|\n`;
-    structuralLeafRemediations.forEach((r, i) => {
-      const actName = r.originalDisplayName || "—";
-      const tag = r.originalTag || "—";
-      const action = (r.developerAction || "").length > 80
-        ? (r.developerAction || "").slice(0, 77) + "..."
-        : (r.developerAction || "—");
-      md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${tag}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+  for (const r of structuralLeafRemediations) {
+    const wfName = (r.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Leaf Stub",
+      description: `Leaf activity "${r.originalDisplayName || "unknown"}" (\`${r.originalTag || "—"}\`) stubbed`,
+      developerAction: r.developerAction || "Implement activity in Studio",
+      estimatedMinutes: r.estimatedEffortMinutes,
+      priority: 4,
     });
-    md += `\n`;
+  }
 
-    if (report.structuralPreservationMetrics && report.structuralPreservationMetrics.length > 0) {
-      md += `#### Structural Preservation Metrics\n\n`;
-      md += `| File | Total Activities | Preserved | Stubbed | Preservation Rate | Studio-Loadable | Preserved Structures |\n`;
-      md += `|------|-----------------|-----------|---------|-------------------|----------------|---------------------|\n`;
-      for (const m of report.structuralPreservationMetrics) {
-        const rate = m.totalActivities > 0 ? Math.round((m.preservedActivities / m.totalActivities) * 100) : 0;
-        const structures = m.preservedStructures.length > 3
-          ? m.preservedStructures.slice(0, 3).join(", ") + `... (+${m.preservedStructures.length - 3})`
-          : m.preservedStructures.join(", ");
-        const loadableLabel = m.studioLoadable === false
-          ? "No"
-          : m.studioLoadable === true
-            ? "Yes"
-            : "Unknown";
-        md += `| \`${m.file}\` | ${m.totalActivities} | ${m.preservedActivities} | ${m.stubbedActivities} | ${rate}% | ${loadableLabel} | ${structures} |\n`;
-      }
-      md += `\n`;
-      const nonLoadable = report.structuralPreservationMetrics.filter(m => m.studioLoadable === false);
-      if (nonLoadable.length > 0) {
-        md += `> **⚠ ${nonLoadable.length} structurally-preserved file(s) are not Studio-loadable** despite high preservation rates. `;
-        md += `XML structure is intact but Studio cannot load these files (missing Implementation/DynamicActivity). `;
-        md += `These require rebuilding from scratch.\n\n`;
-        for (const m of nonLoadable) {
-          if (m.studioLoadableNote) {
-            md += `> - \`${m.file}\`: ${m.studioLoadableNote}\n`;
-          }
-        }
-        if (nonLoadable.some(m => m.studioLoadableNote)) md += `\n`;
-      }
-    }
+  for (const v of stubbedEmissionItems) {
+    const wfName = (v.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Emission Stub",
+      description: (v.detail || "Unapproved activity stubbed").slice(0, 120),
+      developerAction: "Implement approved activity replacement in Studio",
+      estimatedMinutes: 15,
+      priority: 4,
+    });
+  }
+
+  for (const r of report.propertyRemediations) {
+    const wfName = (r.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Property Fix",
+      description: `Property \`${r.propertyName || "—"}\` on "${r.originalDisplayName || r.originalTag || "—"}" replaced with placeholder`,
+      developerAction: r.developerAction || "Replace placeholder with correct value",
+      estimatedMinutes: r.estimatedEffortMinutes,
+      priority: 5,
+    });
   }
 
   const validationFindings = report.remediations.filter(r => r.level === "validation-finding");
-  if (validationFindings.length > 0) {
-    md += `### Validation Issues — Requires Manual Attention (${validationFindings.length})\n\n`;
-    md += `The following issues were detected by the quality gate and require developer review. No automated remediation was applied — workflows are preserved as-generated.\n\n`;
-    md += `| # | File | Check | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|-------|-----------------|-------------|\n`;
-    validationFindings.forEach((r, i) => {
-      const action = (r.developerAction || "").length > 80
-        ? (r.developerAction || "").slice(0, 77) + "..."
-        : (r.developerAction || "—");
-      md += `| ${i + 1} | \`${r.file}\` | \`${r.classifiedCheck}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
+  for (const r of validationFindings) {
+    const wfName = (r.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Validation Finding",
+      description: `Quality gate finding: \`${r.classifiedCheck}\``,
+      developerAction: r.developerAction || "Review and fix",
+      estimatedMinutes: r.estimatedEffortMinutes,
+      priority: 5,
     });
-    md += `\n`;
-  }
-
-  const workflowRemediations = report.remediations.filter(r => r.level === "workflow");
-  if (workflowRemediations.length > 0) {
-    md += `### Workflow-Level Stubs (${workflowRemediations.length})\n\n`;
-    md += `Entire workflows were replaced with Studio-openable stubs (XAML was not parseable for structural preservation).\n\n`;
-    md += `| # | File | Code | Developer Action | Est. Minutes |\n`;
-    md += `|---|------|------|-----------------|-------------|\n`;
-    workflowRemediations.forEach((r, i) => {
-      const action = (r.developerAction || "").length > 80
-        ? (r.developerAction || "").slice(0, 77) + "..."
-        : (r.developerAction || "—");
-      md += `| ${i + 1} | \`${r.file}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes} |\n`;
-    });
-    md += `\n`;
-  }
-
-  if (report.emissionGateViolations && report.emissionGateViolations.details.length > 0) {
-    const stubbedItems = report.emissionGateViolations.details.filter(v => v.resolution === "stubbed");
-    const degradedItems = report.emissionGateViolations.details.filter(v => v.resolution === "degraded");
-
-    if (stubbedItems.length > 0) {
-      md += `### Emission Gate — Stubbed Activities (${stubbedItems.length})\n\n`;
-      md += `Individual unapproved activities were replaced with Comment+LogMessage stubs in sequential context.\n\n`;
-      md += `| # | File | Line | Detail | Est. Minutes |\n`;
-      md += `|---|------|------|--------|-------------|\n`;
-      stubbedItems.forEach((v, i) => {
-        const detail = (v.detail || "").length > 100 ? (v.detail || "").slice(0, 97) + "..." : (v.detail || "—");
-        md += `| ${i + 1} | \`${v.file}\` | ${v.line || "—"} | ${detail.replace(/\|/g, "\\|")} | 15 |\n`;
-      });
-      md += `\n`;
-    }
-
-    if (degradedItems.length > 0) {
-      md += `### Emission Gate — Degraded Blocks (${degradedItems.length})\n\n`;
-      md += `Entire control-flow/retry blocks were replaced with handoff stubs because they contained unapproved activities. These blocks must be implemented manually in Studio.\n\n`;
-      md += `| # | File | Line | Block Type | Contained Activities | Developer Action | Est. Minutes |\n`;
-      md += `|---|------|------|------------|---------------------|-----------------|-------------|\n`;
-      degradedItems.forEach((v, i) => {
-        const blockType = v.containingBlockType || "Unknown";
-        const contained = v.containedActivities?.join(", ") || "—";
-        const detail = (v.detail || "").length > 80 ? (v.detail || "").slice(0, 77) + "..." : (v.detail || "—");
-        md += `| ${i + 1} | \`${v.file}\` | ${v.line || "—"} | ${blockType} | ${contained.replace(/\|/g, "\\|")} | Implement entire ${blockType} block manually in Studio | 30 |\n`;
-      });
-      md += `\n`;
-    }
   }
 
   if (transitiveDependencyWarnings.length > 0) {
-    md += `### Transitive Dependency Issues (${transitiveDependencyWarnings.length})\n\n`;
-    md += `Activities reference packages or types that are not declared in project.json. These may cause runtime failures.\n\n`;
-    md += `| # | File | Check | Detail | Est. Minutes |\n`;
-    md += `|---|------|-------|--------|-------------|\n`;
-    transitiveDependencyWarnings.forEach((w, i) => {
-      const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
-      md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 10} |\n`;
-    });
-    md += `\n`;
+    for (const w of transitiveDependencyWarnings) {
+      const wfName = (w.file || "").replace(/\.xaml$/i, "");
+      todoItems.push({
+        workflow: wfName || "Unknown",
+        category: "Dependency Issue",
+        description: `${w.check}: ${(w.detail || "").slice(0, 100)}`,
+        developerAction: w.developerAction || "Add missing dependency to project.json",
+        estimatedMinutes: w.estimatedEffortMinutes || 10,
+        priority: 4,
+      });
+    }
   }
 
-  if (report.qualityWarnings.length > 0) {
-    const selectorWarnings = report.qualityWarnings.filter(w => w.check === "SELECTOR_PLACEHOLDER" || w.check === "SELECTOR_LOW_QUALITY");
-    const nonTransitiveWarnings = report.qualityWarnings.filter(w =>
-      w.check !== "SELECTOR_PLACEHOLDER" && w.check !== "SELECTOR_LOW_QUALITY" &&
-      w.check !== "transitive-dependency-missing" && w.check !== "error-activity-reference" && w.check !== "unresolved-type-argument"
-    );
+  const nonTransitivePlaceholderWarnings = report.qualityWarnings.filter(w =>
+    w.check !== "transitive-dependency-missing" && w.check !== "error-activity-reference" && w.check !== "unresolved-type-argument"
+  );
+  const selectorWarnings = nonTransitivePlaceholderWarnings.filter(w => w.check === "SELECTOR_PLACEHOLDER" || w.check === "SELECTOR_LOW_QUALITY");
+  for (const w of selectorWarnings) {
+    const wfName = (w.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Selector Warning",
+      description: `${w.check}: ${(w.detail || "").slice(0, 100)}`,
+      developerAction: w.developerAction || "Fix selector in Studio",
+      estimatedMinutes: w.estimatedEffortMinutes || 15,
+      priority: 6,
+    });
+  }
 
-    if (selectorWarnings.length > 0) {
-      md += `### UI Selector Warnings (${selectorWarnings.length})\n\n`;
-      md += `These selectors need attention to ensure reliable UI automation.\n\n`;
-      md += `| # | File | Check | Business Context | Detail | Est. Minutes |\n`;
-      md += `|---|------|-------|-----------------|--------|-------------|\n`;
-      selectorWarnings.forEach((w, i) => {
-        const detail = (w.detail || "").length > 80 ? (w.detail || "").slice(0, 77) + "..." : (w.detail || "—");
-        const context = (w.businessContext || "—").length > 80
-          ? (w.businessContext || "").slice(0, 77) + "..."
-          : (w.businessContext || "—");
-        md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${context.replace(/\|/g, "\\|")} | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 15} |\n`;
+  const otherQualityWarnings = nonTransitivePlaceholderWarnings.filter(w =>
+    w.check !== "SELECTOR_PLACEHOLDER" && w.check !== "SELECTOR_LOW_QUALITY"
+  );
+  const placeholderWarnings = otherQualityWarnings.filter(w => w.check === "placeholder-value");
+  const handoffPlaceholders = placeholderWarnings.filter(w => w.stubCategory !== "failure");
+  const failurePlaceholders = placeholderWarnings.filter(w => w.stubCategory === "failure");
+  const generalWarnings = otherQualityWarnings.filter(w => w.check !== "placeholder-value");
+
+  for (const w of failurePlaceholders) {
+    const wfName = (w.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Generation Failure",
+      description: (w.detail || "Pipeline generation failure").slice(0, 120),
+      developerAction: w.developerAction || "Implement manually — pipeline could not generate",
+      estimatedMinutes: w.estimatedEffortMinutes || 15,
+      priority: 2,
+    });
+  }
+
+  for (const w of handoffPlaceholders) {
+    const wfName = (w.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Implementation Required",
+      description: (w.detail || "Developer implementation required").slice(0, 120),
+      developerAction: w.developerAction || "Implement in Studio",
+      estimatedMinutes: w.estimatedEffortMinutes || 10,
+      priority: 5,
+    });
+  }
+
+  for (const w of generalWarnings) {
+    const wfName = (w.file || "").replace(/\.xaml$/i, "");
+    todoItems.push({
+      workflow: wfName || "Unknown",
+      category: "Quality Warning",
+      description: `${w.check}: ${(w.detail || "").slice(0, 100)}`,
+      developerAction: w.developerAction || "Review and address",
+      estimatedMinutes: w.estimatedEffortMinutes || 10,
+      priority: 6,
+    });
+  }
+
+  if (context.bindPointSummary && context.bindPointSummary.totalCount > 0) {
+    for (const bp of context.bindPointSummary.entries) {
+      const wfName = (bp.file || "").replace(/\.xaml$/i, "");
+      todoItems.push({
+        workflow: wfName || "Unknown",
+        category: "Bind Point",
+        description: `Bind point: ${bp.system} — ${(bp.detail || "Connector implementation needed").slice(0, 100)}`,
+        developerAction: `Implement ${bp.system} connector integration`,
+        estimatedMinutes: bp.estimatedEffortMinutes,
+        priority: 3,
       });
+    }
+  }
+
+  todoItems.sort((a, b) => a.priority - b.priority || a.workflow.localeCompare(b.workflow));
+
+  if (todoItems.length === 0) {
+    md += `No manual developer action is required.\n\n`;
+  } else {
+    const byWorkflow = new Map<string, TodoItem[]>();
+    for (const item of todoItems) {
+      const existing = byWorkflow.get(item.workflow) || [];
+      existing.push(item);
+      byWorkflow.set(item.workflow, existing);
+    }
+
+    const totalTodoEffort = todoItems.reduce((s, t) => s + t.estimatedMinutes, 0);
+    md += `**${todoItems.length} items remaining — ~${totalTodoEffort} minutes (${(totalTodoEffort / 60).toFixed(1)} hours) total estimated effort**\n\n`;
+
+    let globalIndex = 0;
+    for (const [workflow, items] of Array.from(byWorkflow.entries())) {
+      const wfEffort = items.reduce((s: number, t: TodoItem) => s + t.estimatedMinutes, 0);
+      md += `### ${workflow}.xaml (${items.length} item${items.length !== 1 ? "s" : ""}, ~${wfEffort} min)\n\n`;
+      md += `| # | Priority | Category | Description | Developer Action | Est. Minutes |\n`;
+      md += `|---|----------|----------|-------------|-----------------|-------------|\n`;
+      for (const item of items) {
+        globalIndex++;
+        const priorityLabel = item.priority <= 2 ? "High" : item.priority <= 4 ? "Medium" : "Low";
+        const desc = item.description.length > 80 ? item.description.slice(0, 77) + "..." : item.description;
+        const action = item.developerAction.length > 80 ? item.developerAction.slice(0, 77) + "..." : item.developerAction;
+        md += `| ${globalIndex} | ${priorityLabel} | ${item.category} | ${desc.replace(/\|/g, "\\|")} | ${action.replace(/\|/g, "\\|")} | ${item.estimatedMinutes} |\n`;
+      }
       md += `\n`;
     }
-
-    if (nonTransitiveWarnings.length > 0) {
-      const placeholderWarnings = nonTransitiveWarnings.filter(w => w.check === "placeholder-value");
-      const otherWarnings = nonTransitiveWarnings.filter(w => w.check !== "placeholder-value");
-
-      if (placeholderWarnings.length > 0) {
-        const handoffWarnings = placeholderWarnings.filter(w => (w as any).stubCategory !== "failure");
-        const failureWarnings = placeholderWarnings.filter(w => (w as any).stubCategory === "failure");
-
-        if (handoffWarnings.length > 0) {
-          md += `### Developer Implementation Required (${handoffWarnings.length})\n\n`;
-          md += `These placeholders represent intentional handoff points where developer implementation is expected.\n\n`;
-          md += `| # | File | Detail | Est. Minutes |\n`;
-          md += `|---|------|--------|-------------|\n`;
-          handoffWarnings.forEach((w, i) => {
-            const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
-            md += `| ${i + 1} | \`${w.file}\` | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 10} |\n`;
-          });
-          md += `\n`;
-        }
-
-        if (failureWarnings.length > 0) {
-          md += `### Generation Failures — Pipeline Errors (${failureWarnings.length})\n\n`;
-          md += `These placeholders exist because the generation pipeline could not produce the content. These should be prioritized for remediation.\n\n`;
-          md += `| # | File | Detail | Est. Minutes |\n`;
-          md += `|---|------|--------|-------------|\n`;
-          failureWarnings.forEach((w, i) => {
-            const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
-            md += `| ${i + 1} | \`${w.file}\` | ${detail.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes || 15} |\n`;
-          });
-          md += `\n`;
-        }
-      }
-
-      if (otherWarnings.length > 0) {
-        md += `### Quality Warnings (${otherWarnings.length})\n\n`;
-        md += `| # | File | Check | Detail | Developer Action | Est. Minutes |\n`;
-        md += `|---|------|-------|--------|-----------------|-------------|\n`;
-        otherWarnings.forEach((w, i) => {
-          const detail = (w.detail || "").length > 100 ? (w.detail || "").slice(0, 97) + "..." : (w.detail || "—");
-          const action = (w.developerAction || "").length > 80
-            ? (w.developerAction || "").slice(0, 77) + "..."
-            : (w.developerAction || "—");
-          md += `| ${i + 1} | \`${w.file}\` | ${w.check} | ${detail.replace(/\|/g, "\\|")} | ${action.replace(/\|/g, "\\|")} | ${w.estimatedEffortMinutes} |\n`;
-        });
-        md += `\n`;
-      }
-    }
-  }
-
-  if (allRemediations.length > 0 || report.qualityWarnings.length > 0) {
-    const remediationEffort = allRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0);
-    const warningEffort = report.qualityWarnings.reduce((s, w) => s + (w.estimatedEffortMinutes || 0), 0);
-    const totalEffort = remediationEffort + warningEffort;
-    md += `**Total manual remediation effort: ~${totalEffort} minutes (${(totalEffort / 60).toFixed(1)} hours)**\n\n`;
   }
 
   if (context.analysis) {
