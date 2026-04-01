@@ -616,6 +616,17 @@ export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = new Prox
   },
 });
 
+export function getActivityPackageFromRegistry(activityName: string): string | null {
+  const prefixedKey = `ui:${activityName}`;
+  const entry = ACTIVITY_REGISTRY[prefixedKey];
+  if (entry && entry.package) return entry.package;
+
+  const directEntry = ACTIVITY_REGISTRY[activityName];
+  if (directEntry && directEntry.package) return directEntry.package;
+
+  return null;
+}
+
 export type AutomationPattern = "simple-linear" | "api-data-driven" | "ui-automation" | "transactional-queue" | "hybrid";
 
 export function classifyAutomationPattern(

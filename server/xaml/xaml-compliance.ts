@@ -1,5 +1,5 @@
 import { escapeXml } from "../lib/xml-utils";
-import { ACTIVITY_NAME_ALIAS_MAP } from "../uipath-activity-registry";
+import { ACTIVITY_NAME_ALIAS_MAP, getActivityPackageFromRegistry } from "../uipath-activity-registry";
 import { catalogService } from "../catalog/catalog-service";
 import { XMLValidator } from "fast-xml-parser";
 import { QualityGateError } from "../uipath-shared";
@@ -294,6 +294,11 @@ export function resolveActivityToPackage(activityName: string): string | null {
     if (schema) return schema.packageId;
   }
 
+  const registryPackage = getActivityPackageFromRegistry(activityName);
+  if (registryPackage && matchingPackages.includes(registryPackage)) {
+    return registryPackage;
+  }
+
   return matchingPackages.length > 0 ? matchingPackages[0] : null;
 }
 
@@ -352,7 +357,13 @@ export function collectUsedPackages(xaml: string): Set<string> {
 
   if (catalogService.isLoaded()) {
     for (const entry of catalogService.getAllPackageNamespaceEntries()) {
-      if (!entry.prefix || entry.prefix === "ui") continue;
+      if (!entry.prefix) continue;
+      if (entry.prefix === "ui") {
+        if (!canonicalPrefixToPackage.has(entry.prefix)) {
+          canonicalPrefixToPackage.set(entry.prefix, entry.packageId);
+        }
+        continue;
+      }
       if (!canonicalPrefixToPackage.has(entry.prefix)) {
         canonicalPrefixToPackage.set(entry.prefix, entry.packageId);
       }
@@ -364,7 +375,13 @@ export function collectUsedPackages(xaml: string): Set<string> {
   }
 
   for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
-    if (!info.prefix || info.prefix === "ui") continue;
+    if (!info.prefix) continue;
+    if (info.prefix === "ui") {
+      if (!canonicalPrefixToPackage.has(info.prefix)) {
+        canonicalPrefixToPackage.set(info.prefix, packageId);
+      }
+      continue;
+    }
     if (!canonicalPrefixToPackage.has(info.prefix)) {
       canonicalPrefixToPackage.set(info.prefix, packageId);
     }
@@ -385,7 +402,21 @@ export function collectUsedPackages(xaml: string): Set<string> {
   }
 
   if (/<ui:/.test(xaml)) {
-    usedPackages.add("UiPath.System.Activities");
+    const uiActivityPattern = /<ui:(\w+)[\s>\/]/g;
+    let uiMatch;
+    const resolvedUiPackages = new Set<string>();
+    while ((uiMatch = uiActivityPattern.exec(xaml)) !== null) {
+      const activityName = uiMatch[1];
+      const pkg = resolveActivityToPackage(activityName);
+      if (pkg) {
+        resolvedUiPackages.add(pkg);
+      }
+    }
+    if (resolvedUiPackages.size > 0) {
+      Array.from(resolvedUiPackages).forEach(pkg => usedPackages.add(pkg));
+    } else {
+      usedPackages.add("UiPath.System.Activities");
+    }
   }
 
   return usedPackages;
@@ -428,7 +459,6 @@ export function buildDynamicAssemblyRefs(usedPackages: Set<string>, existingXml?
   Array.from(usedPackages).forEach(packageId => {
     const info = resolvePackageNamespaceInfo(packageId);
     if (!info) return;
-    if (info.assembly === "System.Activities" || info.assembly === "UiPath.Core.Activities") return;
     if (existingRefs.has(info.assembly)) return;
     refs.push(`      <AssemblyReference>${info.assembly}</AssemblyReference>`);
   });
@@ -440,19 +470,32 @@ export function buildDynamicAssemblyRefs(usedPackages: Set<string>, existingXml?
   return refs.join("\n");
 }
 
-export function buildDynamicNamespaceImports(usedPackages: Set<string>): string {
+export function buildDynamicNamespaceImports(usedPackages: Set<string>, existingXml?: string): string {
   const imports: string[] = [];
+  const existingNamespaces = new Set<string>();
+
+  if (existingXml) {
+    const nsPattern = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+    let m;
+    while ((m = nsPattern.exec(existingXml)) !== null) {
+      existingNamespaces.add(m[1].trim());
+    }
+  }
 
   Array.from(usedPackages).forEach(packageId => {
     const info = resolvePackageNamespaceInfo(packageId);
     if (!info) return;
-    if (info.clrNamespace === "System.Activities" || info.clrNamespace === "UiPath.Core.Activities") return;
+    if (existingNamespaces.has(info.clrNamespace)) return;
     imports.push(`      <x:String>${info.clrNamespace}</x:String>`);
   });
 
   if (usedPackages.has("UiPath.WebAPI.Activities")) {
-    imports.push(`      <x:String>Newtonsoft.Json</x:String>`);
-    imports.push(`      <x:String>Newtonsoft.Json.Linq</x:String>`);
+    if (!existingNamespaces.has("Newtonsoft.Json")) {
+      imports.push(`      <x:String>Newtonsoft.Json</x:String>`);
+    }
+    if (!existingNamespaces.has("Newtonsoft.Json.Linq")) {
+      imports.push(`      <x:String>Newtonsoft.Json.Linq</x:String>`);
+    }
   }
 
   return imports.join("\n");
@@ -1130,7 +1173,7 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
 
   const additionalXmlns = buildDynamicXmlnsDeclarations(usedPackages, isCrossPlatform, xml);
   const additionalAssemblyRefs = buildDynamicAssemblyRefs(usedPackages, xml);
-  let additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages);
+  let additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages, xml);
 
   const hasStateMachine = /<StateMachine[\s>]|<State[\s>]|<Transition[\s>]/.test(xml);
   if (hasStateMachine && !xml.includes("System.Activities.Statements")) {

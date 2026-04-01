@@ -1282,15 +1282,28 @@ function runAuthoritativeNamespaceInjection(
 
     for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
       if (!info.prefix || info.prefix === "") continue;
+      if (info.prefix === "ui") continue;
       if (usedPrefixes.has(info.prefix)) {
         usedPackages.add(packageId);
+      }
+    }
+
+    if (usedPrefixes.has("ui")) {
+      const uiActivityPattern = /<ui:(\w+)[\s>\/]/g;
+      let uiMatch;
+      while ((uiMatch = uiActivityPattern.exec(content)) !== null) {
+        const activityName = uiMatch[1];
+        const pkg = resolveActivityToPackage(activityName);
+        if (pkg) {
+          usedPackages.add(pkg);
+        }
       }
     }
 
     let updated = content;
     const additionalXmlns = buildDynamicXmlnsDeclarations(usedPackages, isCrossPlatform, updated);
     const additionalAssemblyRefs = buildDynamicAssemblyRefs(usedPackages, updated);
-    const additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages);
+    const additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages, updated);
 
     if (additionalXmlns) {
       const xmlnsInsertPoint = updated.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
@@ -5863,6 +5876,143 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           stage: "authoritative-namespace-injection",
           recoverable: true,
         });
+      }
+    }
+
+    {
+      console.log(`[Pre-Smoke-Test Self-Check] Ensuring all activity assemblies and namespaces are present...`);
+      let selfCheckFixes = 0;
+      Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+        if (!path.endsWith(".xaml")) return;
+        let updated = content;
+
+        const activityTagPattern = /<(\w+):(\w+)[\s>\/]/g;
+        let atm;
+        const neededAssemblies = new Set<string>();
+        const neededNamespaces = new Set<string>();
+        const neededXmlns = new Map<string, string>();
+
+        while ((atm = activityTagPattern.exec(content)) !== null) {
+          const prefix = atm[1];
+          const activityName = atm[2];
+          if (["xmlns", "xml", "x", "sap", "sap2010", "mc", "s", "scg", "sco", "mva", "sads", "scg2"].includes(prefix)) continue;
+
+          let matchedPackage: string | null = null;
+          if (prefix === "ui") {
+            matchedPackage = resolveActivityToPackage(activityName);
+          }
+          if (!matchedPackage) {
+            for (const [pkgId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+              if (info.prefix === prefix) {
+                matchedPackage = pkgId;
+                break;
+              }
+            }
+          }
+
+          if (matchedPackage) {
+            const info = PACKAGE_NAMESPACE_MAP[matchedPackage];
+            if (info) {
+              if (info.assembly) neededAssemblies.add(info.assembly);
+              if (info.clrNamespace) neededNamespaces.add(info.clrNamespace);
+              if (info.prefix && info.xmlns && !neededXmlns.has(info.prefix)) {
+                neededXmlns.set(info.prefix, info.xmlns);
+              }
+            }
+          }
+        }
+
+        const declaredPrefixes = new Set<string>();
+        const xmlnsDeclPattern = /xmlns:(\w+)="([^"]+)"/g;
+        let xdm;
+        while ((xdm = xmlnsDeclPattern.exec(updated)) !== null) {
+          declaredPrefixes.add(xdm[1]);
+        }
+
+        const missingXmlnsDecls: string[] = [];
+        Array.from(neededXmlns.entries()).forEach(([prefix, xmlns]) => {
+          if (!declaredPrefixes.has(prefix)) {
+            missingXmlnsDecls.push(`  xmlns:${prefix}="${xmlns}"`);
+          }
+        });
+
+        if (missingXmlnsDecls.length > 0) {
+          const xmlnsInsertPoint = updated.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
+          if (xmlnsInsertPoint >= 0) {
+            const insertAfter = xmlnsInsertPoint + 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'.length;
+            updated = updated.slice(0, insertAfter) + "\n" + missingXmlnsDecls.join("\n") + updated.slice(insertAfter);
+            selfCheckFixes += missingXmlnsDecls.length;
+          }
+        }
+
+        const declaredAssemblies = new Set<string>();
+        const asmRefPattern = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+        let arm;
+        while ((arm = asmRefPattern.exec(updated)) !== null) {
+          declaredAssemblies.add(arm[1].trim());
+        }
+
+        const declaredNamespaces = new Set<string>();
+        const nsImportPattern = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+        let nsm;
+        while ((nsm = nsImportPattern.exec(updated)) !== null) {
+          declaredNamespaces.add(nsm[1].trim());
+        }
+
+        const missingAssemblies: string[] = [];
+        Array.from(neededAssemblies).forEach(asm => {
+          if (!declaredAssemblies.has(asm)) {
+            missingAssemblies.push(`      <AssemblyReference>${asm}</AssemblyReference>`);
+          }
+        });
+
+        const missingNamespaces: string[] = [];
+        Array.from(neededNamespaces).forEach(ns => {
+          if (!declaredNamespaces.has(ns)) {
+            missingNamespaces.push(`      <x:String>${ns}</x:String>`);
+          }
+        });
+
+        if (missingAssemblies.length > 0) {
+          const refsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.ReferencesForImplementation>/);
+          if (refsMatch && refsMatch.index !== undefined) {
+            updated = updated.slice(0, refsMatch.index) + missingAssemblies.join("\n") + "\n" + updated.slice(refsMatch.index);
+            selfCheckFixes += missingAssemblies.length;
+          } else if (!updated.includes("TextExpression.ReferencesForImplementation")) {
+            const nsForImplEnd = updated.match(/<\/TextExpression\.NamespacesForImplementation>/);
+            if (nsForImplEnd && nsForImplEnd.index !== undefined) {
+              const insertAt = nsForImplEnd.index + nsForImplEnd[0].length;
+              const refsBlock = `\n  <TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${missingAssemblies.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
+              updated = updated.slice(0, insertAt) + refsBlock + updated.slice(insertAt);
+              selfCheckFixes += missingAssemblies.length;
+            }
+          }
+        }
+
+        if (missingNamespaces.length > 0) {
+          const importsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.NamespacesForImplementation>/);
+          if (importsMatch && importsMatch.index !== undefined) {
+            updated = updated.slice(0, importsMatch.index) + missingNamespaces.join("\n") + "\n" + updated.slice(importsMatch.index);
+            selfCheckFixes += missingNamespaces.length;
+          } else if (!updated.includes("TextExpression.NamespacesForImplementation")) {
+            const refsForImplEnd = updated.match(/<\/TextExpression\.ReferencesForImplementation>/);
+            if (refsForImplEnd && refsForImplEnd.index !== undefined) {
+              const insertAt = refsForImplEnd.index + refsForImplEnd[0].length;
+              const nsBlock = `\n  <TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${missingNamespaces.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
+              updated = updated.slice(0, insertAt) + nsBlock + updated.slice(insertAt);
+              selfCheckFixes += missingNamespaces.length;
+            }
+          }
+        }
+
+        if (updated !== content) {
+          deferredWrites.set(path, updated);
+        }
+      });
+      if (selfCheckFixes > 0) {
+        console.log(`[Pre-Smoke-Test Self-Check] Injected ${selfCheckFixes} missing assembly/namespace declaration(s)`);
+      } else {
+        console.log(`[Pre-Smoke-Test Self-Check] All assemblies and namespaces already present`);
       }
     }
 
