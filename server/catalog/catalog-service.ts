@@ -87,10 +87,12 @@ class CatalogService {
   private loaded = false;
   private _studioProfile: StudioProfile | null = null;
   private loadGeneration = 0;
+  private _lastLoadError: string | null = null;
 
   load(catalogPath?: string): void {
     metadataService.load();
     this._studioProfile = metadataService.getStudioProfile();
+    this._lastLoadError = null;
 
     let parsed: any = null;
 
@@ -101,6 +103,7 @@ class CatalogService {
     if (!parsed) {
       const path = catalogPath || metadataService.getActivityCatalogPath() || join(process.cwd(), "catalog", "activity-catalog.json");
       if (!existsSync(path)) {
+        this._lastLoadError = `file not found at ${path}`;
         console.warn(`[Activity Catalog] Catalog file not found at ${path} — catalog constraints disabled`);
         this.loaded = false;
         return;
@@ -109,6 +112,7 @@ class CatalogService {
         const raw = readFileSync(path, "utf-8");
         parsed = JSON.parse(raw);
       } catch (err: any) {
+        this._lastLoadError = err.message;
         console.warn(`[Activity Catalog] Failed to load catalog: ${err.message} — catalog constraints disabled`);
         this.loaded = false;
         return;
@@ -118,6 +122,7 @@ class CatalogService {
     try {
       const validation = validateCatalog(parsed);
       if (!validation.valid) {
+        this._lastLoadError = `validation rejected: ${validation.errors.join("; ")}`;
         console.warn(`[Activity Catalog] Catalog validation failed: ${validation.errors.join("; ")} — catalog constraints disabled`);
         this.loaded = false;
         return;
@@ -142,9 +147,14 @@ class CatalogService {
       this.checkVersionAlignment();
       this.checkCatalogFreshness();
     } catch (err: any) {
+      this._lastLoadError = err.message;
       console.warn(`[Activity Catalog] Failed to load catalog: ${err.message} — catalog constraints disabled`);
       this.loaded = false;
     }
+  }
+
+  getLastLoadError(): string | null {
+    return this._lastLoadError;
   }
 
   getStudioProfile(): StudioProfile | null {

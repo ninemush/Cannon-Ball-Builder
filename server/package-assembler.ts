@@ -2868,6 +2868,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           specValidationReport.commentConversions += report.commentConversions;
           specValidationReport.excessiveStrippingCount += report.excessiveStrippingCount;
           specValidationReport.issues = specValidationReport.issues.concat(report.issues);
+          specValidationReport.catalogLoaded = (specValidationReport.catalogLoaded ?? true) && (report.catalogLoaded ?? true);
+          if (report.catalogLoadError && !specValidationReport.catalogLoadError) {
+            specValidationReport.catalogLoadError = report.catalogLoadError;
+          }
         }
 
         const specJson = JSON.stringify(spec, null, 2);
@@ -3048,6 +3052,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           missingRequiredFilled: 0,
           commentConversions: 0,
           excessiveStrippingCount: 0,
+          catalogLoaded: catalogService.isLoaded(),
           issues: [{
             activityType: "PIPELINE_HEALTH",
             property: "specValidation",
@@ -3073,6 +3078,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           missingRequiredFilled: 0,
           commentConversions: 0,
           excessiveStrippingCount: 0,
+          catalogLoaded: catalogService.isLoaded(),
           issues: [],
         };
       }
@@ -3083,6 +3089,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       const deferredXamlCount = Array.from(deferredWrites.keys()).filter(k => k.endsWith(".xaml")).length;
       if (specValidationReport.totalActivities === 0 && deferredXamlCount > 0 && enrichmentsToProcess.length > 0) {
+        if (specValidationReport.catalogLoaded === false) {
+          const reason = specValidationReport.catalogLoadError || catalogService.getLastLoadError() || "unknown catalog load failure";
+          dependencyWarnings.push({
+            code: "CATALOG_INTEGRITY_FAILURE",
+            message: `Catalog failed to load (${reason}) — spec validation was blind across ${deferredXamlCount} XAML file(s) and ${enrichmentsToProcess.length} enrichment(s)`,
+            stage: "pre-emission-spec-validation",
+            recoverable: false,
+          });
+          throw new Error(`[Pre-Emission Spec Validation] BLOCKED: catalog integrity failure (${reason}) — spec validation was blind, cannot certify build health`);
+        }
         dependencyWarnings.push({
           code: "PRE_EMISSION_ZERO_COVERAGE",
           message: `Pre-emission validation ran but covered 0 activities across ${deferredXamlCount} XAML file(s) and ${enrichmentsToProcess.length} enrichment(s) — build health is degraded`,

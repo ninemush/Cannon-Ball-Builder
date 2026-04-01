@@ -24,6 +24,8 @@ export interface SpecValidationReport {
   missingRequiredFilled: number;
   commentConversions: number;
   issues: SpecValidationIssue[];
+  catalogLoaded?: boolean;
+  catalogLoadError?: string | null;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -45,7 +47,7 @@ const ENUM_AUTO_CORRECTION_MAP: Record<string, string> = {
   "Critical": "Fatal",
 };
 
-function createEmptyReport(): SpecValidationReport {
+function createEmptyReport(catalogLoaded: boolean = true, catalogLoadError?: string | null): SpecValidationReport {
   return {
     totalActivities: 0,
     validActivities: 0,
@@ -56,6 +58,8 @@ function createEmptyReport(): SpecValidationReport {
     missingRequiredFilled: 0,
     commentConversions: 0,
     issues: [],
+    catalogLoaded,
+    catalogLoadError: catalogLoadError ?? null,
   };
 }
 
@@ -709,7 +713,7 @@ export function validateWorkflowSpec(
     }
     if (!catalogService.isLoaded()) {
       console.error(`[SpecValidator] ERROR: Activity catalog could not be loaded — spec validation will produce empty results. Required-property and unknown-activity checks are disabled.`);
-      return { spec, report: createEmptyReport() };
+      return { spec, report: createEmptyReport(false, catalogService.getLastLoadError()) };
     }
   }
 

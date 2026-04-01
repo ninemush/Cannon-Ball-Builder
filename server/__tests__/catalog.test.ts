@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { validateCatalog } from "../catalog/catalog-validator";
 import { catalogService, type ProcessType } from "../catalog/catalog-service";
+import { validateWorkflowSpec, type SpecValidationReport } from "../catalog/spec-validator";
 import { classifyProcessType } from "../ai-xaml-enricher";
 import { classifyQualityIssues, getBlockingFiles } from "../uipath-quality-gate";
 import { buildTemplateBlock, calculateTemplateCompliance, formatTemplateBlockForPrompt } from "../catalog/xaml-template-builder";
@@ -1097,6 +1098,267 @@ describe("Activity Catalog", () => {
       const issues = classifyQualityIssues(mockResult);
       expect(issues).toHaveLength(1);
       expect(issues[0].severity).toBe("warning");
+    });
+  });
+
+  describe("Catalog Validator - duplicate packageId", () => {
+    it("produces a validation error with message matching 'duplicate packageId \"...\"'", () => {
+      const bad = JSON.parse(readFileSync(catalogPath, "utf-8"));
+      const dupPkg = { ...bad.packages[0] };
+      bad.packages.push(dupPkg);
+      const result = validateCatalog(bad);
+      expect(result.valid).toBe(false);
+      const dupError = result.errors.find(e => /duplicate packageId "/.test(e));
+      expect(dupError).toBeDefined();
+      expect(dupError).toContain(dupPkg.packageId);
+    });
+  });
+
+  describe("SpecValidationReport catalogLoaded signal", () => {
+    it("sets catalogLoaded=true when catalog is loaded", () => {
+      expect(catalogService.isLoaded()).toBe(true);
+      const minimalSpec = {
+        processName: "Test",
+        rootSequence: { displayName: "Main", children: [], variables: [] },
+        variables: [],
+      };
+      const { report } = validateWorkflowSpec(minimalSpec as any);
+      expect(report.catalogLoaded).toBe(true);
+    });
+
+    it("sets catalogLoaded=false when catalog cannot be loaded (both initial and retry fail)", () => {
+      const { renameSync, existsSync: localExistsSync } = require("fs");
+      const backupPath = catalogPath + ".__test_backup";
+      let renamed = false;
+
+      try {
+        renameSync(catalogPath, backupPath);
+        renamed = true;
+
+        catalogService.load("/nonexistent/__bad_catalog.json");
+        expect(catalogService.isLoaded()).toBe(false);
+
+        const minimalSpec = {
+          processName: "Test",
+          rootSequence: { displayName: "Main", children: [], variables: [] },
+          variables: [],
+        };
+        const { report } = validateWorkflowSpec(minimalSpec as any);
+        expect(report.catalogLoaded).toBe(false);
+      } finally {
+        if (renamed) {
+          renameSync(backupPath, catalogPath);
+        }
+        catalogService.load(catalogPath);
+      }
+    });
+
+    it("sticky-false: merged report has catalogLoaded=false if any individual report is false", () => {
+      const reportA: SpecValidationReport = {
+        totalActivities: 5,
+        validActivities: 5,
+        unknownActivities: 0,
+        strippedProperties: 0,
+        excessiveStrippingCount: 0,
+        enumCorrections: 0,
+        missingRequiredFilled: 0,
+        commentConversions: 0,
+        issues: [],
+        catalogLoaded: true,
+      };
+      const reportB: SpecValidationReport = {
+        totalActivities: 0,
+        validActivities: 0,
+        unknownActivities: 0,
+        strippedProperties: 0,
+        excessiveStrippingCount: 0,
+        enumCorrections: 0,
+        missingRequiredFilled: 0,
+        commentConversions: 0,
+        issues: [],
+        catalogLoaded: false,
+      };
+
+      const merged = { ...reportA };
+      merged.totalActivities += reportB.totalActivities;
+      merged.catalogLoaded = (merged.catalogLoaded ?? true) && (reportB.catalogLoaded ?? true);
+
+      expect(merged.catalogLoaded).toBe(false);
+    });
+  });
+
+  describe("Pre-emission gate cause-aware validation", () => {
+    function simulatePreEmissionGate(report: SpecValidationReport, deferredXamlCount: number, enrichmentCount: number): { code: string; message: string } | null {
+      if (report.totalActivities === 0 && deferredXamlCount > 0 && enrichmentCount > 0) {
+        if (report.catalogLoaded === false) {
+          const reason = report.catalogLoadError || "unknown catalog load failure";
+          return {
+            code: "CATALOG_INTEGRITY_FAILURE",
+            message: `[Pre-Emission Spec Validation] BLOCKED: catalog integrity failure (${reason}) — spec validation was blind, cannot certify build health`,
+          };
+        }
+        return {
+          code: "PRE_EMISSION_ZERO_COVERAGE",
+          message: `[Pre-Emission Spec Validation] BLOCKED: validation ran but covered 0 activities across ${deferredXamlCount} XAML file(s) — cannot certify build health`,
+        };
+      }
+      return null;
+    }
+
+    it("CATALOG_INTEGRITY_FAILURE: duplicate packageId in catalog triggers distinct cause code with reason", () => {
+      const bad = JSON.parse(readFileSync(catalogPath, "utf-8"));
+      const dupPkgId = bad.packages[0].packageId;
+      bad.packages.push({ ...bad.packages[0] });
+      const validation = validateCatalog(bad);
+      expect(validation.valid).toBe(false);
+      const dupError = validation.errors.find(e => /duplicate packageId "/.test(e));
+      expect(dupError).toBeDefined();
+
+      const catalogLoadError = `validation rejected: ${validation.errors.join("; ")}`;
+
+      const report: SpecValidationReport = {
+        totalActivities: 0,
+        validActivities: 0,
+        unknownActivities: 0,
+        strippedProperties: 0,
+        excessiveStrippingCount: 0,
+        enumCorrections: 0,
+        missingRequiredFilled: 0,
+        commentConversions: 0,
+        issues: [],
+        catalogLoaded: false,
+        catalogLoadError,
+      };
+
+      const result = simulatePreEmissionGate(report, 3, 2);
+      expect(result).not.toBeNull();
+      expect(result!.code).toBe("CATALOG_INTEGRITY_FAILURE");
+      expect(result!.message).toContain("catalog integrity failure");
+      expect(result!.message).toContain("duplicate packageId");
+      expect(result!.message).toContain(dupPkgId);
+    });
+
+    it("PRE_EMISSION_ZERO_COVERAGE: healthy catalog with empty specs still uses existing cause code", () => {
+      expect(catalogService.isLoaded()).toBe(true);
+
+      const report: SpecValidationReport = {
+        totalActivities: 0,
+        validActivities: 0,
+        unknownActivities: 0,
+        strippedProperties: 0,
+        excessiveStrippingCount: 0,
+        enumCorrections: 0,
+        missingRequiredFilled: 0,
+        commentConversions: 0,
+        issues: [],
+        catalogLoaded: true,
+        catalogLoadError: null,
+      };
+
+      const result = simulatePreEmissionGate(report, 3, 2);
+      expect(result).not.toBeNull();
+      expect(result!.code).toBe("PRE_EMISSION_ZERO_COVERAGE");
+      expect(result!.message).not.toContain("CATALOG_INTEGRITY_FAILURE");
+      expect(result!.message).not.toContain("catalog integrity failure");
+    });
+
+    it("no gate triggered when totalActivities > 0", () => {
+      const report: SpecValidationReport = {
+        totalActivities: 5,
+        validActivities: 5,
+        unknownActivities: 0,
+        strippedProperties: 0,
+        excessiveStrippingCount: 0,
+        enumCorrections: 0,
+        missingRequiredFilled: 0,
+        commentConversions: 0,
+        issues: [],
+        catalogLoaded: true,
+        catalogLoadError: null,
+      };
+
+      const result = simulatePreEmissionGate(report, 3, 2);
+      expect(result).toBeNull();
+    });
+
+    it("end-to-end: duplicate packageId catalog load produces report with catalogLoaded=false and error reason", () => {
+      const { writeFileSync, unlinkSync, renameSync } = require("fs");
+      const bad = JSON.parse(readFileSync(catalogPath, "utf-8"));
+      const dupPkgId = bad.packages[0].packageId;
+      bad.packages.push({ ...bad.packages[0] });
+
+      const backupPath = catalogPath + ".__test_e2e_backup";
+      let swapped = false;
+
+      try {
+        renameSync(catalogPath, backupPath);
+        writeFileSync(catalogPath, JSON.stringify(bad));
+        swapped = true;
+
+        catalogService.load(catalogPath);
+        expect(catalogService.isLoaded()).toBe(false);
+
+        const minimalSpec = {
+          processName: "Test",
+          rootSequence: { displayName: "Main", children: [], variables: [] },
+          variables: [],
+        };
+        const { report } = validateWorkflowSpec(minimalSpec as any);
+        expect(report.catalogLoaded).toBe(false);
+        expect(report.catalogLoadError).toContain("duplicate packageId");
+        expect(report.catalogLoadError).toContain(dupPkgId);
+
+        const gateResult = simulatePreEmissionGate(report, 2, 1);
+        expect(gateResult).not.toBeNull();
+        expect(gateResult!.code).toBe("CATALOG_INTEGRITY_FAILURE");
+        expect(gateResult!.message).toContain("duplicate packageId");
+      } finally {
+        if (swapped) {
+          unlinkSync(catalogPath);
+          renameSync(backupPath, catalogPath);
+        }
+        catalogService.load(catalogPath);
+      }
+    });
+  });
+
+  describe("CatalogService lastLoadError", () => {
+    it("captures error when catalog validation fails due to duplicate packageId", () => {
+      const bad = JSON.parse(readFileSync(catalogPath, "utf-8"));
+      bad.packages.push({ ...bad.packages[0] });
+
+      const tmpPath = join(process.cwd(), "catalog", "__test_dup_catalog.json");
+      const { writeFileSync, unlinkSync } = require("fs");
+      try {
+        writeFileSync(tmpPath, JSON.stringify(bad));
+        catalogService.load(tmpPath);
+        expect(catalogService.isLoaded()).toBe(false);
+        const lastError = catalogService.getLastLoadError();
+        expect(lastError).not.toBeNull();
+        expect(lastError).toContain("validation rejected");
+        expect(lastError).toContain("duplicate packageId");
+      } finally {
+        try { unlinkSync(tmpPath); } catch {}
+        catalogService.load(catalogPath);
+      }
+    });
+
+    it("captures error when catalog file is not found", () => {
+      try {
+        catalogService.load("/nonexistent/path/catalog.json");
+        expect(catalogService.isLoaded()).toBe(false);
+        const lastError = catalogService.getLastLoadError();
+        expect(lastError).not.toBeNull();
+        expect(lastError).toContain("file not found");
+      } finally {
+        catalogService.load(catalogPath);
+      }
+    });
+
+    it("clears lastLoadError on successful load", () => {
+      catalogService.load(catalogPath);
+      expect(catalogService.isLoaded()).toBe(true);
+      expect(catalogService.getLastLoadError()).toBeNull();
     });
   });
 });
