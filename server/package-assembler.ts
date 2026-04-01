@@ -221,13 +221,13 @@ function normalizeXamlPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^[./]+/, "");
 }
 
-interface StudioLoadabilityResult {
+export interface StudioLoadabilityResult {
   loadable: boolean;
   reason?: string;
   repairable?: boolean;
 }
 
-function checkStudioLoadability(xamlContent: string): StudioLoadabilityResult {
+export function checkStudioLoadability(xamlContent: string): StudioLoadabilityResult {
   if (!xamlContent || xamlContent.trim().length === 0) {
     return { loadable: false, reason: "Empty XAML content" };
   }
