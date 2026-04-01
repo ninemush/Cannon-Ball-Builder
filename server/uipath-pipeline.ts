@@ -19,7 +19,7 @@ import {
   validateXamlContent,
   type XamlGap,
 } from "./xaml-generator";
-import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
+import { generateDhgFromOutcomeReport, summarizeBindPoints, type DhgContext } from "./dhg-generator";
 import { runDhgAnalysis, type UpstreamContext, type ProcessStepSummary } from "./xaml/dhg-analyzers";
 import { parseArtifactBlockAsObject } from "./lib/artifact-parser";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
@@ -660,12 +660,14 @@ function buildDhgFromBuildResult(
       : (effectiveOutcomeReport?.studioCompatibility?.some(
           sc => sc.level === "studio-blocked"
         ) ?? false);
+    const bindPointSummary = summarizeBindPoints(xamlEntries);
     const dhgContext: DhgContext = {
       projectName,
       workflowNames: effectiveWfNames,
       generationMode: generationMode || undefined,
       analysis,
       finalQualityReport: finalQualityReport || undefined,
+      bindPointSummary: bindPointSummary.totalCount > 0 ? bindPointSummary : undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
@@ -688,11 +690,13 @@ function buildDhgFromBuildResult(
       0,
       ctx.idea.automationType || undefined,
     );
+    const syntheticBindPoints = summarizeBindPoints(xamlEntries);
     const dhgContext: DhgContext = {
       projectName,
       workflowNames: effectiveWfNames,
       generationMode: generationMode || undefined,
       analysis,
+      bindPointSummary: syntheticBindPoints.totalCount > 0 ? syntheticBindPoints : undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(syntheticReport, dhgContext);
   }
