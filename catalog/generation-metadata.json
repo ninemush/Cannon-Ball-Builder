@@ -13,8 +13,8 @@
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.UIAutomation.Activities": {
-      "preferred": "25.10.28",
-      "lastVerifiedAt": "2026-03-25T17:06:34.243Z",
+      "preferred": "25.10.29",
+      "lastVerifiedAt": "2026-04-01T05:38:57.646Z",
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.Mail.Activities": {
@@ -751,7 +751,7 @@
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-03-31T09:06:09.445Z",
+  "lastRefreshedAt": "2026-04-01T05:39:21.214Z",
   "lastVerifiedAt": "2026-03-21T09:00:00.000Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"
