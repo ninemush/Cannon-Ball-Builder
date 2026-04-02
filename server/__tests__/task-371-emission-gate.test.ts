@@ -716,3 +716,146 @@ describe("Emission Gate — Task 374: Safe-floor pipeline", () => {
     expect(result.blocked).toBe(true);
   });
 });
+
+describe("Emission Gate — Task 383: Declaration infrastructure protection", () => {
+  function makeXamlWithDeclarations(bodyXml: string): string {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="TestWorkflow"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=mscorlib">
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence>
+    ${bodyXml}
+  </Sequence>
+</Activity>`;
+  }
+
+  it("does not stub or mutate <AssemblyReference> tags", () => {
+    const xaml = makeXamlWithDeclarations(`
+      <ui:LogMessage Level="Info" Message="&quot;Hello&quot;" />
+    `);
+
+    const entries = [{ name: "DeclTest.xaml", content: xaml }];
+    const result = runEmissionGate(entries);
+
+    expect(entries[0].content).toContain("<AssemblyReference>System.Activities</AssemblyReference>");
+    expect(entries[0].content).toContain("<AssemblyReference>UiPath.Core</AssemblyReference>");
+    expect(entries[0].content).toContain("<AssemblyReference>UiPath.Core.Activities</AssemblyReference>");
+    const asmViolations = result.violations.filter(v => v.detail?.includes("AssemblyReference"));
+    expect(asmViolations.length).toBe(0);
+  });
+
+  it("does not stub or mutate <sco:Collection> tags", () => {
+    const xaml = makeXamlWithDeclarations(`
+      <ui:LogMessage Level="Info" Message="&quot;Hello&quot;" />
+    `);
+
+    const entries = [{ name: "ScoTest.xaml", content: xaml }];
+    const result = runEmissionGate(entries);
+
+    expect(entries[0].content).toContain('<sco:Collection x:TypeArguments="x:String">');
+    expect(entries[0].content).toContain('<sco:Collection x:TypeArguments="AssemblyReference">');
+    const scoViolations = result.violations.filter(v => v.detail?.includes("Collection"));
+    expect(scoViolations.length).toBe(0);
+  });
+
+  it("declaration blocks under TextExpression.ReferencesForImplementation survive emission-gate processing intact", () => {
+    const xaml = makeXamlWithDeclarations(`
+      <ui:LogMessage Level="Info" Message="&quot;test&quot;" />
+    `);
+
+    const originalRefsBlock = `<TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>`;
+
+    const entries = [{ name: "RefsBlock.xaml", content: xaml }];
+    runEmissionGate(entries);
+
+    expect(entries[0].content).toContain(originalRefsBlock);
+  });
+
+  it("declaration blocks under TextExpression.NamespacesForImplementation survive emission-gate processing intact", () => {
+    const xaml = makeXamlWithDeclarations(`
+      <ui:LogMessage Level="Info" Message="&quot;test&quot;" />
+    `);
+
+    const originalNsBlock = `<TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>`;
+
+    const entries = [{ name: "NsBlock.xaml", content: xaml }];
+    runEmissionGate(entries);
+
+    expect(entries[0].content).toContain(originalNsBlock);
+  });
+
+  it("baseline mode also preserves declaration infrastructure", () => {
+    const xaml = makeXamlWithDeclarations(`
+      <ui:LogMessage Level="Info" Message="&quot;test&quot;" />
+    `);
+
+    const entries = [{ name: "BaselineDecl.xaml", content: xaml }];
+    runEmissionGate(entries, "baseline");
+
+    expect(entries[0].content).toContain("<AssemblyReference>System.Activities</AssemblyReference>");
+    expect(entries[0].content).toContain('<sco:Collection x:TypeArguments="x:String">');
+    expect(entries[0].content).toContain('<sco:Collection x:TypeArguments="AssemblyReference">');
+    expect(entries[0].content).toContain("TextExpression.ReferencesForImplementation");
+    expect(entries[0].content).toContain("TextExpression.NamespacesForImplementation");
+  });
+
+  it("activities outside declaration blocks are still enforced normally", () => {
+    if (!catalogService.isLoaded()) {
+      console.warn("Catalog not loaded — skipping test");
+      return;
+    }
+
+    const schema = catalogService.getActivitySchema("GoogleCalendarGetEvents");
+    if (!schema) {
+      console.warn("GoogleCalendarGetEvents not in catalog — skipping test");
+      return;
+    }
+    expect(schema.activity.emissionApproved).toBe(false);
+
+    const xaml = makeXamlWithDeclarations(`
+      <ui:GoogleCalendarGetEvents CalendarId="primary" />
+    `);
+
+    const entries = [{ name: "MixedDecl.xaml", content: xaml }];
+    const result = runEmissionGate(entries);
+
+    const actViolations = result.violations.filter(v => v.type === "unapproved-activity");
+    expect(actViolations.length).toBeGreaterThan(0);
+
+    expect(entries[0].content).toContain("<AssemblyReference>System.Activities</AssemblyReference>");
+    expect(entries[0].content).toContain('<sco:Collection x:TypeArguments="AssemblyReference">');
+  });
+});

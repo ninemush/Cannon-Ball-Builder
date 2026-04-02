@@ -85,6 +85,7 @@ const XML_INFRASTRUCTURE_TAGS = new Set([
   "CSharpValue", "CSharpReference",
   "ActivityAction", "DelegateInArgument", "DelegateOutArgument",
   "ArgumentValue", "VariableValue", "VariableReference",
+  "AssemblyReference", "Collection",
 ]);
 
 const SENTINEL_PATTERNS = /\b(HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*)\b/;
@@ -204,7 +205,9 @@ function listActivitiesInBlock(blockContent: string): string[] {
   const tagPattern = /<(\w+:)?(\w+)[\s/>]/g;
   let m;
   while ((m = tagPattern.exec(blockContent)) !== null) {
+    const prefix = m[1] ? m[1].replace(":", "") : "";
     const name = m[2];
+    if (prefix === "x" || prefix === "s" || prefix === "scg" || prefix === "scg2" || prefix === "sco" || prefix === "mc" || prefix === "sap" || prefix === "sap2010" || prefix === "sads") continue;
     if (!SYSTEM_ACTIVITIES_NO_PREFIX.has(name) && !XML_INFRASTRUCTURE_TAGS.has(name) && !/^[a-z]$/.test(name)) {
       if (!activities.includes(name)) activities.push(name);
     }
@@ -224,18 +227,27 @@ function enforceActivityEmission(
   let blocked = false;
   let result = content;
 
+  const declarationRanges: Array<{ start: number; end: number }> = [];
+  const declSectionPattern = /<TextExpression\.(?:ReferencesForImplementation|NamespacesForImplementation)>[\s\S]*?<\/TextExpression\.(?:ReferencesForImplementation|NamespacesForImplementation)>/g;
+  let declMatch;
+  while ((declMatch = declSectionPattern.exec(content)) !== null) {
+    declarationRanges.push({ start: declMatch.index, end: declMatch.index + declMatch[0].length });
+  }
+
   const activityTagPattern = /<(\w+:)?(\w+)[\s/>]/g;
   const foundActivities = new Map<string, { index: number; prefix: string; fullMatch: string }[]>();
 
   let match;
   while ((match = activityTagPattern.exec(content)) !== null) {
+    const matchIndex = match.index;
+    if (declarationRanges.some(r => matchIndex >= r.start && matchIndex < r.end)) continue;
     const prefix = match[1] ? match[1].replace(":", "") : "";
     const activityName = match[2];
 
     if (SYSTEM_ACTIVITIES_NO_PREFIX.has(activityName)) continue;
     if (XML_INFRASTRUCTURE_TAGS.has(activityName)) continue;
     if (/^[a-z]$/.test(activityName)) continue;
-    if (prefix === "x" || prefix === "s" || prefix === "scg" || prefix === "scg2" || prefix === "mc" || prefix === "sap" || prefix === "sap2010" || prefix === "sads") continue;
+    if (prefix === "x" || prefix === "s" || prefix === "scg" || prefix === "scg2" || prefix === "sco" || prefix === "mc" || prefix === "sap" || prefix === "sap2010" || prefix === "sads") continue;
     if (activityName.includes(".")) continue;
 
     const key = activityName;
