@@ -13,8 +13,8 @@
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.UIAutomation.Activities": {
-      "preferred": "25.10.28",
-      "lastVerifiedAt": "2026-04-01T07:59:00.607Z",
+      "preferred": "25.10.29",
+      "lastVerifiedAt": "2026-04-02T11:30:51.694Z",
       "verificationSource": "uipath-official-feed"
     },
     "UiPath.Mail.Activities": {
@@ -730,8 +730,8 @@
       "discoveredAt": "2026-03-25T19:07:01.899Z"
     },
     "UiPath.WorkflowEvents.Activities": {
-      "preferred": "3.35.0",
-      "lastVerifiedAt": "2026-03-25T19:07:01.899Z",
+      "preferred": "3.35.1",
+      "lastVerifiedAt": "2026-04-02T11:31:16.387Z",
       "verificationSource": "uipath-official-feed",
       "discoveredAt": "2026-03-25T19:07:01.899Z"
     },
@@ -751,7 +751,7 @@
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-04-01T07:59:25.688Z",
+  "lastRefreshedAt": "2026-04-02T11:31:16.675Z",
   "lastVerifiedAt": "2026-03-21T09:00:00.000Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"

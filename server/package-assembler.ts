@@ -386,6 +386,9 @@ const CANONICAL_INFRASTRUCTURE_NAMES = new Set([
 
 export function canonicalizeWorkflowName(name: string): string {
   let result = name
+    .replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1")
+    .replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1")
+    .replace(/\{&quot;type&quot;:&quot;[^&]*&quot;,&quot;value&quot;:&quot;([^&]*)&quot;\}/g, "$1")
     .replace(/[\[\]"]/g, "")
     .replace(/&quot;/g, "")
     .trim();
@@ -1700,10 +1703,6 @@ export function resolveDependencies(
   const tf = targetFramework || (studioProfile?.targetFramework) || "Windows";
 
   referencedPackages.add("UiPath.System.Activities");
-  referencedPackages.add("UiPath.Excel.Activities");
-  if (tf !== "Portable") {
-    referencedPackages.add("UiPath.UIAutomation.Activities");
-  }
 
   const specArray: TreeWorkflowSpec[] = treeSpecs
     ? (Array.isArray(treeSpecs) ? treeSpecs : [treeSpecs])
@@ -1832,8 +1831,6 @@ export function resolveDependencies(
 
   const basePackages = new Set<string>([
     "UiPath.System.Activities",
-    "UiPath.Excel.Activities",
-    "UiPath.UIAutomation.Activities",
   ]);
   if (studioProfile) {
     for (const requiredPkg of studioProfile.minimumRequiredPackages) {
@@ -3576,7 +3573,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         let match;
         while ((match = pattern.exec(content)) !== null) {
           const ref = match[1].replace(/\\/g, "/").replace(/^[./]+/, "")
-            .replace(/&quot;/g, "").replace(/^"+|"+$/g, "");
+            .replace(/&quot;/g, "").replace(/^"+|"+$/g, "")
+            .replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1")
+            .replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1")
+            .replace(/[{}]/g, "");
           referencedFiles.add(ref);
         }
       }
@@ -3585,7 +3585,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         let match;
         while ((match = pattern.exec(entry.content)) !== null) {
           const ref = match[1].replace(/\\/g, "/").replace(/^[./]+/, "")
-            .replace(/&quot;/g, "").replace(/^"+|"+$/g, "");
+            .replace(/&quot;/g, "").replace(/^"+|"+$/g, "")
+            .replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1")
+            .replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1")
+            .replace(/[{}]/g, "");
           referencedFiles.add(ref);
         }
       }
@@ -3906,14 +3909,9 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     {
       const DEPENDENCY_SAFE_LIST = new Set([
         "UiPath.System.Activities",
-        "UiPath.Excel.Activities",
         "UiPath.Mail.Activities",
         "UiPath.Testing.Activities",
       ]);
-
-      if (tf === "Windows") {
-        DEPENDENCY_SAFE_LIST.add("UiPath.UIAutomation.Activities");
-      }
 
       for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
         const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
@@ -3956,29 +3954,6 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         usedPackages.add(safePkg);
       }
 
-      const hasStubbedWorkflows = earlyStubFallbacks.length > 0 || complianceFallbacks.some(fb => fb.wasFullStub);
-      let stubbedWorkflowActivityPackages: Set<string> | null = null;
-      if (hasStubbedWorkflows) {
-        stubbedWorkflowActivityPackages = new Set<string>();
-        const stubbedFileNames = new Set([
-          ...earlyStubFallbacks,
-          ...complianceFallbacks.filter(fb => fb.wasFullStub).map(fb => fb.file),
-        ]);
-        if (allTreeEnrichments && allTreeEnrichments.size > 0) {
-          for (const [wfName, entry] of allTreeEnrichments.entries()) {
-            const wfFile = `${wfName}.xaml`;
-            if (stubbedFileNames.has(wfFile)) {
-              const templates = collectActivityTemplatesFromSpec(entry.spec);
-              for (const template of templates) {
-                const pkg = catalogService.getPackageForActivity(template) || getActivityPackage(template) || null;
-                if (pkg) {
-                  stubbedWorkflowActivityPackages.add(normalizePackageName(pkg));
-                }
-              }
-            }
-          }
-        }
-      }
       const unusedDeps: string[] = [];
       for (const pkgName of Object.keys(deps)) {
         if (!usedPackages.has(pkgName)) {
@@ -3987,18 +3962,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
       const proactiveRemovals: string[] = [];
       for (const pkgName of unusedDeps) {
-        if (hasStubbedWorkflows && specPredictedPackages.has(pkgName) && !proactivelyResolvedPackages.has(pkgName)) {
-          const hasActivityEvidence = stubbedWorkflowActivityPackages ? stubbedWorkflowActivityPackages.has(pkgName) : true;
-          if (hasActivityEvidence) {
-            console.log(`[Dependency Alignment] Preserving spec-predicted dependency ${pkgName} — stubbed workflows reference activities from this package`);
-            continue;
-          }
-          console.log(`[Dependency Alignment] Removing spec-predicted dependency ${pkgName} — no concrete activity evidence from stubbed workflows`);
+        if (specPredictedPackages.has(pkgName)) {
+          console.log(`[Dependency Alignment] Preserving spec-predicted dependency ${pkgName} — spec is source of truth for required packages`);
+          continue;
         }
         delete deps[pkgName];
-        if (proactivelyResolvedPackages.has(pkgName) || specPredictedPackages.has(pkgName)) {
+        if (proactivelyResolvedPackages.has(pkgName)) {
           proactiveRemovals.push(pkgName);
-          console.log(`[Dependency Alignment] Silently removing proactively-resolved dependency: ${pkgName} — predicted from spec but not used in emitted XAML`);
+          console.log(`[Dependency Alignment] Silently removing proactively-resolved dependency: ${pkgName} — not used in emitted XAML`);
         } else {
           console.log(`[Dependency Alignment] Removing unused dependency: ${pkgName} — not referenced in any emitted XAML (activity tags, namespace imports, or assembly references)`);
           dependencyWarnings.push({
@@ -4013,14 +3984,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[Dependency Alignment] Removed ${unusedDeps.length} unused dependenc(ies): ${unusedDeps.join(", ")}${proactiveRemovals.length > 0 ? ` (${proactiveRemovals.length} silently from proactive resolution)` : ""}`);
       }
 
-      const BASELINE_PACKAGES: Record<string, boolean> = {
-        "UiPath.System.Activities": true,
-        "UiPath.Excel.Activities": true,
-      };
-      if (tf === "Windows") {
-        BASELINE_PACKAGES["UiPath.UIAutomation.Activities"] = true;
-      }
-      for (const baselinePkg of Object.keys(BASELINE_PACKAGES)) {
+      const MANDATORY_BASELINE_PACKAGES: string[] = ["UiPath.System.Activities"];
+      for (const baselinePkg of MANDATORY_BASELINE_PACKAGES) {
         if (!deps[baselinePkg]) {
           let version: string | null = null;
           const preferred = getPreferredVersionFromMeta(baselinePkg);
@@ -4036,7 +4001,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           }
           if (version) {
             deps[baselinePkg] = version;
-            console.log(`[Dependency Enforcement] Re-added baseline package ${baselinePkg}@${version} after alignment pruned it`);
+            console.log(`[Dependency Enforcement] Re-added mandatory baseline package ${baselinePkg}@${version} after alignment pruned it`);
           }
         }
       }
@@ -6434,6 +6399,16 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               invokeWorkflows: stubInvokes && stubInvokes.length > 0 ? stubInvokes : undefined,
             });
             sanitized = stubXaml;
+            deferredWrites.set(path, sanitized);
+            outcomeRemediations.push({
+              level: "workflow",
+              file: fileName,
+              remediationCode: "STUB_WORKFLOW_BLOCKING",
+              reason: `Archive gate: XAML well-formedness failure — replaced with stub`,
+              classifiedCheck: "xml-wellformedness",
+              developerAction: `Fix XML structure in ${fileName} — ensure proper nesting and closing tags`,
+              estimatedEffortMinutes: 15,
+            });
             autoFixSummary.push(`Replaced ${fileName} with Studio-openable stub due to XML well-formedness failure`);
           } else {
             autoFixSummary.push(`Fixed XML well-formedness issues in ${fileName} via targeted repair`);
@@ -6457,9 +6432,12 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         const knownByCatalog = catalogService.isLoaded() && catalogService.getConfirmedVersion(key) !== null;
         const knownByMetadata = _metadataService.getPreferredVersion(key) !== null;
         const knownByBaseline = getBaselineFallbackVersion(key, tf as "Windows" | "Portable") !== null;
-        if (!knownByCatalog && !knownByMetadata && !knownByBaseline) {
+        const isSpecPredicted = specPredictedPackages.has(key);
+        if (!knownByCatalog && !knownByMetadata && !knownByBaseline && !isSpecPredicted) {
           console.log(`[Dependency FinalGuard] Rejected unrecognized package before emit: ${key}=${val}`);
           delete deps[key];
+        } else if (isSpecPredicted && !knownByCatalog && !knownByMetadata && !knownByBaseline) {
+          console.log(`[Dependency FinalGuard] Preserved spec-predicted package: ${key}=${val}`);
         }
       }
     }
@@ -6502,11 +6480,15 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     archive.append(finalProjectJsonStr, { name: `${libPath}/project.json` });
 
     {
+      const postGateArchiveXamlEntries = Array.from(deferredWrites.entries())
+        .filter(([k]) => k.endsWith(".xaml"))
+        .map(([name, content]) => ({ name, content }));
+      const postGateRemediationCount = outcomeRemediations.length;
       const dhgAnalysis = runDhgAnalysis(
-        archiveXamlEntries,
+        postGateArchiveXamlEntries,
         finalProjectJsonStr,
         qualityWarningCount,
-        remediationCount,
+        postGateRemediationCount,
         pkg.internal?.automationType || undefined,
         undefined,
         undefined,
@@ -6514,16 +6496,30 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         emptyContainerCount,
       );
       dhgAnalysis.hasBlockedWorkflows = dhgStudioCompatibility.some(sc => sc.level === "studio-blocked");
+      const finalArchiveWfNames = Array.from(deferredWrites.keys())
+        .filter(k => k.endsWith(".xaml"))
+        .map(k => {
+          const baseName = (k.split("/").pop() || k);
+          return baseName.replace(/\.xaml$/i, "");
+        });
       const dhgContext: DhgContext = {
         projectName,
-        workflowNames: archiveWfNames,
+        workflowNames: finalArchiveWfNames,
         generationMode: generationMode || undefined,
         generationModeReason: modeConfig.reason,
         analysis: dhgAnalysis,
       };
       const dhg = generateDhgFromOutcomeReport(assemblerOutcomeReport, dhgContext);
       archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
-      console.log(`[UiPath] Generated Developer Handoff Guide (structured): ${archiveWfNames.length} workflows, ${outcomeRemediations.length} remediations, REFramework=${useReFramework}`);
+
+      const parityResult = assertDhgArchiveParity(dhg, finalArchiveWfNames, postGateArchiveXamlEntries);
+      if (!parityResult.passed) {
+        throw new Error(`[Package-DHG Parity] FATAL DIVERGENCE: ${parityResult.divergences.join("; ")}`);
+      } else {
+        console.log(`[Package-DHG Parity] PASS — archive and DHG agree on ${finalArchiveWfNames.length} workflow(s) with matching statuses`);
+      }
+
+      console.log(`[UiPath] Generated Developer Handoff Guide (structured): ${finalArchiveWfNames.length} workflows, ${outcomeRemediations.length} remediations, REFramework=${useReFramework}`);
     }
 
     const depEntries = Object.entries(deps).map(
@@ -6908,6 +6904,56 @@ export function createTrackedArchive() {
   };
 
   return tracked;
+}
+
+const DHG_STUB_CONTENT_PATTERNS = [
+  "STUB_BLOCKING_FALLBACK", "STUB: ", "STUB_WORKFLOW_GENERATOR_FAILURE",
+  "stub — Final validation remediation", "ASSEMBLY_FAILED",
+  "Generator failed", "Generator could not",
+];
+
+export function assertDhgArchiveParity(
+  dhgContent: string,
+  archiveWorkflowNames: string[],
+  archiveXamlEntries: Array<{ name: string; content: string }>,
+): { passed: boolean; divergences: string[] } {
+  const divergences: string[] = [];
+
+  const dhgWorkflowTablePattern = /\|\s*\d+\s*\|\s*`([^`]+\.xaml)`\s*\|\s*(Generated|Handoff|Stub)\s*\|/g;
+  const dhgWorkflowEntries = new Map<string, string>();
+  let dhgTableMatch;
+  while ((dhgTableMatch = dhgWorkflowTablePattern.exec(dhgContent)) !== null) {
+    const wfName = dhgTableMatch[1].replace(/\.xaml$/i, "").toLowerCase();
+    dhgWorkflowEntries.set(wfName, dhgTableMatch[2]);
+  }
+
+  const archiveManifest = new Set(archiveWorkflowNames.map(n => n.toLowerCase()));
+  const dhgManifest = new Set(dhgWorkflowEntries.keys());
+  const inArchiveNotDhg = Array.from(archiveManifest).filter(n => !dhgManifest.has(n));
+  const inDhgNotArchive = Array.from(dhgManifest).filter(n => !archiveManifest.has(n));
+  if (inArchiveNotDhg.length > 0) {
+    divergences.push(`In archive but not DHG: ${inArchiveNotDhg.join(", ")}`);
+  }
+  if (inDhgNotArchive.length > 0) {
+    divergences.push(`In DHG but not archive: ${inDhgNotArchive.join(", ")}`);
+  }
+
+  for (const [wfNameLower, dhgTier] of dhgWorkflowEntries) {
+    const archiveEntry = archiveXamlEntries.find(e => {
+      const entryName = (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "").toLowerCase();
+      return entryName === wfNameLower;
+    });
+    if (archiveEntry) {
+      const isActuallyStub = DHG_STUB_CONTENT_PATTERNS.some(p => archiveEntry.content.includes(p));
+      if (dhgTier === "Generated" && isActuallyStub) {
+        divergences.push(`Status mismatch: ${wfNameLower}.xaml — DHG says "Generated" but archive content is a stub`);
+      } else if (dhgTier === "Stub" && !isActuallyStub) {
+        divergences.push(`Status mismatch: ${wfNameLower}.xaml — DHG says "Stub" but archive content is not a stub`);
+      }
+    }
+  }
+
+  return { passed: divergences.length === 0, divergences };
 }
 
 export function runPostArchiveParityCheck(

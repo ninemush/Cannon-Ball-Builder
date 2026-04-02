@@ -1,7 +1,7 @@
 {
   "catalogVersion": "2.0.0",
-  "generatedAt": "2026-04-01T16:49:30.930Z",
-  "lastVerifiedAt": "2026-04-01T16:49:30.930Z",
+  "generatedAt": "2026-04-02T11:31:16.685Z",
+  "lastVerifiedAt": "2026-04-02T11:31:16.685Z",
   "studioVersion": "25.10.0",
   "packages": [
     {
@@ -555,9 +555,9 @@
               "name": "QueueName",
               "direction": "In",
               "clrType": "System.String",
-              "xamlSyntax": "attribute",
-              "argumentWrapper": null,
-              "typeArguments": null,
+              "xamlSyntax": "child-element",
+              "argumentWrapper": "InArgument",
+              "typeArguments": "x:String",
               "required": false
             },
             {
@@ -1276,9 +1276,9 @@
     },
     {
       "packageId": "UiPath.UIAutomation.Activities",
-      "version": "25.10.28",
+      "version": "25.10.29",
       "feedStatus": "verified",
-      "preferredVersion": "25.10.28",
+      "preferredVersion": "25.10.29",
       "prefix": "ui",
       "clrNamespace": "UiPath.Core.Activities",
       "assembly": "UiPath.UIAutomation.Activities",
@@ -8204,7 +8204,7 @@
               "clrType": "System.Collections.Generic.List`1[System.Net.Mail.MailMessage]",
               "xamlSyntax": "child-element",
               "argumentWrapper": "OutArgument",
-              "typeArguments": "scg:List(s:Net.Mail.MailMessage)",
+              "typeArguments": "scg:List(snetmail:MailMessage)",
               "required": false
             },
             {
@@ -8297,7 +8297,7 @@
               "clrType": "System.Collections.Generic.List`1[System.Net.Mail.MailMessage]",
               "xamlSyntax": "child-element",
               "argumentWrapper": "OutArgument",
-              "typeArguments": "scg:List(s:Net.Mail.MailMessage)",
+              "typeArguments": "scg:List(snetmail:MailMessage)",
               "required": false
             },
             {
@@ -8435,7 +8435,7 @@
               "clrType": "System.Collections.Generic.List`1[System.Net.Mail.MailMessage]",
               "xamlSyntax": "child-element",
               "argumentWrapper": "OutArgument",
-              "typeArguments": "scg:List(s:Net.Mail.MailMessage)",
+              "typeArguments": "scg:List(snetmail:MailMessage)",
               "required": false
             },
             {
@@ -12155,9 +12155,9 @@
     },
     {
       "packageId": "UiPath.WorkflowEvents.Activities",
-      "version": "3.35.0",
+      "version": "3.35.1",
       "feedStatus": "verified",
-      "preferredVersion": "3.35.0",
+      "preferredVersion": "3.35.1",
       "prefix": "uwfe",
       "clrNamespace": "UiPath.WorkflowEvents.Activities",
       "assembly": "UiPath.WorkflowEvents.Activities",

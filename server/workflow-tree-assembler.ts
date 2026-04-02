@@ -1047,7 +1047,7 @@ export function wrapVariableDefault(val: string, varType: string): string {
   if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) return trimmed;
 
   if (isVbExpression(trimmed)) {
-    const hasVbConcatOperator = / & /.test(trimmed) || /&(?!quot;|amp;|lt;|gt;|apos;)/.test(trimmed);
+    const hasVbConcatOperator = / & /.test(trimmed) || /&(?!quot;|amp;|lt;|gt;|apos;)/.test(trimmed) || /&amp;/.test(trimmed);
     const hasVbOperators = hasVbConcatOperator || (/[+]/.test(trimmed) && /\b\w+\.\w+\(/.test(trimmed));
     if (hasVbOperators) {
       return `[${trimmed}]`;
@@ -1388,7 +1388,7 @@ export function resolveActivityTemplate(
   if (templateName === "InvokeWorkflowFile") {
     let fileName = (getPropString(props, "WorkflowFileName", "workflowFileName") || "Workflow.xaml")
       .replace(/&quot;/g, "").replace(/^"+|"+$/g, "").trim();
-    fileName = fileName.replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1").replace(/[{}]/g, "");
+    fileName = fileName.replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1").replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1").replace(/[{}]/g, "");
     if (!fileName.endsWith(".xaml")) fileName += ".xaml";
     return applyCatalogConformance(`<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
       `  <ui:InvokeWorkflowFile.Arguments>\n` +
@@ -3341,7 +3341,7 @@ export function assembleWorkflowFromSpec(
     registry.registerVariable({
       name: "str_ScreenshotPath",
       type: "String",
-      default: '"screenshots/error_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".png"',
+      default: '["screenshots/error_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".png"]',
       source: "auto-injected",
       scope: "workflow",
     });

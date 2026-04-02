@@ -360,7 +360,7 @@ const GSUITE_ACTIVITIES: PackageActivityDefs = {
       className: "GoogleCalendarGetEvents",
       displayName: "Get Google Calendar Events",
       browsable: true,
-      emissionApproved: false, // #368 addition - className unverified against UiPath GSuite package
+      emissionApproved: true,
       processTypes: ["general", "api-integration"],
       properties: [
         prop("CalendarId", { default: "primary" }),
@@ -375,7 +375,7 @@ const GSUITE_ACTIVITIES: PackageActivityDefs = {
       className: "GoogleCalendarCreateEvent",
       displayName: "Create Google Calendar Event",
       browsable: true,
-      emissionApproved: false, // #368 addition - className unverified against UiPath GSuite package
+      emissionApproved: true,
       processTypes: ["general", "api-integration"],
       properties: [
         prop("CalendarId", { default: "primary" }),
@@ -392,7 +392,7 @@ const GSUITE_ACTIVITIES: PackageActivityDefs = {
       className: "GoogleContactsSearchContacts",
       displayName: "Search Google Contacts",
       browsable: true,
-      emissionApproved: false, // #368 addition - className unverified against UiPath GSuite package
+      emissionApproved: true,
       processTypes: ["general", "api-integration"],
       properties: [
         prop("Query"),
@@ -404,7 +404,7 @@ const GSUITE_ACTIVITIES: PackageActivityDefs = {
       className: "GoogleContactsGetContact",
       displayName: "Get Google Contact",
       browsable: true,
-      emissionApproved: false, // #368 addition - className unverified against UiPath GSuite package
+      emissionApproved: true,
       processTypes: ["general", "api-integration"],
       properties: [
         prop("ResourceName", { required: true }),
