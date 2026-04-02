@@ -310,7 +310,11 @@ export function getActivityPrefixStrict(templateName: string): string | null {
   }
 
   if (!catalogService.isLoaded()) {
-    try { catalogService.load(); } catch (e) { }
+    try {
+      catalogService.load();
+    } catch (e) {
+      console.warn(`[XAML Compliance] Failed to load activity catalog: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   if (catalogService.isLoaded()) {
