@@ -3672,7 +3672,17 @@ export function validateContainerChildModel(xaml: string, workflowName: string):
     if (isSelfClosing) {
       const tag = transMatch[0];
       if (!tag.includes("To=")) {
-        errors.push("Transition is missing To attribute — every Transition must specify a target State");
+        const stateNames = Array.from(patched.matchAll(/x:Name="([^"]+)"/g)).map(m => m[1]);
+        if (stateNames.length > 0) {
+          const displayNameMatch = tag.match(/DisplayName="([^"]*)"/);
+          const dn = displayNameMatch ? displayNameMatch[1] : "Transition";
+          const lastState = stateNames[stateNames.length - 1];
+          const repairedTag = tag.replace(/\/>$/, ` To="{x:Reference ${lastState}}" />`);
+          patched = patched.replace(tag, repairedTag);
+          repairs.push(`Transition "${dn}" was missing To attribute — repaired with target "${lastState}"`);
+        } else {
+          errors.push("Transition is missing To attribute — every Transition must specify a target State");
+        }
       }
       const hasConditionAttr = /Condition="[^"]*"/.test(tag);
       if (!hasConditionAttr) {
@@ -3691,7 +3701,17 @@ export function validateContainerChildModel(xaml: string, workflowName: string):
     if (transEnd === -1) continue;
     const transSection = patched.substring(transStart, transEnd + 13);
     if (!transSection.includes("To=")) {
-      errors.push("Transition is missing To attribute — every Transition must specify a target State");
+      const stateNames = Array.from(patched.matchAll(/x:Name="([^"]+)"/g)).map(m => m[1]);
+      if (stateNames.length > 0) {
+        const displayNameMatch = transSection.match(/DisplayName="([^"]*)"/);
+        const dn = displayNameMatch ? displayNameMatch[1] : "Transition";
+        const lastState = stateNames[stateNames.length - 1];
+        const repairedOpening = transMatch[0].replace(/>$/, ` To="{x:Reference ${lastState}}">`);
+        patched = patched.replace(transMatch[0], repairedOpening);
+        repairs.push(`Transition "${dn}" was missing To attribute — repaired with target "${lastState}"`);
+      } else {
+        errors.push("Transition is missing To attribute — every Transition must specify a target State");
+      }
     }
     const hasCondition = transSection.includes("<Transition.Condition>");
     const hasAction = transSection.includes("<Transition.Action>");

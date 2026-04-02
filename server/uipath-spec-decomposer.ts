@@ -756,6 +756,35 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   console.log(`[SpecDecomposer] Run ${runId}: Scaffold generated — ${scaffold.workflows.length} workflows: ${scaffold.workflows.map(w => w.name).join(", ")}`);
 
+  const budgetMatch = complexityGuidance?.match(/~(\d+)[–-](\d+)\s+workflows/);
+  const budgetMax = budgetMatch ? parseInt(budgetMatch[2], 10) : 0;
+  const isSimpleTier = complexityGuidance?.toLowerCase().includes("simple") || (budgetMax > 0 && budgetMax <= 3);
+
+  if (isSimpleTier && scaffold.workflows.length > (budgetMax || 3)) {
+    const INFRA_NAMES = new Set(["Main", "Init", "InitAllSettings", "GetTransactionData", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses", "Process"]);
+    const infraWorkflows = scaffold.workflows.filter(w => INFRA_NAMES.has(w.name));
+    const businessWorkflows = scaffold.workflows.filter(w => !INFRA_NAMES.has(w.name));
+
+    if (businessWorkflows.length > 1) {
+      const mergedDescription = businessWorkflows.map(w => `${w.name}: ${w.description}`).join("; ");
+      const mergedInvokes = businessWorkflows.flatMap(w => w.invokes || []);
+      const mergedArgs = businessWorkflows.flatMap(w => w.sharedArguments || []);
+      const processWf = infraWorkflows.find(w => w.name === "Process") || {
+        name: "Process",
+        description: `Process transaction — ${mergedDescription}`,
+        invokes: mergedInvokes,
+        sharedArguments: mergedArgs,
+        sharedAssets: [],
+      };
+      if (infraWorkflows.find(w => w.name === "Process")) {
+        processWf.description += ` | Collapsed: ${mergedDescription}`;
+      }
+
+      scaffold.workflows = [...infraWorkflows.filter(w => w.name !== "Process"), processWf];
+      console.log(`[SpecDecomposer] Complexity gate: Collapsed ${businessWorkflows.length} business workflow(s) into Process.xaml for simple automation (budget max: ${budgetMax || 3})`);
+    }
+  }
+
   const workflowMap = new Map<string, ScaffoldWorkflowEntry>();
   for (const w of scaffold.workflows) {
     workflowMap.set(w.name, w);

@@ -24,6 +24,8 @@ import {
   generateInitAllSettingsXaml,
   generateInitXaml,
   generateSetTransactionStatusXaml,
+  generateCloseAllApplicationsXaml,
+  generateKillAllProcessesXaml,
 } from "../xaml-generator";
 import {
   simpleLinearNodes,
@@ -1094,5 +1096,72 @@ describe("Compiler-invariant regression tests", () => {
       const result = mapClrFullyQualifiedToXamlPrefix("UiPath.Mail.Activities.SendSmtpMailMessage");
       expect(result).toBe("umail:SendSmtpMailMessage");
     });
+  });
+
+  describe("Required Property Quality Gate - All Prefixes", () => {
+    it("detects missing required properties on ui: prefixed activities", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage DisplayName="Log Missing Level" />`);
+      const result = runQG([{ name: "Main.xaml", content: xaml }], { "UiPath.System.Activities": "25.10.0" });
+      const propViolations = result.violations.filter(v => v.check === "MISSING_REQUIRED_ACTIVITY_PROPERTY");
+      const levelMissing = propViolations.some(v => v.detail.includes("Level") || v.detail.includes("Message"));
+      expect(levelMissing).toBe(true);
+    });
+
+    it("does not flag activities with all required properties present as attributes", () => {
+      const xaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="[&quot;test&quot;]" DisplayName="Log OK" />`);
+      const result = runQG([{ name: "Main.xaml", content: xaml }], { "UiPath.System.Activities": "25.10.0" });
+      const propViolations = result.violations.filter(v => v.check === "MISSING_REQUIRED_ACTIVITY_PROPERTY");
+      expect(propViolations).toHaveLength(0);
+    });
+
+    it("does not flag activities with required properties as child elements", () => {
+      const xaml = makeValidXaml("Main", `
+        <ui:LogMessage DisplayName="Log OK">
+          <ui:LogMessage.Level>Info</ui:LogMessage.Level>
+          <ui:LogMessage.Message>[&quot;test&quot;]</ui:LogMessage.Message>
+        </ui:LogMessage>
+      `);
+      const result = runQG([{ name: "Main.xaml", content: xaml }], { "UiPath.System.Activities": "25.10.0" });
+      const propViolations = result.violations.filter(v => v.check === "MISSING_REQUIRED_ACTIVITY_PROPERTY");
+      expect(propViolations).toHaveLength(0);
+    });
+  });
+
+  describe("TextExpression Block Coverage", () => {
+    const reframeworkGenerators: Array<{ name: string; gen: () => string }> = [
+      { name: "Main.xaml", gen: () => generateReframeworkMainXaml("Test", "TestQueue", "Windows") },
+      { name: "Init.xaml", gen: () => generateInitXaml() },
+      { name: "InitAllSettings.xaml", gen: () => generateInitAllSettingsXaml("TestProject", "Windows") },
+      { name: "GetTransactionData.xaml", gen: () => generateGetTransactionDataXaml("TestQueue", "Windows") },
+      { name: "SetTransactionStatus.xaml", gen: () => generateSetTransactionStatusXaml("Windows") },
+      { name: "CloseAllApplications.xaml", gen: () => generateCloseAllApplicationsXaml("Windows") },
+      { name: "KillAllProcesses.xaml", gen: () => generateKillAllProcessesXaml("Windows") },
+    ];
+
+    for (const { name, gen } of reframeworkGenerators) {
+      it(`${name} contains TextExpression.NamespacesForImplementation`, () => {
+        const xaml = gen();
+        expect(xaml).toContain("TextExpression.NamespacesForImplementation");
+      });
+
+      it(`${name} contains TextExpression.ReferencesForImplementation`, () => {
+        const xaml = gen();
+        expect(xaml).toContain("TextExpression.ReferencesForImplementation");
+      });
+
+      it(`${name} contains required namespace entries`, () => {
+        const xaml = gen();
+        expect(xaml).toContain("<x:String>System</x:String>");
+        expect(xaml).toContain("<x:String>UiPath.Core.Activities</x:String>");
+        expect(xaml).toContain("<x:String>System.Activities</x:String>");
+      });
+
+      it(`${name} contains required assembly references`, () => {
+        const xaml = gen();
+        expect(xaml).toContain("<AssemblyReference>System.Activities</AssemblyReference>");
+        expect(xaml).toContain("<AssemblyReference>mscorlib</AssemblyReference>");
+        expect(xaml).toContain("<AssemblyReference>UiPath.Core.Activities</AssemblyReference>");
+      });
+    }
   });
 });

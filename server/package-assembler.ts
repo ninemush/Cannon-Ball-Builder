@@ -1533,6 +1533,13 @@ export function runStudioResolutionSmokeTest(
         }
       }
     }
+
+    if (!content.includes("TextExpression.NamespacesForImplementation")) {
+      errors.push(`[${fileName}] Missing TextExpression.NamespacesForImplementation block — Studio cannot resolve expression types`);
+    }
+    if (!content.includes("TextExpression.ReferencesForImplementation")) {
+      errors.push(`[${fileName}] Missing TextExpression.ReferencesForImplementation block — Studio cannot resolve assembly references`);
+    }
   });
 
   return { errors, warnings };
@@ -1740,6 +1747,31 @@ export function resolveDependencies(
         specPredictedPackages.add("Newtonsoft.Json");
         console.log(`[Dependency Resolution] Proactively added Newtonsoft.Json — spec contains type reference "${typePattern}"`);
         break;
+      }
+    }
+  }
+
+  const PROACTIVE_COMMON_PACKAGES: Record<string, string[]> = {
+    "UiPath.UIAutomation.Activities": ["Click", "TypeInto", "GetText", "OpenBrowser", "CloseBrowser", "NavigateTo", "CloseApplication", "KillProcess", "TakeScreenshot", "UseApplicationBrowser", "OpenApplication", "AttachBrowser", "AttachWindow", "FindElement", "ElementExists", "HighlightElement", "SetText", "SendHotkey", "SelectItem", "Check", "GetAttribute", "WaitElementVanish"],
+    "UiPath.Mail.Activities": ["SendSmtpMailMessage", "GetImapMailMessages", "GetOutlookMailMessages", "SendOutlookMailMessage", "GetPop3MailMessages", "ForwardMailMessage", "ReplyToMailMessage", "SaveMailMessage", "ReadMail", "SendMail", "GetMail", "ClassifyEmail"],
+    "UiPath.Excel.Activities": ["ExcelApplicationScope", "ReadRange", "WriteRange", "ReadCell", "WriteCell", "AppendRange", "InsertDeleteColumns", "InsertDeleteRows", "ExcelReadRange", "ExcelWriteRange", "ExcelReadCell", "ExcelWriteCell"],
+    "UiPath.Persistence.Activities": ["CreateFormTask", "WaitForFormTask", "ResumeFormTask", "FormTaskAction", "GetFormTaskData", "SetFormTaskData"],
+    "UiPath.Database.Activities": ["DatabaseConnect", "DatabaseDisconnect", "ExecuteQuery", "ExecuteNonQuery", "InsertDataTable"],
+  };
+
+  for (const treeSpec of specArray) {
+    const specStr = JSON.stringify(treeSpec);
+    for (const [pkgName, triggers] of Object.entries(PROACTIVE_COMMON_PACKAGES)) {
+      for (const trigger of triggers) {
+        if (specStr.includes(trigger)) {
+          const normalized = normalizePackageName(pkgName);
+          if (!referencedPackages.has(normalized)) {
+            referencedPackages.add(normalized);
+            specPredictedPackages.add(normalized);
+            console.log(`[Dependency Resolution] Proactively added ${pkgName} — spec references activity "${trigger}"`);
+          }
+          break;
+        }
       }
     }
   }
@@ -1957,6 +1989,45 @@ function buildXaml(className: string, displayName: string, activities: string, v
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>System.IO</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>System.Xml</x:String>
+      <x:String>System.Xml.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+      <x:String>Microsoft.VisualBasic</x:String>
+      <x:String>Microsoft.VisualBasic.Activities</x:String>
+      <x:String>System.Activities</x:String>
+      <x:String>System.Activities.Statements</x:String>
+      <x:String>System.Activities.Expressions</x:String>
+      <x:String>System.ComponentModel</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
+      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
+      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Data</AssemblyReference>
+      <AssemblyReference>System</AssemblyReference>
+      <AssemblyReference>System.Core</AssemblyReference>
+      <AssemblyReference>System.Xml</AssemblyReference>
+      <AssemblyReference>System.Xml.Linq</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
+      <AssemblyReference>System.ServiceModel</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
   <Sequence DisplayName="${escapeXml(displayName)}">
     ${vars}${activities}
   </Sequence>
@@ -2982,7 +3053,12 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         console.log(`[UiPath] Using tree-based assembly for "${spec.name}"`);
 
         const rawWfName = (spec.name || enrichEntry.name || projectName);
-        const wfName = rawWfName.replace(/"/g, "").replace(/&quot;/g, "").replace(/\[/g, "").replace(/\]/g, "").replace(/\s+/g, "_").replace(/\.xaml$/i, "");
+        const wfName = rawWfName
+          .replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1")
+          .replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1")
+          .replace(/\{&quot;type&quot;:&quot;[^&]*&quot;,&quot;value&quot;:&quot;([^&]*)&quot;\}/g, "$1")
+          .replace(/\{[^}]*\}/g, "")
+          .replace(/"/g, "").replace(/&quot;/g, "").replace(/\[/g, "").replace(/\]/g, "").replace(/\s+/g, "_").replace(/\.xaml$/i, "");
         if (isCanonicalInfrastructureName(wfName) && generatedWorkflowNames.has(wfName)) {
           console.log(`[UiPath] Skipping duplicate infrastructure workflow "${wfName}" (canonical match) — already generated`);
           continue;

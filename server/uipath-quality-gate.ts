@@ -2359,6 +2359,86 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
 
   const transitiveDependencyViolations = checkTransitiveDependencies(input);
 
+  const textExpressionViolations: QualityGateViolation[] = [];
+  for (const entry of input.xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const hasNsBlock = entry.content.includes("TextExpression.NamespacesForImplementation");
+    const hasRefsBlock = entry.content.includes("TextExpression.ReferencesForImplementation");
+    if (!hasNsBlock) {
+      textExpressionViolations.push({
+        category: "completeness",
+        severity: "error",
+        check: "MISSING_TEXT_EXPRESSION_NAMESPACES",
+        file: shortName,
+        detail: `XAML file is missing TextExpression.NamespacesForImplementation block — Studio cannot resolve expression types without this declaration`,
+      });
+    }
+    if (!hasRefsBlock) {
+      textExpressionViolations.push({
+        category: "completeness",
+        severity: "error",
+        check: "MISSING_TEXT_EXPRESSION_REFERENCES",
+        file: shortName,
+        detail: `XAML file is missing TextExpression.ReferencesForImplementation block — Studio cannot resolve assembly references without this declaration`,
+      });
+    }
+  }
+
+  const missingRequiredPropertyViolations: QualityGateViolation[] = [];
+  const FRAMEWORK_TAG_PREFIXES = new Set(["x", "s", "sap", "sap2010", "scg", "scg2", "sco", "mc", "mva", "mca", "sads", "sa", "sad"]);
+  for (const entry of input.xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const activityTagPattern = /<([A-Za-z][A-Za-z0-9]*:[A-Za-z]+)[\s\n\r]+([^]*?)(\s*\/?>)/g;
+    let atMatch;
+    while ((atMatch = activityTagPattern.exec(entry.content)) !== null) {
+      const activityName = atMatch[1];
+      const prefix = activityName.split(":")[0];
+      if (FRAMEWORK_TAG_PREFIXES.has(prefix)) continue;
+      const attrsStr = atMatch[2];
+      let requiredProps: string[] = [];
+      const knownActivity = lookupActivity(activityName);
+      if (knownActivity) {
+        requiredProps = knownActivity.properties.required || [];
+      }
+      if (requiredProps.length === 0 && catalogService.isLoaded()) {
+        const schema = catalogService.getActivitySchema(activityName);
+        if (schema) {
+          requiredProps = schema.activity.properties
+            .filter(p => p.required && p.direction !== "Out")
+            .map(p => p.name);
+        }
+      }
+      if (requiredProps.length === 0) continue;
+      const searchWindow = entry.content.substring(
+        atMatch.index,
+        Math.min(atMatch.index + 4000, entry.content.length)
+      );
+      for (const reqProp of requiredProps) {
+        const propName = String(reqProp);
+        if (propName === "DisplayName") continue;
+        const escapedProp = propName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const escapedActivity = activityName.replace(":", "\\:");
+        const hasAsAttr = new RegExp(`\\b${escapedProp}\\s*=`).test(attrsStr);
+        const hasAsChild = new RegExp(
+          `<${escapedActivity}\\.${escapedProp}[\\s>]`
+        ).test(searchWindow);
+        const hasAsNestedChild = new RegExp(
+          `<${escapedProp}[\\s>]`
+        ).test(searchWindow);
+        if (!hasAsAttr && !hasAsChild && !hasAsNestedChild) {
+          const lineNum = entry.content.substring(0, atMatch.index).split("\n").length;
+          missingRequiredPropertyViolations.push({
+            category: "accuracy",
+            severity: "error",
+            check: "MISSING_REQUIRED_ACTIVITY_PROPERTY",
+            file: shortName,
+            detail: `Line ${lineNum}: ${activityName} is missing required property "${propName}"`,
+          });
+        }
+      }
+    }
+  }
+
   const allViolations = [
     ...blockedViolations,
     ...completenessViolations,
@@ -2373,6 +2453,8 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
     ...unprefixedActivityViolations,
     ...transitiveDependencyViolations,
     ...expressionInLiteralViolations,
+    ...textExpressionViolations,
+    ...missingRequiredPropertyViolations,
   ];
 
   const hasErrors = allViolations.some(v => v.severity === "error");
@@ -2458,6 +2540,9 @@ const BLOCKING_CHECKS = new Set([
   "TYPE_MISMATCH",
   "FOREACH_TYPE_MISMATCH",
   "LITERAL_TYPE_ERROR",
+  "MISSING_TEXT_EXPRESSION_NAMESPACES",
+  "MISSING_TEXT_EXPRESSION_REFERENCES",
+  "MISSING_REQUIRED_ACTIVITY_PROPERTY",
 ]);
 
 const WARNING_CHECKS = new Set([

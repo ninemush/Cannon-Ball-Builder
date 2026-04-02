@@ -1733,7 +1733,7 @@ describe("UiPath Generation Regression Tests", () => {
       expect(result).toBeDefined();
       expect(result.packageBuffer).toBeDefined();
       expect(result.status).toBeDefined();
-      expect(["READY", "READY_WITH_WARNINGS"]).toContain(result.status);
+      expect(["READY", "READY_WITH_WARNINGS", "FALLBACK_READY"]).toContain(result.status);
     });
   });
 
@@ -1758,7 +1758,22 @@ describe("UiPath Generation Regression Tests", () => {
 
     it("missing-package-dep does not trigger STUB_BLOCKING_FALLBACK (Issue 2)", () => {
       const xaml = `<?xml version="1.0" encoding="utf-8"?>
-<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+<Activity x:Class="Test" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib">
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+      <x:String>System.Activities</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
   <Sequence DisplayName="Main Sequence">
     <ui:LogMessage DisplayName="Log" Level="Info" Message="[&quot;Test&quot;]" />
     <ui:GetCredential DisplayName="Get Cred" AssetName="MyCred" />

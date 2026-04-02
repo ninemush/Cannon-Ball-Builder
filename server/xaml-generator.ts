@@ -465,6 +465,8 @@ function classifyActionCenterTask(ctx: ActivityContext, combined: string): Retur
       TaskCatalog: "[str_TaskCatalog]",
       TaskTitle: "[str_TaskTitle]",
       TaskPriority: "Normal",
+      Title: "[str_TaskTitle]",
+      FormSchemaPath: '"TODO: Set form schema path"',
     },
     errorHandling: "catch",
     variables,
@@ -581,7 +583,7 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
     activityPackage: "UiPath.Mail.Activities",
     properties: isCrossPlatform
       ? { Top: "10" }
-      : { Server: "TODO: Set IMAP server", Port: "993", Top: "10" },
+      : { Server: "TODO: Set IMAP server", Port: "993", Top: "10", Email: "TODO: Set IMAP email", Password: "TODO: Set IMAP password" },
     errorHandling: "retry",
     variables,
     gaps,
@@ -1224,12 +1226,55 @@ function inferTypeFromDefaultValue(defaultValue: string | undefined): string | n
   return null;
 }
 
+function buildTextExpressionBlocks(isCSharp: boolean): string {
+  return `
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>System.IO</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>System.Xml</x:String>
+      <x:String>System.Xml.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>${isCSharp ? "" : `
+      <x:String>Microsoft.VisualBasic</x:String>
+      <x:String>Microsoft.VisualBasic.Activities</x:String>`}
+      <x:String>System.Activities</x:String>
+      <x:String>System.Activities.Statements</x:String>
+      <x:String>System.Activities.Expressions</x:String>
+      <x:String>System.ComponentModel</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
+      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
+      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Data</AssemblyReference>
+      <AssemblyReference>System</AssemblyReference>
+      <AssemblyReference>System.Core</AssemblyReference>
+      <AssemblyReference>System.Xml</AssemblyReference>
+      <AssemblyReference>System.Xml.Linq</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
+      <AssemblyReference>System.ServiceModel</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>`;
+}
+
 function renderVariablesBlock(variables: VariableDecl[], targetFramework?: TargetFramework): string {
   const isCSharp = targetFramework === "Portable";
   const screenshotDefault = isCSharp
     ? '"screenshots/error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png"'
     : '"screenshots/error_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".png"';
-  const withScreenshot = [...variables, { name: "str_ScreenshotPath", type: "String", defaultValue: screenshotDefault }];
+  const withScreenshot = [...variables, { name: "str_ScreenshotPath", type: "String", defaultValue: `[${screenshotDefault}]` }];
   if (withScreenshot.length === 0) return "<Sequence.Variables />";
 
   const uniqueVars = new Map<string, VariableDecl>();
@@ -2980,7 +3025,7 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
   <x:Members>
     <x:Property Name="out_Config" Type="OutArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
   </x:Members>
@@ -3053,7 +3098,7 @@ export function generateInitXaml(targetFramework?: TargetFramework): string {
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
   <x:Members>
     <x:Property Name="in_Config" Type="InArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
     <x:Property Name="io_Config" Type="InOutArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
@@ -3368,7 +3413,7 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
   <x:Members>
     <x:Property Name="in_QueueName" Type="InArgument(x:String)" />
     <x:Property Name="out_TransactionItem" Type="OutArgument(ui:QueueItem)" />
@@ -3421,7 +3466,7 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
   <x:Members>
     <x:Property Name="in_TransactionItem" Type="InArgument(ui:QueueItem)" />
     <x:Property Name="in_Status" Type="InArgument(x:String)" />
@@ -3493,7 +3538,7 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not ava
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
   <Sequence DisplayName="Close All Applications">
     <TryCatch DisplayName="Safe Cleanup">
       <TryCatch.Try>
@@ -3560,7 +3605,7 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — KillProcess not availabl
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
   <Sequence DisplayName="Kill All Processes">
     ${killBody}
   </Sequence>
