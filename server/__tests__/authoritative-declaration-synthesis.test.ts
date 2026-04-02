@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { deriveRequiredDeclarationsForXaml, PACKAGE_NAMESPACE_MAP } from "../xaml/xaml-compliance";
+import { describe, it, expect, vi } from "vitest";
+import { deriveRequiredDeclarationsForXaml, PACKAGE_NAMESPACE_MAP, insertBeforeClosingCollectionTag, normalizeXaml } from "../xaml/xaml-compliance";
 import { generateReframeworkMainXaml } from "../xaml-generator";
 import { runStudioResolutionSmokeTest } from "../package-assembler";
 
@@ -263,6 +263,139 @@ describe("Authoritative Declaration Synthesis", () => {
       const result = deriveRequiredDeclarationsForXaml(xaml);
       expect(result.neededXmlns.has("ui")).toBe(true);
       expect(result.neededXmlns.get("ui")).toBe("http://schemas.uipath.com/workflow/activities");
+    });
+  });
+
+  describe("insertBeforeClosingCollectionTag", () => {
+    it("succeeds with standard whitespace between closing tags", () => {
+      const xml = `<sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>`;
+      const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.ReferencesForImplementation>", "      <AssemblyReference>NewRef</AssemblyReference>");
+      expect(result.succeeded).toBe(true);
+      expect(result.updated).toContain("<AssemblyReference>NewRef</AssemblyReference>");
+      expect(result.updated).toContain("</sco:Collection>");
+    });
+
+    it("succeeds with non-standard content between closing tags (fallback path)", () => {
+      const xml = `<sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System</AssemblyReference>
+    </sco:Collection>
+    <!-- some comment -->
+    <SomeOtherElement />
+  </TextExpression.ReferencesForImplementation>`;
+      const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.ReferencesForImplementation>", "      <AssemblyReference>NewRef</AssemblyReference>");
+      expect(result.succeeded).toBe(true);
+      expect(result.updated).toContain("<AssemblyReference>NewRef</AssemblyReference>");
+    });
+
+    it("succeeds with no whitespace between closing tags", () => {
+      const xml = `<sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+    </sco:Collection></TextExpression.NamespacesForImplementation>`;
+      const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.NamespacesForImplementation>", "      <x:String>NewNs</x:String>");
+      expect(result.succeeded).toBe(true);
+      expect(result.updated).toContain("<x:String>NewNs</x:String>");
+    });
+
+    it("fails and returns succeeded=false when neither closing tag is present", () => {
+      const xml = `<Activity><Sequence /></Activity>`;
+      const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.ReferencesForImplementation>", "<AssemblyReference>X</AssemblyReference>");
+      expect(result.succeeded).toBe(false);
+      expect(result.updated).toBe(xml);
+    });
+
+    it("fails when parent closing tag exists but no sco:Collection closing tag before it", () => {
+      const xml = `<TextExpression.ReferencesForImplementation>
+    <SomeOther>content</SomeOther>
+  </TextExpression.ReferencesForImplementation>`;
+      const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.ReferencesForImplementation>", "<AssemblyReference>X</AssemblyReference>");
+      expect(result.succeeded).toBe(false);
+      expect(result.updated).toBe(xml);
+    });
+
+    it("does not target sco:Collection from a sibling block (cross-block protection)", () => {
+      const xml = `<TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <BrokenContainer>
+      <AssemblyReference>System.Activities</AssemblyReference>
+    </BrokenContainer>
+  </TextExpression.ReferencesForImplementation>`;
+      const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.ReferencesForImplementation>", "<AssemblyReference>NewRef</AssemblyReference>");
+      expect(result.succeeded).toBe(false);
+      expect(result.updated).toBe(xml);
+    });
+  });
+
+  describe("Insertion failure produces warnings", () => {
+    it("insertBeforeClosingCollectionTag returns succeeded=false when target is missing", () => {
+      const xmlWithNoTarget = `<Activity><Sequence /></Activity>`;
+      const result = insertBeforeClosingCollectionTag(xmlWithNoTarget, "</TextExpression.ReferencesForImplementation>", "<AssemblyReference>Test</AssemblyReference>");
+      expect(result.succeeded).toBe(false);
+      expect(result.updated).toBe(xmlWithNoTarget);
+    });
+
+    it("compliance layer emits console.warn with file identity when injection target is missing", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const xmlWithBrokenDeclarationBlocks = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="TestWarningWorkflow"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <mva:VisualBasic.Settings>
+    <x:Null />
+  </mva:VisualBasic.Settings>
+  <sap2010:WorkflowViewState.IdRef>TestWarningWorkflow_1</sap2010:WorkflowViewState.IdRef>
+  <TextExpression.NamespacesForImplementation>
+    <BrokenContainer>
+      <x:String>System</x:String>
+    </BrokenContainer>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <BrokenContainer>
+      <AssemblyReference>System.Activities</AssemblyReference>
+    </BrokenContainer>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence DisplayName="Main Sequence">
+    <ui:LogMessage Level="Info" Message="test" DisplayName="Log" />
+  </Sequence>
+</Activity>`;
+
+      try {
+        normalizeXaml(xmlWithBrokenDeclarationBlocks, "Windows");
+      } catch {
+      }
+
+      const warnCalls = warnSpy.mock.calls.map(c => String(c[0]));
+      const injectionWarnings = warnCalls.filter(msg =>
+        msg.includes("[XAML Compliance] WARNING:") && msg.includes("Failed to inject")
+      );
+      expect(injectionWarnings.length).toBeGreaterThan(0);
+
+      const hasFileIdentity = injectionWarnings.some(msg =>
+        msg.includes("[TestWarningWorkflow]")
+      );
+      expect(hasFileIdentity).toBe(true);
+
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
     });
   });
 });

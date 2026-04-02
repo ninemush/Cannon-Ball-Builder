@@ -505,6 +505,42 @@ export function buildDynamicNamespaceImports(usedPackages: Set<string>, existing
   return imports.join("\n");
 }
 
+export interface DeclarationInsertionResult {
+  updated: string;
+  succeeded: boolean;
+}
+
+export function insertBeforeClosingCollectionTag(
+  xml: string,
+  closingParentTag: string,
+  contentToInsert: string,
+): DeclarationInsertionResult {
+  const escapedParent = closingParentTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const primaryPattern = new RegExp(`<\\/sco:Collection>\\s*${escapedParent}`);
+  const primaryMatch = xml.match(primaryPattern);
+  if (primaryMatch && primaryMatch.index !== undefined) {
+    const updated = xml.slice(0, primaryMatch.index) + contentToInsert + "\n" + xml.slice(primaryMatch.index);
+    return { updated, succeeded: true };
+  }
+
+  const parentIdx = xml.indexOf(closingParentTag);
+  if (parentIdx >= 0) {
+    const openingTagName = closingParentTag.slice(2, -1);
+    const openingPattern = new RegExp(`<${openingTagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s>]`);
+    const openingMatch = xml.match(openingPattern);
+    const blockStart = openingMatch ? openingMatch.index! : 0;
+    const regionWithinBlock = xml.slice(blockStart, parentIdx);
+    const collectionCloseRelIdx = regionWithinBlock.lastIndexOf("</sco:Collection>");
+    if (collectionCloseRelIdx >= 0) {
+      const absoluteIdx = blockStart + collectionCloseRelIdx;
+      const updated = xml.slice(0, absoluteIdx) + contentToInsert + "\n" + xml.slice(absoluteIdx);
+      return { updated, succeeded: true };
+    }
+  }
+
+  return { updated: xml, succeeded: false };
+}
+
 export interface AuthoritativeDeclarationResult {
   neededPackages: Set<string>;
   neededAssemblies: Set<string>;
@@ -1248,7 +1284,8 @@ export function sanitizeXmlArtifacts(xml: string): string {
   return xml;
 }
 
-function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolean): string {
+function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolean, fileName?: string): string {
+  const fileLabel = fileName || (xml.match(/x:Class="([^"]+)"/)?.[1]) || "unknown file";
   const declarations = deriveRequiredDeclarationsForXaml(xml);
   const usedPackages = declarations.neededPackages;
 
@@ -1297,16 +1334,20 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
   }
 
   if (additionalAssemblyRefs) {
-    const refsMatch = xml.match(/<\/sco:Collection>\s*<\/TextExpression\.ReferencesForImplementation>/);
-    if (refsMatch && refsMatch.index !== undefined) {
-      xml = xml.slice(0, refsMatch.index) + additionalAssemblyRefs + "\n" + xml.slice(refsMatch.index);
+    const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.ReferencesForImplementation>", additionalAssemblyRefs);
+    if (result.succeeded) {
+      xml = result.updated;
+    } else {
+      console.warn(`[XAML Compliance] WARNING: [${fileLabel}] Failed to inject assembly references — could not locate </sco:Collection> before </TextExpression.ReferencesForImplementation>`);
     }
   }
 
   if (additionalNamespaceImports) {
-    const importsMatch = xml.match(/<\/sco:Collection>\s*<\/TextExpression\.NamespacesForImplementation>/);
-    if (importsMatch && importsMatch.index !== undefined) {
-      xml = xml.slice(0, importsMatch.index) + additionalNamespaceImports + "\n" + xml.slice(importsMatch.index);
+    const result = insertBeforeClosingCollectionTag(xml, "</TextExpression.NamespacesForImplementation>", additionalNamespaceImports);
+    if (result.succeeded) {
+      xml = result.updated;
+    } else {
+      console.warn(`[XAML Compliance] WARNING: [${fileLabel}] Failed to inject namespace imports — could not locate </sco:Collection> before </TextExpression.NamespacesForImplementation>`);
     }
   }
 

@@ -50,7 +50,7 @@ import archiver from "archiver";
   import { runEmissionGate, type EmissionGateResult } from "./emission-gate";
   import { buildWorkflowBusinessContextMap, type WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
-  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, buildDynamicXmlnsDeclarations, buildDynamicAssemblyRefs, buildDynamicNamespaceImports, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml } from "./xaml/xaml-compliance";
+  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, buildDynamicXmlnsDeclarations, buildDynamicAssemblyRefs, buildDynamicNamespaceImports, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
@@ -1289,18 +1289,26 @@ function runAuthoritativeNamespaceInjection(
     }
 
     if (additionalAssemblyRefs) {
-      const refsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.ReferencesForImplementation>/);
-      if (refsMatch && refsMatch.index !== undefined) {
-        updated = updated.slice(0, refsMatch.index) + additionalAssemblyRefs + "\n" + updated.slice(refsMatch.index);
+      const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.ReferencesForImplementation>", additionalAssemblyRefs);
+      if (result.succeeded) {
+        updated = result.updated;
         injectedCount++;
+        console.log(`[Namespace Injection] [${fileName}] Injected assembly references`);
+      } else {
+        console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject assembly references — could not locate </sco:Collection> before </TextExpression.ReferencesForImplementation>`);
+        warnings.push(`${fileName}: failed to inject assembly references`);
       }
     }
 
     if (additionalNamespaceImports) {
-      const importsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.NamespacesForImplementation>/);
-      if (importsMatch && importsMatch.index !== undefined) {
-        updated = updated.slice(0, importsMatch.index) + additionalNamespaceImports + "\n" + updated.slice(importsMatch.index);
+      const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.NamespacesForImplementation>", additionalNamespaceImports);
+      if (result.succeeded) {
+        updated = result.updated;
         injectedCount++;
+        console.log(`[Namespace Injection] [${fileName}] Injected namespace imports`);
+      } else {
+        console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject namespace imports — could not locate </sco:Collection> before </TextExpression.NamespacesForImplementation>`);
+        warnings.push(`${fileName}: failed to inject namespace imports`);
       }
     }
 
@@ -5873,6 +5881,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     {
       console.log(`[Authoritative Declaration Synthesis] Inspecting final XAML files for required declarations...`);
       let selfCheckFixes = 0;
+      let injectionFailures = 0;
       let filesInspected = 0;
       Array.from(deferredWrites.entries()).forEach(([path, content]) => {
         if (!path.endsWith(".xaml")) return;
@@ -5953,37 +5962,57 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         });
 
         if (missingAssemblies.length > 0) {
-          const refsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.ReferencesForImplementation>/);
-          if (refsMatch && refsMatch.index !== undefined) {
-            updated = updated.slice(0, refsMatch.index) + missingAssemblies.join("\n") + "\n" + updated.slice(refsMatch.index);
-            selfCheckFixes += missingAssemblies.length;
-          } else if (!updated.includes("TextExpression.ReferencesForImplementation")) {
+          let asmInserted = false;
+          if (updated.includes("TextExpression.ReferencesForImplementation")) {
+            const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.ReferencesForImplementation>", missingAssemblies.join("\n"));
+            if (result.succeeded) {
+              updated = result.updated;
+              selfCheckFixes += missingAssemblies.length;
+              asmInserted = true;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected assembly references: ${missingAssemblies.length}`);
+            }
+          } else {
             const nsForImplEnd = updated.match(/<\/TextExpression\.NamespacesForImplementation>/);
             if (nsForImplEnd && nsForImplEnd.index !== undefined) {
               const insertAt = nsForImplEnd.index + nsForImplEnd[0].length;
               const refsBlock = `\n  <TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${missingAssemblies.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
               updated = updated.slice(0, insertAt) + refsBlock + updated.slice(insertAt);
               selfCheckFixes += missingAssemblies.length;
+              asmInserted = true;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Created ReferencesForImplementation block with ${missingAssemblies.length} assembly reference(s)`);
             }
           }
-          console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected assembly references: ${missingAssemblies.length}`);
+          if (!asmInserted) {
+            injectionFailures++;
+            console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Failed to inject ${missingAssemblies.length} assembly reference(s) — could not locate valid insertion point`);
+          }
         }
 
         if (missingNamespaces.length > 0) {
-          const importsMatch = updated.match(/<\/sco:Collection>\s*<\/TextExpression\.NamespacesForImplementation>/);
-          if (importsMatch && importsMatch.index !== undefined) {
-            updated = updated.slice(0, importsMatch.index) + missingNamespaces.join("\n") + "\n" + updated.slice(importsMatch.index);
-            selfCheckFixes += missingNamespaces.length;
-          } else if (!updated.includes("TextExpression.NamespacesForImplementation")) {
+          let nsInserted = false;
+          if (updated.includes("TextExpression.NamespacesForImplementation")) {
+            const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.NamespacesForImplementation>", missingNamespaces.join("\n"));
+            if (result.succeeded) {
+              updated = result.updated;
+              selfCheckFixes += missingNamespaces.length;
+              nsInserted = true;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected namespace imports: ${missingNamespaces.length}`);
+            }
+          } else {
             const refsForImplEnd = updated.match(/<\/TextExpression\.ReferencesForImplementation>/);
             if (refsForImplEnd && refsForImplEnd.index !== undefined) {
               const insertAt = refsForImplEnd.index + refsForImplEnd[0].length;
               const nsBlock = `\n  <TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${missingNamespaces.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
               updated = updated.slice(0, insertAt) + nsBlock + updated.slice(insertAt);
               selfCheckFixes += missingNamespaces.length;
+              nsInserted = true;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Created NamespacesForImplementation block with ${missingNamespaces.length} namespace import(s)`);
             }
           }
-          console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected namespace imports: ${missingNamespaces.length}`);
+          if (!nsInserted) {
+            injectionFailures++;
+            console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Failed to inject ${missingNamespaces.length} namespace import(s) — could not locate valid insertion point`);
+          }
         }
 
         if (missingAssemblies.length === 0 && missingNamespaces.length === 0 && missingXmlnsDecls.length === 0) {
@@ -5994,10 +6023,64 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           deferredWrites.set(path, updated);
         }
       });
-      if (selfCheckFixes > 0) {
+      if (selfCheckFixes > 0 && injectionFailures === 0) {
         console.log(`[Authoritative Declaration Synthesis] Injected ${selfCheckFixes} missing declaration(s) across ${filesInspected} XAML file(s)`);
+      } else if (selfCheckFixes > 0 && injectionFailures > 0) {
+        console.warn(`[Authoritative Declaration Synthesis] Injected ${selfCheckFixes} declaration(s) but ${injectionFailures} injection(s) failed across ${filesInspected} XAML file(s)`);
+      } else if (injectionFailures > 0) {
+        console.warn(`[Authoritative Declaration Synthesis] ${injectionFailures} injection(s) failed across ${filesInspected} XAML file(s), no declarations were successfully injected`);
       } else {
         console.log(`[Authoritative Declaration Synthesis] All declarations already present across ${filesInspected} XAML file(s)`);
+      }
+
+      let postCheckFailures = 0;
+      Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+        if (!path.endsWith(".xaml")) return;
+        const fileName = path.split("/").pop() || path;
+        const postDecl = deriveRequiredDeclarationsForXaml(content);
+
+        const declaredAssembliesPost = new Set<string>();
+        const asmRefPatternPost = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+        let armPost;
+        while ((armPost = asmRefPatternPost.exec(content)) !== null) {
+          declaredAssembliesPost.add(armPost[1].trim());
+        }
+
+        const declaredNamespacesPost = new Set<string>();
+        const nsImportPatternPost = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+        let nsmPost;
+        while ((nsmPost = nsImportPatternPost.exec(content)) !== null) {
+          declaredNamespacesPost.add(nsmPost[1].trim());
+        }
+
+        const declaredPrefixesPost = new Set<string>();
+        const xmlnsDeclPatternPost = /xmlns:(\w+)="([^"]+)"/g;
+        let xdmPost;
+        while ((xdmPost = xmlnsDeclPatternPost.exec(content)) !== null) {
+          declaredPrefixesPost.add(xdmPost[1]);
+        }
+
+        const stillMissingAsm = Array.from(postDecl.neededAssemblies).filter(a => !declaredAssembliesPost.has(a));
+        const stillMissingNs = Array.from(postDecl.neededNamespaces).filter(n => !declaredNamespacesPost.has(n));
+        const stillMissingXmlns = Array.from(postDecl.neededXmlns.entries()).filter(([prefix]) => !declaredPrefixesPost.has(prefix));
+
+        if (stillMissingAsm.length > 0 || stillMissingNs.length > 0 || stillMissingXmlns.length > 0) {
+          postCheckFailures++;
+          if (stillMissingAsm.length > 0) {
+            console.error(`[Authoritative Declaration Synthesis] POST-CHECK ERROR: [${fileName}] Still missing assembly references: ${stillMissingAsm.join(", ")}`);
+          }
+          if (stillMissingNs.length > 0) {
+            console.error(`[Authoritative Declaration Synthesis] POST-CHECK ERROR: [${fileName}] Still missing namespace imports: ${stillMissingNs.join(", ")}`);
+          }
+          if (stillMissingXmlns.length > 0) {
+            console.error(`[Authoritative Declaration Synthesis] POST-CHECK ERROR: [${fileName}] Still missing xmlns declarations: ${stillMissingXmlns.map(([p, u]) => `xmlns:${p}="${u}"`).join(", ")}`);
+          }
+        }
+      });
+      if (postCheckFailures > 0) {
+        console.error(`[Authoritative Declaration Synthesis] POST-CHECK: ${postCheckFailures} file(s) still have missing declarations after injection`);
+      } else if (selfCheckFixes > 0) {
+        console.log(`[Authoritative Declaration Synthesis] POST-CHECK: All injections verified — zero missing declarations remain`);
       }
     }
 
