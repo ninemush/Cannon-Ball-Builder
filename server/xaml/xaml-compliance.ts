@@ -1338,7 +1338,23 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
     if (result.succeeded) {
       xml = result.updated;
     } else {
-      console.warn(`[XAML Compliance] WARNING: [${fileLabel}] Failed to inject assembly references — could not locate </sco:Collection> before </TextExpression.ReferencesForImplementation>`);
+      const refsBlockPattern = /<TextExpression\.ReferencesForImplementation>[\s\S]*?<\/TextExpression\.ReferencesForImplementation>/;
+      const existingRefsBlock = xml.match(refsBlockPattern);
+      if (existingRefsBlock) {
+        const existingAsmEntries: string[] = [];
+        const existAsmPat = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+        let ea;
+        while ((ea = existAsmPat.exec(existingRefsBlock[0])) !== null) {
+          existingAsmEntries.push(`      <AssemblyReference>${ea[1].trim()}</AssemblyReference>`);
+        }
+        const additionalLines = additionalAssemblyRefs.split("\n").filter((l: string) => l.trim());
+        const allAsmEntries = [...existingAsmEntries, ...additionalLines];
+        const freshRefsBlock = `<TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsmEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
+        xml = xml.replace(refsBlockPattern, freshRefsBlock);
+        console.log(`[XAML Compliance] [${fileLabel}] Rebuilt malformed ReferencesForImplementation block — injected assembly references`);
+      } else {
+        console.warn(`[XAML Compliance] WARNING: [${fileLabel}] Failed to inject assembly references — no ReferencesForImplementation block found`);
+      }
     }
   }
 
@@ -1347,7 +1363,23 @@ function injectDynamicNamespaceDeclarations(xml: string, isCrossPlatform: boolea
     if (result.succeeded) {
       xml = result.updated;
     } else {
-      console.warn(`[XAML Compliance] WARNING: [${fileLabel}] Failed to inject namespace imports — could not locate </sco:Collection> before </TextExpression.NamespacesForImplementation>`);
+      const nsBlockPattern = /<TextExpression\.NamespacesForImplementation>[\s\S]*?<\/TextExpression\.NamespacesForImplementation>/;
+      const existingNsBlock = xml.match(nsBlockPattern);
+      if (existingNsBlock) {
+        const existingNsEntries: string[] = [];
+        const existNsPat = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+        let en;
+        while ((en = existNsPat.exec(existingNsBlock[0])) !== null) {
+          existingNsEntries.push(`      <x:String>${en[1].trim()}</x:String>`);
+        }
+        const additionalLines = additionalNamespaceImports.split("\n").filter((l: string) => l.trim());
+        const allNsEntries = [...existingNsEntries, ...additionalLines];
+        const freshNsBlock = `<TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNsEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
+        xml = xml.replace(nsBlockPattern, freshNsBlock);
+        console.log(`[XAML Compliance] [${fileLabel}] Rebuilt malformed NamespacesForImplementation block — injected namespace imports`);
+      } else {
+        console.warn(`[XAML Compliance] WARNING: [${fileLabel}] Failed to inject namespace imports — no NamespacesForImplementation block found`);
+      }
     }
   }
 

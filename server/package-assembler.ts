@@ -1295,8 +1295,25 @@ function runAuthoritativeNamespaceInjection(
         injectedCount++;
         console.log(`[Namespace Injection] [${fileName}] Injected assembly references`);
       } else {
-        console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject assembly references — could not locate </sco:Collection> before </TextExpression.ReferencesForImplementation>`);
-        warnings.push(`${fileName}: failed to inject assembly references`);
+        const refsBlockPattern = /<TextExpression\.ReferencesForImplementation>[\s\S]*?<\/TextExpression\.ReferencesForImplementation>/;
+        const existingRefsBlock = updated.match(refsBlockPattern);
+        if (existingRefsBlock) {
+          const existingAsmEntries: string[] = [];
+          const existAsmPat = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+          let ea;
+          while ((ea = existAsmPat.exec(existingRefsBlock[0])) !== null) {
+            existingAsmEntries.push(`      <AssemblyReference>${ea[1].trim()}</AssemblyReference>`);
+          }
+          const additionalLines = additionalAssemblyRefs.split("\n").filter((l: string) => l.trim());
+          const allAsmEntries = [...existingAsmEntries, ...additionalLines];
+          const freshRefsBlock = `<TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsmEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
+          updated = updated.replace(refsBlockPattern, freshRefsBlock);
+          injectedCount++;
+          console.log(`[Namespace Injection] [${fileName}] Rebuilt malformed ReferencesForImplementation block — injected assembly references`);
+        } else {
+          console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject assembly references — no ReferencesForImplementation block found`);
+          warnings.push(`${fileName}: failed to inject assembly references`);
+        }
       }
     }
 
@@ -1307,8 +1324,25 @@ function runAuthoritativeNamespaceInjection(
         injectedCount++;
         console.log(`[Namespace Injection] [${fileName}] Injected namespace imports`);
       } else {
-        console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject namespace imports — could not locate </sco:Collection> before </TextExpression.NamespacesForImplementation>`);
-        warnings.push(`${fileName}: failed to inject namespace imports`);
+        const nsBlockPattern = /<TextExpression\.NamespacesForImplementation>[\s\S]*?<\/TextExpression\.NamespacesForImplementation>/;
+        const existingNsBlock = updated.match(nsBlockPattern);
+        if (existingNsBlock) {
+          const existingNsEntries: string[] = [];
+          const existNsPat = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+          let en;
+          while ((en = existNsPat.exec(existingNsBlock[0])) !== null) {
+            existingNsEntries.push(`      <x:String>${en[1].trim()}</x:String>`);
+          }
+          const additionalLines = additionalNamespaceImports.split("\n").filter((l: string) => l.trim());
+          const allNsEntries = [...existingNsEntries, ...additionalLines];
+          const freshNsBlock = `<TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNsEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
+          updated = updated.replace(nsBlockPattern, freshNsBlock);
+          injectedCount++;
+          console.log(`[Namespace Injection] [${fileName}] Rebuilt malformed NamespacesForImplementation block — injected namespace imports`);
+        } else {
+          console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject namespace imports — no NamespacesForImplementation block found`);
+          warnings.push(`${fileName}: failed to inject namespace imports`);
+        }
       }
     }
 
@@ -5889,6 +5923,13 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         filesInspected++;
         let updated = content;
 
+        const hasRefs = content.includes("TextExpression.ReferencesForImplementation");
+        const hasNs = content.includes("TextExpression.NamespacesForImplementation");
+        const hasScoClose = content.includes("</sco:Collection>");
+        if (hasRefs || hasNs) {
+          console.log(`[Authoritative Declaration Synthesis] [DIAG] [${fileName}] hasRefs=${hasRefs} hasNs=${hasNs} hasScoClose=${hasScoClose} contentLen=${content.length}`);
+        }
+
         const declarations = deriveRequiredDeclarationsForXaml(content);
         const { neededPackages, neededAssemblies, neededNamespaces, neededXmlns, activitiesDetected } = declarations;
 
@@ -5996,6 +6037,23 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               selfCheckFixes += missingAssemblies.length;
               asmInserted = true;
               console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected assembly references: ${missingAssemblies.length}`);
+            } else {
+              const refsBlockPattern = /<TextExpression\.ReferencesForImplementation>[\s\S]*?<\/TextExpression\.ReferencesForImplementation>/;
+              const existingRefsBlock = updated.match(refsBlockPattern);
+              if (existingRefsBlock) {
+                const existingAsmEntries: string[] = [];
+                const existAsmPat = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
+                let ea;
+                while ((ea = existAsmPat.exec(existingRefsBlock[0])) !== null) {
+                  existingAsmEntries.push(`      <AssemblyReference>${ea[1].trim()}</AssemblyReference>`);
+                }
+                const allAsmEntries = [...existingAsmEntries, ...missingAssemblies];
+                const freshRefsBlock = `<TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsmEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
+                updated = updated.replace(refsBlockPattern, freshRefsBlock);
+                selfCheckFixes += missingAssemblies.length;
+                asmInserted = true;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Rebuilt malformed ReferencesForImplementation block with ${allAsmEntries.length} total assembly reference(s) (${missingAssemblies.length} added)`);
+              }
             }
           } else {
             const nsForImplEnd = updated.match(/<\/TextExpression\.NamespacesForImplementation>/);
@@ -6023,6 +6081,23 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
               selfCheckFixes += missingNamespaces.length;
               nsInserted = true;
               console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected namespace imports: ${missingNamespaces.length}`);
+            } else {
+              const nsBlockPattern = /<TextExpression\.NamespacesForImplementation>[\s\S]*?<\/TextExpression\.NamespacesForImplementation>/;
+              const existingNsBlock = updated.match(nsBlockPattern);
+              if (existingNsBlock) {
+                const existingNsEntries: string[] = [];
+                const existNsPat = /<x:String[^>]*>([^<]+)<\/x:String>/g;
+                let en;
+                while ((en = existNsPat.exec(existingNsBlock[0])) !== null) {
+                  existingNsEntries.push(`      <x:String>${en[1].trim()}</x:String>`);
+                }
+                const allNsEntries = [...existingNsEntries, ...missingNamespaces];
+                const freshNsBlock = `<TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNsEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
+                updated = updated.replace(nsBlockPattern, freshNsBlock);
+                selfCheckFixes += missingNamespaces.length;
+                nsInserted = true;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Rebuilt malformed NamespacesForImplementation block with ${allNsEntries.length} total namespace import(s) (${missingNamespaces.length} added)`);
+              }
             }
           } else {
             const refsForImplEnd = updated.match(/<\/TextExpression\.ReferencesForImplementation>/);

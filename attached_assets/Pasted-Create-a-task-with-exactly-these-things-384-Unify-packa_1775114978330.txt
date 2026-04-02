@@ -1,0 +1,150 @@
+Create a task with exactly these things.
+
+#384 - Unify package-generation contract and source-of-truth mappings across representative use cases
+
+What & Why
+We analyzed the current package-generation pipeline in CB2-new against three representative use cases:
+- Birthday Greetings
+- Travel
+- Password Reset
+
+These use cases exposed two failure classes that must be fixed together if package generation is going to work as a single unit:
+
+1. Compiler/package-contract failures
+The package pipeline still corrupts or loses XAML declaration infrastructure in some paths, depends too heavily on repair passes, and allows different late-stage filters to operate with different truths about the same file.
+
+2. Source-of-truth drift
+The deterministic scaffold, xaml generator, activity catalog, activity registry, package namespace maps, and declaration synthesis do not consistently agree on which activity family should be used for the same business intent. This causes package instability, weak degradation, and misleading output even when the smoke test issue is fixed.
+
+This task is not about adding more intelligence. It is about making the package-generation module operate as one coherent multi-stage system with one authoritative source of truth.
+
+Done looks like
+For the representative use-case families covered by the current analysis:
+- Google Workspace / Gmail / Google Calendar / Google Contacts
+- Mail / SMTP
+- WebAPI / HTTP
+- Data Service / Data Fabric
+- Action Center / Persistence
+- Communications Mining
+the pipeline uses one authoritative mapping chain from business intent to:
+- selected activity family
+- package id
+- namespace prefix
+- xmlns declaration
+- AssemblyReference
+- NamespacesForImplementation import
+- emission approval / honest degradation rule
+
+Package generation produces only these outcomes:
+- Studio-openable package with honest DHG
+- clean hard failure for true artifact-integrity reasons
+
+The package module no longer destroys declaration infrastructure upstream.
+The package module no longer relies on conflicting Gmail-vs-SMTP, GSuite-vs-generic, or IntegrationService-vs-HttpClient decisions across layers.
+Unsupported or still-unverified activity families are degraded honestly and consistently, not half-generated.
+
+Out of scope
+Broad support for entirely new activity families not present in the analyzed use cases
+Changing AI prompts
+Weakening the smoke test
+Weakening dependency validation
+Run ID / SSE / server restart issues
+
+Tasks
+1. Fix the structural package-contract bug in the current repo state.
+In emission-gate.ts:
+- add "AssemblyReference" and "Collection" to XML_INFRASTRUCTURE_TAGS
+- add "sco" to the structural prefix skip lists used by both enforceActivityEmission and listActivitiesInBlock
+- add a guard so content inside TextExpression.ReferencesForImplementation and TextExpression.NamespacesForImplementation is never activity-enforced
+- add regression tests proving declaration infrastructure is not mutated by the Emission Gate
+
+2. Remove remaining silent catalog-load failures in package-generation stages.
+In workflow-tree-assembler.ts:
+- replace the remaining bare catalogService.load() catch blocks with visible warning/error logging
+- do not allow source-of-truth inputs to fail silently in one stage while succeeding in another
+
+3. Establish one authoritative activity-family mapping source used by all package-generation stages.
+Audit and unify the mappings used by:
+- deterministic-scaffold.ts
+- xaml-generator.ts
+- activity-definitions.ts
+- uipath-activity-registry.ts
+- xaml/xaml-compliance.ts
+The same business intent must not resolve to different activity families depending on which stage touched it first.
+
+4. Validate and correct package/prefix/namespace mappings against official first-party UiPath sources.
+Use official UiPath documentation as the authority for the packages and activity families used in the analyzed use cases.
+At minimum validate and reconcile:
+- UiPath.GSuite.Activities
+- UiPath.Mail.Activities
+- UiPath.WebAPI.Activities
+- UiPath.Persistence.Activities
+- UiPath.DataService.Activities
+- UiPath.CommunicationsMining.Activities
+Fix any incorrect or conflicting package id, prefix, xmlns, clrNamespace, or assembly mapping found in registry/compliance/catalog code.
+Important known issue to resolve:
+- xaml-compliance.ts uses prefix "ugs" for UiPath.GSuite.Activities
+- uipath-activity-registry.ts currently maps "ugsuite" to UiPath.GSuite.Activities
+These must be made consistent everywhere.
+
+5. Align classifier behavior with official supported families and honest degradation.
+For the analyzed use cases:
+- if Gmail/Google Workspace is the intended system, do not inconsistently route the same intent to SMTP in one layer and Gmail-native activities in another
+- if generic HTTP/WebAPI is the chosen fallback, make that a deliberate package-backed fallback, not an accidental default for connector-oriented systems
+- if Communications Mining or Google Calendar/Contacts activities are still not verified enough to emit safely, degrade them explicitly and consistently with business-meaningful handoff blocks
+- do not leave catalog entries, scaffold logic, and generator logic disagreeing about whether a family is supported
+
+6. Add representative regression coverage using the analyzed use-case families.
+Add regression fixtures/tests that cover at minimum:
+- Birthday Greetings family: Google Calendar + Google Contacts + Gmail + Orchestrator Queue + optional GenAI/manual handoff
+- Travel family: Web/API or connector-driven data collection + Data Service + Gmail + Action Center/human review
+- Password Reset family: email intake + UI/admin portal path + Action Center/manual review + Communications Mining honest degradation if still unsupported
+The tests do not need to run a live external integration. They must verify that the package-generation module as a unit:
+- selects consistent activity families
+- preserves declaration infrastructure
+- produces resolvable XAML headers/declarations
+- emits honest DHG tiers
+- degrades unsupported families consistently instead of producing misleading partial output
+
+7. Enforce one final package contract at the end of the pipeline.
+If a package is emitted, it must be Studio-openable and its DHG must truthfully reflect:
+- Generated Logic
+- Handoff Blocks
+- Manual Work Remaining
+Do not allow a package to be emitted if the final package state, declarations, selected packages, and DHG classification disagree.
+
+Relevant files
+server/emission-gate.ts
+server/workflow-tree-assembler.ts
+server/deterministic-scaffold.ts
+server/xaml-generator.ts
+server/catalog/activity-definitions.ts
+server/uipath-activity-registry.ts
+server/xaml/xaml-compliance.ts
+server/package-assembler.ts
+server/dhg-generator.ts
+server/__tests__/task-371-emission-gate.test.ts
+server/__tests__/authoritative-declaration-synthesis.test.ts
+server/__tests__/pipeline-regression.test.ts
+server/__tests__/uipath-generation.test.ts
+
+Official first-party validation sources
+Use these as the package/activity truth sources during the audit:
+- UiPath Google Workspace activities: https://docs.uipath.com/activities/other/latest/productivity%22/about-google-gsuite-activities
+- UiPath Gmail send activity: https://docs.uipath.com/activities/other/latest/productivity/gsuite-send-mail-messages
+- UiPath Mail activities: https://docs.uipath.com/activities/other/latest/productivity/mail-activities
+- UiPath SMTP mail activity: https://docs.uipath.com/activities/other/latest/productivity/send-mail
+- UiPath WebAPI activities: https://docs.uipath.com/activities/other/latest/developer/web-api-activities
+- UiPath Action Center Create Form Task: https://docs.uipath.com/action-center/automation-suite/2023.10/user-guide/create-form-task
+- UiPath Wait for Form Task and Resume: https://docs.uipath.com/fr/activities/other/latest/workflow/wait-for-form-task-and-resume
+- UiPath Data Service / Data Fabric activities: https://docs.uipath.com/data-service/automation-cloud/latest/user-guide/data-service-studio-activities
+- UiPath Create Entity Record: https://docs.uipath.com/activities/other/latest/workflow/create-entity-record-new
+- UiPath Update Entity Record: https://docs.uipath.com/activities/other/latest/workflow/update-entity-record-new
+- UiPath Communications Mining activities: https://docs.uipath.com/fr/activities/other/latest/communications-mining/frequently-asked-questions
+
+Important constraints
+Do not solve this by weakening the smoke test.
+Do not solve this by turning more failures into warnings.
+Do not leave conflicting activity-family decisions across scaffold, generator, registry, and compliance layers.
+Do not emit a package whose DHG overstates generated coverage.
+Treat the package-generation module as one coherent system: one source of truth in, one package contract out.
