@@ -1,12 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { XMLValidator } from "fast-xml-parser";
 import { buildDeterministicScaffold } from "../deterministic-scaffold";
-import { assembleWorkflowFromSpec } from "../workflow-tree-assembler";
+import {
+  assembleWorkflowFromSpec,
+  coercePropToString,
+  getPropString,
+  mapClrFullyQualifiedToXamlPrefix,
+  wrapVariableDefault,
+  ensureBalancedParens,
+} from "../workflow-tree-assembler";
+import type { PropertyValue } from "../workflow-spec-types";
 import { checkStudioLoadability, resolveDependencies } from "../package-assembler";
 import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
-import { normalizeXaml } from "../xaml/xaml-compliance";
+import { normalizeXaml, smartBracketWrap } from "../xaml/xaml-compliance";
 import { scanXamlForRequiredPackages } from "../uipath-activity-registry";
 import { metadataService } from "../catalog/metadata-service";
+import { ACTIVITY_DEFINITIONS_REGISTRY } from "../catalog/activity-definitions";
+import {
+  generateReframeworkMainXaml,
+  generateGetTransactionDataXaml,
+  generateInitAllSettingsXaml,
+  generateInitXaml,
+  generateSetTransactionStatusXaml,
+} from "../xaml-generator";
 import {
   simpleLinearNodes,
   simpleLinearEdges,
@@ -441,6 +457,183 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
       );
       expect(xamlEntries.length).toBeGreaterThan(0);
       assertPipelineOutput(xamlEntries, deps, "PO_Validation");
+    });
+  });
+
+  describe("BirthdayGreetings defect regression (Task #385)", () => {
+    it("T001: coercePropToString prevents [object Object] leakage from typed property objects", () => {
+      expect(coercePropToString({ type: "literal", value: "hello" })).toBe("hello");
+      expect(coercePropToString({ type: "variable", name: "myVar" })).toBe("myVar");
+      expect(coercePropToString({ type: "vb_expression", value: "DateTime.Now" })).toBe("DateTime.Now");
+      expect(coercePropToString("plain string")).toBe("plain string");
+      expect(coercePropToString(42)).toBe("42");
+      expect(coercePropToString(null)).toBe("");
+      expect(coercePropToString(undefined)).toBe("");
+
+      const objWithValue = { someRandom: "object", value: "fallback" };
+      expect(coercePropToString(objWithValue)).toBe("fallback");
+
+      const greetingValue: PropertyValue = { type: "literal", value: "Happy Birthday" };
+      const props: Record<string, PropertyValue> = { Greeting: greetingValue };
+      const propStr = getPropString(props, "Greeting");
+      expect(propStr).not.toContain("[object Object]");
+      expect(propStr).toContain("Happy Birthday");
+    });
+
+    it("T002: mapClrFullyQualifiedToXamlPrefix converts CLR names to XAML prefix syntax", () => {
+      expect(mapClrFullyQualifiedToXamlPrefix("UiPath.Persistence.Activities.FormTask")).toBe("upers:FormTask");
+      expect(mapClrFullyQualifiedToXamlPrefix("UiPath.Core.Activities.InvokeWorkflowFile")).toBe("ui:InvokeWorkflowFile");
+      expect(mapClrFullyQualifiedToXamlPrefix("UiPath.Mail.Activities.SendMail")).toBe("umail:SendMail");
+
+      expect(mapClrFullyQualifiedToXamlPrefix("String")).toBeNull();
+      expect(mapClrFullyQualifiedToXamlPrefix("x:Int32")).toBeNull();
+
+      expect(mapClrFullyQualifiedToXamlPrefix("System.Net.Mail.MailMessage")).toBeNull();
+      expect(mapClrFullyQualifiedToXamlPrefix("System.String")).toBe("s:String");
+      expect(mapClrFullyQualifiedToXamlPrefix("System.Int32")).toBe("s:Int32");
+    });
+
+    it("T003: wrapVariableDefault bracket-wraps VB expressions even when starting with quote", () => {
+      const concatExpr = `"screenshots/error_" & DateTime.Now.ToString("yyyyMMdd")`;
+      const result = wrapVariableDefault(concatExpr, "String");
+      expect(result.startsWith("[")).toBe(true);
+      expect(result.endsWith("]")).toBe(true);
+
+      expect(wrapVariableDefault(`"plain string"`, "String")).toBe(`"plain string"`);
+
+      expect(wrapVariableDefault("True", "Boolean")).toBe("True");
+      expect(wrapVariableDefault("Nothing", "Object")).toBe("Nothing");
+    });
+
+    it("T004: State.Transitions wrapper is emitted around Transition elements in REFramework Main", () => {
+      const mainXaml = generateReframeworkMainXaml("TestProject", "TestQueue", "Windows");
+      if (mainXaml.includes("<Transition")) {
+        expect(mainXaml).toContain("<State.Transitions>");
+        expect(mainXaml).toContain("</State.Transitions>");
+        const transitionMatches = mainXaml.match(/<Transition /g) || [];
+        const wrapperMatches = mainXaml.match(/<State\.Transitions>/g) || [];
+        expect(wrapperMatches.length).toBeGreaterThan(0);
+        expect(wrapperMatches.length).toBeLessThanOrEqual(transitionMatches.length);
+      }
+      const validationResult = XMLValidator.validate(mainXaml);
+      expect(validationResult).toBe(true);
+    });
+
+    it("T006: ensureBalancedParens fixes missing closing parenthesis", () => {
+      expect(ensureBalancedParens("InArgument(x:String)")).toBe("InArgument(x:String)");
+      expect(ensureBalancedParens("InArgument(scg:List(x:String)")).toBe("InArgument(scg:List(x:String))");
+      expect(ensureBalancedParens("OutArgument(scg:Dictionary(x:String, x:Int32)")).toBe("OutArgument(scg:Dictionary(x:String, x:Int32))");
+      expect(ensureBalancedParens("InArgument(scg:List(scg:Dictionary(x:String, x:Int32))")).toBe("InArgument(scg:List(scg:Dictionary(x:String, x:Int32)))");
+      expect(ensureBalancedParens("NoParens")).toBe("NoParens");
+    });
+
+    it("T007: bare word 'Yes' is quoted as string literal, not bracket-wrapped", () => {
+      const yesResult = smartBracketWrap("Yes");
+      expect(yesResult).not.toMatch(/^\[Yes\]$/);
+      expect(yesResult).toContain("Yes");
+
+      const noResult = smartBracketWrap("No");
+      expect(noResult).not.toMatch(/^\[No\]$/);
+
+      const normalResult = smartBracketWrap("Normal");
+      expect(normalResult).not.toMatch(/^\[Normal\]$/);
+
+      const trueResult = smartBracketWrap("True");
+      expect(trueResult).toBe("True");
+
+      const falseResult = smartBracketWrap("False");
+      expect(falseResult).toBe("False");
+    });
+
+    it("T005: GetTransactionItem catalog uses child-element syntax for QueueName", () => {
+      const allDefs = ACTIVITY_DEFINITIONS_REGISTRY.flatMap((pkg: any) => pkg.activities || []);
+      const getTransDef = allDefs.find(
+        (d: any) => d.className === "GetTransactionItem"
+      );
+      expect(getTransDef).toBeDefined();
+      const queueProp = getTransDef!.properties?.find((p: any) => p.name === "QueueName");
+      expect(queueProp).toBeDefined();
+      expect(queueProp!.xamlSyntax).toBe("child-element");
+    });
+
+    describe("BirthdayGreetings-style orchestration pipeline integration", () => {
+      const birthdayNodes = [
+        { id: "1", name: "Get Birthday List", nodeType: "task", description: "Read employee birthdays from Orchestrator queue", system: "Orchestrator" },
+        { id: "2", name: "Check Birthday Today", nodeType: "decision", description: "Check if any employee has a birthday today", system: "Internal" },
+        { id: "3", name: "Send Greeting Email", nodeType: "task", description: "Send a personalized birthday greeting email", system: "Outlook" },
+        { id: "4", name: "Log Completion", nodeType: "task", description: "Log the greeting status", system: "Internal" },
+      ];
+
+      const birthdayEdges = [
+        { sourceNodeId: "1", targetNodeId: "2", label: "" },
+        { sourceNodeId: "2", targetNodeId: "3", label: "Yes" },
+        { sourceNodeId: "3", targetNodeId: "4", label: "" },
+      ];
+
+      it("generates valid XAML without typed-object leakage or raw CLR type args", () => {
+        const { xamlEntries, deps } = assemblePipeline(
+          birthdayNodes,
+          birthdayEdges,
+          "BirthdayGreetingsV20",
+        );
+
+        expect(xamlEntries.length).toBeGreaterThan(0);
+
+        for (const entry of xamlEntries) {
+          const validationResult = XMLValidator.validate(entry.content);
+          expect(validationResult, `XML malformed in ${entry.name}`).toBe(true);
+
+          expect(entry.content).not.toContain("[object Object]");
+          expect(entry.content).not.toMatch(/s:Net\.Mail\./);
+          expect(entry.content).not.toMatch(/\[ASSEMBLY_FAILED\]/);
+
+          const loadResult = checkStudioLoadability(entry.content);
+          expect(loadResult.loadable, `Studio loadability failed for ${entry.name}: ${loadResult.reason}`).toBe(true);
+        }
+
+        assertPipelineOutput(xamlEntries, deps, "BirthdayGreetingsV20");
+      });
+
+      it("REFramework files have correct structural elements", () => {
+        const mainXaml = generateReframeworkMainXaml("BirthdayGreetingsV20", "BirthdayQueue", "Windows");
+        const getTransXaml = generateGetTransactionDataXaml("BirthdayQueue", "Windows");
+        const initSettingsXaml = generateInitAllSettingsXaml(undefined, "Windows");
+        const initXaml = generateInitXaml("Windows");
+        const setStatusXaml = generateSetTransactionStatusXaml("Windows");
+
+        const reframeworkFiles = [
+          { name: "Main.xaml", content: mainXaml },
+          { name: "GetTransactionData.xaml", content: getTransXaml },
+          { name: "InitAllSettings.xaml", content: initSettingsXaml },
+          { name: "Init.xaml", content: initXaml },
+          { name: "SetTransactionStatus.xaml", content: setStatusXaml },
+        ];
+
+        for (const file of reframeworkFiles) {
+          const valid = XMLValidator.validate(file.content);
+          expect(valid, `XML malformed in ${file.name}: ${JSON.stringify(valid)}`).toBe(true);
+
+          expect(file.content).not.toContain("[object Object]");
+
+          const typeAttrMatches = file.content.match(/Type="[^"]*"/g) || [];
+          for (const typeAttr of typeAttrMatches) {
+            const openParens = (typeAttr.match(/\(/g) || []).length;
+            const closeParens = (typeAttr.match(/\)/g) || []).length;
+            expect(openParens).toBe(closeParens);
+          }
+        }
+
+        if (mainXaml.includes("<Transition")) {
+          expect(mainXaml).toContain("<State.Transitions>");
+          expect(mainXaml).toContain("</State.Transitions>");
+        }
+
+        expect(getTransXaml).toContain("GetTransactionItem");
+        expect(getTransXaml).not.toMatch(/GetTransactionItem\.QueueName="/);
+        if (getTransXaml.includes("QueueName")) {
+          expect(getTransXaml).toMatch(/<InArgument[^>]*>[^<]*BirthdayQueue|QueueName/);
+        }
+      });
     });
   });
 });

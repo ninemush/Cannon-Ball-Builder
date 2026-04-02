@@ -2651,7 +2651,7 @@ const SYSTEM_ACTIVITIES_ENRICHED: PackageActivityDefs = {
       processTypes: ["orchestration"],
       propertiesComplete: true,
       properties: [
-        prop("QueueName", { required: false }),
+        childProp("QueueName", { dir: "In", type: "System.String", wrapper: "InArgument", typeArgs: "x:String" }),
         prop("FilterContent"),
         prop("Reference"),
         childProp("TransactionItem", { dir: "Out", type: "UiPath.Core.QueueItem", wrapper: "OutArgument", typeArgs: "ui:QueueItem" }),

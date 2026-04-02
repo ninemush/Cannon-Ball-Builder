@@ -5717,7 +5717,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             const prefix = argName.replace(/^(?:in_|out_|io_)/, "").match(/^[a-z]+_/)?.[0] || "";
             argType = typeMap[prefix] || "x:String";
           }
-          const propXml = `    <x:Property Name="${argName}" Type="${direction}(${argType})" />\n`;
+          const openCount = (`${direction}(${argType})`).split("(").length - 1;
+          const closeCount = (`${direction}(${argType})`).split(")").length - 1;
+          const balancedType = openCount > closeCount ? `${direction}(${argType})` + ")".repeat(openCount - closeCount) : `${direction}(${argType})`;
+          const propXml = `    <x:Property Name="${argName}" Type="${balancedType}" />\n`;
           const membersEnd = updatedContent.indexOf("</x:Members>");
           if (membersEnd >= 0) {
             updatedContent = updatedContent.slice(0, membersEnd) + propXml + updatedContent.slice(membersEnd);

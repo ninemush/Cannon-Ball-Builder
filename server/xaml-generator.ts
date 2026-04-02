@@ -1280,10 +1280,20 @@ function generateXMembersBlock(
   for (const arg of args) {
     const clrType = mapClrType(arg.type, "critical");
     const dir = arg.direction || "InArgument";
-    lines.push(`    <x:Property Name="${escapeXml(arg.name)}" Type="${dir}(${clrType})" />`);
+    const typeExpr = ensureBalancedParens(`${dir}(${clrType})`);
+    lines.push(`    <x:Property Name="${escapeXml(arg.name)}" Type="${typeExpr}" />`);
   }
   lines.push("  </x:Members>");
   return lines.join("\n");
+}
+
+function ensureBalancedParens(typeExpr: string): string {
+  const opens = (typeExpr.match(/\(/g) || []).length;
+  const closes = (typeExpr.match(/\)/g) || []).length;
+  if (opens > closes) {
+    return typeExpr + ")".repeat(opens - closes);
+  }
+  return typeExpr;
 }
 
 type MapClrTypeContext = "critical" | "non-critical";
@@ -3203,12 +3213,14 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
           <ui:LogMessage Level="Info" Message="[&quot;Initialization complete&quot;]" DisplayName="Log Init Complete" />
         </Sequence>
       </State.Entry>
-      <Transition DisplayName="Init -&gt; Get Transaction" To="{x:Reference State_GetTransaction}">
-        <Transition.Condition>[bool_SystemReady]</Transition.Condition>
-      </Transition>
-      <Transition DisplayName="Init -&gt; End (Failed)" To="{x:Reference State_End}">
-        <Transition.Condition>[${isCSharp ? "!bool_SystemReady" : "Not bool_SystemReady"}]</Transition.Condition>
-      </Transition>
+      <State.Transitions>
+        <Transition DisplayName="Init -&gt; Get Transaction" To="{x:Reference State_GetTransaction}">
+          <Transition.Condition>[bool_SystemReady]</Transition.Condition>
+        </Transition>
+        <Transition DisplayName="Init -&gt; End (Failed)" To="{x:Reference State_End}">
+          <Transition.Condition>[${isCSharp ? "!bool_SystemReady" : "Not bool_SystemReady"}]</Transition.Condition>
+        </Transition>
+      </State.Transitions>
     </State>
 
     <State DisplayName="Get Transaction Data" x:Name="State_GetTransaction">
@@ -3223,12 +3235,14 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
           </ui:InvokeWorkflowFile>
         </Sequence>
       </State.Entry>
-      <Transition DisplayName="Has Transaction -&gt; Process" To="{x:Reference State_Process}">
-        <Transition.Condition>[${isCSharp ? "qi_TransactionItem != null" : "qi_TransactionItem IsNot Nothing"}]</Transition.Condition>
-      </Transition>
-      <Transition DisplayName="No Transaction -&gt; End" To="{x:Reference State_End}">
-        <Transition.Condition>[${isCSharp ? "qi_TransactionItem == null" : "qi_TransactionItem Is Nothing"}]</Transition.Condition>
-      </Transition>
+      <State.Transitions>
+        <Transition DisplayName="Has Transaction -&gt; Process" To="{x:Reference State_Process}">
+          <Transition.Condition>[${isCSharp ? "qi_TransactionItem != null" : "qi_TransactionItem IsNot Nothing"}]</Transition.Condition>
+        </Transition>
+        <Transition DisplayName="No Transaction -&gt; End" To="{x:Reference State_End}">
+          <Transition.Condition>[${isCSharp ? "qi_TransactionItem == null" : "qi_TransactionItem Is Nothing"}]</Transition.Condition>
+        </Transition>
+      </State.Transitions>
     </State>
 
     <State DisplayName="Process Transaction" x:Name="State_Process">
@@ -3309,9 +3323,11 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
           </TryCatch.Catches>
         </TryCatch>
       </State.Entry>
-      <Transition DisplayName="Process -&gt; Get Next Transaction" To="{x:Reference State_GetTransaction}">
-        <Transition.Condition>[True]</Transition.Condition>
-      </Transition>
+      <State.Transitions>
+        <Transition DisplayName="Process -&gt; Get Next Transaction" To="{x:Reference State_GetTransaction}">
+          <Transition.Condition>[True]</Transition.Condition>
+        </Transition>
+      </State.Transitions>
     </State>
 
     <State DisplayName="End Process" x:Name="State_End" IsFinal="True">
@@ -3354,7 +3370,14 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
     <x:Property Name="io_TransactionNumber" Type="InOutArgument(x:Int32)" />
   </x:Members>
   <Sequence DisplayName="Get Transaction Data">
-    <ui:GetTransactionItem DisplayName="Get Queue Item" QueueName="[in_QueueName]" TransactionItem="[out_TransactionItem]" />
+    <ui:GetTransactionItem DisplayName="Get Queue Item">
+      <ui:GetTransactionItem.QueueName>
+        <InArgument x:TypeArguments="x:String">[in_QueueName]</InArgument>
+      </ui:GetTransactionItem.QueueName>
+      <ui:GetTransactionItem.TransactionItem>
+        <OutArgument x:TypeArguments="ui:QueueItem">[out_TransactionItem]</OutArgument>
+      </ui:GetTransactionItem.TransactionItem>
+    </ui:GetTransactionItem>
     <If DisplayName="Check Transaction Item" Condition="[${isCSharp ? "out_TransactionItem != null" : "out_TransactionItem IsNot Nothing"}]">
       <If.Then>
         <Sequence DisplayName="Transaction Found">

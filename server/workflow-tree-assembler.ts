@@ -212,6 +212,44 @@ export function isUnsafeVariableName(name: string): string | null {
 
 type MapClrTypeContext = "critical" | "non-critical";
 
+const CLR_NAMESPACE_TO_XAML_PREFIX: Record<string, string> = {
+  "UiPath.Core": "ui",
+  "UiPath.Core.Activities": "ui",
+  "UiPath.Persistence.Activities": "upers",
+  "UiPath.Mail.Activities": "umail",
+  "UiPath.Excel.Activities": "uexcel",
+  "UiPath.UIAutomation.Activities": "uauto",
+  "UiPath.GSuite.Activities": "ugs",
+  "UiPath.MicrosoftOffice365.Activities": "uo365",
+  "UiPath.Credentials.Activities": "ucred",
+  "UiPath.Testing.Activities": "utest",
+};
+
+export function mapClrFullyQualifiedToXamlPrefix(clrType: string): string | null {
+  const dotParts = clrType.split(".");
+  if (dotParts.length < 2) return null;
+  const typeName = dotParts[dotParts.length - 1];
+  if (!typeName || !/^[A-Z]/.test(typeName)) return null;
+
+  for (let i = dotParts.length - 1; i >= 1; i--) {
+    const ns = dotParts.slice(0, i).join(".");
+    const prefix = CLR_NAMESPACE_TO_XAML_PREFIX[ns];
+    if (prefix) {
+      const remainder = dotParts.slice(i).join(".");
+      return `${prefix}:${remainder}`;
+    }
+  }
+
+  if (clrType.startsWith("System.") && !clrType.startsWith("System.Collections") && !clrType.startsWith("System.Data")) {
+    const afterSystem = clrType.substring("System.".length);
+    if (/^[A-Z]\w*$/.test(afterSystem)) {
+      return `s:${afterSystem}`;
+    }
+  }
+
+  return null;
+}
+
 function mapClrType(type: string, context: MapClrTypeContext = "non-critical"): string {
   const trimmed = type.trim();
   const lower = trimmed.toLowerCase();
@@ -254,6 +292,9 @@ function mapClrType(type: string, context: MapClrTypeContext = "non-critical"): 
     const itemType = mapClrType(arrayBracketMatch[1].trim(), context);
     return `scg:List(${itemType})`;
   }
+
+  const clrPrefixResult = mapClrFullyQualifiedToXamlPrefix(trimmed);
+  if (clrPrefixResult) return clrPrefixResult;
 
   if (trimmed.includes("clr-namespace:")) {
     if (/\[/.test(trimmed)) {
@@ -1002,6 +1043,15 @@ function looksLikeVbExpression(val: string): boolean {
   return false;
 }
 
+const BARE_WORD_LITERALS = new Set([
+  "Yes", "No", "Normal", "High", "Low", "Info", "Warn", "Error", "Trace", "Fatal",
+  "None", "Default", "Verbose", "Debug", "Warning", "Information", "Critical",
+  "Success", "Failed", "Pending", "Completed", "Cancelled", "Skipped",
+  "yes", "no", "normal", "high", "low", "info", "warn", "error", "trace", "fatal",
+  "none", "default", "verbose", "debug", "warning", "information", "critical",
+  "success", "failed", "pending", "completed", "cancelled", "skipped",
+]);
+
 function looksLikeStringLiteral(val: string, isDeclared?: (name: string) => boolean): boolean {
   const trimmed = val.trim();
   if (!trimmed) return false;
@@ -1035,17 +1085,26 @@ function isVbExpression(val: string): boolean {
   return false;
 }
 
-function wrapVariableDefault(val: string, varType: string): string {
+export function wrapVariableDefault(val: string, varType: string): string {
   const trimmed = val.trim();
   if (!trimmed) return trimmed;
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
   if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) return trimmed;
-  if (trimmed.startsWith("\"") || trimmed.startsWith("&quot;")) return trimmed;
 
   if (isVbExpression(trimmed)) {
+    if (trimmed.startsWith("\"") || trimmed.startsWith("&quot;")) {
+      const hasVbOperators = /[&+]/.test(trimmed) && (/\b\w+\.\w+\(/.test(trimmed) || /&(?!quot;|amp;|lt;|gt;|apos;)/.test(trimmed));
+      if (hasVbOperators) {
+        return `[${trimmed}]`;
+      }
+      return trimmed;
+    }
     return `[${trimmed}]`;
   }
+
+  if (trimmed.startsWith("\"") || trimmed.startsWith("&quot;")) return trimmed;
+
   const typeNorm = varType.toLowerCase();
   const isStringType = typeNorm.includes("string") && !typeNorm.includes("secure");
   if (isStringType) {
@@ -1069,6 +1128,9 @@ function smartBracketWrap(val: string, isDeclared?: (name: string) => boolean): 
   if (/^'.*'$/.test(trimmed)) return trimmed;
   if (/^&quot;.*&quot;$/.test(trimmed)) return trimmed;
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return trimmed;
+  if (BARE_WORD_LITERALS.has(trimmed) || BARE_WORD_LITERALS.has(trimmed.toLowerCase())) {
+    return `"${trimmed}"`;
+  }
   if (/^[0-9]+$/.test(trimmed)) return trimmed;
   if (/^New\s+\w/.test(trimmed)) return `[${trimmed}]`;
   if (looksLikeStringLiteral(trimmed, isDeclared)) {
@@ -1131,13 +1193,17 @@ function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean =
     return intent.value;
   }
 
+  if (intent.type === "literal") {
+    const val = intent.value;
+    if (val === "True" || val === "False" || val === "Nothing" || val === "null") {
+      return val;
+    }
+  }
+
   const built = buildExpression(intent);
   const linted = lintAndFixVbExpression(built);
 
   if (intent.type === "literal") {
-    if (linted === "True" || linted === "False" || linted === "Nothing" || linted === "null") {
-      return linted;
-    }
     if (/^[0-9]+(\.[0-9]+)?$/.test(linted)) {
       return linted;
     }
@@ -1313,7 +1379,7 @@ function applyCatalogConformance(xml: string): string {
   return corrected;
 }
 
-function coercePropToString(val: unknown): string {
+export function coercePropToString(val: unknown): string {
   if (val == null) return "";
   if (typeof val === "string") return val;
   if (isValueIntent(val)) {
@@ -1330,14 +1396,15 @@ function coercePropToString(val: unknown): string {
   return String(val);
 }
 
-function getPropString(props: Record<string, PropertyValue>, ...keys: string[]): string {
+export function getPropString(props: Record<string, PropertyValue>, ...keys: string[]): string {
   for (const key of keys) {
     if (props[key] !== undefined) {
       const val = props[key];
+      if (typeof val === "string") return val;
       if (isValueIntent(val)) {
         return buildExpression(val as ValueIntent);
       }
-      return String(val);
+      return coercePropToString(val);
     }
   }
   return "";
@@ -1892,7 +1959,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
     if (key.startsWith("_") || key === "displayName" || key === "DisplayName") continue;
 
     const propClrType = schema ? (schema.activity.properties.find((p: any) => p.name === key)?.clrType) : undefined;
-    let value = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : normalizeStringToExpression(String(rawValue), _activeDeclarationLookup || undefined, propClrType);
+    let value = isValueIntent(rawValue) ? buildExpression(rawValue as ValueIntent) : normalizeStringToExpression(typeof rawValue === "string" ? rawValue : coercePropToString(rawValue), _activeDeclarationLookup || undefined, propClrType);
 
     if (propClrType && /Boolean/i.test(propClrType)) {
       const stripped = value.replace(/^"+|"+$/g, "").replace(/^'+|'+$/g, "").replace(/&quot;/g, "").trim();
@@ -2690,6 +2757,15 @@ function buildVariablesBlock(variables: VariableDeclaration[]): string {
   return xml;
 }
 
+export function ensureBalancedParens(typeExpr: string): string {
+  const opens = (typeExpr.match(/\(/g) || []).length;
+  const closes = (typeExpr.match(/\)/g) || []).length;
+  if (opens > closes) {
+    return typeExpr + ")".repeat(opens - closes);
+  }
+  return typeExpr;
+}
+
 function buildXMembersBlock(
   args: Array<{ name: string; direction: string; type: string }>
 ): string {
@@ -2699,7 +2775,8 @@ function buildXMembersBlock(
   for (const arg of args) {
     const clrType = mapClrType(arg.type, "critical");
     const dir = arg.direction || "InArgument";
-    lines.push(`    <x:Property Name="${escapeXml(arg.name)}" Type="${dir}(${clrType})" />`);
+    const typeExpr = ensureBalancedParens(`${dir}(${clrType})`);
+    lines.push(`    <x:Property Name="${escapeXml(arg.name)}" Type="${typeExpr}" />`);
   }
   lines.push("  </x:Members>");
   return lines.join("\n") + "\n";

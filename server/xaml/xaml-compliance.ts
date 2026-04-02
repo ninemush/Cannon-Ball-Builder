@@ -668,11 +668,18 @@ export function smartBracketWrap(val: string, isDeclared?: (name: string) => boo
   return `[${trimmed}]`;
 }
 
+const BARE_WORD_LITERALS_SET = new Set([
+  "yes", "no", "normal", "high", "low", "info", "warn", "error", "trace", "fatal",
+  "none", "default", "verbose", "debug", "warning", "information", "critical",
+  "success", "failed", "pending", "completed", "cancelled", "skipped",
+]);
+
 function looksLikePlainText(val: string, isDeclared?: (name: string) => boolean): boolean {
   if (/^[a-zA-Z_]\w*\(/.test(val)) return false;
   if (/[+\-*/&=<>]/.test(val) && !/[.,!?;:'"…]/.test(val)) return false;
   if (/^(str_|int_|bool_|dbl_|dec_|obj_|dt_|ts_|drow_|qi_|sec_)/i.test(val)) return false;
   if (/^(in_|out_|io_)/i.test(val)) return false;
+  if (BARE_WORD_LITERALS_SET.has(val.toLowerCase())) return true;
   if (/\b[\w_]+\.(json|xml|xlsx|csv|txt|log|config|pdf|html|xaml)\b/i.test(val)) return true;
   if (/\w+\/\w+\/\w+/.test(val)) return true;
   if (/\u2014/.test(val)) return true;
