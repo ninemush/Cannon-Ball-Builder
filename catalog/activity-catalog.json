@@ -11195,7 +11195,7 @@
       ]
     },
     {
-      "packageId": "UiPath.Web.Activities",
+      "packageId": "UiPath.WebAPI.Activities",
       "activities": [
         {
           "className": "HttpClient",
