@@ -6,6 +6,7 @@ import {
   type ContractExtractionExclusion,
 } from "../xaml/workflow-contract-integrity";
 import { runFinalArtifactValidation, type FinalArtifactValidationInput } from "../final-artifact-validation";
+import type { InvokeSerializationFix } from "../xaml/invoke-binding-canonicalizer";
 
 function makeMinimalXaml(args: string = "", body: string = ""): string {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -734,7 +735,7 @@ describe("workflow-contract-integrity", () => {
       expect(report.contractIntegrityDefects.length).toBeGreaterThan(0);
     });
 
-    it("normalization-required run populates contract normalization actions in report", () => {
+    it("normalization-required run populates invoke serialization fixes in report", () => {
       const parent = makeMainWithInvoke(
         "Child.xaml",
         `<InArgument x:TypeArguments="x:String" x:Key="in_Name">[str_Value]</InArgument>`,
@@ -762,9 +763,11 @@ describe("workflow-contract-integrity", () => {
 
       const report = runFinalArtifactValidation(input);
 
-      expect(report.contractNormalizationActions.length).toBeGreaterThan(0);
-      expect(report.hasContractIntegrityIssues).toBe(true);
-      expect(report.contractIntegritySummary).toBeDefined();
+      expect(report.invokeSerializationFixes.length).toBeGreaterThan(0);
+      const dedupFixes = report.invokeSerializationFixes.filter(
+        (f: InvokeSerializationFix) => f.normalizationType === "dual_serialization_dedup"
+      );
+      expect(dedupFixes.length).toBeGreaterThan(0);
     });
 
     it("FinalQualityReport exposes contractExtractionExclusions", () => {

@@ -21,6 +21,12 @@ import {
   type ContractExtractionExclusion,
   type ContractIntegritySummaryMetrics,
 } from "./xaml/workflow-contract-integrity";
+import {
+  canonicalizeInvokeBindings,
+  postEmissionInvokeValidator,
+  type InvokeSerializationFix,
+  type ResidualExpressionSerializationDefect,
+} from "./xaml/invoke-binding-canonicalizer";
 
 export interface FinalArtifactValidationInput {
   xamlEntries: { name: string; content: string }[];
@@ -90,6 +96,8 @@ export interface FinalQualityReport {
   contractIntegritySummaryMetrics?: ContractIntegritySummaryMetrics;
   contractNormalizationActions: ContractNormalizationAction[];
   contractExtractionExclusions: ContractExtractionExclusion[];
+  invokeSerializationFixes: InvokeSerializationFix[];
+  residualExpressionSerializationDefects: ResidualExpressionSerializationDefect[];
   derivedStatus: PackageStatus;
   statusReason: string;
   outcomeContext?: PipelineOutcomeReport;
@@ -200,6 +208,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const declarationValidation = buildDeclarationSummary(qualityGateResult.violations);
   const enumCompliance = buildEnumComplianceSummary(qualityGateResult.violations);
 
+  const invokeCanonicalizationResult = canonicalizeInvokeBindings(xamlEntries);
+
   const graphValidation = validateWorkflowGraph(xamlEntries);
 
   const perFileResults: PerFileValidation[] = xamlEntries.map(entry => {
@@ -256,6 +266,12 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
 
   const contractIntegrityResult = validateContractIntegrity(xamlEntries);
 
+  const postEmissionInvokeDefects = postEmissionInvokeValidator(xamlEntries);
+  const allResidualDefects = [
+    ...invokeCanonicalizationResult.residualExpressionSerializationDefects,
+    ...postEmissionInvokeDefects,
+  ];
+
   const mainXamlEntry = perFileResults.find(r => r.file === "Main.xaml");
   const entryPointHasBlockers = mainXamlEntry
     ? (mainXamlEntry.studioCompatibilityLevel === "studio-blocked" || mainXamlEntry.hasStubContent)
@@ -266,7 +282,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const hasAnyStubContent = perFileResults.some(r => r.hasStubContent);
   const qgIncomplete = qualityGateResult.completenessLevel === "incomplete";
 
-  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.hasWorkflowGraphIntegrityIssues || contractIntegrityResult.hasContractIntegrityIssues;
+  const hasResidualDefects = allResidualDefects.length > 0;
+  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.hasWorkflowGraphIntegrityIssues || contractIntegrityResult.hasContractIntegrityIssues || hasResidualDefects;
 
   let derivedStatus: PackageStatus;
   let statusReason: string;
@@ -295,15 +312,17 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     if (entryPointHasBlockers) reasons.push("entry point (Main.xaml) has structural blockers or stub content");
     if (hasStructuralBlockers) reasons.push(`${studioBlockedCount} file(s) structurally blocked in final validation`);
     statusReason = `Structurally invalid: ${reasons.join(", ")}`;
-  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking")) {
+  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking") || allResidualDefects.some(d => d.severity === "execution_blocking")) {
     derivedStatus = "structurally_invalid";
     const reasons: string[] = [];
     const graphBlockingCount = graphValidation.workflowGraphDefects.filter(d => d.severity === "execution_blocking").length;
     if (graphBlockingCount > 0) reasons.push(`${graphBlockingCount} execution-blocking workflow graph defect(s)`);
     const contractBlockingCount = contractIntegrityResult.contractIntegrityDefects.filter(d => d.severity === "execution_blocking").length;
     if (contractBlockingCount > 0) reasons.push(`${contractBlockingCount} execution-blocking contract integrity defect(s)`);
+    const residualBlockingCount = allResidualDefects.filter(d => d.severity === "execution_blocking").length;
+    if (residualBlockingCount > 0) reasons.push(`${residualBlockingCount} execution-blocking residual expression/invoke serialization defect(s)`);
     statusReason = `Structurally invalid: ${reasons.join(", ")} detected`;
-  } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.workflowGraphDefects.some(d => d.severity === "handoff_required") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "handoff_required")) {
+  } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.workflowGraphDefects.some(d => d.severity === "handoff_required") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "handoff_required") || allResidualDefects.some(d => d.severity === "handoff_required")) {
     derivedStatus = "handoff_only";
     const reasons: string[] = [];
     if (hasAnyStubContent) reasons.push("stub content detected in finalized artifacts");
@@ -316,6 +335,10 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     if (contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "handoff_required")) {
       const handoffCount = contractIntegrityResult.contractIntegrityDefects.filter(d => d.severity === "handoff_required").length;
       reasons.push(`${handoffCount} contract integrity issue(s) require handoff`);
+    }
+    if (allResidualDefects.some(d => d.severity === "handoff_required")) {
+      const residualHandoffCount = allResidualDefects.filter(d => d.severity === "handoff_required").length;
+      reasons.push(`${residualHandoffCount} residual expression/invoke serialization issue(s) require handoff`);
     }
     statusReason = `Handoff only: ${reasons.join(", ")}`;
   } else if (hasStructuralWarnings || totalWarnings > 0) {
@@ -358,6 +381,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     contractIntegritySummaryMetrics: contractIntegrityResult.contractIntegritySummaryMetrics,
     contractNormalizationActions: contractIntegrityResult.contractNormalizationActions,
     contractExtractionExclusions: contractIntegrityResult.contractExtractionExclusions,
+    invokeSerializationFixes: invokeCanonicalizationResult.invokeSerializationFixes,
+    residualExpressionSerializationDefects: allResidualDefects,
     derivedStatus,
     statusReason,
     outcomeContext: contextMetadata.outcomeReport,

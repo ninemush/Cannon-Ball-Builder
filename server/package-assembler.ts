@@ -60,6 +60,7 @@ import archiver from "archiver";
   import { runPostEmissionDependencyAnalysis, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
   import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
   import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
+  import { canonicalizeInvokeBindings } from "./xaml/invoke-binding-canonicalizer";
 
 interface DomCorrectionResult {
   content: string;
@@ -7594,6 +7595,11 @@ ${depEntries}
   const collectedPropTrace = getAndClearPropertySerializationTrace();
 
   try {
+    const invokeCanonicalization = canonicalizeInvokeBindings(finalXamlEntries);
+    if (invokeCanonicalization.totalCanonicalizations > 0) {
+      console.log(`[Package Assembler] Invoke binding canonicalization: ${invokeCanonicalization.totalCanonicalizations} fix(es) applied, ${invokeCanonicalization.totalResidualDefects} residual defect(s)`);
+    }
+
     const contractResult = validateContractIntegrity(finalXamlEntries);
     const contracts = buildWorkflowContracts(finalXamlEntries);
 

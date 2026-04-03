@@ -1982,9 +1982,56 @@ export function renderActivity(
           </${activityType}>`;
   }
 
+  const isInvokeActivity = activityType === "ui:InvokeWorkflowFile" || activityType === "InvokeWorkflowFile" ||
+    activityType === "ui:InvokeWorkflow" || activityType === "InvokeWorkflow" ||
+    activityType === "ui:InvokeWorkflowInteractive" || activityType === "InvokeWorkflowInteractive";
+
   const convertedInputArgs = properties["_convertedInputArgs"] || "";
   const convertedOutputArgs = properties["_convertedOutputArgs"] || "";
-  const hasConvertedArgs = (activityType === "ui:InvokeWorkflowFile" || activityType === "InvokeWorkflowFile") && (convertedInputArgs || convertedOutputArgs);
+  const hasConvertedArgs = isInvokeActivity && (convertedInputArgs || convertedOutputArgs);
+
+  const invokePropertyBindings: Array<{ key: string; value: string; direction: "In" | "Out" | "InOut" }> = [];
+
+  if (isInvokeActivity) {
+    const INVOKE_ALLOWED_ATTRS = new Set([
+      "WorkflowFileName", "WorkflowFilePath", "FileName",
+      "DisplayName", "ContinueOnError", "Timeout", "Isolated",
+      "TargetFolder", "LogMessage", "TimeoutMS",
+    ]);
+    const pseudoProps = new Set(["Then", "Else", "Body", "Cases", "Finally", "Try", "Catches"]);
+    const keysToRemove: string[] = [];
+    for (const key of Object.keys(properties)) {
+      if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
+      if (key.startsWith("_converted")) continue;
+      if (INVOKE_ALLOWED_ATTRS.has(key)) continue;
+      if (key.startsWith("sap2010:") || key.startsWith("xmlns")) continue;
+      if (pseudoProps.has(key)) {
+        keysToRemove.push(key);
+        continue;
+      }
+      const val = properties[key];
+      const strVal = val == null ? "" : String(val).trim();
+      if (strVal) {
+        let direction: "In" | "Out" | "InOut" = "In";
+        if (key.startsWith("out_")) direction = "Out";
+        else if (key.startsWith("io_")) direction = "InOut";
+        invokePropertyBindings.push({ key, value: strVal, direction });
+      }
+      keysToRemove.push(key);
+    }
+    for (const key of keysToRemove) {
+      delete properties[key];
+    }
+
+    propAttrs = "";
+    for (const [key, value] of Object.entries(properties)) {
+      if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
+      if (key.startsWith("_converted")) continue;
+      const sanitized = sanitizePropertyValue(key, value);
+      if (sanitized === "") continue;
+      propAttrs += ` ${key}="${escapeXmlExpression(sanitized)}"`;
+    }
+  }
 
   let innerActivity: string;
   if (activityType === "Assign") {
@@ -2007,10 +2054,33 @@ export function renderActivity(
               <Assign.To><OutArgument x:TypeArguments="${toType}">${safeToValue}</OutArgument></Assign.To>
               <Assign.Value><InArgument x:TypeArguments="${toType}">${safeAssignValue}</InArgument></Assign.Value>
             </Assign>`;
-  } else if (hasConvertedArgs) {
+  } else if (hasConvertedArgs || (isInvokeActivity && invokePropertyBindings.length > 0)) {
     let argsContent = "";
     if (convertedInputArgs) argsContent += parseInvokeArgs(convertedInputArgs, "In");
     if (convertedOutputArgs) argsContent += parseInvokeArgs(convertedOutputArgs, "Out");
+
+    const convertedKeyValues = new Map<string, string>();
+    const convertedKeyPattern = /x:Key="([^"]+)"[^>]*>([^<]*)</g;
+    let ckm;
+    while ((ckm = convertedKeyPattern.exec(argsContent)) !== null) {
+      convertedKeyValues.set(ckm[1], ckm[2].trim());
+    }
+    for (const binding of invokePropertyBindings) {
+      const argType = binding.direction === "Out" ? "OutArgument" : binding.direction === "InOut" ? "InOutArgument" : "InArgument";
+      const safeValue = escapeXmlExpression(binding.value);
+      if (convertedKeyValues.has(binding.key)) {
+        const existingValue = convertedKeyValues.get(binding.key) || "";
+        const propValue = binding.value.replace(/^\[|\]$/g, "").trim();
+        const existingNorm = existingValue.replace(/^\[|\]$/g, "").trim();
+        if (propValue === existingNorm) {
+          continue;
+        }
+        argsContent += `                <${argType} x:TypeArguments="x:Object" x:Key="${escapeXml(binding.key)}">${safeValue}</${argType}>\n`;
+        continue;
+      }
+      argsContent += `                <${argType} x:TypeArguments="x:Object" x:Key="${escapeXml(binding.key)}">${safeValue}</${argType}>\n`;
+    }
+
     if (argsContent) {
       innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs}>
               <${activityType}.Arguments>
