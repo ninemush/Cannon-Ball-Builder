@@ -1,0 +1,85 @@
+# CB2-F25A - Contract Extraction Exclusion Wiring Verification and Fix
+
+What & Why
+The latest package run after #425 still shows the same false-positive contract defects for designer/layout metadata such as `IdRef` and `HintSize` being reported as `unknown_target_argument`. That means one of these is true:
+- the new exclusion logic is not executing on the active extraction path
+- the exclusion logic executes too late, after defects are already recorded
+- the exclusions are not being surfaced in FinalQualityReport
+- extractInvocationsForActivityType is still scraping raw attributes before exclusion filtering
+
+This task is a focused verification and fix pass for #425. It is not a new broad validator. Its purpose is to ensure the exclusion logic actually takes effect in the active contract extraction path and becomes visible in reporting.
+
+Goals
+1. Prove whether the #425 exclusion logic is executing on the active run path.
+2. Ensure designer/layout/view-state metadata is excluded before contract defects are created.
+3. Surface `contractExtractionExclusions[]` in FinalQualityReport.
+4. Reduce false-positive `unknown_target_argument` defects without hiding real contract issues.
+
+Done looks like
+For the same package shape that currently produces `IdRef` and `HintSize` as `unknown_target_argument`, the validator instead:
+- excludes those fields
+- records them in `contractExtractionExclusions[]`
+- does not count them in `contractIntegrityDefects`
+
+FinalQualityReport now includes:
+- `contractExtractionExclusions[]`
+- `contractIntegrityDefects`
+- `contractIntegritySummary`
+
+The count of false-positive `unknown_target_argument` defects drops materially.
+Real contract defects remain visible.
+A small stage/debug trace confirms whether exclusion logic ran and how many fields were excluded.
+
+Out of scope
+- Broad changes to dependency, graph, or executable-path validation
+- Catalog filter alignment
+- Business-logic repair
+- New package status enums
+
+Tasks
+
+1. Verify active code path
+Instrument `server/xaml/workflow-contract-integrity.ts` so the active extraction path logs or records:
+- total candidate invoke properties seen
+- total excluded non-contract properties
+- total properties passed into contract matching
+- exclusion reasons by category
+
+This can be a debug/report artifact and does not need to be user-facing by default.
+
+2. Move exclusion earlier if needed
+Ensure exclusion of designer/layout/view-state/non-contract fields happens before any defect classification like `unknown_target_argument` is created.
+If extraction currently scrapes all attributes first and classifies later, refactor the order so exclusion happens first.
+
+3. Explicitly exclude known designer/layout patterns
+Confirm the exclusion layer catches at least:
+- `sap2010:WorkflowViewState.IdRef`
+- `sap:VirtualizedContainerService.HintSize`
+- view-state/layout sizing fields
+- annotation-only fields
+- non-runtime serialization artifacts
+
+These should be routed into `contractExtractionExclusions[]`, not `contractIntegrityDefects[]`.
+
+4. Surface exclusions in reporting
+Add `contractExtractionExclusions[]` explicitly to FinalQualityReport and ensure it survives into the verification bundle/debug output.
+Do not treat exclusions as defects.
+
+5. Add focused regression tests
+Add tests proving that:
+- `IdRef` is excluded, not treated as `unknown_target_argument`
+- `HintSize` is excluded, not treated as `unknown_target_argument`
+- mixed real bindings plus metadata on the same invoke node still validate correctly
+- true unknown child arguments still trigger `unknown_target_argument`
+- exclusions appear in reporting output
+
+6. Add a one-run verification artifact
+Add a compact debug summary such as:
+- `contractExtractionDebug: { candidateProperties, excludedProperties, matchedContractProperties, exclusionsByReason }`
+This is temporary-friendly but safe to keep in debug output long term.
+
+Relevant files
+- `server/xaml/workflow-contract-integrity.ts`
+- `server/final-artifact-validation.ts`
+- `server/uipath-pipeline.ts`
+- `server/__tests__/workflow-contract-integrity.test.ts`
