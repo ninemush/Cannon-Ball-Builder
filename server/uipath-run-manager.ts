@@ -334,10 +334,29 @@ async function executeRun(
             runLogger.stageEnd("cache_hit", "succeeded", { cached: true });
             const cachedOutcome = runLogger.buildOutcomeSummary();
             await runLogger.flush();
+
+            let cacheSnapPddId: number | undefined;
+            let cacheSnapSddId: number | undefined;
+            try {
+              const [snapPdd, snapSdd] = await Promise.all([
+                documentStorage.getLatestDocument(ideaId, "PDD"),
+                documentStorage.getLatestDocument(ideaId, "SDD"),
+              ]);
+              if (snapPdd) cacheSnapPddId = snapPdd.id;
+              if (snapSdd) cacheSnapSddId = snapSdd.id;
+            } catch (snapErr: any) {
+              console.warn(`[RunManager] Failed to snapshot document IDs for cache-hit run ${runId}: ${snapErr?.message}`);
+            }
+
             await finishRun(runId, activeRun, phaseEvents, {
               status: "completed",
               outcomeReport: JSON.stringify({ ...cachedOutcome, cached: true }),
               generationMode: cachedResult.generationMode,
+              pddDocumentId: cacheSnapPddId,
+              sddDocumentId: cacheSnapSddId,
+              qualityGateResults: cachedResult.qualityGateResult || undefined,
+              metaValidationResults: cachedResult.metaValidationResult || undefined,
+              finalQualityReport: cachedResult.finalQualityReport || undefined,
             });
             return;
           }
@@ -561,11 +580,30 @@ async function executeRun(
       pipelineOutcome: pipelineResult.outcomeReport || undefined,
       assessedStatus: pipelineResult.status,
     });
+
+    let snapshotPddId: number | undefined;
+    let snapshotSddId: number | undefined;
+    try {
+      const [pddDoc, sddDoc] = await Promise.all([
+        documentStorage.getLatestDocument(ideaId, "PDD"),
+        documentStorage.getLatestDocument(ideaId, "SDD"),
+      ]);
+      if (pddDoc) snapshotPddId = pddDoc.id;
+      if (sddDoc) snapshotSddId = sddDoc.id;
+    } catch (snapErr: any) {
+      console.warn(`[RunManager] Failed to snapshot document IDs for run ${runId}: ${snapErr?.message}`);
+    }
+
     await finishRun(runId, activeRun, phaseEvents, {
       status: isDegraded ? "completed_with_warnings" : "completed",
       outcomeReport: outcomeReportJson,
       dhgContent: pipelineResult.dhgContent || undefined,
       generationMode: pipelineResult.generationMode,
+      pddDocumentId: snapshotPddId,
+      sddDocumentId: snapshotSddId,
+      qualityGateResults: pipelineResult.qualityGateResult || undefined,
+      metaValidationResults: pipelineResult.metaValidationResult || undefined,
+      finalQualityReport: pipelineResult.finalQualityReport || undefined,
     });
 
     console.log(`[RunManager] Run ${runId} completed for idea ${ideaId} — status: ${pipelineResult.status}`);
@@ -623,7 +661,7 @@ async function finishRun(
   runId: string,
   activeRun: ActiveRun,
   phaseEvents: PipelineProgressEvent[],
-  updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string },
+  updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string; pddDocumentId?: number; sddDocumentId?: number; qualityGateResults?: unknown; metaValidationResults?: unknown; finalQualityReport?: unknown },
 ): Promise<void> {
   const finalProgress = JSON.stringify(phaseEvents.slice(-50));
   await storage.updateGenerationRunPhaseProgress(runId, finalProgress).catch(() => {});

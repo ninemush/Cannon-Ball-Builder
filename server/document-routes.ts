@@ -565,9 +565,23 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
       ? "completed_with_warnings"
       : outcome.status === "failed" ? "failed" : "completed";
     try {
+      let sddSnapPddId: number | undefined;
+      let sddSnapSddId: number | undefined;
+      try {
+        const [snapPdd, snapSdd] = await Promise.all([
+          documentStorage.getLatestDocument(ideaId, "PDD"),
+          documentStorage.getLatestDocument(ideaId, "SDD"),
+        ]);
+        if (snapPdd) sddSnapPddId = snapPdd.id;
+        if (snapSdd) sddSnapSddId = snapSdd.id;
+      } catch (snapErr: any) {
+        console.warn(`[SDD] Failed to snapshot document IDs for run ${sddRunId}: ${snapErr?.message}`);
+      }
       await storage.completeGenerationRun(sddRunId, {
         status: sddFinalStatus,
         outcomeReport: JSON.stringify(outcome),
+        pddDocumentId: sddSnapPddId,
+        sddDocumentId: sddSnapSddId,
       });
     } catch {}
 
@@ -646,12 +660,26 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
     const outcome = pddLogger.buildOutcomeSummary();
     await pddLogger.flush();
     try {
+      let pddSnapPddId: number | undefined;
+      let pddSnapSddId: number | undefined;
+      try {
+        const [snapPdd, snapSdd] = await Promise.all([
+          documentStorage.getLatestDocument(ideaId, "PDD"),
+          documentStorage.getLatestDocument(ideaId, "SDD"),
+        ]);
+        if (snapPdd) pddSnapPddId = snapPdd.id;
+        if (snapSdd) pddSnapSddId = snapSdd.id;
+      } catch (snapErr: any) {
+        console.warn(`[PDD] Failed to snapshot document IDs for run ${pddRunId}: ${snapErr?.message}`);
+      }
       await storage.completeGenerationRun(pddRunId, {
         status: "completed",
         outcomeReport: JSON.stringify({
           ...outcome,
           ...(guidanceDiagnosticsPayload ? { guidanceDiagnostics: guidanceDiagnosticsPayload } : {}),
         }),
+        pddDocumentId: pddSnapPddId,
+        sddDocumentId: pddSnapSddId,
       });
     } catch {}
 

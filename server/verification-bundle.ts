@@ -132,14 +132,43 @@ export function registerVerificationBundleRoutes(app: Express): void {
       const now = new Date().toISOString();
 
       const dhgContent = targetRun.dhgContent || (isCachedRun ? pipelineResult?.dhgContent : null) || null;
-      const finalQualityReport = isCachedRun ? (pipelineResult?.finalQualityReport || null) : null;
+      const finalQualityReport = (isCachedRun && pipelineResult?.finalQualityReport)
+        ? pipelineResult.finalQualityReport
+        : (targetRun.finalQualityReport || null);
 
-      const [pddDoc, sddDoc, pddApproval, sddApproval] = await Promise.all([
-        documentStorage.getLatestDocument(ideaId, "PDD"),
-        documentStorage.getLatestDocument(ideaId, "SDD"),
+      const wantSnapshotPdd = !isLatest && !!targetRun.pddDocumentId;
+      const wantSnapshotSdd = !isLatest && !!targetRun.sddDocumentId;
+
+      let pddDoc, sddDoc;
+      let pddFromSnapshot = false;
+      let sddFromSnapshot = false;
+
+      const [rawPddDoc, rawSddDoc, pddApproval, sddApproval] = await Promise.all([
+        wantSnapshotPdd
+          ? documentStorage.getDocument(targetRun.pddDocumentId!)
+          : documentStorage.getLatestDocument(ideaId, "PDD"),
+        wantSnapshotSdd
+          ? documentStorage.getDocument(targetRun.sddDocumentId!)
+          : documentStorage.getLatestDocument(ideaId, "SDD"),
         documentStorage.getApproval(ideaId, "PDD"),
         documentStorage.getApproval(ideaId, "SDD"),
       ]);
+
+      if (rawPddDoc) {
+        pddDoc = rawPddDoc;
+        pddFromSnapshot = wantSnapshotPdd;
+      } else if (wantSnapshotPdd) {
+        pddDoc = await documentStorage.getLatestDocument(ideaId, "PDD");
+        pddFromSnapshot = false;
+      }
+
+      if (rawSddDoc) {
+        sddDoc = rawSddDoc;
+        sddFromSnapshot = wantSnapshotSdd;
+      } else if (wantSnapshotSdd) {
+        sddDoc = await documentStorage.getLatestDocument(ideaId, "SDD");
+        sddFromSnapshot = false;
+      }
 
       const activityCatalog = readCatalogFile("activity-catalog.json");
       const generationMetadata = readCatalogFile("generation-metadata.json");
@@ -166,6 +195,8 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       if (isCachedRun && pipelineResult?.qualityGateResult) {
         artifactSources["quality-gate-results"] = "cache";
+      } else if (targetRun.qualityGateResults) {
+        artifactSources["quality-gate-results"] = "database";
       } else if (targetRun.outcomeReport) {
         artifactSources["quality-gate-results"] = "outcome-report-fallback";
       } else if (!isCachedRun) {
@@ -174,14 +205,18 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       if (isCachedRun && pipelineResult?.metaValidationResult) {
         artifactSources["meta-validation-results"] = "cache";
+      } else if (targetRun.metaValidationResults) {
+        artifactSources["meta-validation-results"] = "database";
       }
 
       if (targetRun.outcomeReport) {
         artifactSources["outcome-report"] = "database";
       }
 
-      if (finalQualityReport) {
+      if (isCachedRun && pipelineResult?.finalQualityReport) {
         artifactSources["final-quality-report"] = "cache";
+      } else if (targetRun.finalQualityReport) {
+        artifactSources["final-quality-report"] = "database";
       } else {
         artifactSources["final-quality-report"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
       }
@@ -191,10 +226,10 @@ export function registerVerificationBundleRoutes(app: Express): void {
       }
 
       if (pddDoc) {
-        artifactSources["pdd"] = "database";
+        artifactSources["pdd"] = pddFromSnapshot ? "database-snapshot" : "database-latest";
       }
       if (sddDoc) {
-        artifactSources["sdd"] = "database";
+        artifactSources["sdd"] = sddFromSnapshot ? "database-snapshot" : "database-latest";
       }
       if (pddApproval || sddApproval) {
         artifactSources["document-approvals"] = "database";
@@ -222,6 +257,14 @@ export function registerVerificationBundleRoutes(app: Express): void {
         totalVersions: allRuns.length,
         isLatest,
         cacheAvailable: isCachedRun,
+        documentSnapshots: {
+          pdd: pddFromSnapshot
+            ? { source: "snapshot", documentId: targetRun.pddDocumentId, version: pddDoc?.version ?? null }
+            : { source: "latest", documentId: pddDoc?.id ?? null, version: pddDoc?.version ?? null },
+          sdd: sddFromSnapshot
+            ? { source: "snapshot", documentId: targetRun.sddDocumentId, version: sddDoc?.version ?? null }
+            : { source: "latest", documentId: sddDoc?.id ?? null, version: sddDoc?.version ?? null },
+        },
         artifactSources,
       };
 
@@ -235,6 +278,8 @@ export function registerVerificationBundleRoutes(app: Express): void {
       let qualityGateResults: any = null;
       if (isCachedRun && pipelineResult?.qualityGateResult) {
         qualityGateResults = pipelineResult.qualityGateResult;
+      } else if (targetRun.qualityGateResults) {
+        qualityGateResults = targetRun.qualityGateResults;
       } else if (outcomeReport?.pipelineOutcome) {
         qualityGateResults = {
           source: "outcome-report-fallback",
@@ -246,6 +291,8 @@ export function registerVerificationBundleRoutes(app: Express): void {
       let metaValidationResults: any = null;
       if (isCachedRun && pipelineResult?.metaValidationResult) {
         metaValidationResults = pipelineResult.metaValidationResult;
+      } else if (targetRun.metaValidationResults) {
+        metaValidationResults = targetRun.metaValidationResults;
       } else if (outcomeReport?.pipelineOutcome) {
         const po = outcomeReport.pipelineOutcome;
         const metaSummary: Record<string, any> = {

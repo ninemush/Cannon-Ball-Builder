@@ -27,7 +27,7 @@ export interface IStorage {
   updateGenerationRunStatus(runId: string, status: GenerationRunStatus | string, currentPhase?: string): Promise<UipathGenerationRun | undefined>;
   updateGenerationRunPhaseProgress(runId: string, phaseProgress: string): Promise<UipathGenerationRun | undefined>;
   updateGenerationRunSpecSnapshot(runId: string, specSnapshot: unknown): Promise<UipathGenerationRun | undefined>;
-  completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string }): Promise<UipathGenerationRun | undefined>;
+  completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string; pddDocumentId?: number; sddDocumentId?: number; qualityGateResults?: unknown; metaValidationResults?: unknown; finalQualityReport?: unknown }): Promise<UipathGenerationRun | undefined>;
   failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined>;
   updateGenerationRunStageLog(runId: string, stageLog: unknown): Promise<UipathGenerationRun | undefined>;
   failOrphanedRuns(): Promise<UipathGenerationRun[]>;
@@ -187,7 +187,7 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string }): Promise<UipathGenerationRun | undefined> {
+  async completeGenerationRun(runId: string, updates: { status: string; outcomeReport?: string; dhgContent?: string; generationMode?: string; pddDocumentId?: number; sddDocumentId?: number; qualityGateResults?: unknown; metaValidationResults?: unknown; finalQualityReport?: unknown }): Promise<UipathGenerationRun | undefined> {
     const [updated] = await db.update(uipathGenerationRuns)
       .set({ ...updates, updatedAt: new Date(), completedAt: new Date() })
       .where(eq(uipathGenerationRuns.runId, runId))
