@@ -143,7 +143,15 @@ function classifyWorkflows(
   const degradedItems = report.emissionGateViolations?.details.filter(v => v.resolution === "degraded") || [];
   const stubbedEmissions = report.emissionGateViolations?.details.filter(v => v.resolution === "stubbed") || [];
 
-  return context.workflowNames.map(wf => {
+  const seenWfNames = new Set<string>();
+  const deduplicatedNames = context.workflowNames.filter(wf => {
+    const normalized = wf.replace(/\.xaml$/i, "").toLowerCase();
+    if (seenWfNames.has(normalized)) return false;
+    seenWfNames.add(normalized);
+    return true;
+  });
+
+  return deduplicatedNames.map(wf => {
     const wfFile = `${wf}.xaml`;
     let isStubbed: boolean;
     let isStudioBlocked = false;
@@ -445,7 +453,7 @@ export function generateDhgFromOutcomeReport(
   }
 
   const fqr = context.finalQualityReport;
-  const studioCompatData = fqr
+  const rawStudioCompatData = fqr
     ? fqr.perFileResults.map(r => ({
         file: r.file,
         level: r.studioCompatibilityLevel,
@@ -454,6 +462,18 @@ export function generateDhgFromOutcomeReport(
         failureSummary: r.blockers.length > 0 ? r.blockers.slice(0, 2).join("; ") : undefined,
       }))
     : (report.studioCompatibility || []);
+  const seenStudioFiles = new Set<string>();
+  const studioCompatData = rawStudioCompatData
+    .map(sc => ({
+      ...sc,
+      file: sc.file.endsWith(".xaml") ? sc.file : `${sc.file}.xaml`,
+    }))
+    .filter(sc => {
+      const normalized = sc.file.replace(/\.xaml$/i, "").toLowerCase();
+      if (seenStudioFiles.has(normalized)) return false;
+      seenStudioFiles.add(normalized);
+      return true;
+    });
 
   if (studioCompatData.length > 0) {
     md += `### Studio Compatibility\n\n`;

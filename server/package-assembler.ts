@@ -726,6 +726,7 @@ export function checkStudioLoadability(xamlContent: string): StudioLoadabilityRe
       .replace(/<mva:VisualBasic\.Settings[\s\S]*?<\/mva:VisualBasic\.Settings>/g, "")
       .replace(/<TextExpression\.NamespacesForImplementation[\s\S]*?<\/TextExpression\.NamespacesForImplementation>/g, "")
       .replace(/<TextExpression\.ReferencesForImplementation[\s\S]*?<\/TextExpression\.ReferencesForImplementation>/g, "")
+      .replace(/<sap2010:WorkflowViewState\.IdRef>[^<]*<\/sap2010:WorkflowViewState\.IdRef>/g, "")
       .trim();
     const firstElementMatch = metadataSkipped.match(/<([A-Za-z][\w]*)\b/);
     if (firstElementMatch) {
@@ -2091,6 +2092,7 @@ export function resolveDependencies(
   studioProfile: StudioProfile | null,
   treeSpecs: TreeWorkflowSpec | TreeWorkflowSpec[] | null,
   targetFramework?: "Windows" | "Portable",
+  xamlContentSources?: string[],
 ): DependencyResolutionResult {
   const deps: Record<string, string> = {};
   const warnings: DependencyResolutionResult["warnings"] = [];
@@ -2162,6 +2164,44 @@ export function resolveDependencies(
             console.log(`[Dependency Resolution] Proactively added ${pkgName} — spec references activity "${trigger}"`);
           }
           break;
+        }
+      }
+    }
+  }
+
+  if (specArray.length === 0 && pkg.workflows) {
+    for (const wf of pkg.workflows) {
+      for (const step of wf.steps || []) {
+        const actType = step.activityType;
+        if (!actType) continue;
+        for (const [pkgName, triggers] of Object.entries(PROACTIVE_COMMON_PACKAGES)) {
+          if (triggers.includes(actType)) {
+            const normalized = normalizePackageName(pkgName);
+            if (!referencedPackages.has(normalized)) {
+              referencedPackages.add(normalized);
+              specPredictedPackages.add(normalized);
+              console.log(`[Dependency Resolution] Proactively added ${pkgName} — workflow step references activity "${actType}"`);
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (xamlContentSources && xamlContentSources.length > 0) {
+    for (const xamlContent of xamlContentSources) {
+      for (const [pkgName, triggers] of Object.entries(PROACTIVE_COMMON_PACKAGES)) {
+        for (const trigger of triggers) {
+          if (xamlContent.includes(trigger)) {
+            const normalized = normalizePackageName(pkgName);
+            if (!referencedPackages.has(normalized)) {
+              referencedPackages.add(normalized);
+              specPredictedPackages.add(normalized);
+              console.log(`[Dependency Resolution] Proactively added ${pkgName} — XAML content references activity "${trigger}"`);
+            }
+            break;
+          }
         }
       }
     }
@@ -3094,7 +3134,14 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     } else if (treeEnrichment?.status === "success") {
       allTreeSpecsForDeps.push(treeEnrichment.workflowSpec);
     }
-    const depResolution = resolveDependencies(pkg, _studioProfile, allTreeSpecsForDeps.length > 0 ? allTreeSpecsForDeps : null, tf as "Windows" | "Portable");
+    const priorCompliantXamlSources: string[] = [];
+    if (allTreeSpecsForDeps.length === 0) {
+      const priorWorkflows = pkg.internal?.priorCompliantWorkflows || [];
+      for (const pw of priorWorkflows) {
+        if (pw.content) priorCompliantXamlSources.push(pw.content);
+      }
+    }
+    const depResolution = resolveDependencies(pkg, _studioProfile, allTreeSpecsForDeps.length > 0 ? allTreeSpecsForDeps : null, tf as "Windows" | "Portable", priorCompliantXamlSources.length > 0 ? priorCompliantXamlSources : undefined);
     const deps = depResolution.deps;
     const dependencyWarnings = depResolution.warnings;
     const proactivelyResolvedPackages = new Set(Object.keys(deps));
@@ -5855,22 +5902,27 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         }
         const isMainFile = corruptedFile === "Main.xaml" || corruptedFile === `${mainWfName}.xaml`;
         let invokeWorkflows: Array<{ displayName: string; fileName: string }> | undefined;
-        if (isMainFile && nonMainWorkflowNames.length > 0) {
-          const seenFiles = new Set<string>();
-          invokeWorkflows = [];
-          const initFile = "InitAllSettings.xaml";
-          if (!seenFiles.has(initFile)) {
-            seenFiles.add(initFile);
-            invokeWorkflows.push({ displayName: "Initialize All Settings", fileName: initFile });
-          }
-          for (const name of nonMainWorkflowNames) {
-            const fn = `${name}.xaml`;
-            if (!seenFiles.has(fn) && name !== stubName) {
-              seenFiles.add(fn);
-              invokeWorkflows.push({ displayName: name, fileName: fn });
+        if (isMainFile) {
+          const effectiveWorkflowNames = nonMainWorkflowNames.length > 0
+            ? nonMainWorkflowNames
+            : Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process");
+          if (effectiveWorkflowNames.length > 0) {
+            const seenFiles = new Set<string>();
+            invokeWorkflows = [];
+            const initFile = "InitAllSettings.xaml";
+            if (!seenFiles.has(initFile)) {
+              seenFiles.add(initFile);
+              invokeWorkflows.push({ displayName: "Initialize All Settings", fileName: initFile });
             }
+            for (const name of effectiveWorkflowNames) {
+              const fn = `${name}.xaml`;
+              if (!seenFiles.has(fn) && name !== stubName) {
+                seenFiles.add(fn);
+                invokeWorkflows.push({ displayName: name, fileName: fn });
+              }
+            }
+            console.log(`[UiPath Pre-Package Validation] Main.xaml stub will preserve ${invokeWorkflows.length} InvokeWorkflowFile reference(s) to maintain sub-workflow reachability`);
           }
-          console.log(`[UiPath Pre-Package Validation] Main.xaml stub will preserve ${invokeWorkflows.length} InvokeWorkflowFile reference(s) to maintain sub-workflow reachability`);
         }
         const stubXaml = generateStubWorkflow(stubName, {
           reason: `Final validation remediation — original XAML had well-formedness violations`,
@@ -5988,7 +6040,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const dhgAllFiles = new Set(
       Array.from(deferredWrites.keys())
         .filter(k => k.endsWith(".xaml"))
-        .map(k => (k.split("/").pop() || k))
+        .map(k => {
+          const baseName = k.split("/").pop() || k;
+          return baseName.endsWith(".xaml") ? baseName : `${baseName}.xaml`;
+        })
     );
     const dhgRemediatedFileSet = new Set(outcomeRemediations.map(r => r.file));
     const dhgStructuralDefectChecks = new Set([
@@ -7007,22 +7062,27 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             const stubName = fileName.replace(/\.xaml$/i, "");
             const isMainStub = fileName === "Main.xaml" || fileName === `${mainWfName}.xaml`;
             let stubInvokes: Array<{ displayName: string; fileName: string }> | undefined;
-            if (isMainStub && nonMainWorkflowNames.length > 0) {
-              const seenFiles = new Set<string>();
-              stubInvokes = [];
-              const initFile = "InitAllSettings.xaml";
-              if (!seenFiles.has(initFile)) {
-                seenFiles.add(initFile);
-                stubInvokes.push({ displayName: "Initialize All Settings", fileName: initFile });
-              }
-              for (const name of nonMainWorkflowNames) {
-                const fn = `${name}.xaml`;
-                if (!seenFiles.has(fn) && fn !== fileName) {
-                  seenFiles.add(fn);
-                  stubInvokes.push({ displayName: name, fileName: fn });
+            if (isMainStub) {
+              const effectiveWfNames = nonMainWorkflowNames.length > 0
+                ? nonMainWorkflowNames
+                : Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process");
+              if (effectiveWfNames.length > 0) {
+                const seenFiles = new Set<string>();
+                stubInvokes = [];
+                const initFile = "InitAllSettings.xaml";
+                if (!seenFiles.has(initFile)) {
+                  seenFiles.add(initFile);
+                  stubInvokes.push({ displayName: "Initialize All Settings", fileName: initFile });
                 }
+                for (const name of effectiveWfNames) {
+                  const fn = `${name}.xaml`;
+                  if (!seenFiles.has(fn) && fn !== fileName) {
+                    seenFiles.add(fn);
+                    stubInvokes.push({ displayName: name, fileName: fn });
+                  }
+                }
+                console.log(`[XML Well-Formedness Gate] Main.xaml stub preserving ${stubInvokes.length} InvokeWorkflowFile reference(s)`);
               }
-              console.log(`[XML Well-Formedness Gate] Main.xaml stub preserving ${stubInvokes.length} InvokeWorkflowFile reference(s)`);
             }
             const stubXaml = generateStubWorkflow(stubName, {
               reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}`,
