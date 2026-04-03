@@ -318,11 +318,6 @@ const NAMESPACE_MAP: Record<string, Record<string, string>> = {
     "CreateFormTask": "UiPath.Form.Activities",
     "WaitFormTask": "UiPath.Form.Activities",
   },
-  "UiPath.GenAI.Activities": {
-    "GenerateText": "UiPath.GenAI.Activities",
-    "ChatCompletion": "UiPath.GenAI.Activities",
-    "Summarize": "UiPath.GenAI.Activities",
-  },
   "UiPath.GoogleCloud.Activities": {
     "GoogleCloudScope": "UiPath.GoogleCloud.Activities",
     "GoogleStorageUploadFile": "UiPath.GoogleCloud.Activities",

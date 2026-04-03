@@ -24,6 +24,8 @@ export const packageVersionRangeEntrySchema = z.object({
   lastVerifiedAt: z.string().datetime(),
   verificationSource: verificationSourceSchema,
   discoveredAt: z.string().datetime().optional(),
+  feedStatus: z.enum(["active", "delisted"]).optional(),
+  delistedAt: z.string().datetime().optional(),
 });
 
 export const generationMetadataSchema = z.object({

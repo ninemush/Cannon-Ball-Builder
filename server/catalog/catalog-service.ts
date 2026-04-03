@@ -6,7 +6,7 @@ export type { StudioProfile } from "./metadata-service";
 
 export type ProcessType = "api-integration" | "document-processing" | "attended-ui" | "unattended-ui" | "orchestration" | "general";
 
-export type FeedStatus = "verified" | "unverified";
+export type FeedStatus = "verified" | "unverified" | "delisted";
 
 export interface CatalogProperty {
   name: string;
@@ -63,6 +63,7 @@ export interface CatalogPackage {
   version?: string;
   feedStatus?: FeedStatus;
   preferredVersion?: string;
+  generationApproved?: boolean;
   prefix?: string;
   clrNamespace?: string;
   assembly?: string;
@@ -189,6 +190,10 @@ class CatalogService {
 
   isLoaded(): boolean {
     return this.loaded;
+  }
+
+  getCatalog(): ActivityCatalog | null {
+    return this.catalog;
   }
 
   getLoadGeneration(): number {

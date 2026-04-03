@@ -432,7 +432,8 @@
           "propertiesComplete": true,
           "namespace": "System.Activities.Statements"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.System.Activities",
@@ -1510,7 +1511,8 @@
             ]
           }
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.UIAutomation.Activities",
@@ -2378,7 +2380,8 @@
           },
           "xamlExample": "<umail:SendOutlookMailMessage To=\"[recipient]\" Subject=\"[subject]\" Body=\"[body]\" DisplayName=\"Send email\" />"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Amazon.Comprehend.Activities",
@@ -2562,7 +2565,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Amazon.Comprehend.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Amazon.Rekognition.Activities",
@@ -2683,7 +2687,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Amazon.Rekognition.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Amazon.Textract.Activities",
@@ -2791,7 +2796,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Amazon.Textract.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.AmazonWebServices.Activities",
@@ -3026,7 +3032,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.AmazonWebServices.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Azure.Activities",
@@ -3251,7 +3258,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Azure.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.AzureFormRecognizerV3.Activities",
@@ -3389,7 +3397,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.AzureFormRecognizerV3.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Box.Activities",
@@ -3593,7 +3602,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.Box.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.CommunicationsMining.Activities",
@@ -3713,7 +3723,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.CommunicationsMining.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.ComplexScenarios.Activities",
@@ -4196,7 +4207,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.ComplexScenarios.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Coupa.IntegrationService.Activities",
@@ -4362,7 +4374,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.Coupa.IntegrationService.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Credentials.Activities",
@@ -4568,7 +4581,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Credentials.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Cryptography.Activities",
@@ -5019,7 +5033,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Cryptography.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Database.Activities",
@@ -5194,7 +5209,8 @@
       ],
       "version": "2.0.0",
       "feedStatus": "verified",
-      "preferredVersion": "2.0.0"
+      "preferredVersion": "2.0.0",
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.DataService.Activities",
@@ -5520,7 +5536,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.DataService.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.DocumentUnderstanding.Activities",
@@ -5763,7 +5780,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.DocumentUnderstanding.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Excel.Activities",
@@ -6192,7 +6210,8 @@
       ],
       "version": "3.4.1",
       "feedStatus": "verified",
-      "preferredVersion": "3.4.1"
+      "preferredVersion": "3.4.1",
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Form.Activities",
@@ -6349,7 +6368,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Form.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.FTP.Activities",
@@ -6616,13 +6636,15 @@
           "emissionApproved": true,
           "namespace": "UiPath.FTP.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.GenAI.Activities",
       "version": "1.1.0",
-      "feedStatus": "verified",
+      "feedStatus": "delisted",
       "preferredVersion": "1.1.0",
+      "generationApproved": false,
       "prefix": "ugenai",
       "clrNamespace": "UiPath.GenAI.Activities",
       "assembly": "UiPath.IntegrationService.Activities",
@@ -7039,7 +7061,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.GoogleCloud.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.GoogleVision.Activities",
@@ -7139,7 +7162,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.GoogleVision.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.GSuite.Activities",
@@ -7784,7 +7808,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.GSuite.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.IntegrationService.Activities",
@@ -7958,7 +7983,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.IntegrationService.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.IntelligentOCR.Activities",
@@ -8122,7 +8148,8 @@
       ],
       "version": "6.27.3",
       "feedStatus": "verified",
-      "preferredVersion": "6.27.3"
+      "preferredVersion": "6.27.3",
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Jira.Activities",
@@ -8434,7 +8461,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.Jira.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Mail.Activities",
@@ -9047,7 +9075,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Mail.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.MicrosoftDynamics.Activities",
@@ -9248,7 +9277,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.MicrosoftDynamics.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.MicrosoftOffice365.Activities",
@@ -9785,7 +9815,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.MicrosoftOffice365.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.MicrosoftTeams.Activities",
@@ -9977,7 +10008,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.MicrosoftTeams.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.MLActivities",
@@ -10074,7 +10106,8 @@
       ],
       "version": "2.0.4",
       "feedStatus": "unverified",
-      "preferredVersion": "2.0.4"
+      "preferredVersion": "2.0.4",
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.PDF.Activities",
@@ -10431,7 +10464,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.PDF.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Persistence.Activities",
@@ -10676,7 +10710,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Persistence.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Presentations.Activities",
@@ -10873,7 +10908,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Presentations.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Salesforce.Activities",
@@ -11157,7 +11193,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.Salesforce.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.ServiceNow.Activities",
@@ -11393,7 +11430,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.ServiceNow.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Slack.Activities",
@@ -11572,7 +11610,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.Slack.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Testing.Activities",
@@ -11845,7 +11884,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Testing.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.WebAPI.Activities",
@@ -12299,7 +12339,8 @@
           "namespace": "UiPath.WebAPI.Activities",
           "xamlExample": "<uweb:DeserializeJson JsonString=\"[jsonText]\" DisplayName=\"Parse JSON\">\n  <uweb:DeserializeJson.JsonObject><OutArgument x:TypeArguments=\"x:Object\">[jsonObj]</OutArgument></uweb:DeserializeJson.JsonObject>\n</uweb:DeserializeJson>"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Word.Activities",
@@ -12585,7 +12626,8 @@
           "emissionApproved": true,
           "namespace": "UiPath.Word.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.Workday.Activities",
@@ -12730,7 +12772,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.Workday.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     },
     {
       "packageId": "UiPath.WorkflowEvents.Activities",
@@ -12853,7 +12896,8 @@
           "emissionApproved": false,
           "namespace": "UiPath.WorkflowEvents.Activities"
         }
-      ]
+      ],
+      "generationApproved": true
     }
   ]
 }

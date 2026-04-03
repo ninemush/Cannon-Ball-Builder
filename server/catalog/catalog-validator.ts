@@ -7,7 +7,7 @@ export interface CatalogValidationResult {
 const VALID_DIRECTIONS = new Set(["In", "Out", "InOut", "None"]);
 const VALID_XAML_SYNTAX = new Set(["child-element", "attribute"]);
 const VALID_ARGUMENT_WRAPPERS = new Set(["InArgument", "OutArgument", "InOutArgument"]);
-const VALID_FEED_STATUSES = new Set(["verified", "unverified"]);
+const VALID_FEED_STATUSES = new Set(["verified", "unverified", "delisted"]);
 const VALID_PROCESS_TYPES = new Set(["api-integration", "document-processing", "attended-ui", "unattended-ui", "orchestration", "general"]);
 
 function isIso8601(s: string): boolean {

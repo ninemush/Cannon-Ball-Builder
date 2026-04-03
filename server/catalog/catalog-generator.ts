@@ -72,10 +72,13 @@ function convertActivity(a: ActivityDef): CatalogActivity {
 function resolveVersion(
   packageId: string,
   metadataPackages: Record<string, any> | null,
-): { version: string; feedStatus: "verified" | "unverified"; preferred: string } {
+): { version: string; feedStatus: "verified" | "unverified" | "delisted"; preferred: string } {
   if (metadataPackages && metadataPackages[packageId]) {
     const entry = metadataPackages[packageId];
     const preferred = entry.preferred || entry.min || "1.0.0";
+    if (entry.feedStatus === "delisted") {
+      return { version: preferred, feedStatus: "delisted", preferred };
+    }
     const isVerified = !!entry.lastVerifiedAt && entry.verificationSource === "uipath-official-feed";
     return {
       version: preferred,
@@ -145,6 +148,7 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
         version: vInfo.version,
         feedStatus: vInfo.feedStatus,
         preferredVersion: vInfo.preferred,
+        generationApproved: existingPkg.generationApproved ?? (vInfo.feedStatus !== "delisted"),
         activities: existingPkg.activities.map(preserveEnrichmentFields),
       });
     }
@@ -184,6 +188,7 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
         version: vInfo.version,
         feedStatus: vInfo.feedStatus,
         preferredVersion: vInfo.preferred,
+        generationApproved: existingPkg.generationApproved ?? (vInfo.feedStatus !== "delisted"),
         ...(nsDefaults ? { prefix: nsDefaults.prefix, clrNamespace: nsDefaults.clrNamespace, assembly: nsDefaults.assembly } : {}),
         activities: [...preservedExisting, ...registryActivities],
       });
@@ -193,6 +198,7 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
         version: vInfo.version,
         feedStatus: vInfo.feedStatus,
         preferredVersion: vInfo.preferred,
+        generationApproved: vInfo.feedStatus !== "delisted",
         ...(nsDefaults ? { prefix: nsDefaults.prefix, clrNamespace: nsDefaults.clrNamespace, assembly: nsDefaults.assembly } : {}),
         activities: regPkg.activities.map(convertActivity),
       });

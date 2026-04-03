@@ -1,3 +1,5 @@
+import { buildPromptPackageGuidance, type PromptGuidanceDiagnostics } from "./catalog/prompt-guidance-filter";
+
 export interface StudioProfileInfo {
   studioLine?: string;
   studioVersion?: string;
@@ -32,7 +34,7 @@ const UIPATH_PROMPT_BODY = `
         {
           "activity": "string (human-readable step description)",
           "activityType": "string (exact UiPath activity name, e.g. ui:TypeInto, ui:Click, ui:GetText, ui:OpenBrowser, ui:ExcelApplicationScope, ui:ReadRange, ui:WriteRange, ui:SendSmtpMailMessage, ui:GetImapMailMessage, ui:HttpClient, ui:ExecuteQuery, ui:ReadTextFile, ui:WriteTextFile, ui:AddQueueItem, ui:GetTransactionItem, ui:SetTransactionStatus, ui:LogMessage, ui:Assign, ui:Delay, ui:MessageBox, If, ForEach, While, Switch, TryCatch, RetryScope, InvokeWorkflowFile)",
-          "activityPackage": "string (UiPath package name from the correct domain — CORE: UiPath.System.Activities (flow/data/file), UiPath.UIAutomation.Activities (UI clicks/typing/scraping), UiPath.Testing.Activities (test automation), UiPath.Form.Activities (user forms/dialogs), UiPath.ComplexScenarios.Activities (advanced orchestration) — PRODUCTIVITY: UiPath.Excel.Activities, UiPath.Mail.Activities, UiPath.PDF.Activities, UiPath.Word.Activities, UiPath.Presentations.Activities — CLOUD/ENTERPRISE: UiPath.MicrosoftOffice365.Activities (O365/SharePoint/Outlook), UiPath.GSuite.Activities (Google Workspace), UiPath.Salesforce.Activities, UiPath.SAP.BAPI.Activities, UiPath.ServiceNow.Activities, UiPath.Jira.Activities, UiPath.Slack.Activities, UiPath.MicrosoftDynamics.Activities, UiPath.OracleNetSuite.Activities, UiPath.Workday.Activities, UiPath.AmazonWebServices.Activities, UiPath.Azure.Activities — DATA/API: UiPath.WebAPI.Activities (HTTP/REST/SOAP), UiPath.Database.Activities (SQL), UiPath.DataService.Activities, UiPath.IntegrationService.Activities, UiPath.FTP.Activities — AI/ML: UiPath.IntelligentOCR.Activities (document understanding), UiPath.MLActivities, UiPath.IntegrationService.Activities (GenAI/AI activities), UiPath.DocumentUnderstanding.ML.Activities, UiPath.Cognitive.Activities, UiPath.GoogleVision.Activities — SECURITY: UiPath.Cryptography.Activities, UiPath.Credentials.Activities — INFRASTRUCTURE: UiPath.Persistence.Activities (queues/storage), UiPath.Citrix.Activities, UiPath.Terminal.Activities, UiPath.VMware.Activities, UiPath.Python.Activities, UiPath.Java.Activities)",
+          "activityPackage": "string (exact UiPath package name — use ONLY packages from the VERIFIED ACTIVITY PACKAGES list below or well-known real UiPath packages. Do NOT invent package names.)",
           "properties": {
             "key": "value (activity-specific properties like Selector, Input, Output, FileName, SheetName, URL, Method, Headers, Body, Query, Timeout, etc.)"
           },
@@ -78,26 +80,47 @@ VB.NET EXPRESSION SYNTAX:
 
 Return ONLY the JSON object, no other text.`;
 
-export function buildUiPathPrompt(profile?: StudioProfileInfo | null): string {
-  if (!profile) {
-    return `Based on the approved SDD, generate a detailed UiPath automation package specification. Output a JSON object with this exact shape:` + UIPATH_PROMPT_BODY;
-  }
-  const lines: string[] = [
-    "STUDIO PROFILE:",
-    `Studio: ${profile.studioLine || "Community"} v${profile.studioVersion || "25.10"}`,
-    `Target Framework: ${profile.targetFramework || "Windows"}`,
-    `Expression Language: ${profile.expressionLanguage || "VisualBasic"}`,
-  ];
-  if (profile.minimumRequiredPackages) {
-    const pkgs = Array.isArray(profile.minimumRequiredPackages)
-      ? profile.minimumRequiredPackages
-      : Object.entries(profile.minimumRequiredPackages).map(([k, v]) => `${k}=${v}`);
-    if (pkgs.length > 0) {
-      lines.push(`Minimum Required Packages: ${pkgs.join(", ")}`);
+export function buildUiPathPrompt(profile?: StudioProfileInfo | null): { prompt: string; guidanceDiagnostics?: PromptGuidanceDiagnostics } {
+  const studioProfile = profile ? {
+    studioLine: profile.studioLine || "Community",
+    studioVersion: profile.studioVersion || "25.10",
+    targetFramework: (profile.targetFramework || "Windows") as "Windows" | "Portable",
+    projectType: "Process" as const,
+    expressionLanguage: (profile.expressionLanguage || "VisualBasic") as "VisualBasic" | "CSharp",
+    minimumRequiredPackages: Array.isArray(profile.minimumRequiredPackages) ? profile.minimumRequiredPackages : [],
+  } : null;
+
+  const { guidance, diagnostics } = buildPromptPackageGuidance(studioProfile);
+
+  const lines: string[] = [];
+  if (profile) {
+    lines.push("STUDIO PROFILE:");
+    lines.push(`Studio: ${profile.studioLine || "Community"} v${profile.studioVersion || "25.10"}`);
+    lines.push(`Target Framework: ${profile.targetFramework || "Windows"}`);
+    lines.push(`Expression Language: ${profile.expressionLanguage || "VisualBasic"}`);
+    if (profile.minimumRequiredPackages) {
+      const pkgs = Array.isArray(profile.minimumRequiredPackages)
+        ? profile.minimumRequiredPackages
+        : Object.entries(profile.minimumRequiredPackages).map(([k, v]) => `${k}=${v}`);
+      if (pkgs.length > 0) {
+        lines.push(`Minimum Required Packages: ${pkgs.join(", ")}`);
+      }
     }
+    lines.push("");
   }
-  lines.push("");
-  return `${lines.join("\n")}Based on the approved SDD, generate a detailed UiPath automation package specification. Output a JSON object with this exact shape:` + UIPATH_PROMPT_BODY;
+
+  const promptBody = UIPATH_PROMPT_BODY + (guidance || "");
+  const prompt = `${lines.join("\n")}Based on the approved SDD, generate a detailed UiPath automation package specification. Output a JSON object with this exact shape:` + promptBody;
+
+  if (diagnostics) {
+    console.log(`[PromptGuidance:UiPath] Considered: ${diagnostics.totalConsidered}, Included: ${diagnostics.totalIncluded}, Excluded: ${diagnostics.totalExcluded}, Budget applied: ${diagnostics.budgetApplied}, Target: ${diagnostics.targetFramework}`);
+  }
+
+  return { prompt, guidanceDiagnostics: diagnostics };
+}
+
+export function buildUiPathPromptString(profile?: StudioProfileInfo | null): string {
+  return buildUiPathPrompt(profile).prompt;
 }
 
 export const UIPATH_PROMPT = `Based on the approved SDD, generate a detailed UiPath automation package specification. Output a JSON object with this exact shape:` + UIPATH_PROMPT_BODY;

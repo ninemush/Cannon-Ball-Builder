@@ -11,6 +11,7 @@ import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPacka
 import { generateConfigXlsx } from "./package-assembler";
 import { startUiPathGenerationRun, type TriggerSource, type RunCallbacks, type RunResult } from "./uipath-run-manager";
 import { UIPATH_PROMPT, buildUiPathPrompt, repairTruncatedPackageJson } from "./uipath-prompts";
+import { scanSddForUnverifiedPackages, buildSddScanGuidance } from "./catalog/prompt-guidance-filter";
 export { UIPATH_PROMPT, repairTruncatedPackageJson };
 import type { MetaValidationMode } from "./meta-validation";
 import { catalogService } from "./catalog/catalog-service";
@@ -605,7 +606,7 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
 
   pddLogger.stageStart("llm_generation");
   const studioProfile = catalogService.getStudioProfile();
-  const prompt = docType === "PDD" ? PDD_PROMPT : buildUiPathPrompt(studioProfile);
+  const prompt = docType === "PDD" ? PDD_PROMPT : buildUiPathPrompt(studioProfile).prompt;
   const maxTokens = 4096;
   try {
     const response = await getLLM().create({
@@ -615,16 +616,48 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
     });
     pddLogger.stageEnd("llm_generation", "succeeded");
 
+    let unverifiedPackageMentions: string[] | undefined;
+    let guidanceDiagnosticsPayload: Record<string, unknown> | undefined;
+    if (docType === "SDD") {
+      try {
+        const sddGuidanceResult = buildSddScanGuidance(studioProfile);
+        unverifiedPackageMentions = scanSddForUnverifiedPackages(response.text, sddGuidanceResult.packageIds);
+        guidanceDiagnosticsPayload = {
+          totalConsidered: sddGuidanceResult.diagnostics.totalConsidered,
+          totalIncluded: sddGuidanceResult.diagnostics.totalIncluded,
+          totalExcluded: sddGuidanceResult.diagnostics.totalExcluded,
+          budgetApplied: sddGuidanceResult.diagnostics.budgetApplied,
+          budgetTruncatedCount: sddGuidanceResult.diagnostics.budgetTruncatedCount,
+          targetFramework: sddGuidanceResult.diagnostics.targetFramework,
+          includedPackages: sddGuidanceResult.diagnostics.included.map(e => ({ packageId: e.packageId, version: e.version })),
+          excludedPackages: sddGuidanceResult.diagnostics.excluded.map(e => ({ packageId: e.packageId, reasons: e.reasons })),
+          unverifiedPackageMentions: unverifiedPackageMentions,
+        };
+        if (unverifiedPackageMentions.length > 0) {
+          console.warn(`[SDD Diagnostics] Unverified package mentions in generated SDD: ${unverifiedPackageMentions.join(", ")}`);
+        }
+        console.log(`[SDD Diagnostics] Guidance diagnostics: ${JSON.stringify(guidanceDiagnosticsPayload)}`);
+      } catch (scanErr: any) {
+        console.warn(`[SDD Diagnostics] Failed to scan for unverified packages: ${scanErr.message}`);
+      }
+    }
+
     const outcome = pddLogger.buildOutcomeSummary();
     await pddLogger.flush();
     try {
       await storage.completeGenerationRun(pddRunId, {
         status: "completed",
-        outcomeReport: JSON.stringify(outcome),
+        outcomeReport: JSON.stringify({
+          ...outcome,
+          ...(guidanceDiagnosticsPayload ? { guidanceDiagnostics: guidanceDiagnosticsPayload } : {}),
+        }),
       });
     } catch {}
 
-    return { content: response.text };
+    return {
+      content: response.text,
+      ...(guidanceDiagnosticsPayload ? { guidanceDiagnostics: guidanceDiagnosticsPayload } : {}),
+    };
   } catch (docErr: any) {
     pddLogger.stageEnd("llm_generation", "failed", undefined, docErr?.message);
     const failOutcome = pddLogger.buildOutcomeSummary({ status: "failed", errorMessage: docErr?.message });

@@ -27,6 +27,7 @@ export interface ActivityDef {
 
 export interface PackageActivityDefs {
   packageId: string;
+  generationApproved?: boolean;
   activities: ActivityDef[];
 }
 
@@ -2292,64 +2293,6 @@ const PERSISTENCE_ACTIVITIES: PackageActivityDefs = {
   ],
 };
 
-const GENAI_ACTIVITIES: PackageActivityDefs = {
-  packageId: "UiPath.GenAI.Activities",
-  activities: [
-    {
-      className: "UseGenAI",
-      displayName: "Use GenAI",
-      browsable: true,
-      emissionApproved: false, // #368 addition - className unverified
-      processTypes: ["general", "api-integration"],
-      properties: [
-        prop("ModelName", { required: true }),
-        childProp("Prompt", { required: true }),
-        childProp("SystemPrompt"),
-        prop("MaxTokens", { type: "System.Int32", default: "4096" }),
-        prop("Temperature", { type: "System.Double", default: "0.7" }),
-        childProp("Response", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
-        childProp("Result", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
-      ],
-    },
-    {
-      className: "ExtractData",
-      displayName: "Extract Data with AI",
-      browsable: true,
-      emissionApproved: false, // #368 addition - className unverified
-      processTypes: ["general", "document-processing"],
-      properties: [
-        childProp("Text", { required: true }),
-        childProp("ExtractionSchema", { required: true }),
-        childProp("Result", { dir: "Out", type: "System.Object", wrapper: "OutArgument", typeArgs: "x:Object" }),
-      ],
-    },
-    {
-      className: "ClassifyText",
-      displayName: "Classify Text with AI",
-      browsable: true,
-      emissionApproved: false, // #368 addition - className unverified
-      processTypes: ["general"],
-      properties: [
-        childProp("Text", { required: true }),
-        childProp("Categories", { required: true }),
-        childProp("Result", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
-      ],
-    },
-    {
-      className: "SummarizeText",
-      displayName: "Summarize Text with AI",
-      browsable: true,
-      emissionApproved: false, // #368 addition - className unverified
-      processTypes: ["general", "document-processing"],
-      properties: [
-        childProp("Text", { required: true }),
-        prop("MaxLength", { type: "System.Int32" }),
-        childProp("Summary", { dir: "Out", wrapper: "OutArgument", typeArgs: "x:String" }),
-      ],
-    },
-  ],
-};
-
 const INTEGRATION_SERVICE_ACTIVITIES: PackageActivityDefs = {
   packageId: "UiPath.IntegrationService.Activities",
   activities: [
@@ -3171,7 +3114,6 @@ export const ACTIVITY_DEFINITIONS_REGISTRY: PackageActivityDefs[] = [
   MAIL_ACTIVITIES,
   DATA_SERVICE_ACTIVITIES,
   PERSISTENCE_ACTIVITIES,
-  GENAI_ACTIVITIES,
   INTEGRATION_SERVICE_ACTIVITIES,
   COMMUNICATIONS_MINING_ACTIVITIES,
   WORKFLOW_EVENTS_ACTIVITIES,

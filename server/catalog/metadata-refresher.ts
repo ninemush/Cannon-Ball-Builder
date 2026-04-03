@@ -111,7 +111,6 @@ function isActivityPackage(packageId: string): boolean {
     return true;
   }
   const knownActivityPatterns = [
-    "UiPath.GenAI.",
     "UiPath.Credentials.",
     "UiPath.CV.",
   ];
@@ -379,6 +378,11 @@ interface DiscoveryResult {
   count: number;
 }
 
+function isDelistedInMetadata(packageId: string, existingRanges: Record<string, any>): boolean {
+  const entry = existingRanges[packageId];
+  return entry?.feedStatus === "delisted";
+}
+
 async function discoverAndResolveNewPackages(
   searchQueryServiceUrl: string,
   existingRanges: Record<string, any>,
@@ -415,6 +419,11 @@ async function discoverAndResolveNewPackages(
   const discovery = { status: "ok" as const, packageIds: Array.from(allDiscoveredIds) };
 
   for (const pkgId of discovery.packageIds) {
+    if (isDelistedInMetadata(pkgId, existingRanges)) {
+      console.log(`[MetadataRefresher] Skipping ${pkgId} — previously delisted, requires manual re-approval`);
+      continue;
+    }
+
     if (existingRanges[pkgId]) continue;
 
     const versionResult = await fetchVersionsViaSearchQuery(searchQueryServiceUrl, pkgId);
@@ -614,6 +623,7 @@ export async function refreshGeneration(): Promise<RefreshResult> {
     let updatedCount = 0;
     let fallbackCount = 0;
     let failedPackages: string[] = [];
+    let delistedPackages: string[] = [];
     const allPackageNames = Object.keys(updatedRanges);
 
     for (const pkgName of allPackageNames) {
@@ -646,11 +656,25 @@ export async function refreshGeneration(): Promise<RefreshResult> {
           preferred: resolution.preferred,
           lastVerifiedAt: now,
           verificationSource: resolution.source,
+          feedStatus: "active",
         };
+        if (existingRange.feedStatus === "delisted") {
+          delete (updatedRanges[pkgName] as any).delistedAt;
+          console.log(`[MetadataRefresher] ${pkgName}: previously delisted package is now available again on feed`);
+        }
         updatedCount++;
       } else {
-        failedPackages.push(pkgName);
-        console.error(`[MetadataRefresher] ${pkgName}: FAILED to resolve on any authoritative feed. No compatible version found.`);
+        const wasAlreadyDelisted = existingRange.feedStatus === "delisted";
+        updatedRanges[pkgName] = {
+          ...updatedRanges[pkgName],
+          feedStatus: "delisted",
+          ...(!wasAlreadyDelisted ? { delistedAt: now } : {}),
+        };
+        if (!wasAlreadyDelisted) {
+          console.warn(`[MetadataRefresher] WARNING: ${pkgName} detected as DELISTED — 0 versions / 404 from all authoritative feeds. Package preserved for diagnostics but excluded from generation guidance.`);
+        }
+        delistedPackages.push(pkgName);
+        updatedCount++;
       }
     }
 
@@ -676,7 +700,7 @@ export async function refreshGeneration(): Promise<RefreshResult> {
     }
 
     const requiredPackages = existing.minimumRequiredPackages || [];
-    const unresolvableRequired = requiredPackages.filter(pkg => failedPackages.includes(pkg));
+    const unresolvableRequired = requiredPackages.filter(pkg => failedPackages.includes(pkg) && !delistedPackages.includes(pkg));
     if (unresolvableRequired.length > 0) {
       metadataService.recordRefreshResult("generation", false);
       return {
@@ -731,6 +755,9 @@ export async function refreshGeneration(): Promise<RefreshResult> {
     }
     if (fallbackCount > 0) {
       statusParts.push(`${fallbackCount} via nuget.org fallback`);
+    }
+    if (delistedPackages.length > 0) {
+      statusParts.push(`${delistedPackages.length} delisted: ${delistedPackages.join(", ")}`);
     }
     if (failedPackages.length > 0) {
       statusParts.push(`${failedPackages.length} unresolvable (non-required): ${failedPackages.join(", ")}`);
