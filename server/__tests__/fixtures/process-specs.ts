@@ -202,7 +202,7 @@ export function makeProjectJson(
     description: `${projectName} automation`,
     main: "Main.xaml",
     dependencies: deps,
-    toolVersion: "25.10.0",
+    toolVersion: "25.10.7",
     projectType: "Workflow",
     libraryOptions: { includeOriginalXaml: false, packageId: projectName, version: "1.0.0" },
     designOptions: { projectProfile: "Development", outputType: "Process", modernBehavior },

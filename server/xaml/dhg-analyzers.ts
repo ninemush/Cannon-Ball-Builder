@@ -461,7 +461,7 @@ export function detectEnvironmentRequirements(
   }
 
   let requiredPackages: string[] = [];
-  let studioVersion = "25.10.0";
+  let studioVersion = "25.10.7";
   if (projectJsonContent) {
     try {
       const pj = JSON.parse(projectJsonContent);

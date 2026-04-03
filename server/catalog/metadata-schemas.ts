@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const CANONICAL_STUDIO_VERSION = "25.10.7";
+
 export const studioTargetSchema = z.object({
   line: z.string(),
   version: z.string(),

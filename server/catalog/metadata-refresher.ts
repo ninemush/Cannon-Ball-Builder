@@ -3,6 +3,7 @@ import { join } from "path";
 import {
   generationMetadataSchema,
   serviceEndpointsSchema,
+  CANONICAL_STUDIO_VERSION,
   type GenerationMetadata,
   type ServiceEndpoints,
   type VerificationSource,
@@ -697,6 +698,10 @@ export async function refreshGeneration(): Promise<RefreshResult> {
     const isPartial = updatedCount < allPackageNames.length;
     const updated: GenerationMetadata = {
       ...existing,
+      studioTarget: {
+        ...existing.studioTarget,
+        version: CANONICAL_STUDIO_VERSION,
+      },
       packageVersionRanges: updatedRanges,
       lastRefreshedAt: now,
       lastVerifiedAt: isPartial ? existing.lastVerifiedAt : now,

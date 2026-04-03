@@ -2,7 +2,7 @@
   "catalogVersion": "2.0.0",
   "generatedAt": "2026-04-03T03:54:49.734Z",
   "lastVerifiedAt": "2026-04-03T03:54:49.734Z",
-  "studioVersion": "25.10.0",
+  "studioVersion": "25.10.7",
   "packages": [
     {
       "packageId": "System.Activities",

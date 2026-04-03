@@ -14,6 +14,7 @@ import type {
   ActivityCatalog,
 } from "./catalog-service";
 import { PACKAGE_NAMESPACE_MAP } from "../xaml/xaml-compliance";
+import { CANONICAL_STUDIO_VERSION } from "./metadata-schemas";
 
 const CATALOG_VERSION = "2.0.0";
 
@@ -89,21 +90,15 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
     preserveExisting = true,
     existingCatalogPath = join(process.cwd(), "catalog", "activity-catalog.json"),
     metadataPath = join(process.cwd(), "catalog", "generation-metadata.json"),
-    studioVersion = "25.10.7",
+    studioVersion = CANONICAL_STUDIO_VERSION,
   } = options;
 
   let metadataPackages: Record<string, any> | null = null;
-  if (existsSync(metadataPath)) {
-    try {
-      const raw = JSON.parse(readFileSync(metadataPath, "utf-8"));
-      metadataPackages = raw.packageVersionRanges || null;
-    } catch (e) {}
-  }
-
   let resolvedStudioVersion = studioVersion;
   if (existsSync(metadataPath)) {
     try {
       const raw = JSON.parse(readFileSync(metadataPath, "utf-8"));
+      metadataPackages = raw.packageVersionRanges || null;
       if (raw.studioTarget?.version) {
         resolvedStudioVersion = raw.studioTarget.version;
       }

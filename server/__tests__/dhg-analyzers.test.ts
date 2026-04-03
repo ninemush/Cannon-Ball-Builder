@@ -46,7 +46,7 @@ function makeEnvResult(overrides: Partial<EnvironmentRequirements> = {}): Enviro
     usesDataService: false,
     machineTemplate: { recommendedType: "Standard", note: "Standard unattended machine template" },
     orchestratorFolderGuidance: "Create a Modern Folder with at least one unattended robot assignment.",
-    studioVersion: "25.10.0",
+    studioVersion: "25.10.7",
     ...overrides,
   };
 }
@@ -394,9 +394,9 @@ describe("detectEnvironmentRequirements", () => {
     expect(result.orchestratorFolderGuidance).toContain("Modern Folder");
   });
 
-  it("defaults studioVersion to 25.10.0", () => {
+  it("defaults studioVersion to 25.10.7", () => {
     const result = detectEnvironmentRequirements([]);
-    expect(result.studioVersion).toBe("25.10.0");
+    expect(result.studioVersion).toBe("25.10.7");
   });
 
   it("extracts studioVersion from project.json", () => {
