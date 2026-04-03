@@ -39,7 +39,8 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **Business Context Mapping**: Extracts per-workflow business context from SDD content.
 - **Business-Context-Aware Handoff Stubs**: Annotates handoff stubs with business descriptions.
 - **Unified Metadata Freshness Architecture**: Three snapshot files provide a single source of truth for generation metadata, service endpoints, and activity catalogs.
-- **Activity Catalog System**: A versioned activity catalog serves as the single source of truth for packages and activities.
+- **Activity Catalog System**: A versioned activity catalog serves as the single source of truth for packages and activities, enriched with CLR namespaces, canonical identity for duplicate classNames, deprecation/modern-alternative tagging, composition rules, property conflicts, and XAML usage examples. Enrichment provenance is tracked as `authoritative` (DLL metadata) or `curated` (official docs).
+- **Catalog Enrichment Pipeline**: `server/catalog/catalog-enrichment.ts` applies quality enrichment to the catalog from NuGet package metadata, with provenance tracking in `catalog/catalog-enrichment-report.json`.
 - **Template-Driven XAML Generation**: Provides pre-defined XAML templates with typed placeholders for LLM-based generation.
 - **Hierarchical XAML Generation Architecture**: A three-pass tree-based pipeline assembles correctly-nested XAML.
 - **Canonical XAML Normalization Boundary**: Defines all bracket-wrapping, literal-vs-expression classification, bare-word handling, and package/prefix/namespace mapping in a single canonical source.

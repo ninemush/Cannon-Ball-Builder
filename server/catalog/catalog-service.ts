@@ -22,14 +22,40 @@ export interface CatalogProperty {
   removedInVersion?: string;
 }
 
+export interface CanonicalIdentity {
+  canonicalPackageId: string;
+  canonicalPrefix: string;
+  canonicalNamespace: string;
+  alternates: Array<{ packageId: string; prefix: string; namespace: string }>;
+}
+
+export interface CompositionRule {
+  rule: string;
+  provenance: "authoritative" | "curated";
+}
+
+export interface PropertyConflict {
+  property: string;
+  conflictsWith: string[];
+  reason: string;
+  provenance: "authoritative" | "curated";
+}
+
 export interface CatalogActivity {
   className: string;
   displayName: string;
+  namespace?: string;
   browsable: boolean;
   processTypes: ProcessType[];
   properties: CatalogProperty[];
   propertiesComplete?: boolean;
   emissionApproved: boolean;
+  canonicalIdentity?: CanonicalIdentity;
+  isDeprecated?: boolean;
+  preferModern?: string;
+  compositionRules?: CompositionRule[];
+  propertyConflicts?: PropertyConflict[];
+  xamlExample?: string;
 }
 
 export interface CatalogPackage {
@@ -227,7 +253,14 @@ class CatalogService {
           packageVersion: metaVersion || pkg.version || "",
         };
 
-        this.activityIndex.set(act.className, schema);
+        const existingEntry = this.activityIndex.get(act.className);
+        if (existingEntry) {
+          if (act.canonicalIdentity && act.canonicalIdentity.canonicalPackageId === pkg.packageId) {
+            this.activityIndex.set(act.className, schema);
+          }
+        } else {
+          this.activityIndex.set(act.className, schema);
+        }
 
         if (pkg.packageId) {
           this.activityIndex.set(`${pkg.packageId}:${act.className}`, schema);

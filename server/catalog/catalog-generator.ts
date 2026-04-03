@@ -57,6 +57,15 @@ function convertActivity(a: ActivityDef): CatalogActivity {
   if (a.propertiesComplete) {
     result.propertiesComplete = true;
   }
+  if (a.namespace) {
+    result.namespace = a.namespace;
+  }
+  if (a.isDeprecated) {
+    result.isDeprecated = true;
+  }
+  if (a.preferModern) {
+    result.preferModern = a.preferModern;
+  }
   return result;
 }
 
@@ -120,9 +129,8 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
 
   const packages: CatalogPackage[] = [];
 
-  function ensureEmissionApproved(act: CatalogActivity): CatalogActivity {
+  function preserveEnrichmentFields(act: CatalogActivity): CatalogActivity {
     if (act.emissionApproved === undefined) {
-      // Preserved activities without explicit emissionApproved are not approved by default
       return { ...act, emissionApproved: false };
     }
     return act;
@@ -137,7 +145,7 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
         version: vInfo.version,
         feedStatus: vInfo.feedStatus,
         preferredVersion: vInfo.preferred,
-        activities: existingPkg.activities.map(ensureEmissionApproved),
+        activities: existingPkg.activities.map(preserveEnrichmentFields),
       });
     }
   }
@@ -149,8 +157,27 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
 
     if (existingPkg) {
       const registryClassNames = new Set(regPkg.activities.map(a => a.className));
-      const preservedExisting = existingPkg.activities.filter(a => !registryClassNames.has(a.className)).map(ensureEmissionApproved);
-      const registryActivities = regPkg.activities.map(convertActivity);
+      const preservedExisting = existingPkg.activities.filter(a => !registryClassNames.has(a.className)).map(preserveEnrichmentFields);
+
+      const existingActivityMap = new Map<string, CatalogActivity>();
+      for (const act of existingPkg.activities) {
+        existingActivityMap.set(act.className, act);
+      }
+
+      const registryActivities = regPkg.activities.map(a => {
+        const converted = convertActivity(a);
+        const existing = existingActivityMap.get(a.className);
+        if (existing) {
+          if (existing.canonicalIdentity) converted.canonicalIdentity = existing.canonicalIdentity;
+          if (existing.compositionRules) converted.compositionRules = existing.compositionRules;
+          if (existing.propertyConflicts) converted.propertyConflicts = existing.propertyConflicts;
+          if (existing.xamlExample) converted.xamlExample = existing.xamlExample;
+          if (existing.namespace && !converted.namespace) converted.namespace = existing.namespace;
+          if (existing.isDeprecated !== undefined) converted.isDeprecated = existing.isDeprecated;
+          if (existing.preferModern && !converted.preferModern) converted.preferModern = existing.preferModern;
+        }
+        return converted;
+      });
 
       packages.push({
         packageId: regPkg.packageId,

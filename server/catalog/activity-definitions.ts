@@ -15,11 +15,14 @@ export interface ActivityPropertyDef {
 export interface ActivityDef {
   className: string;
   displayName: string;
+  namespace?: string;
   browsable: boolean;
   processTypes: ProcessType[];
   properties: ActivityPropertyDef[];
   propertiesComplete?: boolean;
   emissionApproved: boolean;
+  isDeprecated?: boolean;
+  preferModern?: string;
 }
 
 export interface PackageActivityDefs {

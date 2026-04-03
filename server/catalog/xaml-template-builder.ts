@@ -474,6 +474,18 @@ export function buildCompactCatalogSummary(): string {
   const palette = catalogService.buildWidePalette();
   if (palette.length === 0) return "";
 
+  const allActivities = catalogService.getAllActivities();
+  const activityMetaMap = new Map<string, { isDeprecated?: boolean; preferModern?: string; canonicalPackageId?: string; firstCompositionHint?: string }>();
+  for (const schema of allActivities) {
+    const act = schema.activity;
+    activityMetaMap.set(`${schema.packageId}:${act.className}`, {
+      isDeprecated: act.isDeprecated,
+      preferModern: act.preferModern,
+      canonicalPackageId: act.canonicalIdentity?.canonicalPackageId,
+      firstCompositionHint: act.compositionRules?.[0]?.rule,
+    });
+  }
+
   const byPackage: Record<string, PaletteEntry[]> = {};
   for (const entry of palette) {
     if (!byPackage[entry.packageId]) {
@@ -492,16 +504,29 @@ export function buildCompactCatalogSummary(): string {
     lines.push(`## ${packageId}`);
     for (const entry of entries) {
       const requiredProps = entry.properties.filter((p: PaletteEntry["properties"][0]) => p.required && p.direction !== "Out");
-      const enumProps = entry.properties.filter((p: PaletteEntry["properties"][0]) => p.validValues && p.validValues.length > 0);
 
       let line = `- ${entry.className}`;
       if (requiredProps.length > 0) {
         line += ` [required: ${requiredProps.map((p: PaletteEntry["properties"][0]) => p.name).join(", ")}]`;
       }
-      if (enumProps.length > 0) {
-        const enumParts = enumProps.map((p: PaletteEntry["properties"][0]) => `${p.name}: ${p.validValues!.join("|")}`);
-        line += ` | enums: ${enumParts.join("; ")}`;
+
+      const meta = activityMetaMap.get(`${entry.packageId}:${entry.className}`);
+      if (meta) {
+        if (meta.isDeprecated) {
+          line += ` [DEPRECATED]`;
+        }
+        if (meta.preferModern) {
+          line += ` [PREFER: ${meta.preferModern}]`;
+        }
+        if (meta.canonicalPackageId) {
+          line += ` [canonical: ${meta.canonicalPackageId}]`;
+        }
+        if (meta.firstCompositionHint) {
+          const shortHint = meta.firstCompositionHint.length > 80 ? meta.firstCompositionHint.substring(0, 77) + "..." : meta.firstCompositionHint;
+          line += ` | structure: ${shortHint}`;
+        }
       }
+
       lines.push(line);
     }
     lines.push("");
@@ -510,12 +535,14 @@ export function buildCompactCatalogSummary(): string {
   const builtInActivities = [
     "- Assign [required: To, Value]",
     "- If [required: Condition]",
-    "- ForEach [required: Values]",
+    "- ForEach [required: Values] | structure: Requires TypeArgument attribute (e.g., x:TypeArguments=\"x:String\"). Body goes in <ForEach.Body>...",
     "- While [required: Condition]",
-    "- TryCatch",
+    "- TryCatch | structure: Body goes in <TryCatch.Try>. Catches require typed <Catch> children with x:TypeArguments.",
+    "- Switch [required: Expression] | structure: Requires x:TypeArguments. Cases in <Switch.Cases>, default in <Switch.Default>.",
+    "- Flowchart | structure: Contains FlowStep/FlowDecision nodes. StartNode points to first node.",
     "- RetryScope [required: NumberOfRetries]",
     "- InvokeWorkflowFile [required: WorkflowFileName]",
-    "- LogMessage [required: Message] | enums: Level: Trace|Info|Warn|Error|Fatal",
+    "- LogMessage [required: Message]",
     "- Delay [required: Duration]",
   ];
 

@@ -1,7 +1,7 @@
 {
   "catalogVersion": "2.0.0",
-  "generatedAt": "2026-04-03T03:54:49.734Z",
-  "lastVerifiedAt": "2026-04-03T03:54:49.734Z",
+  "generatedAt": "2026-04-03T06:14:09.102Z",
+  "lastVerifiedAt": "2026-04-03T06:14:09.102Z",
   "studioVersion": "25.10.7",
   "packages": [
     {
@@ -88,7 +88,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "xamlExample": "<Assign DisplayName=\"Set variable\">\n  <Assign.To><OutArgument x:TypeArguments=\"x:String\">[myVar]</OutArgument></Assign.To>\n  <Assign.Value><InArgument x:TypeArguments=\"x:String\">Hello</InArgument></Assign.Value>\n</Assign>"
         },
         {
           "className": "If",
@@ -114,7 +116,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "xamlExample": "<If Condition=\"[myVar = &quot;Hello&quot;]\" DisplayName=\"Check value\">\n  <If.Then><Sequence><ui:LogMessage Message=\"Match\" Level=\"Info\" /></Sequence></If.Then>\n  <If.Else><Sequence><ui:LogMessage Message=\"No match\" Level=\"Warn\" /></Sequence></If.Else>\n</If>"
         },
         {
           "className": "Sequence",
@@ -130,7 +134,9 @@
           ],
           "properties": [],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "xamlExample": "<Sequence DisplayName=\"Main Sequence\">\n  <Sequence.Variables><Variable x:TypeArguments=\"x:String\" Name=\"result\" /></Sequence.Variables>\n  <!-- child activities here -->\n</Sequence>"
         },
         {
           "className": "TryCatch",
@@ -146,7 +152,15 @@
           ],
           "properties": [],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "compositionRules": [
+            {
+              "rule": "Body goes in <TryCatch.Try>. Catches require typed <Catch> children with x:TypeArguments. Finally goes in <TryCatch.Finally>.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<TryCatch DisplayName=\"Error handler\">\n  <TryCatch.Try><Sequence><!-- protected activities --></Sequence></TryCatch.Try>\n  <TryCatch.Catches>\n    <Catch x:TypeArguments=\"s:Exception\">\n      <ActivityAction x:TypeArguments=\"s:Exception\">\n        <ActivityAction.Argument><DelegateInArgument x:TypeArguments=\"s:Exception\" Name=\"exception\" /></ActivityAction.Argument>\n        <Sequence><ui:LogMessage Message=\"[exception.Message]\" Level=\"Error\" /></Sequence>\n      </ActivityAction>\n    </Catch>\n  </TryCatch.Catches>\n</TryCatch>"
         },
         {
           "className": "Flowchart",
@@ -162,7 +176,15 @@
           ],
           "properties": [],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "compositionRules": [
+            {
+              "rule": "Contains FlowStep and FlowDecision nodes. StartNode attribute points to the first node. Nodes connect via FlowStep.Next or FlowDecision.True/False.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<Flowchart DisplayName=\"Decision flow\">\n  <Flowchart.StartNode>\n    <FlowStep x:Name=\"step1\">\n      <ui:LogMessage Message=\"Step 1\" Level=\"Info\" />\n      <FlowStep.Next><FlowStep x:Name=\"step2\"><!-- next step --></FlowStep></FlowStep.Next>\n    </FlowStep>\n  </Flowchart.StartNode>\n</Flowchart>"
         },
         {
           "className": "ForEach",
@@ -188,7 +210,15 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "compositionRules": [
+            {
+              "rule": "Requires TypeArgument attribute (e.g., x:TypeArguments=\"x:String\"). Body goes in <ForEach.Body><ActivityAction x:TypeArguments=\"x:String\"><Sequence>...</Sequence></ActivityAction></ForEach.Body>.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<ForEach x:TypeArguments=\"x:String\" Values=\"[itemList]\" DisplayName=\"Process each item\">\n  <ForEach.Body><ActivityAction x:TypeArguments=\"x:String\">\n    <ActivityAction.Argument><DelegateInArgument x:TypeArguments=\"x:String\" Name=\"item\" /></ActivityAction.Argument>\n    <Sequence><ui:LogMessage Message=\"[item]\" Level=\"Info\" /></Sequence>\n  </ActivityAction></ForEach.Body>\n</ForEach>"
         },
         {
           "className": "While",
@@ -214,7 +244,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "xamlExample": "<While Condition=\"[counter &lt; 10]\" DisplayName=\"Loop while counter less than 10\">\n  <Sequence><!-- loop body --></Sequence>\n</While>"
         },
         {
           "className": "DoWhile",
@@ -240,7 +272,8 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements"
         },
         {
           "className": "Switch",
@@ -256,7 +289,15 @@
           ],
           "properties": [],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "compositionRules": [
+            {
+              "rule": "Requires x:TypeArguments on the Switch element. Cases are <Switch.Cases> containing typed key-value pairs. Default case goes in <Switch.Default>.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<Switch x:TypeArguments=\"x:String\" Expression=\"[status]\" DisplayName=\"Route by status\">\n  <Switch.Default><Sequence><ui:LogMessage Message=\"Unknown status\" Level=\"Warn\" /></Sequence></Switch.Default>\n</Switch>"
         },
         {
           "className": "Throw",
@@ -282,7 +323,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "xamlExample": "<Throw DisplayName=\"Throw error\">\n  <Throw.Exception><InArgument x:TypeArguments=\"s:Exception\">[New System.Exception(\"Error message\")]</InArgument></Throw.Exception>\n</Throw>"
         },
         {
           "className": "Rethrow",
@@ -298,7 +341,20 @@
           ],
           "properties": [],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "canonicalIdentity": {
+            "canonicalPackageId": "System.Activities",
+            "canonicalPrefix": "",
+            "canonicalNamespace": "System.Activities.Statements",
+            "alternates": [
+              {
+                "packageId": "UiPath.System.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.Core.Activities"
+              }
+            ]
+          }
         },
         {
           "className": "Delay",
@@ -324,7 +380,21 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements",
+          "canonicalIdentity": {
+            "canonicalPackageId": "System.Activities",
+            "canonicalPrefix": "",
+            "canonicalNamespace": "System.Activities.Statements",
+            "alternates": [
+              {
+                "packageId": "UiPath.System.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.Core.Activities"
+              }
+            ]
+          },
+          "xamlExample": "<Delay Duration=\"[TimeSpan.FromSeconds(5)]\" DisplayName=\"Wait 5 seconds\" />"
         },
         {
           "className": "ParallelForEach",
@@ -359,7 +429,8 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "System.Activities.Statements"
         }
       ]
     },
@@ -411,10 +482,13 @@
                 "Unicode",
                 "ASCII",
                 "Default"
-              ]
+              ],
+              "default": "UTF-8"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:ReadTextFile FileName=\"input.txt\" Encoding=\"UTF-8\" DisplayName=\"Read file\">\n  <ui:ReadTextFile.Content><OutArgument x:TypeArguments=\"x:String\">[fileContent]</OutArgument></ui:ReadTextFile.Content>\n</ui:ReadTextFile>"
         },
         {
           "className": "WriteTextFile",
@@ -464,10 +538,13 @@
                 "Unicode",
                 "ASCII",
                 "Default"
-              ]
+              ],
+              "default": "UTF-8"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:WriteTextFile FileName=\"output.txt\" Text=\"[result]\" Encoding=\"UTF-8\" DisplayName=\"Write file\" />"
         },
         {
           "className": "PathExists",
@@ -510,7 +587,8 @@
               "typeArguments": "x:Boolean"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities"
         },
         {
           "className": "Comment",
@@ -530,7 +608,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities"
         },
         {
           "className": "Rethrow",
@@ -540,7 +619,20 @@
             "general"
           ],
           "properties": [],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "System.Activities",
+            "canonicalPrefix": "",
+            "canonicalNamespace": "System.Activities.Statements",
+            "alternates": [
+              {
+                "packageId": "System.Activities",
+                "prefix": "",
+                "namespace": "System.Activities.Statements"
+              }
+            ]
+          }
         },
         {
           "className": "KillProcess",
@@ -571,7 +663,20 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.UIAutomation.Activities",
+            "canonicalPrefix": "ui",
+            "canonicalNamespace": "UiPath.UIAutomation.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.UIAutomation.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.UIAutomation.Activities"
+              }
+            ]
+          }
         },
         {
           "className": "Delay",
@@ -603,7 +708,21 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "System.Activities",
+            "canonicalPrefix": "",
+            "canonicalNamespace": "System.Activities.Statements",
+            "alternates": [
+              {
+                "packageId": "System.Activities",
+                "prefix": "",
+                "namespace": "System.Activities.Statements"
+              }
+            ]
+          },
+          "xamlExample": "<Delay Duration=\"[TimeSpan.FromSeconds(5)]\" DisplayName=\"Wait 5 seconds\" />"
         },
         {
           "className": "GetTransactionItem",
@@ -620,7 +739,8 @@
               "xamlSyntax": "child-element",
               "argumentWrapper": "InArgument",
               "typeArguments": "x:String",
-              "required": false
+              "required": false,
+              "default": ""
             },
             {
               "name": "FilterContent",
@@ -661,7 +781,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:GetTransactionItem QueueName=\"MyQueue\" DisplayName=\"Get transaction\">\n  <ui:GetTransactionItem.TransactionItem><OutArgument x:TypeArguments=\"x:Object\">[transactionItem]</OutArgument></ui:GetTransactionItem.TransactionItem>\n</ui:GetTransactionItem>"
         },
         {
           "className": "SetTransactionStatus",
@@ -727,7 +849,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:SetTransactionStatus Status=\"Successful\" DisplayName=\"Mark success\" />"
         },
         {
           "className": "LogMessage",
@@ -780,7 +904,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:LogMessage Message=\"Processing started\" Level=\"Info\" DisplayName=\"Log start\" />"
         },
         {
           "className": "InvokeWorkflowFile",
@@ -836,7 +962,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:InvokeWorkflowFile WorkflowFileName=\"SubProcess.xaml\" DisplayName=\"Run sub-process\" />"
         },
         {
           "className": "AddQueueItem",
@@ -918,7 +1046,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:AddQueueItem QueueName=\"MyQueue\" DisplayName=\"Add to queue\" />"
         },
         {
           "className": "GetCredential",
@@ -968,7 +1098,8 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities"
         },
         {
           "className": "GetAsset",
@@ -1018,7 +1149,8 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities"
         },
         {
           "className": "AddLogFields",
@@ -1050,7 +1182,8 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities"
         },
         {
           "className": "RetryScope",
@@ -1095,7 +1228,9 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities",
+          "xamlExample": "<ui:RetryScope NumberOfRetries=\"3\" DisplayName=\"Retry on failure\">\n  <ui:RetryScope.Body><ActivityAction>\n    <Sequence><!-- retryable activities --></Sequence>\n  </ActivityAction></ui:RetryScope.Body>\n</ui:RetryScope>"
         },
         {
           "className": "ShouldRetry",
@@ -1109,7 +1244,8 @@
             "unattended-ui"
           ],
           "properties": [],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Core.Activities"
         },
         {
           "className": "ExcelApplicationScope",
@@ -1199,7 +1335,21 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Excel.Activities",
+            "canonicalPrefix": "uexcel",
+            "canonicalNamespace": "UiPath.Excel.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.Excel.Activities",
+                "prefix": "uexcel",
+                "namespace": "UiPath.Excel.Activities"
+              }
+            ]
+          },
+          "preferModern": "UseExcel"
         },
         {
           "className": "ExcelReadRange",
@@ -1270,7 +1420,20 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Excel.Activities",
+            "canonicalPrefix": "uexcel",
+            "canonicalNamespace": "UiPath.Excel.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.Excel.Activities",
+                "prefix": "uexcel",
+                "namespace": "UiPath.Excel.Activities"
+              }
+            ]
+          }
         },
         {
           "className": "ExcelWriteRange",
@@ -1332,7 +1495,20 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.Core.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Excel.Activities",
+            "canonicalPrefix": "uexcel",
+            "canonicalNamespace": "UiPath.Excel.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.Excel.Activities",
+                "prefix": "uexcel",
+                "namespace": "UiPath.Excel.Activities"
+              }
+            ]
+          }
         }
       ]
     },
@@ -1388,7 +1564,15 @@
               "addedInVersion": "23.4.0"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "compositionRules": [
+            {
+              "rule": "Must wrap child activities that interact with the browser. Url specifies the initial navigation target. Children execute within the browser scope.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<ui:UseBrowser Url=\"https://example.com\" BrowserType=\"Chrome\" DisplayName=\"Browser scope\">\n  <ui:UseBrowser.Body><ActivityAction x:TypeArguments=\"x:Object\">\n    <Sequence><!-- browser activities --></Sequence>\n  </ActivityAction></ui:UseBrowser.Body>\n</ui:UseBrowser>"
         },
         {
           "className": "NavigateTo",
@@ -1418,7 +1602,9 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "xamlExample": "<ui:NavigateTo Url=\"[targetUrl]\" DisplayName=\"Navigate to URL\" />"
         },
         {
           "className": "AttachBrowser",
@@ -1471,7 +1657,9 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "preferModern": "UseBrowser"
         },
         {
           "className": "AttachWindow",
@@ -1492,7 +1680,9 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "preferModern": "UseApplication"
         },
         {
           "className": "UseApplicationBrowser",
@@ -1538,7 +1728,8 @@
               "addedInVersion": "23.4.0"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities"
         },
         {
           "className": "ElementExists",
@@ -1577,7 +1768,18 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "propertyConflicts": [
+            {
+              "property": "Selector",
+              "conflictsWith": [
+                "Target"
+              ],
+              "reason": "Modern Target-based identification replaces classic Selector strings. Use one or the other.",
+              "provenance": "curated"
+            }
+          ]
         },
         {
           "className": "UseApplication",
@@ -1607,7 +1809,14 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "compositionRules": [
+            {
+              "rule": "Must wrap child activities that interact with a desktop application. Children execute within the application scope.",
+              "provenance": "curated"
+            }
+          ]
         },
         {
           "className": "TakeScreenshot",
@@ -1639,7 +1848,18 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "propertyConflicts": [
+            {
+              "property": "Selector",
+              "conflictsWith": [
+                "Target"
+              ],
+              "reason": "Modern Target-based identification replaces classic Selector strings. Use one or the other.",
+              "provenance": "curated"
+            }
+          ]
         },
         {
           "className": "Click",
@@ -1737,7 +1957,19 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "propertyConflicts": [
+            {
+              "property": "Selector",
+              "conflictsWith": [
+                "Target"
+              ],
+              "reason": "Modern Target-based identification replaces classic Selector strings. Use one or the other.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<ui:Click DisplayName=\"Click button\">\n  <ui:Click.Target><ui:Target /><ui:Click.Selector>&lt;html /&gt;&lt;webctrl tag='BUTTON' /&gt;</ui:Click.Selector></ui:Click.Target>\n</ui:Click>"
         },
         {
           "className": "TypeInto",
@@ -1785,7 +2017,11 @@
               "argumentWrapper": null,
               "typeArguments": null,
               "required": false,
-              "default": "False"
+              "default": "False",
+              "validValues": [
+                "True",
+                "False"
+              ]
             },
             {
               "name": "ClickBeforeTyping",
@@ -1795,7 +2031,11 @@
               "argumentWrapper": null,
               "typeArguments": null,
               "required": false,
-              "default": "True"
+              "default": "True",
+              "validValues": [
+                "True",
+                "False"
+              ]
             },
             {
               "name": "TimeoutMS",
@@ -1819,7 +2059,19 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "propertyConflicts": [
+            {
+              "property": "Selector",
+              "conflictsWith": [
+                "Target"
+              ],
+              "reason": "Modern Target-based identification replaces classic Selector strings. Use one or the other.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<ui:TypeInto Text=\"[inputText]\" DisplayName=\"Type into field\">\n  <ui:TypeInto.Target><ui:Target /><ui:TypeInto.Selector>&lt;html /&gt;&lt;webctrl tag='INPUT' /&gt;</ui:TypeInto.Selector></ui:TypeInto.Target>\n</ui:TypeInto>"
         },
         {
           "className": "GetText",
@@ -1861,7 +2113,19 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "propertyConflicts": [
+            {
+              "property": "Selector",
+              "conflictsWith": [
+                "Target"
+              ],
+              "reason": "Modern Target-based identification replaces classic Selector strings. Use one or the other.",
+              "provenance": "curated"
+            }
+          ],
+          "xamlExample": "<ui:GetText DisplayName=\"Get element text\">\n  <ui:GetText.Value><OutArgument x:TypeArguments=\"x:String\">[extractedText]</OutArgument></ui:GetText.Value>\n</ui:GetText>"
         },
         {
           "className": "OpenBrowser",
@@ -1929,7 +2193,9 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "preferModern": "UseBrowser"
         },
         {
           "className": "CloseApplication",
@@ -1952,7 +2218,8 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities"
         },
         {
           "className": "KillProcess",
@@ -1984,7 +2251,20 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.UIAutomation.Activities",
+            "canonicalPrefix": "ui",
+            "canonicalNamespace": "UiPath.UIAutomation.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.System.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.Core.Activities"
+              }
+            ]
+          }
         },
         {
           "className": "SendOutlookMailMessage",
@@ -2082,7 +2362,21 @@
             }
           ],
           "emissionApproved": true,
-          "propertiesComplete": true
+          "propertiesComplete": true,
+          "namespace": "UiPath.UIAutomation.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Mail.Activities",
+            "canonicalPrefix": "umail",
+            "canonicalNamespace": "UiPath.Mail.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.Mail.Activities",
+                "prefix": "umail",
+                "namespace": "UiPath.Mail.Activities"
+              }
+            ]
+          },
+          "xamlExample": "<umail:SendOutlookMailMessage To=\"[recipient]\" Subject=\"[subject]\" Body=\"[body]\" DisplayName=\"Send email\" />"
         }
       ]
     },
@@ -2155,7 +2449,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Comprehend.Activities"
         },
         {
           "className": "ComprehendDetectEntities",
@@ -2194,7 +2489,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Comprehend.Activities"
         },
         {
           "className": "ComprehendDetectKeyPhrases",
@@ -2233,7 +2529,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Comprehend.Activities"
         },
         {
           "className": "ComprehendDetectLanguage",
@@ -2262,7 +2559,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Comprehend.Activities"
         }
       ]
     },
@@ -2322,7 +2620,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Rekognition.Activities"
         },
         {
           "className": "RekognitionDetectText",
@@ -2351,7 +2650,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Rekognition.Activities"
         },
         {
           "className": "RekognitionDetectFaces",
@@ -2380,7 +2680,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Rekognition.Activities"
         }
       ]
     },
@@ -2446,7 +2747,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Textract.Activities"
         },
         {
           "className": "TextractDetectText",
@@ -2486,7 +2788,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Amazon.Textract.Activities"
         }
       ]
     },
@@ -2554,7 +2857,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AmazonWebServices.Activities"
         },
         {
           "className": "S3UploadFile",
@@ -2601,7 +2905,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AmazonWebServices.Activities"
         },
         {
           "className": "S3DownloadFile",
@@ -2639,7 +2944,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AmazonWebServices.Activities"
         },
         {
           "className": "S3DeleteObject",
@@ -2668,7 +2974,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AmazonWebServices.Activities"
         },
         {
           "className": "S3ListObjects",
@@ -2716,7 +3023,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AmazonWebServices.Activities"
         }
       ]
     },
@@ -2774,7 +3082,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Azure.Activities"
         },
         {
           "className": "AzureBlobUpload",
@@ -2831,7 +3140,8 @@
               "default": "True"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Azure.Activities"
         },
         {
           "className": "AzureBlobDownload",
@@ -2869,7 +3179,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Azure.Activities"
         },
         {
           "className": "AzureBlobDelete",
@@ -2898,7 +3209,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Azure.Activities"
         },
         {
           "className": "AzureBlobList",
@@ -2936,7 +3248,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Azure.Activities"
         }
       ]
     },
@@ -3014,7 +3327,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AzureFormRecognizerV3.Activities"
         },
         {
           "className": "FormRecognizerAnalyzeLayout",
@@ -3072,7 +3386,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.AzureFormRecognizerV3.Activities"
         }
       ]
     },
@@ -3136,7 +3451,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Box.Activities"
         },
         {
           "className": "BoxUploadFile",
@@ -3184,7 +3500,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Box.Activities"
         },
         {
           "className": "BoxDownloadFile",
@@ -3213,7 +3530,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Box.Activities"
         },
         {
           "className": "BoxDeleteFile",
@@ -3233,7 +3551,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Box.Activities"
         },
         {
           "className": "BoxSearchFiles",
@@ -3271,7 +3590,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Box.Activities"
         }
       ]
     },
@@ -3321,7 +3641,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.CommunicationsMining.Activities"
         },
         {
           "className": "AnalyzeMessage",
@@ -3359,7 +3680,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.CommunicationsMining.Activities"
         },
         {
           "className": "UploadCommunications",
@@ -3388,7 +3710,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.CommunicationsMining.Activities"
         }
       ]
     },
@@ -3419,7 +3742,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "WaitForDownload",
@@ -3459,7 +3783,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "RepeatUntil",
@@ -3489,7 +3814,8 @@
               "default": "100"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "BuildDataTable",
@@ -3527,7 +3853,9 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities",
+          "xamlExample": "<ucs:BuildDataTable DisplayName=\"Build DataTable\">\n  <ucs:BuildDataTable.DataTable><OutArgument x:TypeArguments=\"scg:DataTable\">[dt]</OutArgument></ucs:BuildDataTable.DataTable>\n</ucs:BuildDataTable>"
         },
         {
           "className": "FilterDataTable",
@@ -3570,7 +3898,9 @@
               "default": "Keep"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities",
+          "xamlExample": "<ucs:FilterDataTable DisplayName=\"Filter rows\" FilterRowsMode=\"Keep\">\n  <ucs:FilterDataTable.DataTable><InArgument x:TypeArguments=\"scg:DataTable\">[dt]</InArgument></ucs:FilterDataTable.DataTable>\n</ucs:FilterDataTable>"
         },
         {
           "className": "SortDataTable",
@@ -3622,7 +3952,8 @@
               "default": "Ascending"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "RemoveDuplicateRows",
@@ -3651,7 +3982,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "JoinDataTables",
@@ -3704,7 +4036,8 @@
               "default": "Inner"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "OutputDataTable",
@@ -3733,7 +4066,9 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities",
+          "xamlExample": "<ucs:OutputDataTable InputDataTable=\"[dt]\" DisplayName=\"DataTable to string\">\n  <ucs:OutputDataTable.Text><OutArgument x:TypeArguments=\"x:String\">[dtText]</OutArgument></ucs:OutputDataTable.Text>\n</ucs:OutputDataTable>"
         },
         {
           "className": "AddDataRow",
@@ -3771,7 +4106,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "RemoveDataRow",
@@ -3791,7 +4127,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         },
         {
           "className": "LookupDataTable",
@@ -3856,7 +4193,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.ComplexScenarios.Activities"
         }
       ]
     },
@@ -3897,7 +4235,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Coupa.IntegrationService.Activities"
         },
         {
           "className": "CoupaGetPurchaseOrders",
@@ -3943,7 +4282,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Coupa.IntegrationService.Activities"
         },
         {
           "className": "CoupaCreateRequisition",
@@ -3972,7 +4312,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Coupa.IntegrationService.Activities"
         },
         {
           "className": "CoupaGetInvoices",
@@ -4018,7 +4359,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Coupa.IntegrationService.Activities"
         }
       ]
     },
@@ -4081,7 +4423,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Credentials.Activities"
         },
         {
           "className": "AddCredential",
@@ -4148,7 +4491,8 @@
               "default": "Enterprise"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Credentials.Activities"
         },
         {
           "className": "DeleteCredential",
@@ -4182,7 +4526,8 @@
               "default": "Generic"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Credentials.Activities"
         },
         {
           "className": "RequestCredential",
@@ -4220,7 +4565,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Credentials.Activities"
         }
       ]
     },
@@ -4302,7 +4648,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         },
         {
           "className": "DecryptText",
@@ -4373,7 +4720,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         },
         {
           "className": "EncryptFile",
@@ -4428,7 +4776,8 @@
               "default": "AES"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         },
         {
           "className": "DecryptFile",
@@ -4483,7 +4832,8 @@
               "default": "AES"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         },
         {
           "className": "HashText",
@@ -4546,7 +4896,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         },
         {
           "className": "HashFile",
@@ -4593,7 +4944,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         },
         {
           "className": "KeyedHashText",
@@ -4664,7 +5016,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Cryptography.Activities"
         }
       ]
     },
@@ -4736,7 +5089,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Database.Activities"
         },
         {
           "className": "ExecuteNonQuery",
@@ -4794,7 +5148,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Database.Activities"
         },
         {
           "className": "ConnectToDatabase",
@@ -4833,7 +5188,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Database.Activities"
         }
       ],
       "version": "2.0.0",
@@ -4897,7 +5253,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.DataService.Activities"
         },
         {
           "className": "CreateEntityRecord",
@@ -4947,7 +5304,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.DataService.Activities"
         },
         {
           "className": "QueryEntity",
@@ -5024,7 +5382,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.DataService.Activities"
         },
         {
           "className": "UpdateEntity",
@@ -5065,7 +5424,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.DataService.Activities"
         },
         {
           "className": "DeleteEntity",
@@ -5106,7 +5466,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.DataService.Activities"
         },
         {
           "className": "GetEntityById",
@@ -5156,7 +5517,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.DataService.Activities"
         }
       ]
     },
@@ -5196,7 +5558,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.DocumentUnderstanding.Activities"
         },
         {
           "className": "DigitizeScope",
@@ -5225,7 +5588,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.DocumentUnderstanding.Activities"
         },
         {
           "className": "ClassifyDocumentScope",
@@ -5263,7 +5627,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.DocumentUnderstanding.Activities"
         },
         {
           "className": "ExtractDocumentDataScope",
@@ -5301,7 +5666,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.DocumentUnderstanding.Activities"
         },
         {
           "className": "ValidationStation",
@@ -5349,7 +5715,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.DocumentUnderstanding.Activities"
         },
         {
           "className": "ExportExtractionResults",
@@ -5393,7 +5760,8 @@
               "default": "JSON"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.DocumentUnderstanding.Activities"
         }
       ]
     },
@@ -5475,7 +5843,21 @@
               "addedInVersion": "2.0.0"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Excel.Activities",
+            "canonicalPrefix": "uexcel",
+            "canonicalNamespace": "UiPath.Excel.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.System.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.Core.Activities"
+              }
+            ]
+          },
+          "preferModern": "UseExcel"
         },
         {
           "className": "UseExcel",
@@ -5524,7 +5906,14 @@
               "typeArguments": "x:String"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities",
+          "compositionRules": [
+            {
+              "rule": "Must wrap child activities that operate on Excel. Children execute within the Excel file scope defined by FilePath.",
+              "provenance": "curated"
+            }
+          ]
         },
         {
           "className": "ExcelReadRange",
@@ -5582,7 +5971,20 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Excel.Activities",
+            "canonicalPrefix": "uexcel",
+            "canonicalNamespace": "UiPath.Excel.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.System.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.Core.Activities"
+              }
+            ]
+          }
         },
         {
           "className": "ExcelWriteRange",
@@ -5631,7 +6033,20 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Excel.Activities",
+            "canonicalPrefix": "uexcel",
+            "canonicalNamespace": "UiPath.Excel.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.System.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.Core.Activities"
+              }
+            ]
+          }
         },
         {
           "className": "ExcelWriteCell",
@@ -5671,7 +6086,8 @@
               "typeArguments": "x:String"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities"
         },
         {
           "className": "ReadRange",
@@ -5720,7 +6136,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities"
         },
         {
           "className": "WriteRange",
@@ -5769,7 +6186,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Excel.Activities"
         }
       ],
       "version": "3.4.1",
@@ -5832,7 +6250,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Form.Activities"
         },
         {
           "className": "ShowForm",
@@ -5870,7 +6289,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Form.Activities"
         },
         {
           "className": "CalloutActivities",
@@ -5926,7 +6346,8 @@
               "default": "5000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Form.Activities"
         }
       ]
     },
@@ -6016,7 +6437,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.FTP.Activities"
         },
         {
           "className": "FTPUpload",
@@ -6066,7 +6488,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.FTP.Activities"
         },
         {
           "className": "FTPDownload",
@@ -6106,7 +6529,8 @@
               "default": "True"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.FTP.Activities"
         },
         {
           "className": "FTPDelete",
@@ -6127,7 +6551,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.FTP.Activities"
         },
         {
           "className": "FTPListFiles",
@@ -6157,7 +6582,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.FTP.Activities"
         },
         {
           "className": "FTPDirectoryExists",
@@ -6187,7 +6613,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.FTP.Activities"
         }
       ]
     },
@@ -6275,7 +6702,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.GenAI.Activities"
         },
         {
           "className": "ExtractData",
@@ -6314,7 +6742,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.GenAI.Activities"
         },
         {
           "className": "ClassifyText",
@@ -6352,7 +6781,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.GenAI.Activities"
         },
         {
           "className": "SummarizeText",
@@ -6391,7 +6821,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.GenAI.Activities"
         }
       ]
     },
@@ -6431,7 +6862,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleCloud.Activities"
         },
         {
           "className": "GoogleCloudStorageUpload",
@@ -6478,7 +6910,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleCloud.Activities"
         },
         {
           "className": "GoogleCloudStorageDownload",
@@ -6516,7 +6949,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleCloud.Activities"
         },
         {
           "className": "GoogleCloudTranslateText",
@@ -6563,7 +6997,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleCloud.Activities"
         },
         {
           "className": "GoogleCloudNLPAnalyzeSentiment",
@@ -6601,7 +7036,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleCloud.Activities"
         }
       ]
     },
@@ -6660,7 +7096,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleVision.Activities"
         },
         {
           "className": "GoogleVisionLabelDetection",
@@ -6699,7 +7136,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GoogleVision.Activities"
         }
       ]
     },
@@ -6765,7 +7203,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleSheetsReadRange",
@@ -6815,7 +7254,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleSheetsWriteRange",
@@ -6865,7 +7305,8 @@
               "default": "True"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleSheetsAppendRange",
@@ -6905,7 +7346,8 @@
               "default": "True"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleDriveUploadFile",
@@ -6953,7 +7395,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleDriveDownloadFile",
@@ -6992,7 +7435,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GmailSendMessage",
@@ -7059,7 +7503,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GmailGetMessages",
@@ -7109,7 +7554,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleCalendarGetEvents",
@@ -7177,7 +7623,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleCalendarCreateEvent",
@@ -7262,7 +7709,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleContactsSearchContacts",
@@ -7302,7 +7750,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         },
         {
           "className": "GoogleContactsGetContact",
@@ -7332,7 +7781,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.GSuite.Activities"
         }
       ]
     },
@@ -7373,7 +7823,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.IntegrationService.Activities"
         },
         {
           "className": "IntegrationServiceHTTPRequest",
@@ -7473,7 +7924,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.IntegrationService.Activities"
         },
         {
           "className": "IntegrationServiceTrigger",
@@ -7503,7 +7955,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.IntegrationService.Activities"
         }
       ]
     },
@@ -7546,7 +7999,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.IntelligentOCR.Activities"
         },
         {
           "className": "ClassifyDocument",
@@ -7584,7 +8038,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.IntelligentOCR.Activities"
         },
         {
           "className": "ExtractDocumentData",
@@ -7622,7 +8077,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.IntelligentOCR.Activities"
         },
         {
           "className": "ValidateDocumentData",
@@ -7660,7 +8116,8 @@
               "typeArguments": "x:Boolean"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.IntelligentOCR.Activities"
         }
       ],
       "version": "6.27.3",
@@ -7723,7 +8180,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Jira.Activities"
         },
         {
           "className": "JiraCreateIssue",
@@ -7812,7 +8270,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Jira.Activities"
         },
         {
           "className": "JiraGetIssue",
@@ -7842,7 +8301,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Jira.Activities"
         },
         {
           "className": "JiraUpdateIssue",
@@ -7899,7 +8359,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Jira.Activities"
         },
         {
           "className": "JiraSearchIssues",
@@ -7939,7 +8400,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Jira.Activities"
         },
         {
           "className": "JiraAddComment",
@@ -7969,7 +8431,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Jira.Activities"
         }
       ]
     },
@@ -8120,7 +8583,9 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Mail.Activities",
+          "preferModern": "SendMail (Integration Service)"
         },
         {
           "className": "SendOutlookMailMessage",
@@ -8215,7 +8680,21 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Mail.Activities",
+          "canonicalIdentity": {
+            "canonicalPackageId": "UiPath.Mail.Activities",
+            "canonicalPrefix": "umail",
+            "canonicalNamespace": "UiPath.Mail.Activities",
+            "alternates": [
+              {
+                "packageId": "UiPath.UIAutomation.Activities",
+                "prefix": "ui",
+                "namespace": "UiPath.UIAutomation.Activities"
+              }
+            ]
+          },
+          "xamlExample": "<umail:SendOutlookMailMessage To=\"[recipient]\" Subject=\"[subject]\" Body=\"[body]\" DisplayName=\"Send email\" />"
         },
         {
           "className": "GetImapMailMessage",
@@ -8330,7 +8809,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Mail.Activities"
         },
         {
           "className": "GetOutlookMailMessages",
@@ -8423,7 +8903,9 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Mail.Activities",
+          "preferModern": "UseOutlookAccount + ForEachMail"
         },
         {
           "className": "SendMail",
@@ -8500,7 +8982,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Mail.Activities"
         },
         {
           "className": "GetMail",
@@ -8561,7 +9044,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Mail.Activities"
         }
       ]
     },
@@ -8634,7 +9118,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.MicrosoftDynamics.Activities"
         },
         {
           "className": "DynamicsGetRecords",
@@ -8682,7 +9167,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.MicrosoftDynamics.Activities"
         },
         {
           "className": "DynamicsCreateRecord",
@@ -8720,7 +9206,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.MicrosoftDynamics.Activities"
         },
         {
           "className": "DynamicsUpdateRecord",
@@ -8758,7 +9245,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.MicrosoftDynamics.Activities"
         }
       ]
     },
@@ -8832,7 +9320,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "SendMail365",
@@ -8908,7 +9397,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "GetMail365",
@@ -8968,7 +9458,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "CreateEvent365",
@@ -9034,7 +9525,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "ExcelCreateSpreadsheet",
@@ -9082,7 +9574,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "ExcelReadRange365",
@@ -9141,7 +9634,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "ExcelWriteRange365",
@@ -9190,7 +9684,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "SharePointUploadFile",
@@ -9247,7 +9742,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         },
         {
           "className": "SharePointDownloadFile",
@@ -9286,7 +9782,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftOffice365.Activities"
         }
       ]
     },
@@ -9345,7 +9842,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftTeams.Activities"
         },
         {
           "className": "TeamsSendMessage",
@@ -9397,7 +9895,8 @@
               "default": "text"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftTeams.Activities"
         },
         {
           "className": "TeamsGetMessages",
@@ -9445,7 +9944,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftTeams.Activities"
         },
         {
           "className": "TeamsSendChatMessage",
@@ -9474,7 +9974,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MicrosoftTeams.Activities"
         }
       ]
     },
@@ -9527,7 +10028,8 @@
               "typeArguments": null
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MLActivities"
         },
         {
           "className": "Predict",
@@ -9566,7 +10068,8 @@
               "typeArguments": "x:String"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.MLActivities"
         }
       ],
       "version": "2.0.4",
@@ -9640,7 +10143,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.PDF.Activities"
         },
         {
           "className": "ReadPDFWithOCR",
@@ -9708,7 +10212,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.PDF.Activities"
         },
         {
           "className": "ExtractPDFPageRange",
@@ -9766,7 +10271,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.PDF.Activities"
         },
         {
           "className": "MergePDF",
@@ -9806,7 +10312,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.PDF.Activities"
         },
         {
           "className": "ExportPDFPageAsImage",
@@ -9871,7 +10378,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.PDF.Activities"
         },
         {
           "className": "GetPDFPageCount",
@@ -9920,7 +10428,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.PDF.Activities"
         }
       ]
     },
@@ -9969,7 +10478,8 @@
               "typeArguments": "x:String"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Persistence.Activities"
         },
         {
           "className": "CreateFormTask",
@@ -10045,7 +10555,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Persistence.Activities"
         },
         {
           "className": "WaitForFormTask",
@@ -10094,7 +10605,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Persistence.Activities"
         },
         {
           "className": "CreateExternalTask",
@@ -10161,7 +10673,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Persistence.Activities"
         }
       ]
     },
@@ -10202,7 +10715,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Presentations.Activities"
         },
         {
           "className": "AddSlide",
@@ -10223,7 +10737,8 @@
               "default": "0"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Presentations.Activities"
         },
         {
           "className": "SetText",
@@ -10261,7 +10776,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Presentations.Activities"
         },
         {
           "className": "ExportSlideAsImage",
@@ -10305,7 +10821,8 @@
               "default": "PNG"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Presentations.Activities"
         },
         {
           "className": "ReplaceTextInSlide",
@@ -10353,7 +10870,8 @@
               "default": "True"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Presentations.Activities"
         }
       ]
     },
@@ -10440,7 +10958,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Salesforce.Activities"
         },
         {
           "className": "SalesforceGetRecords",
@@ -10488,7 +11007,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Salesforce.Activities"
         },
         {
           "className": "SalesforceInsertRecords",
@@ -10526,7 +11046,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Salesforce.Activities"
         },
         {
           "className": "SalesforceUpdateRecords",
@@ -10564,7 +11085,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Salesforce.Activities"
         },
         {
           "className": "SalesforceDeleteRecords",
@@ -10602,7 +11124,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Salesforce.Activities"
         },
         {
           "className": "SalesforceSOQLQuery",
@@ -10631,7 +11154,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Salesforce.Activities"
         }
       ]
     },
@@ -10705,7 +11229,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.ServiceNow.Activities"
         },
         {
           "className": "ServiceNowGetRecords",
@@ -10754,7 +11279,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.ServiceNow.Activities"
         },
         {
           "className": "ServiceNowCreateRecord",
@@ -10793,7 +11319,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.ServiceNow.Activities"
         },
         {
           "className": "ServiceNowUpdateRecord",
@@ -10832,7 +11359,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.ServiceNow.Activities"
         },
         {
           "className": "ServiceNowDeleteRecord",
@@ -10862,7 +11390,8 @@
               "required": true
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.ServiceNow.Activities"
         }
       ]
     },
@@ -10903,7 +11432,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Slack.Activities"
         },
         {
           "className": "SlackSendMessage",
@@ -10951,7 +11481,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Slack.Activities"
         },
         {
           "className": "SlackGetMessages",
@@ -10990,7 +11521,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Slack.Activities"
         },
         {
           "className": "SlackUploadFile",
@@ -11037,7 +11569,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Slack.Activities"
         }
       ]
     },
@@ -11087,7 +11620,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "VerifyRange",
@@ -11134,7 +11668,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "VerifyControlAttribute",
@@ -11183,7 +11718,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "LogAssert",
@@ -11212,7 +11748,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "GivenName",
@@ -11232,7 +11769,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "WhenName",
@@ -11252,7 +11790,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "ThenName",
@@ -11272,7 +11811,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         },
         {
           "className": "AddTestDataQueueItem",
@@ -11302,7 +11842,8 @@
               "required": true
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Testing.Activities"
         }
       ]
     },
@@ -11449,7 +11990,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.WebAPI.Activities"
         },
         {
           "className": "DownloadFile",
@@ -11499,7 +12041,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.WebAPI.Activities"
         },
         {
           "className": "HttpClient",
@@ -11625,7 +12168,9 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.WebAPI.Activities",
+          "xamlExample": "<uweb:HttpClient EndPoint=\"[apiUrl]\" Method=\"GET\" AcceptFormat=\"JSON\" DisplayName=\"API call\">\n  <uweb:HttpClient.Result><OutArgument x:TypeArguments=\"x:String\">[response]</OutArgument></uweb:HttpClient.Result>\n</uweb:HttpClient>"
         },
         {
           "className": "DeserializeJSON",
@@ -11655,7 +12200,8 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.WebAPI.Activities"
         },
         {
           "className": "SerializeJson",
@@ -11708,7 +12254,9 @@
               "default": "None"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.WebAPI.Activities",
+          "xamlExample": "<uweb:SerializeJson JsonObject=\"[dataObj]\" DisplayName=\"Convert to JSON\">\n  <uweb:SerializeJson.JsonString><OutArgument x:TypeArguments=\"x:String\">[jsonOutput]</OutArgument></uweb:SerializeJson.JsonString>\n</uweb:SerializeJson>"
         },
         {
           "className": "DeserializeJson",
@@ -11747,7 +12295,9 @@
               "required": false
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.WebAPI.Activities",
+          "xamlExample": "<uweb:DeserializeJson JsonString=\"[jsonText]\" DisplayName=\"Parse JSON\">\n  <uweb:DeserializeJson.JsonObject><OutArgument x:TypeArguments=\"x:Object\">[jsonObj]</OutArgument></uweb:DeserializeJson.JsonObject>\n</uweb:DeserializeJson>"
         }
       ]
     },
@@ -11798,7 +12348,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Word.Activities"
         },
         {
           "className": "WriteDocument",
@@ -11838,7 +12389,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Word.Activities"
         },
         {
           "className": "ReplaceText",
@@ -11897,7 +12449,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Word.Activities"
         },
         {
           "className": "AppendText",
@@ -11937,7 +12490,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Word.Activities"
         },
         {
           "className": "InsertPicture",
@@ -11977,7 +12531,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Word.Activities"
         },
         {
           "className": "ReadTable",
@@ -12027,7 +12582,8 @@
               "default": "False"
             }
           ],
-          "emissionApproved": true
+          "emissionApproved": true,
+          "namespace": "UiPath.Word.Activities"
         }
       ]
     },
@@ -12095,7 +12651,8 @@
               "default": "30000"
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Workday.Activities"
         },
         {
           "className": "WorkdayGetWorkers",
@@ -12140,7 +12697,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Workday.Activities"
         },
         {
           "className": "WorkdayGetWorkerById",
@@ -12169,7 +12727,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.Workday.Activities"
         }
       ]
     },
@@ -12226,7 +12785,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.WorkflowEvents.Activities"
         },
         {
           "className": "TriggerJob",
@@ -12290,7 +12850,8 @@
               "required": false
             }
           ],
-          "emissionApproved": false
+          "emissionApproved": false,
+          "namespace": "UiPath.WorkflowEvents.Activities"
         }
       ]
     }
