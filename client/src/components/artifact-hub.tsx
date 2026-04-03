@@ -523,6 +523,46 @@ export function ArtifactHub({ ideaId, ideaTitle }: ArtifactHubProps) {
   const [viewingArtifact, setViewingArtifact] = useState<string | null>(null);
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [downloadingBundle, setDownloadingBundle] = useState(false);
+  const [selectedBundleRunId, setSelectedBundleRunId] = useState<string | null>(null);
+  const [bundleVersionMenuOpen, setBundleVersionMenuOpen] = useState(false);
+  const bundleVersionRef = useRef<HTMLDivElement>(null);
+
+  interface BundleVersion {
+    version: number;
+    versionLabel: string;
+    runId: string;
+    status: string;
+    generationMode: string;
+    createdAt: string;
+    completedAt: string | null;
+    cacheAvailable: boolean;
+    isLatest: boolean;
+  }
+
+  const { data: bundleVersionsData } = useQuery<{ versions: BundleVersion[] }>({
+    queryKey: ["/api/verification-bundle", ideaId, "versions"],
+    queryFn: async () => {
+      const res = await fetch(`/api/verification-bundle/${ideaId}/versions`, { credentials: "include" });
+      if (!res.ok) return { versions: [] };
+      return res.json();
+    },
+    staleTime: 15000,
+  });
+
+  const bundleVersions = bundleVersionsData?.versions || [];
+  const selectedVersion = bundleVersions.find(v => v.runId === selectedBundleRunId) || bundleVersions[0] || null;
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (bundleVersionRef.current && !bundleVersionRef.current.contains(e.target as Node)) {
+        setBundleVersionMenuOpen(false);
+      }
+    }
+    if (bundleVersionMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [bundleVersionMenuOpen]);
 
   const { data, isLoading } = useQuery<{ artifacts: ArtifactSummary[] }>({
     queryKey: ["/api/ideas", ideaId, "artifacts"],
@@ -582,22 +622,32 @@ export function ArtifactHub({ ideaId, ideaTitle }: ArtifactHubProps) {
     }
   }
 
-  async function downloadVerificationBundle() {
+  async function downloadVerificationBundle(runId?: string) {
     setDownloadingBundle(true);
     try {
+      const body: Record<string, string> = {};
+      if (runId) body.runId = runId;
       const res = await fetch(`/api/verification-bundle/${ideaId}`, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.message || "Failed to generate verification bundle");
       }
       const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition");
+      let filename = `${ideaTitle.replace(/[^a-zA-Z0-9_-]/g, "_")}_verification_bundle.zip`;
+      if (disposition) {
+        const match = disposition.match(/filename="?([^"]+)"?/);
+        if (match) filename = match[1];
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${ideaTitle.replace(/[^a-zA-Z0-9_-]/g, "_")}_verification_bundle.zip`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -686,21 +736,75 @@ export function ArtifactHub({ ideaId, ideaTitle }: ArtifactHubProps) {
         {anyExists && (
           <div className="flex items-center gap-1.5">
             {uipathPackageExists && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[10px] gap-1"
-                onClick={downloadVerificationBundle}
-                disabled={downloadingBundle}
-                data-testid="button-download-verification-bundle"
-              >
-                {downloadingBundle ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <ClipboardCheck className="h-3 w-3" />
+              <div className="relative" ref={bundleVersionRef} data-testid="container-verification-bundle">
+                <div className="flex items-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[10px] gap-1 rounded-r-none border-r-0"
+                    onClick={() => downloadVerificationBundle(selectedVersion?.runId)}
+                    disabled={downloadingBundle}
+                    data-testid="button-download-verification-bundle"
+                  >
+                    {downloadingBundle ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <ClipboardCheck className="h-3 w-3" />
+                    )}
+                    Bundle{selectedVersion ? ` ${selectedVersion.versionLabel}` : ""}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-1.5 rounded-l-none"
+                    onClick={() => setBundleVersionMenuOpen(!bundleVersionMenuOpen)}
+                    disabled={downloadingBundle || bundleVersions.length === 0}
+                    data-testid="button-bundle-version-selector"
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </div>
+                {bundleVersionMenuOpen && bundleVersions.length > 0 && (
+                  <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-md border border-border bg-popover shadow-md" data-testid="menu-bundle-versions">
+                    <div className="p-1.5 border-b border-border">
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-1.5">Bundle Versions</span>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto p-1">
+                      {bundleVersions.map((v) => (
+                        <button
+                          key={v.runId}
+                          className={`w-full text-left px-2 py-1.5 rounded-sm text-[11px] flex items-center justify-between gap-2 hover:bg-accent hover:text-accent-foreground transition-colors ${
+                            selectedVersion?.runId === v.runId ? "bg-accent/50" : ""
+                          }`}
+                          onClick={() => {
+                            setSelectedBundleRunId(v.runId);
+                            setBundleVersionMenuOpen(false);
+                          }}
+                          data-testid={`button-bundle-version-${v.version}`}
+                        >
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold">{v.versionLabel}</span>
+                              {v.isLatest && (
+                                <span className="text-[9px] bg-primary/15 text-primary px-1 rounded">Latest</span>
+                              )}
+                              {!v.cacheAvailable && (
+                                <span className="text-[9px] bg-amber-500/15 text-amber-500 px-1 rounded">Partial</span>
+                              )}
+                            </div>
+                            <span className="text-muted-foreground truncate">
+                              {new Date(v.createdAt).toLocaleDateString()} · {v.status} · {v.generationMode.replace(/_/g, " ")}
+                            </span>
+                          </div>
+                          {selectedVersion?.runId === v.runId && (
+                            <Check className="h-3 w-3 text-primary flex-shrink-0" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
-                Verification Bundle
-              </Button>
+              </div>
             )}
             <Button
               variant="outline"

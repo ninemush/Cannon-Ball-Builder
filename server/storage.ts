@@ -31,6 +31,7 @@ export interface IStorage {
   failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined>;
   updateGenerationRunStageLog(runId: string, stageLog: unknown): Promise<UipathGenerationRun | undefined>;
   failOrphanedRuns(): Promise<UipathGenerationRun[]>;
+  getGenerationRunsForIdea(ideaId: string): Promise<UipathGenerationRun[]>;
   listGenerationRuns(options: { offset?: number; limit?: number; status?: string; ideaId?: string; fromDate?: Date; toDate?: Date; search?: string }): Promise<{ runs: (UipathGenerationRun & { ideaTitle?: string })[]; total: number }>;
 }
 
@@ -146,6 +147,12 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(uipathGenerationRuns.createdAt))
       .limit(1);
     return run;
+  }
+
+  async getGenerationRunsForIdea(ideaId: string): Promise<UipathGenerationRun[]> {
+    return db.select().from(uipathGenerationRuns)
+      .where(eq(uipathGenerationRuns.ideaId, ideaId))
+      .orderBy(uipathGenerationRuns.createdAt);
   }
 
   async updateGenerationRunStatus(runId: string, status: GenerationRunStatus | string, currentPhase?: string): Promise<UipathGenerationRun | undefined> {

@@ -29,6 +29,42 @@ async function verifyIdeaAccess(req: Request, res: Response): Promise<{ ideaId: 
 }
 
 export function registerVerificationBundleRoutes(app: Express): void {
+  app.get("/api/verification-bundle/:ideaId/versions", async (req: Request, res: Response) => {
+    const access = await verifyIdeaAccess(req, res);
+    if (!access) return;
+    const { ideaId } = access;
+
+    try {
+      const allRuns = await storage.getGenerationRunsForIdea(ideaId);
+      if (allRuns.length === 0) {
+        return res.json({ versions: [] });
+      }
+
+      const latestRun = allRuns[allRuns.length - 1];
+      const pipelineResult = getCachedPipelineResult(ideaId);
+      const cachedRunId = pipelineResult ? latestRun.runId : null;
+
+      const versions = allRuns.map((run, index) => ({
+        version: index + 1,
+        versionLabel: `V${index + 1}`,
+        runId: run.runId,
+        status: run.status,
+        generationMode: run.generationMode,
+        createdAt: run.createdAt,
+        completedAt: run.completedAt,
+        cacheAvailable: run.runId === cachedRunId,
+        isLatest: run.runId === latestRun.runId,
+      }));
+
+      versions.reverse();
+
+      return res.json({ versions });
+    } catch (err: any) {
+      console.error(`[VerificationBundle] Error listing versions for idea ${ideaId}:`, err);
+      return res.status(500).json({ message: err.message || "Failed to list bundle versions" });
+    }
+  });
+
   app.post("/api/verification-bundle/:ideaId", async (req: Request, res: Response) => {
     const access = await verifyIdeaAccess(req, res);
     if (!access) return;
@@ -41,14 +77,34 @@ export function registerVerificationBundleRoutes(app: Express): void {
         return res.status(404).json({ message: "Idea not found" });
       }
 
-      const latestRun = await storage.getLatestGenerationRunForIdea(ideaId);
-      if (!latestRun) {
+      const requestedRunId = req.body?.runId as string | undefined;
+
+      const allRuns = await storage.getGenerationRunsForIdea(ideaId);
+      if (allRuns.length === 0) {
         return res.status(404).json({
           message: "No generation run found for this idea. Generate a package first.",
         });
       }
 
+      let targetRun;
+      let versionNumber: number;
+
+      if (requestedRunId) {
+        const runIndex = allRuns.findIndex(r => r.runId === requestedRunId);
+        if (runIndex === -1) {
+          return res.status(404).json({ message: "Generation run not found for this idea." });
+        }
+        targetRun = allRuns[runIndex];
+        versionNumber = runIndex + 1;
+      } else {
+        targetRun = allRuns[allRuns.length - 1];
+        versionNumber = allRuns.length;
+      }
+
+      const latestRun = allRuns[allRuns.length - 1];
+      const isLatest = targetRun.runId === latestRun.runId;
       const pipelineResult = getCachedPipelineResult(ideaId);
+      const isCachedRun = !!pipelineResult && isLatest;
 
       const messages = await chatStorage.getMessagesByIdeaId(ideaId);
       const uipathMsg = findUiPathMessage(messages);
@@ -61,34 +117,49 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       const now = new Date().toISOString();
 
-      const dhgContent = latestRun.dhgContent || pipelineResult?.dhgContent || null;
-      const finalQualityReport = pipelineResult?.finalQualityReport || null;
+      const dhgContent = targetRun.dhgContent || (isCachedRun ? pipelineResult?.dhgContent : null) || null;
+      const finalQualityReport = isCachedRun ? (pipelineResult?.finalQualityReport || null) : null;
 
       const artifactSources: Record<string, string> = {
         manifest: "generated",
         "pipeline-diagnostics": "database",
       };
-      if (pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
+
+      if (isCachedRun && pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
         artifactSources["nupkg"] = "cache";
+      } else if (!isCachedRun) {
+        artifactSources["nupkg"] = "unavailable-cache-expired";
       }
+
       if (dhgContent) {
-        artifactSources["dhg"] = latestRun.dhgContent ? "database" : "cache";
+        artifactSources["dhg"] = targetRun.dhgContent ? "database" : "cache";
       }
-      if (pipelineResult?.qualityGateResult) {
+
+      if (isCachedRun && pipelineResult?.qualityGateResult) {
         artifactSources["quality-gate-results"] = "cache";
-      } else if (latestRun.outcomeReport) {
+      } else if (targetRun.outcomeReport) {
         artifactSources["quality-gate-results"] = "outcome-report-fallback";
+      } else if (!isCachedRun) {
+        artifactSources["quality-gate-results"] = "unavailable-cache-expired";
       }
-      if (pipelineResult?.metaValidationResult) {
+
+      if (isCachedRun && pipelineResult?.metaValidationResult) {
         artifactSources["meta-validation-results"] = "cache";
+      } else if (!isCachedRun) {
+        artifactSources["meta-validation-results"] = "unavailable-cache-expired";
       }
-      if (latestRun.outcomeReport) {
+
+      if (targetRun.outcomeReport) {
         artifactSources["outcome-report"] = "database";
       }
+
       if (finalQualityReport) {
         artifactSources["final-quality-report"] = "cache";
+      } else if (!isCachedRun) {
+        artifactSources["final-quality-report"] = "unavailable-cache-expired";
       }
-      if (latestRun.specSnapshot) {
+
+      if (targetRun.specSnapshot) {
         artifactSources["spec-snapshot"] = "database";
       }
 
@@ -96,27 +167,30 @@ export function registerVerificationBundleRoutes(app: Express): void {
         ideaId,
         ideaTitle: idea.title,
         ideaDescription: idea.description,
-        generationRunId: latestRun.runId,
-        generationMode: latestRun.generationMode,
-        generationStatus: latestRun.status,
-        triggeredBy: latestRun.triggeredBy,
-        createdAt: latestRun.createdAt,
-        completedAt: latestRun.completedAt,
+        generationRunId: targetRun.runId,
+        generationMode: targetRun.generationMode,
+        generationStatus: targetRun.status,
+        triggeredBy: targetRun.triggeredBy,
+        createdAt: targetRun.createdAt,
+        completedAt: targetRun.completedAt,
         bundleGeneratedAt: now,
-        projectName: packageData?.projectName || pipelineResult?.projectName || idea.title,
-        cacheAvailable: !!pipelineResult,
+        projectName: packageData?.projectName || (isCachedRun ? pipelineResult?.projectName : null) || idea.title,
+        version: `V${versionNumber}`,
+        totalVersions: allRuns.length,
+        isLatest,
+        cacheAvailable: isCachedRun,
         artifactSources,
       };
 
       let outcomeReport: any = null;
-      if (latestRun.outcomeReport) {
+      if (targetRun.outcomeReport) {
         try {
-          outcomeReport = JSON.parse(latestRun.outcomeReport);
+          outcomeReport = JSON.parse(targetRun.outcomeReport);
         } catch {}
       }
 
       let qualityGateResults: any = null;
-      if (pipelineResult?.qualityGateResult) {
+      if (isCachedRun && pipelineResult?.qualityGateResult) {
         qualityGateResults = pipelineResult.qualityGateResult;
       } else if (outcomeReport?.pipelineOutcome) {
         qualityGateResults = {
@@ -127,39 +201,40 @@ export function registerVerificationBundleRoutes(app: Express): void {
       }
 
       let metaValidationResults: any = null;
-      if (pipelineResult?.metaValidationResult) {
+      if (isCachedRun && pipelineResult?.metaValidationResult) {
         metaValidationResults = pipelineResult.metaValidationResult;
       }
 
       let stageLog: any = null;
-      if (latestRun.stageLog) {
-        stageLog = latestRun.stageLog;
+      if (targetRun.stageLog) {
+        stageLog = targetRun.stageLog;
       }
 
       let phaseProgress: any = null;
-      if (latestRun.phaseProgress) {
+      if (targetRun.phaseProgress) {
         try {
-          phaseProgress = JSON.parse(latestRun.phaseProgress);
+          phaseProgress = JSON.parse(targetRun.phaseProgress);
         } catch {}
       }
 
       const pipelineDiagnostics = {
-        runId: latestRun.runId,
-        status: latestRun.status,
-        currentPhase: latestRun.currentPhase,
-        errorMessage: latestRun.errorMessage,
+        runId: targetRun.runId,
+        status: targetRun.status,
+        currentPhase: targetRun.currentPhase,
+        errorMessage: targetRun.errorMessage,
         stageLog,
         phaseProgress,
-        createdAt: latestRun.createdAt,
-        completedAt: latestRun.completedAt,
+        createdAt: targetRun.createdAt,
+        completedAt: targetRun.completedAt,
       };
 
       const safeProjectName = (manifest.projectName || "VerificationBundle").replace(/[^a-zA-Z0-9_-]/g, "_");
+      const versionTag = `V${versionNumber}`;
 
       const serializedArtifacts: Array<{ data: string | Buffer; name: string }> = [];
       serializedArtifacts.push({ data: JSON.stringify(manifest, null, 2), name: "manifest.json" });
 
-      if (pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
+      if (isCachedRun && pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
         serializedArtifacts.push({ data: pipelineResult.packageBuffer, name: `${safeProjectName}.nupkg` });
       }
 
@@ -185,8 +260,8 @@ export function registerVerificationBundleRoutes(app: Express): void {
         serializedArtifacts.push({ data: JSON.stringify(finalQualityReport, null, 2), name: "final-quality-report.json" });
       }
 
-      if (latestRun.specSnapshot) {
-        serializedArtifacts.push({ data: JSON.stringify(latestRun.specSnapshot, null, 2), name: "spec-snapshot.json" });
+      if (targetRun.specSnapshot) {
+        serializedArtifacts.push({ data: JSON.stringify(targetRun.specSnapshot, null, 2), name: "spec-snapshot.json" });
       }
 
       archive = archiver("zip", { zlib: { level: 9 } });
@@ -195,7 +270,7 @@ export function registerVerificationBundleRoutes(app: Express): void {
       let settled = false;
 
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${safeProjectName}_verification_bundle.zip"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${safeProjectName}_${versionTag}_verification_bundle.zip"`);
 
       await new Promise<void>((resolve, reject) => {
         const settle = (fn: typeof resolve | typeof reject, val?: any) => {
