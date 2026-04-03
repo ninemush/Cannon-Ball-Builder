@@ -10,9 +10,10 @@ export type ContractDefectType =
   | "invalid_expression_scope"
   | "mixed_literal_expression_syntax"
   | "placeholder_sentinel_in_property"
-  | "pseudo_property_on_invoke"
+  | "pseudo_property_on_invoke" // @deprecated — use invalid_invoke_serialization; retained for backward compatibility
   | "conflicting_argument_serialization"
-  | "invalid_argument_map_serialization";
+  | "invalid_argument_map_serialization"
+  | "invalid_invoke_serialization";
 
 export type ContractDefectSeverity = "execution_blocking" | "handoff_required";
 
@@ -52,11 +53,42 @@ export interface ContractNormalizationAction {
   rationale: string;
 }
 
+export type ExclusionCategory =
+  | "designer_metadata"
+  | "view_state"
+  | "layout_hint"
+  | "idref_reference"
+  | "annotation"
+  | "non_runtime_serialization";
+
+export interface ContractExtractionExclusion {
+  file: string;
+  workflow: string;
+  activityType: string;
+  propertyName: string;
+  exclusionCategory: ExclusionCategory;
+  exclusionReason: string;
+}
+
+export interface ContractIntegritySummaryMetrics {
+  totalContractDefects: number;
+  totalNormalizationActions: number;
+  totalExecutionBlocking: number;
+  totalHandoffRequired: number;
+  totalUnknownTargetArguments: number;
+  totalInvalidInvokeSerialization: number;
+  totalUndeclaredSymbols: number;
+  totalExcludedNonContractFields: number;
+  exclusionsByCategory: Record<ExclusionCategory, number>;
+}
+
 export interface ContractIntegrityResult {
   contractIntegrityDefects: ContractIntegrityDefect[];
   hasContractIntegrityIssues: boolean;
   contractIntegritySummary?: string;
+  contractIntegritySummaryMetrics?: ContractIntegritySummaryMetrics;
   contractNormalizationActions: ContractNormalizationAction[];
+  contractExtractionExclusions: ContractExtractionExclusion[];
 }
 
 interface WorkflowContract {
@@ -144,11 +176,45 @@ const INVOKE_SYSTEM_ATTRS = new Set([
   "targetfolder", "logmessage",
 ]);
 
+const NON_CONTRACT_EXCLUSION_PATTERNS: Array<{ pattern: RegExp; category: ExclusionCategory; reason: string }> = [
+  { pattern: /^sap2010:WorkflowViewState\./i, category: "view_state", reason: "WF designer view-state property" },
+  { pattern: /^sap:WorkflowViewStateService\./i, category: "view_state", reason: "WF designer view-state service property" },
+  { pattern: /^WorkflowViewState\./i, category: "view_state", reason: "WF designer view-state property" },
+  { pattern: /^sap:VirtualizedContainerService\./i, category: "layout_hint", reason: "Designer virtualization layout hint" },
+  { pattern: /^VirtualizedContainerService\./i, category: "layout_hint", reason: "Designer virtualization layout hint" },
+  { pattern: /\.IdRef$/i, category: "idref_reference", reason: "Designer IdRef tracking reference" },
+  { pattern: /^Annotation\./i, category: "annotation", reason: "Designer annotation-only field" },
+  { pattern: /^sap2010:Annotation\./i, category: "annotation", reason: "Designer annotation field" },
+  { pattern: /^mc:/, category: "non_runtime_serialization", reason: "Markup compatibility attribute" },
+  { pattern: /^mva:VisualBasic\.Settings$/i, category: "non_runtime_serialization", reason: "VB settings serialization artifact" },
+  { pattern: /^TextExpression\./i, category: "non_runtime_serialization", reason: "Text expression namespace/reference metadata" },
+];
+
+const NON_CONTRACT_EXACT_NAMES = new Map<string, { category: ExclusionCategory; reason: string }>([
+  ["HintSize", { category: "layout_hint", reason: "Designer layout sizing hint" }],
+  ["WorkflowViewState.IdRef", { category: "idref_reference", reason: "Designer IdRef tracking reference" }],
+]);
+
+function classifyNonContractProperty(attrName: string): { category: ExclusionCategory; reason: string } | null {
+  const exactMatch = NON_CONTRACT_EXACT_NAMES.get(attrName);
+  if (exactMatch) return exactMatch;
+
+  for (const { pattern, category, reason } of NON_CONTRACT_EXCLUSION_PATTERNS) {
+    if (pattern.test(attrName)) return { category, reason };
+  }
+
+  if (/^sap\d*:/.test(attrName)) return { category: "designer_metadata", reason: "SAP designer namespace property" };
+
+  return null;
+}
+
 function extractInvocationsForActivityType(
   content: string,
   fileName: string,
   workflowName: string,
   activityType: string,
+  exclusions: ContractExtractionExclusion[],
+  defects: ContractIntegrityDefect[],
 ): InvocationBinding[] {
   const invocations: InvocationBinding[] = [];
 
@@ -193,12 +259,44 @@ function extractInvocationsForActivityType(
       }
     }
 
-    const attrArgPattern = /\b([a-zA-Z_]\w*)\s*=\s*"([^"]*)"/g;
+    const attrArgPattern = /\b([a-zA-Z_][\w.:]*)\s*=\s*"([^"]*)"/g;
     let attrM;
     while ((attrM = attrArgPattern.exec(attrs)) !== null) {
       const attrName = attrM[1];
       if (INVOKE_SYSTEM_ATTRS.has(attrName.toLowerCase())) continue;
-      if (attrName.startsWith("xmlns") || attrName.startsWith("sap") || attrName.startsWith("x:")) continue;
+      if (attrName.startsWith("xmlns") || attrName.startsWith("x:")) continue;
+
+      const nonContractClassification = classifyNonContractProperty(attrName);
+      if (nonContractClassification) {
+        exclusions.push({
+          file: fileName,
+          workflow: workflowName,
+          activityType,
+          propertyName: attrName,
+          exclusionCategory: nonContractClassification.category,
+          exclusionReason: nonContractClassification.reason,
+        });
+        continue;
+      }
+
+      if (PSEUDO_PROPERTY_NAMES.has(attrName)) {
+        defects.push({
+          file: fileName,
+          workflow: workflowName,
+          defectType: "invalid_invoke_serialization",
+          activityType,
+          propertyName: attrName,
+          referencedSymbol: "",
+          targetWorkflow: targetWorkflow,
+          targetArgument: "",
+          offendingValue: attrM[2].substring(0, 200),
+          severity: "execution_blocking",
+          detectionMethod: "invoke_attr_classification",
+          notes: `Pseudo-property "${attrName}" on ${activityType} is not a valid contract carrier — structural element serialized as attribute`,
+        });
+        continue;
+      }
+
       if (!bindings.has(attrName)) {
         bindings.set(attrName, attrM[2]);
       }
@@ -217,10 +315,16 @@ function extractInvocationsForActivityType(
   return invocations;
 }
 
-function extractInvocations(content: string, fileName: string, workflowName: string): InvocationBinding[] {
+function extractInvocations(
+  content: string,
+  fileName: string,
+  workflowName: string,
+  exclusions: ContractExtractionExclusion[],
+  defects: ContractIntegrityDefect[],
+): InvocationBinding[] {
   const invocations: InvocationBinding[] = [];
   for (const activityType of INVOKE_ACTIVITY_TYPES) {
-    invocations.push(...extractInvocationsForActivityType(content, fileName, workflowName, activityType));
+    invocations.push(...extractInvocationsForActivityType(content, fileName, workflowName, activityType, exclusions, defects));
   }
   return invocations;
 }
@@ -378,11 +482,12 @@ function validateParentChildContracts(
   entries: { name: string; content: string }[],
   contracts: Map<string, WorkflowContract>,
   defects: ContractIntegrityDefect[],
+  exclusions: ContractExtractionExclusion[],
 ): void {
   for (const entry of entries) {
     const normalizedName = normalizeFilePath(entry.name);
     const workflowName = deriveWorkflowName(normalizedName);
-    const invocations = extractInvocations(entry.content, normalizedName, workflowName);
+    const invocations = extractInvocations(entry.content, normalizedName, workflowName, exclusions, defects);
 
     for (const invocation of invocations) {
       const childContract = resolveTargetContract(invocation.targetWorkflow, contracts);
@@ -640,20 +745,26 @@ function validateInvokePropertySerialization(
           const pseudoPattern = new RegExp(`\\b${pseudoName}\\s*=\\s*"([^"]*)"`, "g");
           let pm;
           while ((pm = pseudoPattern.exec(attrs)) !== null) {
-            defects.push({
-              file: normalizedName,
-              workflow: workflowName,
-              defectType: "pseudo_property_on_invoke",
-              activityType: invokeType,
-              propertyName: pseudoName,
-              referencedSymbol: "",
-              targetWorkflow: "",
-              targetArgument: "",
-              offendingValue: pm[1].substring(0, 200),
-              severity: "execution_blocking",
-              detectionMethod: "pseudo_property_scan",
-              notes: `${invokeType} has pseudo-property "${pseudoName}" as attribute — structural element serialized as string`,
-            });
+            const alreadyReported = defects.some(
+              d => d.file === normalizedName && d.activityType === invokeType &&
+                   d.propertyName === pseudoName && d.defectType === "invalid_invoke_serialization"
+            );
+            if (!alreadyReported) {
+              defects.push({
+                file: normalizedName,
+                workflow: workflowName,
+                defectType: "invalid_invoke_serialization",
+                activityType: invokeType,
+                propertyName: pseudoName,
+                referencedSymbol: "",
+                targetWorkflow: "",
+                targetArgument: "",
+                offendingValue: pm[1].substring(0, 200),
+                severity: "execution_blocking",
+                detectionMethod: "pseudo_property_scan",
+                notes: `${invokeType} has pseudo-property "${pseudoName}" as attribute — structural element serialized as string`,
+              });
+            }
           }
         }
       }
@@ -957,10 +1068,11 @@ export function validateContractIntegrity(
 ): ContractIntegrityResult {
   const defects: ContractIntegrityDefect[] = [];
   const normalizations: ContractNormalizationAction[] = [];
+  const exclusions: ContractExtractionExclusion[] = [];
 
   const contracts = buildWorkflowContracts(entries);
 
-  validateParentChildContracts(entries, contracts, defects);
+  validateParentChildContracts(entries, contracts, defects, exclusions);
   validateScopeAndReferences(entries, defects);
   validateExpressionScopeViolations(entries, defects);
   validateMixedLiteralExpressionSyntax(entries, defects);
@@ -969,21 +1081,54 @@ export function validateContractIntegrity(
 
   const hasIssues = defects.length > 0;
 
+  const executionBlocking = defects.filter(d => d.severity === "execution_blocking").length;
+  const handoffRequired = defects.filter(d => d.severity === "handoff_required").length;
+  const totalUnknownTargetArguments = defects.filter(d => d.defectType === "unknown_target_argument").length;
+  const totalInvalidInvokeSerialization = defects.filter(d => d.defectType === "invalid_invoke_serialization" || d.defectType === "invalid_argument_map_serialization").length;
+  const totalUndeclaredSymbols = defects.filter(d => d.defectType === "undeclared_variable_reference" || d.defectType === "undeclared_argument_reference").length;
+
+  const exclusionsByCategory: Record<ExclusionCategory, number> = {
+    designer_metadata: 0,
+    view_state: 0,
+    layout_hint: 0,
+    idref_reference: 0,
+    annotation: 0,
+    non_runtime_serialization: 0,
+  };
+  for (const ex of exclusions) {
+    exclusionsByCategory[ex.exclusionCategory]++;
+  }
+
+  const summaryMetrics: ContractIntegritySummaryMetrics = {
+    totalContractDefects: defects.length,
+    totalNormalizationActions: normalizations.length,
+    totalExecutionBlocking: executionBlocking,
+    totalHandoffRequired: handoffRequired,
+    totalUnknownTargetArguments,
+    totalInvalidInvokeSerialization,
+    totalUndeclaredSymbols,
+    totalExcludedNonContractFields: exclusions.length,
+    exclusionsByCategory,
+  };
+
   let summary: string | undefined;
-  if (hasIssues) {
-    const executionBlocking = defects.filter(d => d.severity === "execution_blocking").length;
-    const handoffRequired = defects.filter(d => d.severity === "handoff_required").length;
+  if (hasIssues || exclusions.length > 0) {
     const parts: string[] = [];
     if (executionBlocking > 0) parts.push(`${executionBlocking} execution-blocking`);
     if (handoffRequired > 0) parts.push(`${handoffRequired} handoff-required`);
     if (normalizations.length > 0) parts.push(`${normalizations.length} normalization(s) applied`);
-    summary = `Contract integrity: ${parts.join(", ")} defect(s) found`;
+    if (exclusions.length > 0) parts.push(`${exclusions.length} non-contract field(s) excluded`);
+    summary = hasIssues
+      ? `Contract integrity: ${parts.join(", ")} defect(s) found`
+      : `Contract integrity: clean — ${parts.join(", ")}`;
   }
 
   return {
     contractIntegrityDefects: defects,
     hasContractIntegrityIssues: hasIssues,
     contractIntegritySummary: summary,
+    contractIntegritySummaryMetrics: summaryMetrics,
     contractNormalizationActions: normalizations,
+    contractExtractionExclusions: exclusions,
   };
 }

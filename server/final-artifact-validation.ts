@@ -18,6 +18,8 @@ import {
   validateContractIntegrity,
   type ContractIntegrityDefect,
   type ContractNormalizationAction,
+  type ContractExtractionExclusion,
+  type ContractIntegritySummaryMetrics,
 } from "./xaml/workflow-contract-integrity";
 
 export interface FinalArtifactValidationInput {
@@ -85,7 +87,9 @@ export interface FinalQualityReport {
   contractIntegrityDefects: ContractIntegrityDefect[];
   hasContractIntegrityIssues: boolean;
   contractIntegritySummary?: string;
+  contractIntegritySummaryMetrics?: ContractIntegritySummaryMetrics;
   contractNormalizationActions: ContractNormalizationAction[];
+  contractExtractionExclusions: ContractExtractionExclusion[];
   derivedStatus: PackageStatus;
   statusReason: string;
   outcomeContext?: PipelineOutcomeReport;
@@ -351,7 +355,9 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     contractIntegrityDefects: contractIntegrityResult.contractIntegrityDefects,
     hasContractIntegrityIssues: contractIntegrityResult.hasContractIntegrityIssues,
     contractIntegritySummary: contractIntegrityResult.contractIntegritySummary,
+    contractIntegritySummaryMetrics: contractIntegrityResult.contractIntegritySummaryMetrics,
     contractNormalizationActions: contractIntegrityResult.contractNormalizationActions,
+    contractExtractionExclusions: contractIntegrityResult.contractExtractionExclusions,
     derivedStatus,
     statusReason,
     outcomeContext: contextMetadata.outcomeReport,
