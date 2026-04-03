@@ -1,0 +1,149 @@
+# CB2-F26A - Generic Expression Target/Value Canonicalization and Symbol Scope Enforcement
+
+What & Why
+After invoke-binding canonicalization, the dominant remaining package failures are no longer primarily malformed invoke argument shapes. The current blockers are now concentrated in generic expression target/value serialization and symbol-scope integrity.
+
+The latest package run still shows:
+- JSON-like intermediate payloads leaking into executable properties such as Assign.To, Assign.Value, LogMessage.Message, entity/object payloads, and message subject/body fields
+- undeclared argument or symbol references surviving into final XAML
+- required executable properties still ending with PLACEHOLDER
+- Studio load failures in workflows whose executable properties are still not emitted in valid UiPath-consumable form
+
+This task adds a generic target/value canonicalization and symbol-scope enforcement pass. It must operate pattern-first across expression-bearing and target-bearing properties, not as a one-off fix for one activity.
+
+Goals
+1. Canonicalize target-bearing properties like Assign.To into valid UiPath-supported final forms.
+2. Canonicalize value-bearing executable properties so internal JSON-like objects never reach final XAML.
+3. Enforce that every referenced symbol exists in the correct scope before final emission.
+4. Prevent required executable properties from surviving as PLACEHOLDER/TODO/HANDOFF/STUB values in package mode.
+5. Preserve unresolved cases as structured defects instead of emitting malformed XAML.
+
+Done looks like
+- Target-bearing properties such as Assign.To no longer contain JSON-like object payloads in final XAML.
+- Value-bearing executable properties no longer contain serialized internal expression objects in final XAML.
+- Referenced variables and arguments are validated against declared workflow scope before final emission.
+- Required executable properties do not survive as PLACEHOLDER/TODO/HANDOFF/STUB in final package output.
+- Unresolved target/value/scope issues are preserved as structured defects and degrade the package, rather than being emitted in malformed forms.
+- New diagnostics arrays appear in FinalQualityReport:
+  - `expressionCanonicalizationFixes[]`
+  - `symbolScopeDefects[]`
+  - optional `targetValueCanonicalizationSummary`
+- Build mode remains preserved. Package ZIP and DHG still generate.
+
+Key invariants
+- Pattern-first, not activity-first.
+- No internal JSON-like expression object may survive into final XAML in any executable property or target slot.
+- No fabricated symbols, values, or business logic.
+- No silent deletion of required executable values.
+- If canonicalization is not deterministic, preserve the defect and downgrade instead of guessing.
+- Do not hardcode legacy status strings.
+
+Out of scope
+- Reworking the overall decomposition strategy
+- Broad catalog/filter alignment changes
+- Replacing dependency, graph, or contract validators
+- Deep semantic repair of business logic
+
+Tasks
+
+1. Define canonical target/value serialization rules
+Document and implement one valid final serialization rule set for:
+- target-bearing properties such as Assign.To
+- generic value-bearing executable properties
+- symbol references used inside expression-bearing properties
+
+Internal object-shaped representations like:
+- {"type":"variable","name":"..."}
+- {"type":"vb_expression","value":"..."}
+must be resolved before final XAML emission or preserved as defects.
+
+2. Canonicalize target-bearing properties
+Update emission/canonicalization paths so target-bearing properties are emitted only in valid final UiPath-supported forms.
+For example:
+- Assign.To must become a valid target expression or remain a structured defect
+- target slots must never receive object-shaped JSON-like strings
+
+3. Expand generic expression value canonicalization
+Extend the existing residual expression cleanup so it covers all remaining executable property paths that still emit internal object shapes, including:
+- Assign.Value
+- LogMessage.Message
+- condition expressions
+- throw expressions
+- entity/object payload properties
+- message subject/body properties
+- any other executable property that still receives serialized internal object shapes
+
+4. Enforce symbol scope before final emission
+Add a symbol-scope enforcement layer that validates every referenced variable or argument against the workflow’s declared scope before final XAML is emitted.
+Detect and report:
+- `undeclared_variable_reference`
+- `undeclared_argument_reference`
+- `invalid_expression_scope`
+
+If a reference cannot be resolved deterministically, preserve it as a defect and downgrade. Do not emit malformed expressions into final XAML.
+
+5. Block placeholder survival in required executable properties
+Extend package-mode validation/canonicalization so required executable properties containing:
+- PLACEHOLDER
+- TODO
+- HANDOFF
+- STUB
+or similar sentinels are never emitted as if runnable.
+If they cannot be resolved safely, preserve them as structured defects and degrade the package.
+
+6. Emit structured diagnostics
+Add:
+- `expressionCanonicalizationFixes[]`
+- `symbolScopeDefects[]`
+- optional `targetValueCanonicalizationSummary`
+
+Each canonicalization record should include:
+- file
+- workflow
+- activityType
+- propertyName
+- originalValue
+- canonicalizedValue
+- normalizationType
+- rationale
+
+Each defect should include:
+- file
+- workflow
+- activityType
+- propertyName
+- referencedSymbol
+- defectType
+- offendingValue
+- severity
+- detectionMethod
+- notes
+
+7. Integrate into final quality reporting
+Wire unresolved target/value/scope defects into the current degradation / structural-invalidity derivation path.
+Do not hardcode legacy status values.
+
+8. Add regression tests
+Add tests for:
+- Assign.To containing a JSON-like variable payload
+- Assign.Value containing a JSON-like expression payload
+- LogMessage.Message containing a JSON-like expression payload
+- undeclared variable reference in an expression-bearing property
+- undeclared argument reference in an expression-bearing property
+- required executable property containing PLACEHOLDER
+- deterministic canonicalization success case
+- ambiguous case that must remain a defect
+- no silent deletion or fabrication
+- final XAML does not contain internal object-shaped payloads in executable or target-bearing properties
+
+Relevant files
+- server/xaml/expression-builder.ts
+- server/xaml-generator.ts
+- server/workflow-tree-assembler.ts
+- server/xaml/workflow-contract-integrity.ts
+- server/final-artifact-validation.ts
+- server/uipath-pipeline.ts
+- server/xaml/executable-path-validator.ts
+- server/xaml/vbnet-expression-linter.ts
+- server/xaml/xaml-compliance.ts
+- tests under server/__tests__/
