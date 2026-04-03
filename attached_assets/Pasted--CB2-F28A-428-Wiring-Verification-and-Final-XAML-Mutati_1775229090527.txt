@@ -1,0 +1,106 @@
+# CB2-F28A - 428 Wiring Verification and Final-XAML Mutation Enforcement
+
+What & Why
+Task #428 was intended to canonicalize generic expression target/value serialization and enforce symbol-scope handling before final XAML packaging. However, the latest package still contains the same dominant defect classes in the actual archived workflows:
+- leaked JSON-like expression payloads in final XAML
+- malformed attribute quoting in final XAML
+- placeholders surviving in required executable properties
+- zero populated records in expressionCanonicalizationFixes[], symbolScopeDefects[], invokeSerializationFixes[], and residualExpressionSerializationDefects[]
+
+This strongly suggests that either:
+- the #428 canonicalization logic is not running on the active package path,
+- or it is running on an intermediate representation but not mutating the exact XAML content that is finally archived,
+- or the diagnostics are not being wired from the active mutation path into FinalQualityReport.
+
+This task is a focused wiring and enforcement fix. It is not a new conceptual layer. Its purpose is to prove where #428 is and is not executing, ensure it mutates the final archive-bound XAML, and ensure its diagnostics are populated from the same path.
+
+Goals
+1. Prove whether #428 runs on the exact XAML that is ultimately archived.
+2. Ensure target/value canonicalization mutates the final archive-bound XAML, not an unused side representation.
+3. Ensure diagnostics arrays from #428 are populated from the active mutation path.
+4. Eliminate known remaining patterns such as malformed GetAsset AssetName quoting and JSON-like payloads in executable properties from final archived XAML.
+
+Done looks like
+- The canonicalization/mutation stage runs on the exact XAML entries that are written into the package archive.
+- The final archived XAML no longer contains:
+  - malformed attribute quoting like `AssetName="["BGV26_BirthdaysCalendarName"]"`
+  - JSON-like internal object payloads in executable properties
+  - unresolved target/value object payloads in final executable slots
+- FinalQualityReport shows non-zero and meaningful values in:
+  - `expressionCanonicalizationFixes[]`
+  - `symbolScopeDefects[]`
+  - `targetValueCanonicalizationSummary`
+  - `residualExpressionSerializationDefects[]` when unresolved cases remain
+- Stage/debug output proves hash parity between the post-428 mutated XAML and the archived XAML.
+- Build mode remains preserved.
+
+Out of scope
+- Broad catalog/filter alignment changes
+- New contract-validation concepts
+- Reworking decomposition strategy
+- Deep business-logic repair
+
+Tasks
+
+1. Trace the active 428 execution path
+Instrument the 428 canonicalization path to emit, per workflow:
+- pre-canonicalization content hash
+- post-canonicalization content hash
+- whether mutation occurred
+- whether the mutated content is the exact content passed to archive write
+- diagnostics counts emitted from that same path
+
+2. Enforce final-archive mutation path
+Ensure the 428 canonicalization output is the exact XAML set used for:
+- final packaging
+- final-artifact-validation
+- final-quality-report diagnostics
+There must not be a split where canonicalization updates one copy while the archive writes another.
+
+3. Add final-XAML assertion checks
+Before archive write, assert that final XAML contains none of these unresolved patterns:
+- malformed quoting in attributes like `AssetName="["..."]"`
+- JSON-like object payloads in executable properties
+- target-bearing slots containing internal object-shaped payloads
+
+If a pattern remains unresolved:
+- record structured defects
+- degrade appropriately
+- but do not silently archive the malformed form
+
+4. Populate 428 diagnostics from active path
+Wire the actual active mutation path into:
+- `expressionCanonicalizationFixes[]`
+- `symbolScopeDefects[]`
+- `targetValueCanonicalizationSummary`
+- `residualExpressionSerializationDefects[]`
+
+If no records are emitted, that should be explainable by genuinely clean input, not by a disconnected code path.
+
+5. Add targeted regression cases from the actual failing package
+Use real failing patterns from the latest package, including:
+- malformed GetAsset AssetName quoting pattern like `AssetName="["BGV26_BirthdaysCalendarName"]"`
+- JSON-like vb_expression payload inside `LogMessage.Message`
+- JSON-like variable payload in target/value-bearing slots
+- placeholder in required executable field
+- child-element Assign.To / Assign.Value object payloads
+
+6. Add final-archive parity proof
+Extend debug/reporting with a compact artifact such as:
+- `canonicalizationArchiveParity`
+containing, per workflow:
+- file
+- canonicalizedHash
+- archivedHash
+- identical: true/false
+
+Relevant files
+- `server/xaml/invoke-binding-canonicalizer.ts`
+- `server/xaml/expression-builder.ts`
+- `server/xaml/xaml-compliance.ts`
+- `server/xaml-generator.ts`
+- `server/workflow-tree-assembler.ts`
+- `server/final-artifact-validation.ts`
+- `server/package-assembler.ts`
+- `server/uipath-pipeline.ts`
+- tests under `server/__tests__/`

@@ -1,0 +1,94 @@
+#429 - 428 Wiring Verification and Final-XAML Mutation Enforcement
+
+What & Why
+Task #428 added canonicalization logic for generic expression target/value serialization and symbol-scope handling, but the latest packages still contain the same dominant defect classes: leaked JSON payloads, malformed attribute quoting, surviving placeholders, and empty 428 diagnostics arrays. This indicates a wiring problem, not a missing concept.
+
+Specifically, the canonicalization logic appears not to be mutating the exact XAML that is ultimately archived, or its diagnostics are not being wired from the active mutation path into the final build/reporting output.
+
+This task is a focused wiring and enforcement fix. It is not a new validator concept. Its purpose is to ensure #428 runs on the exact archive-bound XAML, mutates that content before archive write, and surfaces its diagnostics from the same active path.
+
+Done looks like
+- The canonicalization/mutation stage runs on the exact XAML entries that are written into the package archive.
+- The final archived XAML no longer contains:
+  - malformed attribute quoting like `AssetName="["BGV26_BirthdaysCalendarName"]"`
+  - JSON-like internal object payloads in executable properties
+  - unresolved target/value object payloads in final executable slots
+- FinalQualityReport and build output show non-zero, meaningful values in:
+  - `expressionCanonicalizationFixes[]`
+  - `symbolScopeDefects[]`
+  - `targetValueCanonicalizationSummary`
+  - `residualExpressionSerializationDefects[]`
+  when applicable.
+- Debug output proves hash parity between post-canonicalization XAML and archived XAML via a `canonicalizationArchiveParity` artifact.
+- Build mode is preserved.
+
+Out of scope
+- Broad catalog/filter alignment changes
+- New contract-validation concepts
+- Reworking decomposition strategy
+- Deep business-logic repair
+
+Tasks
+
+1. Trace the active 428 execution path
+Instrument the 428 canonicalization path to emit per workflow:
+- pre-canonicalization content hash
+- post-canonicalization content hash
+- whether mutation occurred
+- whether the mutated content is the exact content passed to archive write
+- diagnostics counts emitted from that same path
+
+2. Enforce final-archive mutation path
+Ensure the 428 canonicalization output is the exact XAML set used for:
+- final packaging
+- final artifact validation
+- final quality report diagnostics
+There must not be a split where canonicalization updates one copy while the archive writes another.
+
+3. Add pre-archive assertion checks
+Before archive write, scan final XAML for known unresolved patterns:
+- malformed quoting in attributes like `AssetName="["..."]"`
+- JSON-like object payloads in executable properties
+- target-bearing slots containing internal object-shaped payloads
+
+If a pattern remains unresolved:
+- record structured defects
+- degrade appropriately
+- but do not silently archive the malformed form
+
+4. Populate 428 diagnostics from active path
+Wire the actual active mutation path into:
+- `expressionCanonicalizationFixes[]`
+- `symbolScopeDefects[]`
+- `targetValueCanonicalizationSummary`
+- `residualExpressionSerializationDefects[]`
+
+If no records are emitted, that must be explainable by genuinely clean input, not by disconnected wiring.
+
+5. Add targeted regression cases from the actual failing package
+Use real failing patterns from the latest package, including:
+- malformed GetAsset AssetName quoting like `AssetName="["BGV26_BirthdaysCalendarName"]"`
+- JSON-like `vb_expression` payload inside `LogMessage.Message`
+- JSON-like variable payload in target/value-bearing slots
+- placeholder in required executable field
+- child-element `Assign.To` and `Assign.Value` object payloads
+
+6. Add final-archive parity proof
+Extend debug/reporting with a compact artifact:
+`canonicalizationArchiveParity`
+containing, per workflow:
+- file
+- canonicalizedHash
+- archivedHash
+- identical: true/false
+
+Relevant files
+- server/xaml/invoke-binding-canonicalizer.ts
+- server/xaml/expression-builder.ts
+- server/xaml/xaml-compliance.ts
+- server/xaml-generator.ts
+- server/workflow-tree-assembler.ts
+- server/final-artifact-validation.ts
+- server/package-assembler.ts
+- server/uipath-pipeline.ts
+- tests under server/__tests__/

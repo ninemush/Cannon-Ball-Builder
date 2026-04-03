@@ -60,3 +60,9 @@ id = "hTnFS0W-8RkiloosvR1Gc"
 uri = "file://scripts/renderer-comparison/orthogonal-100-nodes.png"
 type = "image"
 title = "Orthogonal (100 nodes, 4x chained flow)"
+
+[[outputs]]
+id = "POyCjQJC5xXd2t06qkKjg"
+uri = "file://pipeline-run-diagnostic-47058712.md"
+type = "text"
+title = "Pipeline Run Diagnostic: 47058712"
