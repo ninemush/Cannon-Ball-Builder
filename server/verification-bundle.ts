@@ -1,7 +1,10 @@
 import type { Express, Request, Response } from "express";
 import archiver from "archiver";
+import * as fs from "fs";
+import * as path from "path";
 import { storage } from "./storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
+import { documentStorage } from "./document-storage";
 import { getCachedPipelineResult, findUiPathMessage, parseUiPathPackage } from "./uipath-pipeline";
 
 async function verifyIdeaAccess(req: Request, res: Response): Promise<{ ideaId: string; isAdmin: boolean } | null> {
@@ -26,6 +29,17 @@ async function verifyIdeaAccess(req: Request, res: Response): Promise<{ ideaId: 
     return null;
   }
   return { ideaId, isAdmin: activeRole === "Admin" || activeRole === "CoE" };
+}
+
+function readCatalogFile(filename: string): any | null {
+  try {
+    const filePath = path.resolve("catalog", filename);
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch {}
+  return null;
 }
 
 export function registerVerificationBundleRoutes(app: Express): void {
@@ -120,14 +134,29 @@ export function registerVerificationBundleRoutes(app: Express): void {
       const dhgContent = targetRun.dhgContent || (isCachedRun ? pipelineResult?.dhgContent : null) || null;
       const finalQualityReport = isCachedRun ? (pipelineResult?.finalQualityReport || null) : null;
 
+      const [pddDoc, sddDoc, pddApproval, sddApproval] = await Promise.all([
+        documentStorage.getLatestDocument(ideaId, "PDD"),
+        documentStorage.getLatestDocument(ideaId, "SDD"),
+        documentStorage.getApproval(ideaId, "PDD"),
+        documentStorage.getApproval(ideaId, "SDD"),
+      ]);
+
+      const activityCatalog = readCatalogFile("activity-catalog.json");
+      const generationMetadata = readCatalogFile("generation-metadata.json");
+
       const artifactSources: Record<string, string> = {
         manifest: "generated",
         "pipeline-diagnostics": "database",
       };
 
+      let nupkgBuffer: Buffer | null = null;
       if (isCachedRun && pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
+        nupkgBuffer = pipelineResult.packageBuffer;
         artifactSources["nupkg"] = "cache";
-      } else if (!isCachedRun) {
+      } else if (packageData) {
+        artifactSources["nupkg"] = "unavailable-metadata-only";
+        artifactSources["package-metadata"] = "chat-message";
+      } else {
         artifactSources["nupkg"] = "unavailable-cache-expired";
       }
 
@@ -145,8 +174,6 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       if (isCachedRun && pipelineResult?.metaValidationResult) {
         artifactSources["meta-validation-results"] = "cache";
-      } else if (!isCachedRun) {
-        artifactSources["meta-validation-results"] = "unavailable-cache-expired";
       }
 
       if (targetRun.outcomeReport) {
@@ -155,12 +182,28 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       if (finalQualityReport) {
         artifactSources["final-quality-report"] = "cache";
-      } else if (!isCachedRun) {
-        artifactSources["final-quality-report"] = "unavailable-cache-expired";
+      } else {
+        artifactSources["final-quality-report"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
       }
 
       if (targetRun.specSnapshot) {
         artifactSources["spec-snapshot"] = "database";
+      }
+
+      if (pddDoc) {
+        artifactSources["pdd"] = "database";
+      }
+      if (sddDoc) {
+        artifactSources["sdd"] = "database";
+      }
+      if (pddApproval || sddApproval) {
+        artifactSources["document-approvals"] = "database";
+      }
+      if (activityCatalog) {
+        artifactSources["activity-catalog"] = "filesystem";
+      }
+      if (generationMetadata) {
+        artifactSources["generation-metadata"] = "filesystem";
       }
 
       const manifest = {
@@ -203,6 +246,33 @@ export function registerVerificationBundleRoutes(app: Express): void {
       let metaValidationResults: any = null;
       if (isCachedRun && pipelineResult?.metaValidationResult) {
         metaValidationResults = pipelineResult.metaValidationResult;
+      } else if (outcomeReport?.pipelineOutcome) {
+        const po = outcomeReport.pipelineOutcome;
+        const metaSummary: Record<string, any> = {
+          source: "outcome-report-fallback",
+        };
+        if (po.metaValidationEngaged !== undefined) metaSummary.engaged = po.metaValidationEngaged;
+        if (po.correctionsApplied !== undefined) metaSummary.correctionsApplied = po.correctionsApplied;
+        if (po.confidenceScore !== undefined) metaSummary.confidenceScore = po.confidenceScore;
+        if (po.metaValidationMode !== undefined) metaSummary.mode = po.metaValidationMode;
+        if (po.metaValidationDuration !== undefined) metaSummary.duration = po.metaValidationDuration;
+
+        if (po.metaValidation) {
+          if (po.metaValidation.engaged !== undefined) metaSummary.engaged = po.metaValidation.engaged;
+          if (po.metaValidation.correctionsApplied !== undefined) metaSummary.correctionsApplied = po.metaValidation.correctionsApplied;
+          if (po.metaValidation.confidenceScore !== undefined) metaSummary.confidenceScore = po.metaValidation.confidenceScore;
+          if (po.metaValidation.mode !== undefined) metaSummary.mode = po.metaValidation.mode;
+          if (po.metaValidation.duration !== undefined) metaSummary.duration = po.metaValidation.duration;
+        }
+
+        if (Object.keys(metaSummary).length > 1) {
+          metaValidationResults = metaSummary;
+          artifactSources["meta-validation-results"] = "outcome-report-fallback";
+        }
+      }
+
+      if (!artifactSources["meta-validation-results"]) {
+        artifactSources["meta-validation-results"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
       }
 
       let stageLog: any = null;
@@ -234,8 +304,18 @@ export function registerVerificationBundleRoutes(app: Express): void {
       const serializedArtifacts: Array<{ data: string | Buffer; name: string }> = [];
       serializedArtifacts.push({ data: JSON.stringify(manifest, null, 2), name: "manifest.json" });
 
-      if (isCachedRun && pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
-        serializedArtifacts.push({ data: pipelineResult.packageBuffer, name: `${safeProjectName}.nupkg` });
+      if (nupkgBuffer && nupkgBuffer.length > 0) {
+        serializedArtifacts.push({ data: nupkgBuffer, name: `${safeProjectName}.nupkg` });
+      } else if (packageData) {
+        const { internal, ...publicMetadata } = packageData;
+        serializedArtifacts.push({
+          data: JSON.stringify({
+            source: "chat-message",
+            note: "Binary .nupkg unavailable; reconstruction inputs (xamlEntries/archiveManifest) are not persisted to database. Package metadata from chat message is included instead.",
+            ...publicMetadata,
+          }, null, 2),
+          name: "package-metadata.json",
+        });
       }
 
       if (dhgContent) {
@@ -262,6 +342,53 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       if (targetRun.specSnapshot) {
         serializedArtifacts.push({ data: JSON.stringify(targetRun.specSnapshot, null, 2), name: "spec-snapshot.json" });
+      }
+
+      if (pddDoc?.content) {
+        serializedArtifacts.push({ data: pddDoc.content, name: "pdd.md" });
+      }
+
+      if (sddDoc?.content) {
+        serializedArtifacts.push({ data: sddDoc.content, name: "sdd.md" });
+      }
+
+      const docApprovals: Record<string, any> = {};
+      if (pddApproval) {
+        docApprovals.pdd = {
+          approvedBy: pddApproval.userName,
+          userId: pddApproval.userId,
+          role: pddApproval.userRole,
+          approvedAt: pddApproval.approvedAt,
+          documentId: pddApproval.documentId,
+          version: pddDoc?.version ?? null,
+        };
+      }
+      if (sddApproval) {
+        docApprovals.sdd = {
+          approvedBy: sddApproval.userName,
+          userId: sddApproval.userId,
+          role: sddApproval.userRole,
+          approvedAt: sddApproval.approvedAt,
+          documentId: sddApproval.documentId,
+          version: sddDoc?.version ?? null,
+        };
+      }
+      if (Object.keys(docApprovals).length > 0) {
+        serializedArtifacts.push({ data: JSON.stringify(docApprovals, null, 2), name: "document-approvals.json" });
+      }
+
+      if (activityCatalog) {
+        serializedArtifacts.push({
+          data: JSON.stringify({
+            snapshotAt: now,
+            ...activityCatalog,
+          }, null, 2),
+          name: "activity-catalog.json",
+        });
+      }
+
+      if (generationMetadata) {
+        serializedArtifacts.push({ data: JSON.stringify(generationMetadata, null, 2), name: "generation-metadata.json" });
       }
 
       archive = archiver("zip", { zlib: { level: 9 } });
