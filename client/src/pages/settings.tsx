@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { MetaValidationDashboard } from "@/components/meta-validation-dashboard";
 import { PipelineHealthDashboard } from "@/components/pipeline-health-dashboard";
+import { PipelineDebugPanel } from "@/components/pipeline-debug-panel";
 import {
   ShieldAlert,
   Shield,
@@ -53,6 +54,7 @@ import {
   Database,
   Code,
   MessageSquare,
+  Bug,
 } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -3665,6 +3667,10 @@ export default function SettingsPage() {
               <Activity className="mr-1.5 sm:mr-2 h-4 w-4" />
               <span className="text-xs sm:text-sm">Pipeline Health</span>
             </TabsTrigger>
+            <TabsTrigger value="debug" data-testid="tab-debug">
+              <Bug className="mr-1.5 sm:mr-2 h-4 w-4" />
+              <span className="text-xs sm:text-sm">Debug</span>
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -3691,6 +3697,11 @@ export default function SettingsPage() {
         <TabsContent value="pipeline-health" className="mt-4">
           <Card data-testid="card-pipeline-health">
             <PipelineHealthDashboard />
+          </Card>
+        </TabsContent>
+        <TabsContent value="debug" className="mt-4">
+          <Card data-testid="card-debug">
+            <PipelineDebugPanel />
           </Card>
         </TabsContent>
       </Tabs>

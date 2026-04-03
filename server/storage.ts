@@ -2,7 +2,7 @@ import { users, ideas, auditLogs, uipathGenerationRuns, type User, type InsertUs
 import { appSettings } from "@shared/schema";
 import type { GenerationRunStatus } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, isNull } from "drizzle-orm";
+import { eq, desc, and, isNull, sql, gte, lte, count, or, ilike } from "drizzle-orm";
 
 export interface IStorage {
   getAppSetting(key: string): Promise<string | undefined>;
@@ -31,6 +31,7 @@ export interface IStorage {
   failGenerationRun(runId: string, errorMessage: string): Promise<UipathGenerationRun | undefined>;
   updateGenerationRunStageLog(runId: string, stageLog: unknown): Promise<UipathGenerationRun | undefined>;
   failOrphanedRuns(): Promise<UipathGenerationRun[]>;
+  listGenerationRuns(options: { offset?: number; limit?: number; status?: string; ideaId?: string; fromDate?: Date; toDate?: Date; search?: string }): Promise<{ runs: (UipathGenerationRun & { ideaTitle?: string })[]; total: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -219,6 +220,37 @@ export class DatabaseStorage implements IStorage {
       )
       .returning();
     return orphaned;
+  }
+
+  async listGenerationRuns(options: { offset?: number; limit?: number; status?: string; ideaId?: string; fromDate?: Date; toDate?: Date; search?: string }): Promise<{ runs: (UipathGenerationRun & { ideaTitle?: string })[]; total: number }> {
+    const conditions = [];
+    if (options.status) conditions.push(eq(uipathGenerationRuns.status, options.status));
+    if (options.ideaId) conditions.push(eq(uipathGenerationRuns.ideaId, options.ideaId));
+    if (options.fromDate) conditions.push(gte(uipathGenerationRuns.createdAt, options.fromDate));
+    if (options.toDate) conditions.push(lte(uipathGenerationRuns.createdAt, options.toDate));
+    if (options.search) {
+      const searchPattern = `%${options.search}%`;
+      conditions.push(or(ilike(ideas.title, searchPattern), ilike(uipathGenerationRuns.runId, searchPattern)));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [{ total: totalCount }] = await db.select({ total: count() }).from(uipathGenerationRuns).leftJoin(ideas, eq(uipathGenerationRuns.ideaId, ideas.id)).where(whereClause);
+
+    const rows = await db
+      .select({
+        run: uipathGenerationRuns,
+        ideaTitle: ideas.title,
+      })
+      .from(uipathGenerationRuns)
+      .leftJoin(ideas, eq(uipathGenerationRuns.ideaId, ideas.id))
+      .where(whereClause)
+      .orderBy(desc(uipathGenerationRuns.createdAt))
+      .limit(options.limit ?? 25)
+      .offset(options.offset ?? 0);
+
+    const runs = rows.map(r => ({ ...r.run, ideaTitle: r.ideaTitle ?? undefined }));
+    return { runs, total: totalCount };
   }
 }
 

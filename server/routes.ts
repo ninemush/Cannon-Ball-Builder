@@ -634,6 +634,96 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/debug/runs", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const dbUser = await storage.getUser(req.session.userId);
+    if (!dbUser || (req.session.activeRole || dbUser.role) !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 25, 100));
+    const status = req.query.status as string | undefined;
+    const ideaId = req.query.ideaId as string | undefined;
+    const fromDateRaw = req.query.fromDate ? new Date(req.query.fromDate as string) : undefined;
+    const toDateRaw = req.query.toDate ? new Date(req.query.toDate as string) : undefined;
+    const fromDate = fromDateRaw && !isNaN(fromDateRaw.getTime()) ? fromDateRaw : undefined;
+    const toDate = toDateRaw && !isNaN(toDateRaw.getTime()) ? toDateRaw : undefined;
+    const search = (req.query.search as string) || undefined;
+
+    const result = await storage.listGenerationRuns({ offset, limit, status: status || undefined, ideaId: ideaId || undefined, fromDate, toDate, search });
+
+    const runs = result.runs.map(r => {
+      let warningCount = 0;
+      let remediationCount = 0;
+      try {
+        if (r.outcomeReport) {
+          const report = JSON.parse(r.outcomeReport);
+          const po = report.pipelineOutcome || report;
+          warningCount = po.qualityWarnings?.length || 0;
+          remediationCount = po.remediations?.length || 0;
+        }
+      } catch {}
+      const durationMs = r.completedAt && r.createdAt ? new Date(r.completedAt).getTime() - new Date(r.createdAt).getTime() : null;
+      return {
+        runId: r.runId,
+        ideaId: r.ideaId,
+        ideaTitle: r.ideaTitle || "Unknown",
+        status: r.status,
+        generationMode: r.generationMode,
+        currentPhase: r.currentPhase,
+        triggeredBy: r.triggeredBy,
+        warningCount,
+        remediationCount,
+        durationMs,
+        errorMessage: r.errorMessage,
+        createdAt: r.createdAt,
+        completedAt: r.completedAt,
+      };
+    });
+    return res.json({ runs, total: result.total, offset, limit });
+  });
+
+  app.get("/api/admin/debug/runs/:runId", async (req: Request, res: Response) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const dbUser = await storage.getUser(req.session.userId);
+    if (!dbUser || (req.session.activeRole || dbUser.role) !== "Admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    const { runId } = req.params;
+    const dbRun = await storage.getGenerationRun(runId);
+    if (!dbRun) {
+      return res.status(404).json({ message: "Run not found" });
+    }
+    const idea = await storage.getIdea(dbRun.ideaId);
+
+    let parsedPhaseProgress = null;
+    let parsedOutcomeReport = null;
+    let parsedStageLog = null;
+    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch {}
+    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch {}
+    try { if (dbRun.stageLog) parsedStageLog = typeof dbRun.stageLog === 'string' ? JSON.parse(dbRun.stageLog) : dbRun.stageLog; } catch {}
+
+    const durationMs = dbRun.completedAt && dbRun.createdAt ? new Date(dbRun.completedAt).getTime() - new Date(dbRun.createdAt).getTime() : null;
+    const terminalStatuses = ["completed", "completed_with_warnings", "failed", "blocked"];
+    const isActive = !terminalStatuses.includes(dbRun.status) && !dbRun.completedAt;
+
+    return res.json({
+      run: {
+        ...dbRun,
+        ideaTitle: idea?.title || "Unknown",
+        phaseProgress: parsedPhaseProgress,
+        outcomeReport: parsedOutcomeReport,
+        stageLog: parsedStageLog,
+        durationMs,
+        isActive,
+      },
+    });
+  });
+
   app.get("/api/admin/pipeline-health/convergence", async (req: Request, res: Response) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
