@@ -2318,6 +2318,10 @@ export function registerUiPathRoutes(app: Express): void {
                 completenessLevel: pr?.qualityGateResult?.completenessLevel,
                 outcomeSummary: buildOutcomeSummary,
                 dependencyMap: pr?.dependencyMap,
+                dependencyDiagnostics: pr?.dependencyDiagnostics,
+                dependencyGaps: pr?.dependencyGaps,
+                ambiguousResolutions: pr?.ambiguousResolutions,
+                orphanDependencies: pr?.orphanDependencies,
               });
             },
             onFail: (error: string) => {
@@ -2387,6 +2391,10 @@ export function registerUiPathRoutes(app: Express): void {
             completenessLevel: observerRun.completenessLevel,
             outcomeSummary: observerRun.outcomeSummary,
             dependencyMap: observerRun.dependencyMap,
+            dependencyDiagnostics: observerRun.dependencyDiagnostics,
+            dependencyGaps: observerRun.dependencyGaps,
+            ambiguousResolutions: observerRun.ambiguousResolutions,
+            orphanDependencies: observerRun.orphanDependencies,
             createdAt: observerRun.createdAt,
           },
         });
@@ -2634,7 +2642,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (isObserverTerminalStatus(observerRun.status) && !replay) {
         console.log(`[Observer] SSE stream: run already terminal (${observerRun.status}), sending final status for runId=${runId}`);
         clearInterval(heartbeatInterval);
-        res.write(`data: ${JSON.stringify({ done: true, status: observerRun.status, warnings: observerRun.warnings, templateComplianceScore: observerRun.complianceScore, completenessLevel: observerRun.completenessLevel, outcomeSummary: observerRun.outcomeSummary, dependencyMap: observerRun.dependencyMap })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true, status: observerRun.status, warnings: observerRun.warnings, templateComplianceScore: observerRun.complianceScore, completenessLevel: observerRun.completenessLevel, outcomeSummary: observerRun.outcomeSummary, dependencyMap: observerRun.dependencyMap, dependencyDiagnostics: observerRun.dependencyDiagnostics, dependencyGaps: observerRun.dependencyGaps, ambiguousResolutions: observerRun.ambiguousResolutions, orphanDependencies: observerRun.orphanDependencies })}\n\n`);
         res.end();
         unsubscribeFn();
         return;

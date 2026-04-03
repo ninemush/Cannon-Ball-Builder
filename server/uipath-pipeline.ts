@@ -363,6 +363,10 @@ export interface PipelineResult {
   metaValidationResult?: MetaValidationResult;
   outcomeReport?: PipelineOutcomeReport;
   finalQualityReport?: FinalQualityReport;
+  dependencyDiagnostics?: import("./post-emission-dependency-analyzer").DependencyDiagnosticsArtifact;
+  dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
+  ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
+  orphanDependencies?: Array<{ packageId: string; version: string | null; reason: string }>;
 }
 
 export interface DhgResult {
@@ -1811,6 +1815,10 @@ export async function compilePackageFromSpecs(
       metaValidationResult,
       outcomeReport: buildResult.outcomeReport,
       finalQualityReport,
+      dependencyDiagnostics: buildResult.dependencyDiagnostics,
+      dependencyGaps: buildResult.dependencyGaps,
+      ambiguousResolutions: buildResult.ambiguousResolutions,
+      orphanDependencies: buildResult.orphanDependencies,
     };
 
     evictOldestPipelineCacheEntry();

@@ -760,6 +760,10 @@ export interface ObserverRunState {
     totalEstimatedMinutes: number;
   };
   dependencyMap?: Record<string, string>;
+  dependencyDiagnostics?: unknown;
+  dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
+  ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
+  orphanDependencies?: Array<{ packageId: string; version: string | null; reason: string }>;
   error?: string;
 }
 
@@ -838,6 +842,10 @@ export function emitObserverDone(runId: string, payload: any): void {
   if (payload.completenessLevel) entry.state.completenessLevel = payload.completenessLevel;
   if (payload.outcomeSummary) entry.state.outcomeSummary = payload.outcomeSummary;
   if (payload.dependencyMap) entry.state.dependencyMap = payload.dependencyMap;
+  if (payload.dependencyDiagnostics) entry.state.dependencyDiagnostics = payload.dependencyDiagnostics;
+  if (payload.dependencyGaps) entry.state.dependencyGaps = payload.dependencyGaps;
+  if (payload.ambiguousResolutions) entry.state.ambiguousResolutions = payload.ambiguousResolutions;
+  if (payload.orphanDependencies) entry.state.orphanDependencies = payload.orphanDependencies;
   entry.state.updatedAt = Date.now();
   emitObserverEvent(runId, { type: "done", data: { done: true, ...payload }, timestamp: Date.now() });
 }

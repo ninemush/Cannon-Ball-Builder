@@ -57,6 +57,10 @@ interface CompletedRunResult {
   completenessLevel?: "structural" | "functional" | "incomplete";
   outcomeSummary?: UiPathOutcomeSummary;
   dependencyMap?: Record<string, string>;
+  dependencyDiagnostics?: unknown;
+  dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
+  ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
+  orphanDependencies?: Array<{ packageId: string; version: string | null; reason: string }>;
 }
 
 export interface UseUiPathRunReturn {
@@ -352,6 +356,10 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
             completenessLevel: data.completenessLevel,
             outcomeSummary: data.outcomeSummary || cur?.outcomeSummary,
             dependencyMap: data.dependencyMap,
+            dependencyDiagnostics: data.dependencyDiagnostics,
+            dependencyGaps: data.dependencyGaps,
+            ambiguousResolutions: data.ambiguousResolutions,
+            orphanDependencies: data.orphanDependencies,
           });
           return next;
         });
@@ -541,6 +549,10 @@ export function useUiPathRun(ideaId: string): UseUiPathRunReturn {
             completenessLevel: run.completenessLevel,
             outcomeSummary: run.outcomeSummary,
             dependencyMap: run.dependencyMap,
+            dependencyDiagnostics: run.dependencyDiagnostics,
+            dependencyGaps: run.dependencyGaps,
+            ambiguousResolutions: run.ambiguousResolutions,
+            orphanDependencies: run.orphanDependencies,
           }]]));
         }
       } catch {}

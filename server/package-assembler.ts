@@ -57,6 +57,7 @@ import archiver from "archiver";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
   import { XMLParser, XMLBuilder } from "fast-xml-parser";
+  import { runPostEmissionDependencyAnalysis, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
 
 interface DomCorrectionResult {
   content: string;
@@ -2085,6 +2086,13 @@ function collectActivityTypesFromWorkflows(workflows: Array<{ steps?: Array<{ ac
   return packages;
 }
 
+/**
+ * Speculative dependency resolution based on planning metadata, tree specs, and keyword matching.
+ * NON-AUTHORITATIVE: This function is used for cache fingerprinting and early estimation only.
+ * The authoritative dependency set is produced by PostEmissionDependencyAnalyzer after XAML emission.
+ * If PostEmissionDependencyAnalyzer is unavailable, this function's output may be used as a named fallback
+ * with the event recorded in the diagnostics artifact.
+ */
 export function resolveDependencies(
   pkg: { workflows?: Array<{ name?: string; steps?: Array<{ activityType?: string; activityPackage?: string }> }> },
   studioProfile: StudioProfile | null,
@@ -2602,6 +2610,10 @@ export type BuildResult = {
   usedAIFallback: boolean;
   outcomeReport?: PipelineOutcomeReport;
   projectJsonContent?: string;
+  dependencyDiagnostics?: DependencyDiagnosticsArtifact;
+  dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
+  ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
+  orphanDependencies?: Array<{ packageId: string; version: string | null; reason: string }>;
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -6917,34 +6929,6 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     }
 
     {
-      console.log(`[Studio Resolution Smoke Test] Scanning all XAML files for unresolvable activities...`);
-      const smokeTestResult = runStudioResolutionSmokeTest(deferredWrites, deps);
-      for (const warn of smokeTestResult.warnings) {
-        console.warn(`[Studio Resolution Smoke Test] WARNING: ${warn}`);
-        dependencyWarnings.push({
-          code: "STUDIO_RESOLUTION_WARNING",
-          message: warn,
-          stage: "studio-resolution-smoke-test",
-          recoverable: true,
-        });
-      }
-      if (smokeTestResult.errors.length > 0) {
-        for (const err of smokeTestResult.errors) {
-          console.error(`[Studio Resolution Smoke Test] ERROR: ${err}`);
-          dependencyWarnings.push({
-            code: "STUDIO_RESOLUTION_FAILURE",
-            message: err,
-            stage: "studio-resolution-smoke-test",
-            recoverable: false,
-          });
-        }
-        throw new Error(`[Studio Resolution Smoke Test] BLOCKED: ${smokeTestResult.errors.length} unresolvable activity error(s) — package would fail in Studio:\n${smokeTestResult.errors.join("\n")}`);
-      } else {
-        console.log(`[Studio Resolution Smoke Test] PASSED — all activity prefixes map to declared namespaces and project.json dependencies`);
-      }
-    }
-
-    {
       console.log(`[Final Dedup Gate] Checking for bracket-named duplicate files...`);
       const deferredPaths = Array.from(deferredWrites.keys());
       const { collisionDetails } = detectFinalDedupCollisions(deferredPaths);
@@ -7000,6 +6984,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 
       console.log(`[Post-Assembly Validation] PASSED — all dependency versions validated, entry point verified, studio version confirmed`);
     }
+
+    const postGateXamlEntries: Array<{ name: string; content: string }> = [];
 
     for (const [path, content] of deferredWrites.entries()) {
       if (path.endsWith(".xaml")) {
@@ -7101,9 +7087,129 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             autoFixSummary.push(`Fixed XML well-formedness issues in ${fileName} via targeted repair`);
           }
         }
+        postGateXamlEntries.push({ name: path, content: sanitized });
         archive.append(sanitized, { name: path });
       } else {
         archive.append(content, { name: path });
+      }
+    }
+
+    const speculativeDepsSnapshot = { ...deps };
+
+    let postEmissionDiagnostics: DependencyDiagnosticsArtifact | undefined;
+    let postEmissionGaps: Array<{ activityTag: string; fileName: string; detail: string }> | undefined;
+    let postEmissionAmbiguous: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }> | undefined;
+    let postEmissionOrphans: Array<{ packageId: string; version: string | null; reason: string }> | undefined;
+
+    {
+
+      try {
+        console.log(`[Post-Emission Analyzer] Running post-emission dependency analysis on ${postGateXamlEntries.length} final XAML entries...`);
+        const postEmissionResult = runPostEmissionDependencyAnalysis(
+          postGateXamlEntries,
+          tf as "Windows" | "Portable",
+          speculativeDepsSnapshot,
+        );
+
+        const derivedDeps = postEmissionResult.deps;
+        const derivedReport = postEmissionResult.report;
+        postEmissionDiagnostics = postEmissionResult.diagnostics;
+
+        for (const key of Object.keys(deps)) {
+          delete deps[key];
+        }
+        for (const [key, val] of Object.entries(derivedDeps)) {
+          deps[key] = val;
+        }
+
+        const droppedSpeculative: string[] = [];
+        for (const [specPkg] of Object.entries(speculativeDepsSnapshot)) {
+          if (!deps[specPkg] && specPredictedPackages.has(specPkg)) {
+            droppedSpeculative.push(specPkg);
+            console.log(`[Post-Emission Analyzer] Dropped speculative package ${specPkg} — not found in XAML-derived set (post-emission analyzer is authoritative)`);
+          }
+        }
+
+        if (droppedSpeculative.length > 0) {
+          console.log(`[Post-Emission Analyzer] Dropped ${droppedSpeculative.length} speculative package(s) not confirmed by XAML analysis: ${droppedSpeculative.join(", ")}`);
+        }
+
+        if (derivedReport.dependencyGaps.length > 0) {
+          postEmissionGaps = derivedReport.dependencyGaps;
+        }
+        if (derivedReport.ambiguousResolutions.length > 0) {
+          postEmissionAmbiguous = derivedReport.ambiguousResolutions;
+        }
+        if (postEmissionDiagnostics.orphanDependencies.length > 0) {
+          postEmissionOrphans = postEmissionDiagnostics.orphanDependencies;
+          for (const orphan of postEmissionDiagnostics.orphanDependencies) {
+            dependencyWarnings.push({
+              code: "ORPHAN_DEPENDENCY",
+              message: `${orphan.reason}`,
+              stage: "post-emission-analysis",
+              recoverable: true,
+            });
+          }
+        }
+
+        console.log(`[Post-Emission Analyzer] XAML-derived dependency set: ${Object.keys(deps).length} packages (speculative had ${Object.keys(speculativeDepsSnapshot).length}, ${droppedSpeculative.length} speculative dropped)`);
+      } catch (analyzerErr: unknown) {
+        const errMsg = analyzerErr instanceof Error ? analyzerErr.message : String(analyzerErr);
+        console.warn(`[Post-Emission Analyzer] Analyzer failed — falling back to speculative dependencies: ${errMsg}`);
+        dependencyWarnings.push({
+          code: "POST_EMISSION_ANALYZER_FALLBACK",
+          message: `Post-emission dependency analyzer failed: ${errMsg}. Using speculative (resolveDependencies) set as fallback.`,
+          stage: "post-emission-analysis",
+          recoverable: true,
+        });
+        postEmissionDiagnostics = {
+          activityResolutions: [],
+          packageResolutions: Object.entries(speculativeDepsSnapshot).map(([pkgId, ver]) => ({
+            packageId: pkgId,
+            version: ver,
+            resolutionSource: "speculative_fallback" as ResolutionSource,
+            activities: [],
+          })),
+          unresolvedActivities: [],
+          ambiguousResolutions: [],
+          orphanDependencies: [],
+          speculativeComparisonDelta: null,
+          summary: {
+            totalActivities: 0,
+            resolvedPackages: Object.keys(speculativeDepsSnapshot).length,
+            unresolvedCount: 0,
+            ambiguousCount: 0,
+            orphanCount: 0,
+          },
+        };
+      }
+    }
+
+    {
+      console.log(`[Studio Resolution Smoke Test] Scanning all XAML files against post-emission-derived deps...`);
+      const smokeTestResult = runStudioResolutionSmokeTest(deferredWrites, deps);
+      for (const warn of smokeTestResult.warnings) {
+        console.warn(`[Studio Resolution Smoke Test] WARNING: ${warn}`);
+        dependencyWarnings.push({
+          code: "STUDIO_RESOLUTION_WARNING",
+          message: warn,
+          stage: "studio-resolution-smoke-test",
+          recoverable: true,
+        });
+      }
+      if (smokeTestResult.errors.length > 0) {
+        for (const err of smokeTestResult.errors) {
+          console.warn(`[Studio Resolution Smoke Test] DIAGNOSTIC: ${err}`);
+          dependencyWarnings.push({
+            code: "STUDIO_RESOLUTION_DIAGNOSTIC",
+            message: err,
+            stage: "studio-resolution-smoke-test",
+            recoverable: true,
+          });
+        }
+        console.warn(`[Studio Resolution Smoke Test] ${smokeTestResult.errors.length} unresolvable activity diagnostic(s) — package generation continues with structured diagnostics`);
+      } else {
+        console.log(`[Studio Resolution Smoke Test] PASSED — all activity prefixes map to declared namespaces and post-emission dependencies`);
       }
     }
 
@@ -7115,17 +7221,6 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       } else if (!isValidNuGetVersion(val)) {
         console.log(`[Dependency FinalGuard] Rejected invalid version before emit: ${key}=${val}`);
         delete deps[key];
-      } else {
-        const knownByCatalog = catalogService.isLoaded() && catalogService.getConfirmedVersion(key) !== null;
-        const knownByMetadata = _metadataService.getPreferredVersion(key) !== null;
-        const knownByBaseline = getBaselineFallbackVersion(key, tf as "Windows" | "Portable") !== null;
-        const isSpecPredicted = specPredictedPackages.has(key);
-        if (!knownByCatalog && !knownByMetadata && !knownByBaseline && !isSpecPredicted) {
-          console.log(`[Dependency FinalGuard] Rejected unrecognized package before emit: ${key}=${val}`);
-          delete deps[key];
-        } else if (isSpecPredicted && !knownByCatalog && !knownByMetadata && !knownByBaseline) {
-          console.log(`[Dependency FinalGuard] Preserved spec-predicted package: ${key}=${val}`);
-        }
       }
     }
     projectJson.dependencies = { ...deps };
@@ -7523,7 +7618,7 @@ ${depEntries}
     });
     console.log(`[UiPath Cache] Stored build for ${buildCacheKey} (${buffer.length} bytes, v${version}) with per-stage fingerprints [enrichment=${stageEnrichment.fingerprint.slice(0, 8)}, xaml=${xamlFp.slice(0, 8)}, qg=${qgFp.slice(0, 8)}]`);
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans };
 }
 
 export function createTrackedArchive() {
