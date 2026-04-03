@@ -1,0 +1,209 @@
+# CB2-F13 - Workflow Contract Integrity and Generic Property/Expression Serialization
+
+What & Why
+Recent package runs show that the dominant remaining failures are no longer primarily raw JSON intermediate leaks. The current defects are broader and pattern-driven:
+
+- mixed literal/expression syntax in executable properties
+- undeclared variables and arguments referenced in expressions
+- invalid or pseudo-XAML property emission on workflow invocation activities
+- placeholders surviving in required executable properties
+- decomposed child workflows generated without clean argument contracts
+- parent/child workflow invocation mismatch causing Studio load failures and structurally invalid packages
+
+These issues are not specific to one activity type. They are symptoms of weak workflow contract integrity and inconsistent generic property/expression serialization across the pipeline.
+
+This task adds a contract-integrity and generic property/serialization validation + normalization layer that works across workflow boundaries and expression-bearing properties, not just per-activity special cases.
+
+Goals
+1. Ensure parent and child workflows have valid argument contracts.
+2. Ensure expressions only reference declared variables/arguments in scope.
+3. Ensure invocation serialization uses valid UiPath-supported argument binding shapes.
+4. Ensure required executable properties never carry placeholders or pseudo-XAML payloads as if runnable.
+5. Detect and downgrade broken contracts and invalid expression/property emission patterns with structured diagnostics.
+
+Done looks like
+A dedicated contract-integrity validator runs on the final archive-bound workflow set and analyzes:
+- declared workflow arguments
+- declared variables
+- invocation argument bindings
+- expression references in executable properties
+- workflow-to-workflow contract consistency
+
+The validator detects and reports these pattern classes:
+- undeclared_variable_reference
+- undeclared_argument_reference
+- invoke_argument_binding_mismatch
+- unknown_target_argument
+- missing_required_target_argument
+- invalid_invoke_serialization
+- mixed_literal_expression_syntax
+- required_property_placeholder
+- invalid_expression_scope
+- decomposed_workflow_missing_contract
+
+The validator is pattern-driven and generic. It must not be implemented as a growing list of activity-specific hacks, except where explicit framework constraints genuinely require a small override list.
+
+A structured diagnostics artifact is emitted, for example:
+- contractIntegrityDefects[]
+- hasContractIntegrityIssues: boolean
+- optional contractIntegritySummary
+
+Each defect entry includes:
+- file
+- workflow
+- defectType
+- activityType
+- propertyName
+- referencedSymbol
+- targetWorkflow
+- targetArgument
+- offendingValue
+- severity
+- detectionMethod
+- notes
+
+The validator works across these generic patterns:
+- any expression-bearing property
+- any workflow invocation construct
+- any argument map or binding dictionary
+- any variable/argument reference in executable scope
+
+Parent/child workflow contracts are validated by reading the invoked child workflow's declared arguments and comparing them to the invocation bindings in the caller.
+
+The validator must distinguish:
+- execution_blocking defects
+- handoff_required defects
+
+Build mode is preserved. Packages and DHG still generate, but downstream status derivation receives a degradation signal and structured diagnostics.
+
+Key invariants
+- Pattern-first, not activity-first. Solve classes of defects, not one activity at a time.
+- Use activity-specific overrides only where required by UiPath serialization rules, and keep them minimal.
+- No fabricated variables, arguments, or business values.
+- No silent deletion of required argument bindings or executable property values.
+- Validation and any safe normalization must operate on the final archive-bound content or the last structured representation that deterministically feeds that content.
+- The validator must not hardcode legacy status strings.
+
+Out of scope
+- Reworking the overall process decomposition strategy
+- Inventing missing business logic
+- Adding new package status enums
+- Replacing dependency, executable-path, or workflow-graph validators
+- Deep business-rule correctness checking beyond contract/scope/property integrity
+
+Tasks
+
+1. Create a workflow contract integrity module
+Create a module such as:
+`server/xaml/workflow-contract-integrity.ts`
+
+Input:
+- final workflow set, including file name and content
+- if available, final structured invocation metadata before XAML serialization
+
+Output:
+- `contractIntegrityDefects`
+- `hasContractIntegrityIssues`
+- optional `contractIntegritySummary`
+
+It must extract or derive:
+- workflow declared arguments
+- workflow declared variables where accessible
+- invocation targets
+- invocation argument bindings
+- executable expressions and referenced symbols
+
+2. Validate parent-child workflow contracts generically
+For every workflow invocation:
+- resolve the target child workflow
+- read the child workflow's declared arguments
+- compare invocation bindings against the child contract
+- detect:
+  - unknown_target_argument
+  - missing_required_target_argument
+  - invoke_argument_binding_mismatch
+  - decomposed_workflow_missing_contract
+
+Do not rely on a single activity type. Support generic workflow invocation serialization patterns and the forms used by the current pipeline.
+
+3. Validate scope and symbol references
+Across executable expressions and bindings, detect:
+- undeclared_variable_reference
+- undeclared_argument_reference
+- invalid_expression_scope
+
+This must be based on actual workflow declarations and scope context where available, not just raw string heuristics. Use existing expression parsing/linting helpers where possible.
+
+4. Detect mixed literal/expression serialization patterns
+Add a generic detector for invalid mixed literal/expression syntax such as:
+- literal text concatenated with malformed VB fragments
+- pseudo-expression wrappers
+- partially serialized object/value hybrids
+- string forms that are neither valid literal strings nor valid executable expressions
+
+This should be a pattern-level detector across expression-bearing properties, not tied to one activity.
+
+5. Detect invalid invoke/property serialization
+Add generic detection for property emission patterns that do not belong in final UiPath-supported serialization, such as:
+- pseudo-properties injected as attributes where they do not belong
+- argument blobs plus per-argument pseudo-properties that conflict
+- invalid argument-map serialization
+- required executable properties containing PLACEHOLDER, TODO, HANDOFF, STUB, or equivalent synthetic sentinel values
+
+Do not silently strip these. Preserve them as defects for downgrade.
+
+6. Add safe normalization only for deterministic contract-safe cases
+If safe normalization is possible, limit it to deterministic, non-semantic cases such as:
+- normalizing argument binding shape into one valid supported form
+- removing duplicate conflicting serialization of the same binding when one canonical representation is clearly correct
+- normalizing quoting/wrapping when the underlying symbol/value is already explicit
+
+Rules:
+- no invented symbols
+- no guessed target arguments
+- no fabricated values
+- every normalization attempt must emit before/after diagnostics
+
+If normalization is not clearly safe, keep the defect and downgrade.
+
+7. Integrate into final quality reporting
+Add to FinalQualityReport:
+- `contractIntegrityDefects`
+- `hasContractIntegrityIssues`
+- optional `contractIntegritySummary`
+
+Feed `hasContractIntegrityIssues` into the current degradation/structural-invalidity derivation path. Do not hardcode any legacy status strings.
+
+8. Add regression tests
+Create tests such as:
+`server/__tests__/workflow-contract-integrity.test.ts`
+
+Include cases for:
+- invoke binding references child argument that does not exist
+- child workflow requires argument that caller does not provide
+- expression references undeclared variable
+- expression references undeclared argument
+- mixed literal/expression syntax in a generic executable property
+- placeholder in required executable property
+- duplicate/conflicting invoke argument serialization
+- clean parent/child contract passes
+- clean scoped variable/argument references pass
+
+Verify:
+- pattern-based defects are detected correctly
+- diagnostics include all required fields
+- safe normalization only applies when deterministic
+- no silent deletion or fabrication occurs
+- final degradation signal is set correctly
+
+Relevant files
+- `server/workflow-tree-assembler.ts`
+- `server/xaml/expression-builder.ts`
+- `server/final-artifact-validation.ts`
+- `server/uipath-pipeline.ts`
+- `server/xaml/executable-path-validator.ts`
+- `server/xaml/workflow-graph-validator.ts`
+- `server/xaml/vbnet-expression-linter.ts`
+- `server/uipath-quality-gate.ts`
+- any workflow invocation serialization helpers
+- test fixtures under `server/__tests__/`
