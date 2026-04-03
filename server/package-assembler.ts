@@ -60,7 +60,7 @@ import archiver from "archiver";
   import { runPostEmissionDependencyAnalysis, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
   import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
   import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
-  import { canonicalizeInvokeBindings } from "./xaml/invoke-binding-canonicalizer";
+  import { canonicalizeInvokeBindings, canonicalizeTargetValueExpressions, type InvokeCanonicalizationResult, type TargetValueCanonicalizationResult } from "./xaml/invoke-binding-canonicalizer";
 
 interface DomCorrectionResult {
   content: string;
@@ -7127,12 +7127,128 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             autoFixSummary.push(`Fixed XML well-formedness issues in ${fileName} via targeted repair`);
           }
         }
-        updateStageHash(path.split("/").pop() || path, "archivedFile", sanitized);
+        updateStageHash(path.split("/").pop() || path, "preCanonicalization", sanitized);
         postGateXamlEntries.push({ name: path, content: sanitized });
-        archive.append(sanitized, { name: path });
       } else {
         archive.append(content, { name: path });
       }
+    }
+
+    let preArchiveInvokeCanonicalization: InvokeCanonicalizationResult | undefined;
+    let preArchiveTargetValueCanonicalization: TargetValueCanonicalizationResult | undefined;
+    const preArchiveStructuralDefects: Array<{ file: string; pattern: string; detail: string }> = [];
+    const preCanonicalizationHashes = new Map<string, string>();
+
+    {
+      console.log(`[Pre-Archive Canonicalization] Running invoke binding canonicalization on ${postGateXamlEntries.length} XAML entries BEFORE archive write...`);
+      for (const entry of postGateXamlEntries) {
+        preCanonicalizationHashes.set(entry.name, createHash("sha256").update(entry.content).digest("hex"));
+      }
+
+      preArchiveInvokeCanonicalization = canonicalizeInvokeBindings(postGateXamlEntries);
+      if (preArchiveInvokeCanonicalization.totalCanonicalizations > 0) {
+        console.log(`[Pre-Archive Canonicalization] Invoke binding canonicalization: ${preArchiveInvokeCanonicalization.totalCanonicalizations} fix(es) applied, ${preArchiveInvokeCanonicalization.totalResidualDefects} residual defect(s)`);
+      }
+
+      console.log(`[Pre-Archive Canonicalization] Running target/value expression canonicalization on ${postGateXamlEntries.length} XAML entries BEFORE archive write...`);
+      preArchiveTargetValueCanonicalization = canonicalizeTargetValueExpressions(postGateXamlEntries);
+      if (preArchiveTargetValueCanonicalization.expressionCanonicalizationFixes.length > 0 || preArchiveTargetValueCanonicalization.symbolScopeDefects.length > 0 || preArchiveTargetValueCanonicalization.sentinelReplacements.length > 0 || preArchiveTargetValueCanonicalization.unresolvableJsonDefects.length > 0) {
+        console.log(`[Pre-Archive Canonicalization] ${preArchiveTargetValueCanonicalization.summary}`);
+      }
+
+      const MALFORMED_QUOTING_PATTERN = /(?:AssetName|AssetValue|Value|Text|Message)="\[(?:&quot;|")\w+(?:&quot;|")]/;
+      const JSON_OBJECT_IN_ATTR_PATTERN = /(?:Message|Value|To|Text|Expression|Condition)="\{(?:&quot;|")(?:type|value|name)(?:&quot;|")\s*:/;
+      const TARGET_OBJECT_PATTERN = /<(?:Assign\.To|Assign\.Value)>[\s\S]*?(?:<(?:In|Out|InOut)Argument\b[^>]*>)?\s*\{(?:&quot;|")(?:type|value|name)(?:&quot;|")\s*:/;
+
+      for (const entry of postGateXamlEntries) {
+        const shortName = entry.name.split("/").pop() || entry.name;
+
+        const malformedQuotingMatch = MALFORMED_QUOTING_PATTERN.exec(entry.content);
+        if (malformedQuotingMatch) {
+          preArchiveStructuralDefects.push({
+            file: shortName,
+            pattern: "malformed_attribute_quoting",
+            detail: `Malformed attribute quoting detected: ${malformedQuotingMatch[0].substring(0, 120)}`,
+          });
+        }
+
+        const jsonAttrMatch = JSON_OBJECT_IN_ATTR_PATTERN.exec(entry.content);
+        if (jsonAttrMatch) {
+          preArchiveStructuralDefects.push({
+            file: shortName,
+            pattern: "json_object_in_executable_attribute",
+            detail: `JSON-like object payload in executable attribute: ${jsonAttrMatch[0].substring(0, 120)}`,
+          });
+        }
+
+        const targetObjMatch = TARGET_OBJECT_PATTERN.exec(entry.content);
+        if (targetObjMatch) {
+          preArchiveStructuralDefects.push({
+            file: shortName,
+            pattern: "object_payload_in_target_value_slot",
+            detail: `Object payload in target/value slot: ${targetObjMatch[0].substring(0, 120)}`,
+          });
+        }
+      }
+
+      if (preArchiveStructuralDefects.length > 0) {
+        console.warn(`[Pre-Archive Assertion] ${preArchiveStructuralDefects.length} structural defect(s) detected after canonicalization:`);
+        const defectsByFile = new Map<string, Array<{ pattern: string; detail: string }>>();
+        for (const defect of preArchiveStructuralDefects) {
+          console.warn(`  [${defect.file}] ${defect.pattern}: ${defect.detail}`);
+          outcomeRemediations.push({
+            level: "workflow",
+            file: defect.file,
+            remediationCode: "STUB_WORKFLOW_BLOCKING",
+            reason: `Pre-archive assertion: ${defect.pattern} — ${defect.detail}`,
+            classifiedCheck: "pre-archive-canonicalization",
+            developerAction: `Resolve ${defect.pattern} in ${defect.file}`,
+            estimatedEffortMinutes: 10,
+          });
+          if (!defectsByFile.has(defect.file)) defectsByFile.set(defect.file, []);
+          defectsByFile.get(defect.file)!.push({ pattern: defect.pattern, detail: defect.detail });
+        }
+
+        if (generationMode === "package") {
+          for (const entry of postGateXamlEntries) {
+            const shortName = entry.name.split("/").pop() || entry.name;
+            const fileDefects = defectsByFile.get(shortName);
+            if (!fileDefects || fileDefects.length === 0) continue;
+
+            const defectSummary = fileDefects.map(d => `${d.pattern}: ${d.detail}`).join("; ");
+            const stubName = shortName.replace(/\.xaml$/i, "");
+            console.error(`[Pre-Archive Enforcement] Replacing malformed "${shortName}" with handoff stub — defects: ${defectSummary.substring(0, 200)}`);
+            const safeDefectSummary = escapeXml(defectSummary.substring(0, 300));
+            const safeStubName = escapeXml(stubName);
+            entry.content = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="${safeStubName}" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="${safeStubName} — Handoff Required">
+    <ui:LogMessage Level="Warn" Message="&quot;[CannonBall] This workflow requires manual implementation — pre-archive canonicalization detected unresolvable structural defects: ${safeDefectSummary}&quot;" DisplayName="Handoff Notice" />
+  </Sequence>
+</Activity>`;
+          }
+        }
+      }
+    }
+
+    const canonicalizationArchiveParity: Array<{ file: string; preCanonicalizationHash: string; canonicalizedHash: string; archivedHash: string; identical: boolean; mutated: boolean }> = [];
+
+    for (const entry of postGateXamlEntries) {
+      const shortName = entry.name.split("/").pop() || entry.name;
+      const preHash = preCanonicalizationHashes.get(entry.name) || "unknown";
+      const canonicalizedHash = createHash("sha256").update(entry.content).digest("hex");
+      const archivedContent = entry.content;
+      updateStageHash(shortName, "archivedFile", archivedContent);
+      archive.append(archivedContent, { name: entry.name });
+      const archivedHash = createHash("sha256").update(archivedContent).digest("hex");
+      canonicalizationArchiveParity.push({
+        file: shortName,
+        preCanonicalizationHash: preHash,
+        canonicalizedHash,
+        archivedHash,
+        identical: canonicalizedHash === archivedHash,
+        mutated: preHash !== canonicalizedHash,
+      });
     }
 
     const speculativeDepsSnapshot = { ...deps };
@@ -7337,7 +7453,7 @@ ${depEntries}
 
   runPostArchiveParityCheck(buffer, _archiveManifestTracker, _appendedContentHashes, xamlEntries, libPath);
 
-  const finalXamlEntries = xamlEntries.map(e => ({ name: e.name, content: e.content }));
+  const finalXamlEntries = postGateXamlEntries.map(e => ({ name: e.name, content: e.content }));
   const finalDependencyMap = { ...deps };
   const finalArchiveManifest = allArchivePaths;
 
@@ -7595,11 +7711,6 @@ ${depEntries}
   const collectedPropTrace = getAndClearPropertySerializationTrace();
 
   try {
-    const invokeCanonicalization = canonicalizeInvokeBindings(finalXamlEntries);
-    if (invokeCanonicalization.totalCanonicalizations > 0) {
-      console.log(`[Package Assembler] Invoke binding canonicalization: ${invokeCanonicalization.totalCanonicalizations} fix(es) applied, ${invokeCanonicalization.totalResidualDefects} residual defect(s)`);
-    }
-
     const contractResult = validateContractIntegrity(finalXamlEntries);
     const contracts = buildWorkflowContracts(finalXamlEntries);
 
@@ -7719,6 +7830,15 @@ ${depEntries}
       commentConversions: specValidationReport.commentConversions,
       issueCount: specValidationReport.issues.length,
     } : undefined,
+    invokeSerializationFixes: preArchiveInvokeCanonicalization ? preArchiveInvokeCanonicalization.invokeSerializationFixes : undefined,
+    expressionCanonicalizationFixes: preArchiveTargetValueCanonicalization ? preArchiveTargetValueCanonicalization.expressionCanonicalizationFixes : undefined,
+    symbolScopeDefects: preArchiveTargetValueCanonicalization ? preArchiveTargetValueCanonicalization.symbolScopeDefects : undefined,
+    targetValueCanonicalizationSummary: preArchiveTargetValueCanonicalization ? preArchiveTargetValueCanonicalization.summary : undefined,
+    residualExpressionSerializationDefects: preArchiveInvokeCanonicalization ? preArchiveInvokeCanonicalization.residualExpressionSerializationDefects : undefined,
+    sentinelReplacements: preArchiveTargetValueCanonicalization ? preArchiveTargetValueCanonicalization.sentinelReplacements : undefined,
+    unresolvableJsonDefects: preArchiveTargetValueCanonicalization ? preArchiveTargetValueCanonicalization.unresolvableJsonDefects : undefined,
+    canonicalizationArchiveParity: canonicalizationArchiveParity.length > 0 ? canonicalizationArchiveParity : undefined,
+    preArchiveStructuralDefects: preArchiveStructuralDefects.length > 0 ? preArchiveStructuralDefects : undefined,
   };
 
   if (buildCacheKey && fingerprint) {

@@ -340,6 +340,15 @@ export interface PipelineOutcomeReport {
       expectedOutputs?: string;
     }>;
   };
+  invokeSerializationFixes?: import("./xaml/invoke-binding-canonicalizer").InvokeSerializationFix[];
+  expressionCanonicalizationFixes?: import("./xaml/invoke-binding-canonicalizer").ExpressionCanonicalizationFix[];
+  symbolScopeDefects?: import("./xaml/invoke-binding-canonicalizer").SymbolScopeDefect[];
+  targetValueCanonicalizationSummary?: string;
+  residualExpressionSerializationDefects?: import("./xaml/invoke-binding-canonicalizer").ResidualExpressionSerializationDefect[];
+  sentinelReplacements?: import("./xaml/invoke-binding-canonicalizer").SentinelReplacementRecord[];
+  unresolvableJsonDefects?: import("./xaml/invoke-binding-canonicalizer").UnresolvableJsonDefect[];
+  canonicalizationArchiveParity?: Array<{ file: string; preCanonicalizationHash: string; canonicalizedHash: string; archivedHash: string; identical: boolean; mutated: boolean }>;
+  preArchiveStructuralDefects?: Array<{ file: string; pattern: string; detail: string }>;
 }
 
 export interface PipelineResult {
