@@ -1,0 +1,119 @@
+# CB2-F12A - Forensic stage-tracing for final package corruption
+
+What & Why
+Recent package runs show that final packaged workflows can still be invalid in UiPath Studio even after dependency, executable-path, and workflow-graph validation improvements. Before implementing another corrective gate, we need grounded evidence showing exactly where corruption or invalid serialization is being introduced.
+
+This task is a narrow forensic investigation. Do not redesign the pipeline yet. Instrument it so we can trace the lifecycle of final XAML for each workflow and determine whether corruption is introduced:
+- before final validation
+- during repair/normalization
+- during final serialization
+- during archive append/write
+- or because validators are inspecting different content than what is ultimately packaged
+
+Goals
+Produce concrete evidence answering:
+1. Which pipeline stage last had valid XAML for each broken workflow?
+2. Which stage first introduced invalid XML, leaked intermediate expression objects, malformed quoting, or other final-content corruption?
+3. Are F02, F03, and F06 inspecting the exact same final XAML bytes that are written into the ZIP?
+4. Are some workflow files bypassing one or more final validation stages?
+
+Done looks like
+A forensic trace is available for each workflow file in a generation run, showing stage-by-stage content hashes and defect summaries.
+For at least the broken workflows from recent runs, the trace shows:
+- stage name
+- workflow file name
+- content hash
+- XML well-formedness result
+- executable-path defect count
+- graph defect count
+- dependency analysis summary if applicable
+- whether the workflow content at that stage is identical to the content ultimately written into the ZIP
+
+A final forensic report identifies, for each broken workflow:
+- last known good stage
+- first bad stage
+- defect class introduced
+- whether downstream mutation occurred after validation
+- recommended next fix location
+
+This task must not change package generation behavior except for adding instrumentation, trace output, and optional debug artifacts.
+
+Out of scope
+- Fixing the corruption itself
+- Adding new package status values
+- Refactoring the whole pipeline
+- Changing business logic generation
+
+Tasks
+
+1. Add stage-tracing instrumentation
+Instrument the package pipeline so these stages emit per-workflow forensic trace records:
+- post-generation
+- post-repair
+- post-normalization
+- post-compliance/emission gate
+- post-final validation input
+- pre-archive append
+- post-archive write verification if feasible
+
+Each trace record should include:
+- workflow file
+- stage name
+- content hash
+- content length
+- XML well-formedness result
+- whether JSON-like intermediate expression payloads are present
+- whether malformed attribute quoting is present
+- whether executable-path defects are present
+- whether the content exactly matches the final archived version
+
+2. Capture final archive truth
+Add a debug mode that extracts or re-reads the just-written archive entries and computes hashes for the actual packaged workflow bytes. Compare those hashes to the hashes from the final validation input stage.
+
+3. Correlate validator inputs
+Record what exact workflow content F02, F03, and F06 operated on for each file, using hashes. This must prove whether each validator inspected the same content that ended up in the ZIP.
+
+4. Produce a forensic report
+Create a structured forensic artifact for each run, for example:
+- perWorkflowStageTrace[]
+- finalArchiveHashes
+- validatorInputHashes
+- corruptionFindings[]
+
+Each corruption finding should include:
+- workflow file
+- lastKnownGoodStage
+- firstKnownBadStage
+- defectClass
+- evidence summary
+- likely root cause category:
+  - serialization_leak
+  - downstream_mutation
+  - validator_bypass
+  - archive_write_mismatch
+  - unknown
+
+5. Add targeted diff output
+For workflows that transition from good to bad across stages, emit a compact diff or excerpt showing the exact lines/attributes that changed. Focus especially on:
+- JSON-like leaked expression objects
+- malformed XML attribute quoting
+- invalid executable property serialization
+
+6. Keep output controlled
+Do not dump full workflow contents indiscriminately into logs. Use hashes, counts, and compact diffs/excerpts so the forensic artifact stays readable.
+
+Relevant files
+- server/package-assembler.ts
+- server/final-artifact-validation.ts
+- server/uipath-pipeline.ts
+- server/xaml/executable-path-validator.ts
+- server/xaml/workflow-graph-validator.ts
+- any final archive append/write utilities
+- any dependency diagnostics artifact producers
+
+Deliverable
+A single forensic report from one package generation run that clearly identifies whether corruption is happening before validation, after validation, or during archive finalization, with enough evidence to decide whether CB2-F12 should target:
+- final serialization normalization
+- post-validation mutation prevention
+- archive write integrity checks
+- validator coverage gaps
