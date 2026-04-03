@@ -34,6 +34,7 @@ export function registerVerificationBundleRoutes(app: Express): void {
     if (!access) return;
     const { ideaId } = access;
 
+    let archive: ReturnType<typeof archiver> | undefined;
     try {
       const idea = await storage.getIdea(ideaId);
       if (!idea) {
@@ -153,77 +154,99 @@ export function registerVerificationBundleRoutes(app: Express): void {
         completedAt: latestRun.completedAt,
       };
 
-      const archive = archiver("zip", { zlib: { level: 9 } });
       const safeProjectName = (manifest.projectName || "VerificationBundle").replace(/[^a-zA-Z0-9_-]/g, "_");
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", `attachment; filename="${safeProjectName}_verification_bundle.zip"`);
 
-      archive.on("error", (err) => {
-        console.error(`[VerificationBundle] Archive error for idea ${ideaId}:`, err);
-        if (!res.headersSent) {
-          res.status(500).json({ message: "Failed to generate verification bundle" });
-        } else {
-          res.end();
-        }
-      });
-
-      res.on("close", () => {
-        archive.abort();
-      });
-
-      archive.pipe(res);
-
-      archive.append(JSON.stringify(manifest, null, 2), { name: "manifest.json" });
+      const serializedArtifacts: Array<{ data: string | Buffer; name: string }> = [];
+      serializedArtifacts.push({ data: JSON.stringify(manifest, null, 2), name: "manifest.json" });
 
       if (pipelineResult?.packageBuffer && pipelineResult.packageBuffer.length > 0) {
-        archive.append(pipelineResult.packageBuffer, {
-          name: `${safeProjectName}.nupkg`,
-        });
+        serializedArtifacts.push({ data: pipelineResult.packageBuffer, name: `${safeProjectName}.nupkg` });
       }
 
       if (dhgContent) {
-        archive.append(dhgContent, { name: "dhg.md" });
+        serializedArtifacts.push({ data: dhgContent, name: "dhg.md" });
       }
 
       if (qualityGateResults) {
-        archive.append(JSON.stringify(qualityGateResults, null, 2), {
-          name: "quality-gate-results.json",
-        });
+        serializedArtifacts.push({ data: JSON.stringify(qualityGateResults, null, 2), name: "quality-gate-results.json" });
       }
 
       if (metaValidationResults) {
-        archive.append(JSON.stringify(metaValidationResults, null, 2), {
-          name: "meta-validation-results.json",
-        });
+        serializedArtifacts.push({ data: JSON.stringify(metaValidationResults, null, 2), name: "meta-validation-results.json" });
       }
 
-      archive.append(JSON.stringify(pipelineDiagnostics, null, 2), {
-        name: "pipeline-diagnostics.json",
-      });
+      serializedArtifacts.push({ data: JSON.stringify(pipelineDiagnostics, null, 2), name: "pipeline-diagnostics.json" });
 
       if (outcomeReport) {
-        archive.append(JSON.stringify(outcomeReport, null, 2), {
-          name: "outcome-report.json",
-        });
+        serializedArtifacts.push({ data: JSON.stringify(outcomeReport, null, 2), name: "outcome-report.json" });
       }
 
       if (finalQualityReport) {
-        archive.append(JSON.stringify(finalQualityReport, null, 2), {
-          name: "final-quality-report.json",
-        });
+        serializedArtifacts.push({ data: JSON.stringify(finalQualityReport, null, 2), name: "final-quality-report.json" });
       }
 
       if (latestRun.specSnapshot) {
-        archive.append(JSON.stringify(latestRun.specSnapshot, null, 2), {
-          name: "spec-snapshot.json",
-        });
+        serializedArtifacts.push({ data: JSON.stringify(latestRun.specSnapshot, null, 2), name: "spec-snapshot.json" });
       }
 
-      await archive.finalize();
+      archive = archiver("zip", { zlib: { level: 9 } });
+      const zip = archive;
+      let finalized = false;
+      let settled = false;
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeProjectName}_verification_bundle.zip"`);
+
+      await new Promise<void>((resolve, reject) => {
+        const settle = (fn: typeof resolve | typeof reject, val?: any) => {
+          if (settled) return;
+          settled = true;
+          fn(val);
+        };
+
+        zip.on("error", (err) => {
+          console.error(`[VerificationBundle] Archive error for idea ${ideaId}:`, err);
+          if (!res.headersSent) {
+            res.status(500).json({ message: "Failed to generate verification bundle" });
+          } else {
+            zip.destroy();
+            if (!res.writableEnded) res.end();
+          }
+          settle(reject, err);
+        });
+
+        res.on("close", () => {
+          if (!finalized) {
+            zip.abort();
+          }
+          settle(resolve);
+        });
+
+        res.on("finish", () => {
+          settle(resolve);
+        });
+
+        zip.pipe(res);
+
+        for (const artifact of serializedArtifacts) {
+          zip.append(artifact.data, { name: artifact.name });
+        }
+
+        zip.finalize().then(() => {
+          finalized = true;
+        }).catch((err) => settle(reject, err));
+      });
     } catch (err: any) {
       console.error(`[VerificationBundle] Error generating bundle for idea ${ideaId}:`, err);
       if (!res.headersSent) {
         res.status(500).json({ message: err.message || "Failed to generate verification bundle" });
+      } else {
+        if (archive && !archive.destroyed) {
+          archive.destroy();
+        }
+        if (!res.writableEnded) {
+          res.end();
+        }
       }
     }
   });
