@@ -7,6 +7,7 @@ import type {
   PipelineOutcomeReport,
 } from "./uipath-pipeline";
 import type { AutomationPattern } from "./uipath-activity-registry";
+import { validateExecutablePaths, type ExecutablePathDefect } from "./xaml/executable-path-validator";
 
 export interface FinalArtifactValidationInput {
   xamlEntries: { name: string; content: string }[];
@@ -65,6 +66,8 @@ export interface FinalQualityReport {
     totalErrors: number;
     totalWarnings: number;
   };
+  executablePathDefects: ExecutablePathDefect[];
+  hasExecutablePathContamination: boolean;
   derivedStatus: PackageStatus;
   statusReason: string;
   outcomeContext?: PipelineOutcomeReport;
@@ -225,6 +228,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const totalErrors = perFileResults.reduce((s, r) => s + r.errorCount, 0);
   const totalWarnings = perFileResults.reduce((s, r) => s + r.warningCount, 0);
 
+  const executablePathResult = validateExecutablePaths(xamlEntries);
+
   const mainXamlEntry = perFileResults.find(r => r.file === "Main.xaml");
   const entryPointHasBlockers = mainXamlEntry
     ? (mainXamlEntry.studioCompatibilityLevel === "studio-blocked" || mainXamlEntry.hasStubContent)
@@ -235,7 +240,7 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const hasAnyStubContent = perFileResults.some(r => r.hasStubContent);
   const qgIncomplete = qualityGateResult.completenessLevel === "incomplete";
 
-  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete;
+  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination;
 
   let derivedStatus: PackageStatus;
   let statusReason: string;
@@ -264,11 +269,12 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     if (entryPointHasBlockers) reasons.push("entry point (Main.xaml) has structural blockers or stub content");
     if (hasStructuralBlockers) reasons.push(`${studioBlockedCount} file(s) structurally blocked in final validation`);
     statusReason = `Structurally invalid: ${reasons.join(", ")}`;
-  } else if (hasAnyStubContent || qgIncomplete) {
+  } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination) {
     derivedStatus = "handoff_only";
     const reasons: string[] = [];
     if (hasAnyStubContent) reasons.push("stub content detected in finalized artifacts");
     if (qgIncomplete) reasons.push("quality gate completeness level: incomplete");
+    if (executablePathResult.hasExecutablePathContamination) reasons.push(`${executablePathResult.executablePathDefects.length} executable-path defect(s) detected`);
     statusReason = `Handoff only: ${reasons.join(", ")}`;
   } else if (hasStructuralWarnings || totalWarnings > 0) {
     derivedStatus = "openable_with_warnings";
@@ -295,6 +301,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
       totalErrors,
       totalWarnings,
     },
+    executablePathDefects: executablePathResult.executablePathDefects,
+    hasExecutablePathContamination: executablePathResult.hasExecutablePathContamination,
     derivedStatus,
     statusReason,
     outcomeContext: contextMetadata.outcomeReport,

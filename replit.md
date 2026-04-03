@@ -61,6 +61,7 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **Pre-Emission Health Invariant**: Throws blocking error when non-empty builds have zero activity coverage.
 - **High-Risk Expression Decomposition**: Decomposes complex nested expressions into sequential Assign activities.
 - **Final Artifact Truth Gate**: A single `FinalArtifactValidation` pass produces a `FinalQualityReport` as the sole authority for package status.
+- **Executable-Path Validator**: A read-only validation pass (`server/xaml/executable-path-validator.ts`) scans final post-repair XAML for six defect classes (placeholders, TODO markers, leaked JSON expressions, blank required properties, malformed VB expressions, sentinel values) in runtime-critical property slots. Uses ACTIVITY_REGISTRY and high-risk overrides for severity classification. Emits `hasExecutablePathContamination` signal for downstream status derivation.
 - **Pipeline Health & Convergence Metrics**: Tracks per-run convergence metrics and determines readiness.
 - **Transitive Dependency Validation**: Validates that XAML-referenced activities have corresponding packages declared.
 - **Regression Test Suite**: Server-side vitest tests cover 34+ regression scenarios.
