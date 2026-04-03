@@ -306,6 +306,9 @@ export interface PipelineOutcomeReport {
   totalEstimatedEffortMinutes: number;
   structuralPreservationMetrics?: StructuralPreservationMetrics[];
   studioCompatibility?: PerWorkflowStudioCompatibility[];
+  propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
+  invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
+  stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
   preEmissionValidation?: {
     totalActivities: number;
     validActivities: number;
@@ -367,6 +370,9 @@ export interface PipelineResult {
   dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
   ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
   orphanDependencies?: Array<{ packageId: string; version: string | null; reason: string }>;
+  propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
+  invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
+  stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
 }
 
 export interface DhgResult {
@@ -1819,6 +1825,9 @@ export async function compilePackageFromSpecs(
       dependencyGaps: buildResult.dependencyGaps,
       ambiguousResolutions: buildResult.ambiguousResolutions,
       orphanDependencies: buildResult.orphanDependencies,
+      propertySerializationTrace: buildResult.propertySerializationTrace,
+      invokeContractTrace: buildResult.invokeContractTrace,
+      stageHashParity: buildResult.stageHashParity,
     };
 
     evictOldestPipelineCacheEntry();

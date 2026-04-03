@@ -58,6 +58,8 @@ import archiver from "archiver";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
   import { XMLParser, XMLBuilder } from "fast-xml-parser";
   import { runPostEmissionDependencyAnalysis, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
+  import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
+  import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
 
 interface DomCorrectionResult {
   content: string;
@@ -2381,6 +2383,10 @@ type CachedBuild = {
   stageXaml?: CachedStageXaml;
   stageQualityGate?: CachedStageQualityGate;
   complexityTier?: string;
+  outcomeReport?: PipelineOutcomeReport;
+  propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
+  invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
+  stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
 };
 
 const packageBuildCache = new Map<string, CachedBuild>();
@@ -2614,6 +2620,9 @@ export type BuildResult = {
   dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
   ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
   orphanDependencies?: Array<{ packageId: string; version: string | null; reason: string }>;
+  propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
+  invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
+  stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -2775,6 +2784,10 @@ function buildDeterministicScaffold(
 
 
 export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier): Promise<BuildResult> {
+  return runWithTraceContext(() => buildNuGetPackageImpl(pkg, version, ideaId, generationMode, onProgress, studioProfile, complexityTier));
+}
+
+async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier): Promise<BuildResult> {
   if (!catalogService.isLoaded()) {
     console.warn(`[Package Assembler] Catalog not loaded at buildNuGetPackage entry — attempting synchronous load`);
     try {
@@ -2818,7 +2831,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
         cachedEntry = packageBuildCache.get(buildCacheKey);
       } else {
         console.log(`[UiPath Cache] FULL HIT for ${buildCacheKey} — all stages cached (enrichment, XAML, quality gate)`);
-        return { buffer: cachedEntry.buffer, gaps: cachedEntry.gaps, usedPackages: cachedEntry.usedPackages, cacheHit: true, qualityGateResult: cachedEntry.qualityGateResult, xamlEntries: cachedEntry.xamlEntries, dependencyMap: cachedEntry.dependencyMap, archiveManifest: cachedEntry.archiveManifest, usedFallbackStubs: false, generationMode, referencedMLSkillNames: cachedEntry.referencedMLSkillNames || [], usedAIFallback: cachedEntry.usedAIFallback || false, projectJsonContent: cachedEntry.projectJsonContent };
+        return { buffer: cachedEntry.buffer, gaps: cachedEntry.gaps, usedPackages: cachedEntry.usedPackages, cacheHit: true, qualityGateResult: cachedEntry.qualityGateResult, xamlEntries: cachedEntry.xamlEntries, dependencyMap: cachedEntry.dependencyMap, archiveManifest: cachedEntry.archiveManifest, usedFallbackStubs: false, generationMode, referencedMLSkillNames: cachedEntry.referencedMLSkillNames || [], usedAIFallback: cachedEntry.usedAIFallback || false, projectJsonContent: cachedEntry.projectJsonContent, outcomeReport: cachedEntry.outcomeReport, propertySerializationTrace: cachedEntry.propertySerializationTrace, invokeContractTrace: cachedEntry.invokeContractTrace, stageHashParity: cachedEntry.stageHashParity };
       }
     } else if (cachedEntry) {
       const enrichHit = cachedEntry.stageEnrichment && cachedEntry.stageEnrichment.fingerprint === enrichmentFp;
@@ -3023,6 +3036,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
           referencedMLSkillNames: cachedEntry.referencedMLSkillNames || [],
           usedAIFallback: cachedEntry.usedAIFallback || false,
           projectJsonContent: cachedEntry.projectJsonContent,
+          outcomeReport: cachedEntry.outcomeReport,
+          propertySerializationTrace: cachedEntry.propertySerializationTrace,
+          invokeContractTrace: cachedEntry.invokeContractTrace,
+          stageHashParity: cachedEntry.stageHashParity,
         };
       } else {
         const qgReason = !cachedEntry.stageQualityGate
@@ -3075,6 +3092,10 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             referencedMLSkillNames: cachedXaml.referencedMLSkillNames || [],
             usedAIFallback: cachedEntry.usedAIFallback || false,
             projectJsonContent: cachedXaml.projectJsonContent,
+            outcomeReport: cachedEntry.outcomeReport,
+            propertySerializationTrace: cachedEntry.propertySerializationTrace,
+            invokeContractTrace: cachedEntry.invokeContractTrace,
+            stageHashParity: cachedEntry.stageHashParity,
           };
         } else {
           console.log(`[UiPath Cache] Quality gate re-run FAILED (${rerunQG.summary?.totalErrors || 0} error(s)) — proceeding with full rebuild`);
@@ -3545,10 +3566,12 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             compliant = spResult.content;
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
+          updateStageHash(`${wfName}.xaml`, "postGeneration", compliant);
           const implRepair = repairMissingImplementation(compliant, `${wfName}.xaml`);
           if (implRepair.repaired) {
             compliant = implRepair.content;
           }
+          updateStageHash(`${wfName}.xaml`, "postRepair", compliant);
           deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
           generatedWorkflowNames.add(wfName);
           if ((wfName === "Main" || wfName === "Process") && !complianceFailed) {
@@ -4177,6 +4200,17 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
       }
       if (stubCount > 0) {
         console.log(`[Scaffold] Generated ${stubCount} stub XAML file(s) for missing referenced workflows`);
+      }
+    }
+
+    for (const [path, content] of deferredWrites.entries()) {
+      if (!path.endsWith(".xaml")) continue;
+      const shortName = path.split("/").pop() || path;
+      if (!hasStageHash(shortName, "postGeneration")) {
+        updateStageHash(shortName, "postGeneration", content);
+      }
+      if (!hasStageHash(shortName, "postRepair")) {
+        updateStageHash(shortName, "postRepair", content);
       }
     }
 
@@ -5522,6 +5556,11 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
     const normalizedFields = finalNormalize(xamlEntries, deferredWrites);
     if (normalizedFields.size > 0) {
       console.log(`[Final Normalization] Normalized fields before quality gate: ${Array.from(normalizedFields).join(", ")}`);
+    }
+
+    for (const entry of xamlEntries) {
+      const shortName = entry.name.split("/").pop() || entry.name;
+      updateStageHash(shortName, "postNormalization", entry.content);
     }
 
     const qualityGateRunCount = 1;
@@ -7087,6 +7126,7 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
             autoFixSummary.push(`Fixed XML well-formedness issues in ${fileName} via targeted repair`);
           }
         }
+        updateStageHash(path.split("/").pop() || path, "archivedFile", sanitized);
         postGateXamlEntries.push({ name: path, content: sanitized });
         archive.append(sanitized, { name: path });
       } else {
@@ -7528,6 +7568,111 @@ ${depEntries}
     return { file, level, blockers };
   });
 
+  for (const entry of finalXamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    updateStageHash(shortName, "postFinalValidationInput", entry.content);
+  }
+
+  const brokenWorkflowFiles = new Set<string>();
+  for (const sc of studioCompatibility) {
+    if (sc.level === "studio-blocked" || sc.level === "studio-warnings") {
+      brokenWorkflowFiles.add(sc.file);
+    }
+  }
+  for (const f of stubbedFiles) brokenWorkflowFiles.add(f);
+  if (generationMode === "baseline_openable") {
+    for (const f of allFiles) brokenWorkflowFiles.add(f);
+  }
+
+  for (const entry of finalXamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    if (brokenWorkflowFiles.has(shortName)) {
+      updateStageHash(shortName, "preArchive", entry.content);
+    }
+  }
+
+  const collectedPropTrace = getAndClearPropertySerializationTrace();
+
+  try {
+    const contractResult = validateContractIntegrity(finalXamlEntries);
+    const contracts = buildWorkflowContracts(finalXamlEntries);
+
+    const defectIndex = new Map<string, ContractIntegrityDefect[]>();
+    for (const defect of contractResult.contractIntegrityDefects) {
+      const key = `${defect.file}::${defect.targetWorkflow}`;
+      if (!defectIndex.has(key)) defectIndex.set(key, []);
+      defectIndex.get(key)!.push(defect);
+    }
+
+    for (const entry of finalXamlEntries) {
+      const normalizedName = entry.name.replace(/\\/g, "/").replace(/^[./]+/, "");
+      const wfBaseName = (normalizedName.split("/").pop() || normalizedName).replace(/\.xaml$/i, "");
+      const invocations = extractInvocations(entry.content, normalizedName, wfBaseName, [], []);
+
+      for (const invocation of invocations) {
+        const childContract = resolveTargetContract(invocation.targetWorkflow, contracts);
+        const targetDeclaredArguments: string[] = [];
+        if (childContract) {
+          for (const argName of childContract.declaredArguments.keys()) {
+            targetDeclaredArguments.push(argName);
+          }
+        }
+
+        const providedBindings: Record<string, string> = {};
+        for (const [k, v] of invocation.bindings) {
+          providedBindings[k] = v;
+        }
+
+        const defectKey = `${normalizedName}::${invocation.targetWorkflow}`;
+        const matchedDefects = defectIndex.get(defectKey) || [];
+
+        const unknownTargetArguments: string[] = [];
+        const missingRequiredArguments: string[] = [];
+        const undeclaredSymbols: string[] = [];
+
+        const bindingKeys = new Set(invocation.bindings.keys());
+        for (const defect of matchedDefects) {
+          if (defect.defectType === "unknown_target_argument" && defect.targetArgument && bindingKeys.has(defect.targetArgument)) {
+            unknownTargetArguments.push(defect.targetArgument);
+          } else if (defect.defectType === "missing_required_target_argument" && defect.targetArgument) {
+            missingRequiredArguments.push(defect.targetArgument);
+          } else if (defect.defectType === "invoke_argument_binding_mismatch" && defect.targetArgument && bindingKeys.has(defect.targetArgument)) {
+            unknownTargetArguments.push(defect.targetArgument);
+          }
+        }
+
+        const bindingValues = new Set(invocation.bindings.values());
+        for (const defect of contractResult.contractIntegrityDefects) {
+          if (defect.file !== normalizedName) continue;
+          if (defect.defectType !== "undeclared_variable_reference" && defect.defectType !== "undeclared_argument_reference") continue;
+          if (!defect.referencedSymbol || !defect.offendingValue) continue;
+          for (const bv of bindingValues) {
+            if (bv && bv.includes(defect.referencedSymbol)) {
+              undeclaredSymbols.push(defect.referencedSymbol);
+              break;
+            }
+          }
+        }
+
+        emitInvokeContractTrace({
+          callerWorkflow: entry.name.split("/").pop() || entry.name,
+          targetWorkflow: invocation.targetWorkflow,
+          targetDeclaredArguments,
+          providedBindings,
+          unknownTargetArguments,
+          missingRequiredArguments,
+          undeclaredSymbols: [...new Set(undeclaredSymbols)],
+        });
+      }
+    }
+  } catch (contractErr) {
+    console.warn(`[Pipeline Trace] Invoke contract trace extraction failed: ${contractErr instanceof Error ? contractErr.message : String(contractErr)}`);
+  }
+
+  const collectedInvokeTrace = getAndClearInvokeContractTrace();
+  const collectedStageHash = getAndClearStageHashParity();
+  const brokenOnlyStageHash = collectedStageHash.filter(e => brokenWorkflowFiles.has(e.workflowFile));
+
   const outcomeReport: PipelineOutcomeReport = {
     fullyGeneratedFiles: fullyGenerated,
     autoRepairs: outcomeAutoRepairs,
@@ -7538,6 +7683,9 @@ ${depEntries}
     totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
     structuralPreservationMetrics: structuralPreservationMetrics.length > 0 ? structuralPreservationMetrics : undefined,
     studioCompatibility,
+    propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined,
+    invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined,
+    stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined,
     emissionGateViolations: emissionGateResult.violations.length > 0 ? {
       totalViolations: emissionGateResult.summary.totalViolations,
       stubbed: emissionGateResult.summary.stubbed,
@@ -7615,10 +7763,14 @@ ${depEntries}
       stageXaml,
       stageQualityGate,
       complexityTier: tierStr,
+      outcomeReport,
+      propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined,
+      invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined,
+      stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined,
     });
     console.log(`[UiPath Cache] Stored build for ${buildCacheKey} (${buffer.length} bytes, v${version}) with per-stage fingerprints [enrichment=${stageEnrichment.fingerprint.slice(0, 8)}, xaml=${xamlFp.slice(0, 8)}, qg=${qgFp.slice(0, 8)}]`);
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined };
 }
 
 export function createTrackedArchive() {

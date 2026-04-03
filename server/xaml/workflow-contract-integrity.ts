@@ -91,14 +91,14 @@ export interface ContractIntegrityResult {
   contractExtractionExclusions: ContractExtractionExclusion[];
 }
 
-interface WorkflowContract {
+export interface WorkflowContract {
   file: string;
   workflowName: string;
   declaredArguments: Map<string, { direction: string; type: string }>;
   declaredVariables: Set<string>;
 }
 
-interface InvocationBinding {
+export interface InvocationBinding {
   file: string;
   workflow: string;
   activityType: string;
@@ -315,7 +315,7 @@ function extractInvocationsForActivityType(
   return invocations;
 }
 
-function extractInvocations(
+export function extractInvocations(
   content: string,
   fileName: string,
   workflowName: string,
@@ -433,7 +433,7 @@ function detectSentinelInProperty(value: string): string | null {
   return null;
 }
 
-function buildWorkflowContracts(
+export function buildWorkflowContracts(
   entries: { name: string; content: string }[]
 ): Map<string, WorkflowContract> {
   const contracts = new Map<string, WorkflowContract>();
@@ -465,7 +465,7 @@ function buildWorkflowContracts(
   return contracts;
 }
 
-function resolveTargetContract(
+export function resolveTargetContract(
   targetWorkflow: string,
   contracts: Map<string, WorkflowContract>
 ): WorkflowContract | null {

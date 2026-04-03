@@ -322,6 +322,39 @@ export function registerVerificationBundleRoutes(app: Express): void {
         artifactSources["meta-validation-results"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
       }
 
+      let propertySerializationTrace: any = null;
+      if (isCachedRun && pipelineResult?.propertySerializationTrace && pipelineResult.propertySerializationTrace.length > 0) {
+        propertySerializationTrace = pipelineResult.propertySerializationTrace;
+        artifactSources["property-serialization-trace"] = "cache";
+      } else if (outcomeReport?.pipelineOutcome?.propertySerializationTrace) {
+        propertySerializationTrace = outcomeReport.pipelineOutcome.propertySerializationTrace;
+        artifactSources["property-serialization-trace"] = "outcome-report-fallback";
+      } else {
+        artifactSources["property-serialization-trace"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
+      }
+
+      let invokeContractTrace: any = null;
+      if (isCachedRun && pipelineResult?.invokeContractTrace && pipelineResult.invokeContractTrace.length > 0) {
+        invokeContractTrace = pipelineResult.invokeContractTrace;
+        artifactSources["invoke-contract-trace"] = "cache";
+      } else if (outcomeReport?.pipelineOutcome?.invokeContractTrace) {
+        invokeContractTrace = outcomeReport.pipelineOutcome.invokeContractTrace;
+        artifactSources["invoke-contract-trace"] = "outcome-report-fallback";
+      } else {
+        artifactSources["invoke-contract-trace"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
+      }
+
+      let stageHashParity: any = null;
+      if (isCachedRun && pipelineResult?.stageHashParity && pipelineResult.stageHashParity.length > 0) {
+        stageHashParity = pipelineResult.stageHashParity;
+        artifactSources["stage-hash-parity"] = "cache";
+      } else if (outcomeReport?.pipelineOutcome?.stageHashParity) {
+        stageHashParity = outcomeReport.pipelineOutcome.stageHashParity;
+        artifactSources["stage-hash-parity"] = "outcome-report-fallback";
+      } else {
+        artifactSources["stage-hash-parity"] = isCachedRun ? "unavailable-not-generated" : "unavailable-cache-expired";
+      }
+
       let stageLog: any = null;
       if (targetRun.stageLog) {
         stageLog = targetRun.stageLog;
@@ -436,6 +469,18 @@ export function registerVerificationBundleRoutes(app: Express): void {
 
       if (generationMetadata) {
         serializedArtifacts.push({ data: JSON.stringify(generationMetadata, null, 2), name: "generation-metadata.json" });
+      }
+
+      if (propertySerializationTrace) {
+        serializedArtifacts.push({ data: JSON.stringify(propertySerializationTrace, null, 2), name: "property-serialization-trace.json" });
+      }
+
+      if (invokeContractTrace) {
+        serializedArtifacts.push({ data: JSON.stringify(invokeContractTrace, null, 2), name: "invoke-contract-trace.json" });
+      }
+
+      if (stageHashParity) {
+        serializedArtifacts.push({ data: JSON.stringify(stageHashParity, null, 2), name: "stage-hash-parity.json" });
       }
 
       archive = archiver("zip", { zlib: { level: 9 } });

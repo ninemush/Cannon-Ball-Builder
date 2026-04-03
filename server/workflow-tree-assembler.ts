@@ -19,6 +19,7 @@ import type { ProcessType } from "./catalog/catalog-service";
 import { escapeXml, escapeXmlExpression, normalizeXmlExpression, escapeXmlTextContent } from "./lib/xml-utils";
 import { XMLValidator } from "fast-xml-parser";
 import { buildExpression, isValueIntent, normalizeStringToExpression, normalizePropertyToValueIntent, tryParseJsonValueIntent, emitJsonResolutionDiagnostic, type ValueIntent } from "./xaml/expression-builder";
+import { emitPropertySerializationTrace, computeContentHash } from "./pipeline-trace-collector";
 import { validateMapClrTypeOutput, reportCriticalTypeDiagnostic } from "./emission-gate";
 import { getActivityTag, getActivityPrefixStrict, injectMissingNamespaceDeclarations, ensureBracketWrapped, smartBracketWrap, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX } from "./xaml/xaml-compliance";
 import { lintExpression } from "./xaml/vbnet-expression-linter";
@@ -1498,6 +1499,7 @@ export function resolveActivityTemplate(
       .replace(/&quot;/g, "").replace(/^"+|"+$/g, "").trim();
     fileName = fileName.replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1").replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1").replace(/[{}]/g, "");
     if (!fileName.endsWith(".xaml")) fileName += ".xaml";
+
     return applyCatalogConformance(`<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
       `  <ui:InvokeWorkflowFile.Arguments>\n` +
       `  </ui:InvokeWorkflowFile.Arguments>\n` +
@@ -2110,10 +2112,12 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
     const propClrType = schema ? (schema.activity.properties.find((p: any) => p.name === key)?.clrType) : undefined;
 
     let preprocessedRawValue = rawValue;
+    let _dynamicFallbackUsed = false;
     if (typeof rawValue === "string" && !isValueIntent(rawValue)) {
       const jsonParsed = tryParseJsonValueIntent(rawValue);
       if (jsonParsed) {
         preprocessedRawValue = jsonParsed.intent;
+        _dynamicFallbackUsed = jsonParsed.fallbackUsed;
         const resolvedExpr = buildExpression(jsonParsed.intent);
         emitJsonResolutionDiagnostic(rawValue, jsonParsed.intent, resolvedExpr, jsonParsed.fallbackUsed);
         console.log(`[Tree Assembler] resolveDynamicTemplate pre-processed JSON string for property "${key}": type=${jsonParsed.intent.type}, fallback=${jsonParsed.fallbackUsed}, raw=${rawValue.substring(0, 120)}`);
@@ -2190,6 +2194,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
     }
 
     let isChildElement = false;
+    let childSerializedValue = "";
     if (schema) {
       const propDef = schema.activity.properties.find((p: any) => p.name === key);
       if (propDef && propDef.xamlSyntax === "child-element") {
@@ -2213,18 +2218,48 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
             wrappedValue = stripped;
           }
         }
-        const safeWrappedValue = escapeXmlTextContent(wrappedValue);
+        childSerializedValue = escapeXmlTextContent(wrappedValue);
         childParts.push(
           `  <${tag}.${key}>\n` +
-          `    <${wrapper}${typeArg}>${safeWrappedValue}</${wrapper}>\n` +
+          `    <${wrapper}${typeArg}>${childSerializedValue}</${wrapper}>\n` +
           `  </${tag}.${key}>`
         );
       }
     }
 
+    const traceIntentType = isValueIntent(preprocessedRawValue) ? (preprocessedRawValue as ValueIntent).type : "string";
+    const isExpressionBearing = traceIntentType !== "string" || _dynamicFallbackUsed ||
+      (typeof effectiveValue === "string" && /^\[.*\]$/.test(effectiveValue.trim()));
+
     if (!isChildElement) {
       const lintedAttrValue = lintAndFixVbExpression(effectiveValue);
       attrParts.push(`${key}="${escapeXml(lintedAttrValue)}"`);
+      if (isExpressionBearing) {
+        emitPropertySerializationTrace({
+          workflowFile: _activeRemediationContext?.fileName || "unknown",
+          activityType: templateName,
+          propertyName: key,
+          originalRawValue: (typeof rawValue === "string" ? rawValue : JSON.stringify(rawValue)).substring(0, 500),
+          parsedIntentType: traceIntentType,
+          normalizedOutput: lintedAttrValue.substring(0, 500),
+          fallbackUsed: _dynamicFallbackUsed,
+          finalValueHash: computeContentHash(lintedAttrValue),
+        });
+      }
+    } else {
+      const serializedChildValue = childSerializedValue || effectiveValue;
+      if (isExpressionBearing) {
+        emitPropertySerializationTrace({
+          workflowFile: _activeRemediationContext?.fileName || "unknown",
+          activityType: templateName,
+          propertyName: key,
+          originalRawValue: (typeof rawValue === "string" ? rawValue : JSON.stringify(rawValue)).substring(0, 500),
+          parsedIntentType: traceIntentType,
+          normalizedOutput: serializedChildValue.substring(0, 500),
+          fallbackUsed: _dynamicFallbackUsed,
+          finalValueHash: computeContentHash(serializedChildValue),
+        });
+      }
     }
   }
 
@@ -3385,7 +3420,7 @@ function countPropertyMetrics(node: WorkflowNode, metrics: ValueIntentMetrics): 
   }
 }
 
-function normalizeSpecProperties(node: WorkflowNode): void {
+function normalizeSpecProperties(node: WorkflowNode, workflowFile?: string): void {
   if (node.kind === "activity") {
     const templateName = node.template || "";
     for (const [key, value] of Object.entries(node.properties || {})) {
@@ -3400,29 +3435,43 @@ function normalizeSpecProperties(node: WorkflowNode): void {
           clrType,
         );
         (node.properties as Record<string, any>)[key] = normalized;
+
+        const normalizedOutput = isValueIntent(normalized)
+          ? buildExpression(normalized as ValueIntent)
+          : String(normalized);
+        emitPropertySerializationTrace({
+          workflowFile: workflowFile || "unknown",
+          activityType: templateName,
+          propertyName: key,
+          originalRawValue: value.substring(0, 500),
+          parsedIntentType: `pre-assembly:${isValueIntent(normalized) ? (normalized as ValueIntent).type : "passthrough"}`,
+          normalizedOutput: normalizedOutput.substring(0, 500),
+          fallbackUsed: false,
+          finalValueHash: computeContentHash(normalizedOutput),
+        });
       }
     }
   }
   if (node.kind === "sequence") {
-    for (const child of node.children) normalizeSpecProperties(child);
+    for (const child of node.children) normalizeSpecProperties(child, workflowFile);
   }
   if (node.kind === "tryCatch") {
-    for (const child of node.tryChildren) normalizeSpecProperties(child);
-    for (const child of node.catchChildren) normalizeSpecProperties(child);
-    for (const child of node.finallyChildren) normalizeSpecProperties(child);
+    for (const child of node.tryChildren) normalizeSpecProperties(child, workflowFile);
+    for (const child of node.catchChildren) normalizeSpecProperties(child, workflowFile);
+    for (const child of node.finallyChildren) normalizeSpecProperties(child, workflowFile);
   }
   if (node.kind === "if") {
-    for (const child of node.thenChildren) normalizeSpecProperties(child);
-    for (const child of node.elseChildren) normalizeSpecProperties(child);
+    for (const child of node.thenChildren) normalizeSpecProperties(child, workflowFile);
+    for (const child of node.elseChildren) normalizeSpecProperties(child, workflowFile);
   }
   if (node.kind === "while") {
-    for (const child of node.bodyChildren) normalizeSpecProperties(child);
+    for (const child of node.bodyChildren) normalizeSpecProperties(child, workflowFile);
   }
   if (node.kind === "forEach") {
-    for (const child of node.bodyChildren) normalizeSpecProperties(child);
+    for (const child of node.bodyChildren) normalizeSpecProperties(child, workflowFile);
   }
   if (node.kind === "retryScope") {
-    for (const child of node.bodyChildren) normalizeSpecProperties(child);
+    for (const child of node.bodyChildren) normalizeSpecProperties(child, workflowFile);
   }
 }
 
@@ -3467,8 +3516,9 @@ export function assembleWorkflowFromSpec(
     }
   }
 
+  const workflowFileName = workflowName.endsWith(".xaml") ? workflowName : `${workflowName}.xaml`;
   for (const child of spec.rootSequence.children) {
-    normalizeSpecProperties(child);
+    normalizeSpecProperties(child, workflowFileName);
   }
 
   const renameMap = new Map<string, string>();
