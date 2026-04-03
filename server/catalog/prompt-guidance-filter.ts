@@ -241,7 +241,18 @@ export function buildSddPackageGuidance(profile?: StudioProfile | null): { guida
 
   logGuidanceDiagnostics("SDD", result.diagnostics);
 
-  const guidance = `\nVERIFIED UiPath ACTIVITY PACKAGES (prefer these for package references — they are catalog-verified and available on the UiPath Official Feed. You may recommend real UiPath packages outside this list if needed, but note they are unverified):\n${result.guidanceBlock}\n`;
+  const versionedLines: string[] = [];
+  for (const entry of result.diagnostics.included) {
+    const versionTag = entry.version ? ` ${entry.version}` : "";
+    if (entry.keyActivities.length > 0) {
+      versionedLines.push(`- ${entry.packageId}${versionTag}: ${entry.keyActivities.join(", ")}`);
+    } else {
+      versionedLines.push(`- ${entry.packageId}${versionTag}`);
+    }
+  }
+  const versionedBlock = versionedLines.join("\n");
+
+  const guidance = `\nVERIFIED UiPath ACTIVITY PACKAGES (${result.diagnostics.totalIncluded} packages — catalog-verified, available on the UiPath Official Feed):\n${versionedBlock}\n`;
   return { guidance, diagnostics: result.diagnostics };
 }
 

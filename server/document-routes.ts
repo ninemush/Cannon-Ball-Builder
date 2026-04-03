@@ -11,7 +11,7 @@ import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPacka
 import { generateConfigXlsx } from "./package-assembler";
 import { startUiPathGenerationRun, type TriggerSource, type RunCallbacks, type RunResult } from "./uipath-run-manager";
 import { UIPATH_PROMPT, buildUiPathPrompt, repairTruncatedPackageJson } from "./uipath-prompts";
-import { scanSddForUnverifiedPackages, buildSddScanGuidance } from "./catalog/prompt-guidance-filter";
+import { scanSddForUnverifiedPackages, buildSddScanGuidance, buildSddPackageGuidance } from "./catalog/prompt-guidance-filter";
 export { UIPATH_PROMPT, repairTruncatedPackageJson };
 import type { MetaValidationMode } from "./meta-validation";
 import { catalogService } from "./catalog/catalog-service";
@@ -83,7 +83,7 @@ Include these sections:
 
 1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.). Explain how Action Center, Data Fabric, and Apps work together in this solution. If attended robots are available, explicitly recommend attended vs unattended execution for each component with justification.
 2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses. For each human-in-the-loop step, specify the complete form schema and SLA configuration. Reference existing deployed processes that can be reused if applicable.
-3) UiPath Activities and Packages Required — list specific UiPath packages and activities${packageRegistryContext ? " with EXACT version numbers from the validated package registry provided below" : ""}. Include Integration Service connectors if applicable. Include UiPath.Persistence.Activities for Action Center tasks and Data Fabric HTTP activities for entity operations. When targeting Serverless (Cross-Platform) robots, use Modern Design activities only: UseExcel instead of ExcelApplicationScope, UseBrowser instead of OpenBrowser, SendMail/GetMail instead of SendSmtpMailMessage/GetImapMailMessage. Do NOT use CloseApplication or KillProcess on Serverless.
+3) UiPath Activities and Packages Required — list specific UiPath packages and activities${packageRegistryContext ? " with EXACT version numbers from the verified package list provided below" : ""}. Include Integration Service connectors if applicable. Include UiPath.Persistence.Activities for Action Center tasks and Data Fabric HTTP activities for entity operations. When targeting Serverless (Cross-Platform) robots, use Modern Design activities only: UseExcel instead of ExcelApplicationScope, UseBrowser instead of OpenBrowser, SendMail/GetMail instead of SendSmtpMailMessage/GetImapMailMessage. Do NOT use CloseApplication or KillProcess on Serverless.
 4) Integration Points and API/System Connections — all external systems, APIs, databases, and how they connect (Integration Service connectors, custom HTTP, direct DB, etc.). Include Data Fabric entity service endpoints for data persistence.
 5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling. Include screenshot-on-error as a best practice: every TryCatch error handler should capture a screenshot before logging, especially critical for Serverless robots where no RDP is available for debugging.
 6) Security Considerations — credential management via Orchestrator assets, role-based access, data encryption, audit trail
@@ -101,7 +101,7 @@ Include a dedicated "## 8. Agent Architecture" section with:
 - **Guardrails**: safety constraints, output validation, PII handling, max iteration limits
 - **Agent Interaction Flow**: which RPA process triggers the agent, what it returns, downstream steps
 
-` : ""}Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.${packageRegistryContext ? `\n\n${packageRegistryContext}\n\nPACKAGE VERSION RULES (MANDATORY):\n- For every UiPath package you reference, use the EXACT preferred version from the registry above (e.g., "UiPath.System.Activities 25.10.7").\n- Do NOT write "Latest stable", "Latest", or invent version numbers.\n- If a package is needed but NOT listed in the registry above, you MUST note: "[package name] — version not verified (not in validated registry)" instead of guessing a version.` : ""}`;
+` : ""}Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.${packageRegistryContext ? `\n\n${packageRegistryContext}\n\nPACKAGE VERSION RULES (MANDATORY):\n- For every UiPath package you reference, use the EXACT version shown in the verified package list above (e.g., "UiPath.System.Activities 25.10.7").\n- Do NOT write "Latest stable", "Latest", or invent version numbers.\n- If a package is needed but NOT listed in the verified list above, you MUST note: "[package name] — version not verified (not in verified catalog)" instead of guessing a version.` : ""}`;
 }
 
 interface SlimArtifactsContext {
@@ -458,9 +458,10 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
     const startTime = Date.now();
     const systemPrompt = `You are a Senior Solution Architect generating formal documents for the "${idea.title}" project. You think in solution patterns (dispatcher-performer, REFramework, attended hybrid, queue-driven fan-out) and select them with deliberate rationale — not by default. You make platform trade-offs explicitly: why Orchestrator queues vs Data Fabric, why attended vs unattended, why Integration Service connectors vs custom HTTP. You design for operability — every component has a monitoring, alerting, and SLA adherence story. You consider deployment topology (on-prem vs cloud, Serverless vs classic robots) and licensing implications. Your documents are architecturally intentional, not templated. Be specific and use details from the conversation.${contextPrompt}`;
 
-    const packageRegistryContext = metadataService.getPackageRegistryContext();
+    const studioProfileForSdd = catalogService.getStudioProfile();
+    const { guidance: packageGuidanceContext } = buildSddPackageGuidance(studioProfileForSdd);
     const ideaAutomationType = (idea.automationType as string) || undefined;
-    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText, packageRegistryContext, ideaAutomationType);
+    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText, packageGuidanceContext, ideaAutomationType);
 
     const slimArtifactsCtx = buildArtifactsContext(platformProfile);
     slimArtifactsCtx.automationType = ideaAutomationType;
