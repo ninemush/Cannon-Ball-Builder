@@ -8,6 +8,12 @@ import type {
 } from "./uipath-pipeline";
 import type { AutomationPattern } from "./uipath-activity-registry";
 import { validateExecutablePaths, type ExecutablePathDefect } from "./xaml/executable-path-validator";
+import {
+  validateWorkflowGraph,
+  type WorkflowGraphDefect,
+  type WorkflowGraphSummary,
+  type WorkflowGraphValidationResult,
+} from "./xaml/workflow-graph-validator";
 
 export interface FinalArtifactValidationInput {
   xamlEntries: { name: string; content: string }[];
@@ -58,6 +64,9 @@ export interface FinalQualityReport {
   analysisReports: Array<{ fileName: string; report: AnalysisReport }>;
   declarationValidation: DeclarationValidationSummary;
   enumCompliance: EnumComplianceSummary;
+  workflowGraphDefects: WorkflowGraphDefect[];
+  hasWorkflowGraphIntegrityIssues: boolean;
+  workflowGraphSummary: WorkflowGraphSummary;
   aggregatedStats: {
     totalFiles: number;
     studioCleanCount: number;
@@ -178,6 +187,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const declarationValidation = buildDeclarationSummary(qualityGateResult.violations);
   const enumCompliance = buildEnumComplianceSummary(qualityGateResult.violations);
 
+  const graphValidation = validateWorkflowGraph(xamlEntries);
+
   const perFileResults: PerFileValidation[] = xamlEntries.map(entry => {
     const shortName = entry.name.split("/").pop() || entry.name;
 
@@ -240,7 +251,7 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const hasAnyStubContent = perFileResults.some(r => r.hasStubContent);
   const qgIncomplete = qualityGateResult.completenessLevel === "incomplete";
 
-  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination;
+  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.hasWorkflowGraphIntegrityIssues;
 
   let derivedStatus: PackageStatus;
   let statusReason: string;
@@ -269,12 +280,20 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     if (entryPointHasBlockers) reasons.push("entry point (Main.xaml) has structural blockers or stub content");
     if (hasStructuralBlockers) reasons.push(`${studioBlockedCount} file(s) structurally blocked in final validation`);
     statusReason = `Structurally invalid: ${reasons.join(", ")}`;
-  } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination) {
+  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking")) {
+    derivedStatus = "structurally_invalid";
+    const blockingCount = graphValidation.workflowGraphDefects.filter(d => d.severity === "execution_blocking").length;
+    statusReason = `Structurally invalid: ${blockingCount} execution-blocking workflow graph defect(s) detected`;
+  } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.workflowGraphDefects.some(d => d.severity === "handoff_required")) {
     derivedStatus = "handoff_only";
     const reasons: string[] = [];
     if (hasAnyStubContent) reasons.push("stub content detected in finalized artifacts");
     if (qgIncomplete) reasons.push("quality gate completeness level: incomplete");
     if (executablePathResult.hasExecutablePathContamination) reasons.push(`${executablePathResult.executablePathDefects.length} executable-path defect(s) detected`);
+    if (graphValidation.workflowGraphDefects.some(d => d.severity === "handoff_required")) {
+      const handoffCount = graphValidation.workflowGraphDefects.filter(d => d.severity === "handoff_required").length;
+      reasons.push(`${handoffCount} workflow graph integrity issue(s) require handoff`);
+    }
     statusReason = `Handoff only: ${reasons.join(", ")}`;
   } else if (hasStructuralWarnings || totalWarnings > 0) {
     derivedStatus = "openable_with_warnings";
@@ -293,6 +312,9 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     analysisReports,
     declarationValidation,
     enumCompliance,
+    workflowGraphDefects: graphValidation.workflowGraphDefects,
+    hasWorkflowGraphIntegrityIssues: graphValidation.hasWorkflowGraphIntegrityIssues,
+    workflowGraphSummary: graphValidation.workflowGraphSummary,
     aggregatedStats: {
       totalFiles: xamlEntries.length,
       studioCleanCount,

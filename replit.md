@@ -60,8 +60,9 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **Safe VB Expression Normalization**: Detects and emits complex expressions as-is to prevent corruption.
 - **Pre-Emission Health Invariant**: Throws blocking error when non-empty builds have zero activity coverage.
 - **High-Risk Expression Decomposition**: Decomposes complex nested expressions into sequential Assign activities.
-- **Final Artifact Truth Gate**: A single `FinalArtifactValidation` pass produces a `FinalQualityReport` as the sole authority for package status.
+- **Final Artifact Truth Gate**: A single `FinalArtifactValidation` pass produces a `FinalQualityReport` as the sole authority for package status. Includes workflow graph integrity validation via `server/xaml/workflow-graph-validator.ts`.
 - **Executable-Path Validator**: A read-only validation pass (`server/xaml/executable-path-validator.ts`) scans final post-repair XAML for six defect classes (placeholders, TODO markers, leaked JSON expressions, blank required properties, malformed VB expressions, sentinel values) in runtime-critical property slots. Uses ACTIVITY_REGISTRY and high-risk overrides for severity classification. Emits `hasExecutablePathContamination` signal for downstream status derivation.
+- **Workflow Graph Validator**: A dedicated read-only graph-based validator (`server/xaml/workflow-graph-validator.ts`) that operates on final archive entries to detect orphaned workflows, broken InvokeWorkflowFile references, REFramework wiring defects (via structural state-machine analysis), decomposed-but-unwired workflows, ambiguous references, and graph discontinuities. Emits `workflowGraphDefects[]`, `hasWorkflowGraphIntegrityIssues`, and `workflowGraphSummary` with exclusions for non-executable files. Feeds into `hasDegradation` composite in `FinalQualityReport`.
 - **Pipeline Health & Convergence Metrics**: Tracks per-run convergence metrics and determines readiness.
 - **Transitive Dependency Validation**: Validates that XAML-referenced activities have corresponding packages declared.
 - **Regression Test Suite**: Server-side vitest tests cover 34+ regression scenarios.
