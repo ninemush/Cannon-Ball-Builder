@@ -18,6 +18,7 @@ import {
   resetArchiveFreeze,
   isArchiveFrozen,
   createGuardedDeferredWrites,
+  createGuardedPostGateEntries,
   verifyFrozenArchiveBuffer,
   getMutationTrace,
   assertNoPostFreezeMutation,
@@ -27,6 +28,7 @@ import {
   type PostClassifierMutationTraceEntry,
   type FrozenWorkflowEntry,
   type WorkflowStatusParityEntry,
+  type WorkflowStatus,
 } from "../workflow-status-classifier";
 import AdmZip from "adm-zip";
 import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
@@ -1358,6 +1360,177 @@ describe("Compiler-invariant regression tests", () => {
       const deferredWrites = createGuardedDeferredWrites(new Map<string, string>(), isPackageMode);
 
       expect(() => deferredWrites.set("lib/Main.xaml", mainXaml + "<!-- changed -->")).toThrow("Post-Freeze Mutation Violation");
+    });
+  });
+
+  describe("Task 434 regression: pipeline-level freeze verification and mutation trace", () => {
+    beforeEach(() => {
+      resetMonotonicCounter();
+      resetArchiveFreeze();
+    });
+
+    it("full pipeline: freeze → archive → verify produces zero mismatches when no mutation occurs", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Pipeline test&quot;" DisplayName="Log" />`);
+      const helperXaml = makeValidXaml("Helper", `<ui:LogMessage Level="Info" Message="&quot;Helper&quot;" DisplayName="Log" />`);
+      const entries = [
+        { name: "lib/Main.xaml", content: mainXaml },
+        { name: "lib/Helper.xaml", content: helperXaml },
+      ];
+
+      const classification = classifyWorkflowStatus(entries);
+      const freeze = freezeArchiveWorkflows(entries, classification);
+      expect(freeze.frozenWorkflows.size).toBe(2);
+
+      const zip = new AdmZip();
+      for (const entry of entries) {
+        zip.addFile(entry.name, Buffer.from(entry.content, "utf-8"));
+      }
+      const archiveBuffer = zip.toBuffer();
+
+      const result = verifyFrozenArchiveBuffer(archiveBuffer, "lib");
+      expect(result.verified).toBe(true);
+      expect(result.mismatches).toHaveLength(0);
+    });
+
+    it("full pipeline: mutated archive buffer is detected by verifyFrozenArchiveBuffer", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Pipeline test&quot;" DisplayName="Log" />`);
+      const entries = [{ name: "lib/Main.xaml", content: mainXaml }];
+
+      const classification = classifyWorkflowStatus(entries);
+      freezeArchiveWorkflows(entries, classification);
+
+      const zip = new AdmZip();
+      zip.addFile("lib/Main.xaml", Buffer.from(mainXaml + "<!-- post-freeze mutation -->", "utf-8"));
+      const archiveBuffer = zip.toBuffer();
+
+      const result = verifyFrozenArchiveBuffer(archiveBuffer, "lib");
+      expect(result.verified).toBe(false);
+      expect(result.mismatches.length).toBeGreaterThan(0);
+      expect(result.mismatches[0].file).toBe("Main.xaml");
+    });
+
+    it("mutation trace entries include function field in all call sites", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Trace test&quot;" DisplayName="Log" />`);
+      const entries = [{ name: "lib/Main.xaml", content: mainXaml }];
+      const classification = classifyWorkflowStatus(entries);
+      freezeArchiveWorkflows(entries, classification);
+
+      try {
+        assertNoPostFreezeMutation("test-stage", "Main.xaml", mainXaml + "<!-- changed -->", "xaml_bytes", "test mutation");
+      } catch (_e) {}
+
+      try {
+        const invalidStatus: WorkflowStatus = "stub";
+        assertNoPostFreezeStatusMutation("test-stage", "Main.xaml", invalidStatus, "test status change");
+      } catch (_e) {}
+
+      const trace = getMutationTrace();
+      const nonFreezeEntries = trace.entries.filter(e => e.stage !== "freeze-archive-workflows");
+      expect(nonFreezeEntries.length).toBeGreaterThan(0);
+      for (const entry of nonFreezeEntries) {
+        expect(entry).toHaveProperty("function");
+        expect(typeof entry.function).toBe("string");
+        expect(entry.function!.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("createGuardedPostGateEntries blocks post-freeze content mutation in package mode", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Guard test&quot;" DisplayName="Log" />`);
+      const entries = [{ name: "lib/Main.xaml", content: mainXaml }];
+      const classification = classifyWorkflowStatus(entries);
+      freezeArchiveWorkflows(entries, classification);
+
+      const guarded = createGuardedPostGateEntries(entries, true);
+      expect(() => {
+        guarded[0].content = mainXaml + "<!-- mutated -->";
+      }).toThrow("Post-Freeze Mutation Violation");
+    });
+
+    it("createGuardedPostGateEntries allows identical content assignment without throwing", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Guard test&quot;" DisplayName="Log" />`);
+      const entries = [{ name: "lib/Main.xaml", content: mainXaml }];
+      const classification = classifyWorkflowStatus(entries);
+      freezeArchiveWorkflows(entries, classification);
+
+      const guarded = createGuardedPostGateEntries(entries, true);
+      expect(() => {
+        guarded[0].content = mainXaml;
+      }).not.toThrow();
+    });
+
+    it("deferredWrites guard and postGateEntries guard both block mutation, ensuring dual-path consistency", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Dual path&quot;" DisplayName="Log" />`);
+      const entries = [{ name: "lib/Main.xaml", content: mainXaml }];
+      const classification = classifyWorkflowStatus(entries);
+      freezeArchiveWorkflows(entries, classification);
+
+      const guardedDW = createGuardedDeferredWrites(new Map<string, string>(), true);
+      const guardedEntries = createGuardedPostGateEntries(entries, true);
+
+      const mutated = mainXaml + "<!-- dual-path-mutation -->";
+      expect(() => guardedDW.set("lib/Main.xaml", mutated)).toThrow("Post-Freeze Mutation Violation");
+      expect(() => { guardedEntries[0].content = mutated; }).toThrow("Post-Freeze Mutation Violation");
+
+      const trace = getMutationTrace();
+      expect(trace.summary.totalUnexpectedPostFreezeMutations).toBeGreaterThanOrEqual(2);
+    });
+
+    it("postGateXamlEntries is the single authoritative XAML source after pre-freeze sync", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Authority test&quot;" DisplayName="Log" />`);
+      const entries = [{ name: "lib/Main.xaml", content: mainXaml }];
+      const classification = classifyWorkflowStatus(entries);
+
+      const deferredWrites = new Map<string, string>();
+      deferredWrites.set("lib/Main.xaml", mainXaml + "<!-- stale deferredWrites content -->");
+      deferredWrites.set("project.json", "{}");
+
+      for (const entry of entries) {
+        if (!entry.name.endsWith(".xaml")) continue;
+        deferredWrites.set(entry.name, entry.content);
+      }
+
+      for (const entry of entries) {
+        if (!entry.name.endsWith(".xaml")) continue;
+        const dwContent = deferredWrites.get(entry.name);
+        expect(dwContent).toBe(entry.content);
+      }
+
+      freezeArchiveWorkflows(entries, classification);
+
+      const postGateArchiveXamlEntries = entries.filter(e => e.name.endsWith(".xaml"));
+      expect(postGateArchiveXamlEntries).toHaveLength(1);
+      expect(postGateArchiveXamlEntries[0].content).toBe(mainXaml);
+
+      const zip = new AdmZip();
+      for (const [path, content] of deferredWrites.entries()) {
+        zip.addFile(path, Buffer.from(content, "utf-8"));
+      }
+      const result = verifyFrozenArchiveBuffer(zip.toBuffer(), "lib");
+      expect(result.verified).toBe(true);
+    });
+
+    it("mutation trace perFileMutationCounts tracks per-file mutation attempts", () => {
+      const mainXaml = makeValidXaml("Main", `<ui:LogMessage Level="Info" Message="&quot;Count test&quot;" DisplayName="Log" />`);
+      const helperXaml = makeValidXaml("Helper", `<ui:LogMessage Level="Info" Message="&quot;Count helper&quot;" DisplayName="Log" />`);
+      const entries = [
+        { name: "lib/Main.xaml", content: mainXaml },
+        { name: "lib/Helper.xaml", content: helperXaml },
+      ];
+      const classification = classifyWorkflowStatus(entries);
+      freezeArchiveWorkflows(entries, classification);
+
+      try {
+        assertNoPostFreezeMutation("test", "Main.xaml", mainXaml + "<!-- a -->", "xaml_bytes", "test");
+      } catch (_e) {}
+      try {
+        assertNoPostFreezeMutation("test", "Helper.xaml", helperXaml + "<!-- b -->", "xaml_bytes", "test");
+      } catch (_e) {}
+
+      const trace = getMutationTrace();
+      expect(trace.perFileMutationCounts).toBeDefined();
+      expect(Object.keys(trace.perFileMutationCounts!).length).toBeGreaterThanOrEqual(2);
+      expect(trace.filesChangedAfterFreeze).toBeDefined();
+      expect(trace.filesChangedAfterFreeze!.length).toBeGreaterThanOrEqual(2);
     });
   });
 });

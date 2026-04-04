@@ -273,6 +273,7 @@ export interface ArchiveFreezePoint {
 
 export interface PostClassifierMutationTraceEntry {
   stage: string;
+  function: string;
   file: string;
   mutationType: "xaml_bytes" | "workflow_status" | "deferred_write" | "archive_buffer" | "stub_injection" | "placeholder_injection";
   preHash: string;
@@ -286,11 +287,15 @@ export interface PostClassifierMutationTraceEntry {
 
 export interface PostClassifierMutationTrace {
   entries: PostClassifierMutationTraceEntry[];
+  perFileMutationCounts: Record<string, number>;
+  filesChangedAfterFreeze: string[];
   summary: {
     totalAttemptedMutations: number;
     totalBlockedMutations: number;
     totalAllowedPreFreezeMutations: number;
     totalPostFreezeViolations: number;
+    totalUnexpectedPostFreezeMutations: number;
+    filesChangedAfterFreeze: number;
   };
 }
 
@@ -338,6 +343,7 @@ export function freezeArchiveWorkflows(
   for (const [normalized, frozenEntry] of Array.from(frozenWorkflows.entries())) {
     recordMutationAttempt({
       stage: "pre-freeze-snapshot",
+      function: "freezeArchiveWorkflows",
       file: frozenEntry.file,
       mutationType: "xaml_bytes",
       preHash: "N/A",
@@ -378,14 +384,29 @@ export function getMutationTrace(): PostClassifierMutationTrace {
   const totalBlockedMutations = entries.filter(e => !e.allowed).length;
   const totalAllowedPreFreezeMutations = entries.filter(e => e.allowed).length;
   const totalPostFreezeViolations = entries.filter(e => !e.allowed).length;
+  const unexpectedPostFreeze = entries.filter(e => !e.allowed && e.changedBytes).length;
+
+  const perFileMutationCounts: Record<string, number> = {};
+  const filesChangedAfterFreezeSet = new Set<string>();
+  for (const e of entries) {
+    perFileMutationCounts[e.file] = (perFileMutationCounts[e.file] || 0) + 1;
+    if (!e.allowed && e.changedBytes) {
+      filesChangedAfterFreezeSet.add(e.file);
+    }
+  }
+  const filesChangedAfterFreeze = Array.from(filesChangedAfterFreezeSet);
 
   return {
     entries,
+    perFileMutationCounts,
+    filesChangedAfterFreeze,
     summary: {
       totalAttemptedMutations,
       totalBlockedMutations,
       totalAllowedPreFreezeMutations,
       totalPostFreezeViolations,
+      totalUnexpectedPostFreezeMutations: unexpectedPostFreeze,
+      filesChangedAfterFreeze: filesChangedAfterFreeze.length,
     },
   };
 }
@@ -407,6 +428,7 @@ export function assertNoPostFreezeMutation(
   if (currentHash !== frozenEntry.contentHash) {
     const traceEntry: PostClassifierMutationTraceEntry = {
       stage,
+      function: "assertNoPostFreezeMutation",
       file: frozenEntry.file,
       mutationType,
       preHash: frozenEntry.contentHash,
@@ -442,6 +464,7 @@ export function assertNoPostFreezeStatusMutation(
   if (newStatus !== frozenEntry.status) {
     const traceEntry: PostClassifierMutationTraceEntry = {
       stage,
+      function: "assertNoPostFreezeStatusMutation",
       file: frozenEntry.file,
       mutationType: "workflow_status",
       preHash: frozenEntry.status,
@@ -481,6 +504,7 @@ export function checkPostFreezeDeferredWriteMutation(
   if (newHash !== frozenEntry.contentHash) {
     const traceEntry: PostClassifierMutationTraceEntry = {
       stage,
+      function: "checkPostFreezeDeferredWriteMutation",
       file: frozenEntry.file,
       mutationType: "deferred_write",
       preHash: frozenEntry.contentHash,
@@ -501,6 +525,57 @@ export function checkPostFreezeDeferredWriteMutation(
       );
     }
   }
+}
+
+export function createGuardedPostGateEntries(
+  entries: Array<{ name: string; content: string }>,
+  isPackageMode: boolean,
+): Array<{ name: string; content: string }> {
+  return entries.map(entry => {
+    const baseName = (entry.name.split("/").pop() || entry.name);
+    if (!baseName.endsWith(".xaml")) return entry;
+    return new Proxy(entry, {
+      set(target, prop, value) {
+        if (prop === "content" && typeof value === "string") {
+          if (!_archiveFreezePoint) {
+            Reflect.set(target, prop, value);
+            return true;
+          }
+          const normalized = normalizeClassifierFileName(baseName);
+          const frozenEntry = _archiveFreezePoint.frozenWorkflows.get(normalized);
+          if (frozenEntry) {
+            const newHash = computeContentHash(value);
+            if (newHash !== frozenEntry.contentHash) {
+              const traceEntry: PostClassifierMutationTraceEntry = {
+                stage: "post-freeze-postGateXamlEntries-guard",
+                function: "createGuardedPostGateEntries",
+                file: frozenEntry.file,
+                mutationType: "xaml_bytes",
+                preHash: frozenEntry.contentHash,
+                postHash: newHash,
+                allowed: false,
+                reason: `postGateXamlEntries[].content assignment after archive freeze`,
+                changedBytes: true,
+                changedStatus: false,
+                enforcementAction: isPackageMode ? "fatal" : "blocked",
+              };
+              recordMutationAttempt(traceEntry);
+              if (isPackageMode) {
+                throw new Error(
+                  `[Post-Freeze Mutation Violation] FATAL: Attempted to mutate postGateXamlEntries content for frozen workflow "${frozenEntry.file}" after archive freeze. ` +
+                  `preHash=${frozenEntry.contentHash.substring(0, 12)}, postHash=${newHash.substring(0, 12)}. ` +
+                  `No content mutations are permitted after archive freeze in package mode.`
+                );
+              }
+              return true;
+            }
+          }
+        }
+        Reflect.set(target, prop, value);
+        return true;
+      }
+    });
+  });
 }
 
 export function createGuardedDeferredWrites(
@@ -543,6 +618,7 @@ export function verifyFrozenArchiveBuffer(
           mismatches.push({ file: frozenEntry.file, frozenHash: frozenEntry.contentHash, archiveHash });
           recordMutationAttempt({
             stage: "post-archive-freeze-verification",
+            function: "verifyFrozenArchiveBuffer",
             file: frozenEntry.file,
             mutationType: "archive_buffer",
             preHash: frozenEntry.contentHash,

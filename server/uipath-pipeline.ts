@@ -362,6 +362,7 @@ export interface PipelineOutcomeReport {
   workflowStatusParity?: import("./workflow-status-classifier").WorkflowStatusParityEntry[];
   _preArchiveClassification?: import("./workflow-status-classifier").WorkflowStatusClassifierResult;
   postClassifierMutationTrace?: import("./workflow-status-classifier").PostClassifierMutationTrace;
+  postFreezeMutationTrace?: import("./workflow-status-classifier").PostClassifierMutationTrace;
 }
 
 export interface PipelineResult {

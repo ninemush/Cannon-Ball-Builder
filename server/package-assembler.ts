@@ -62,7 +62,7 @@ import archiver from "archiver";
   import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
   import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
   import { canonicalizeInvokeBindings, canonicalizeTargetValueExpressions, type InvokeCanonicalizationResult, type TargetValueCanonicalizationResult } from "./xaml/invoke-binding-canonicalizer";
-  import { classifyFromArchiveBuffer, buildWorkflowStatusParity, normalizeClassifierFileName, AUTHORITATIVE_STUB_PATTERNS, verifyAndReclassifyFromArchive, assertClassificationFreshness, freezeArchiveWorkflows, isArchiveFrozen, getArchiveFreezePoint, resetArchiveFreeze, checkPostFreezeDeferredWriteMutation, getMutationTrace, recordMutationAttempt, assertNoPostFreezeStatusMutation, createGuardedDeferredWrites, verifyFrozenArchiveBuffer, type WorkflowStatusClassifierResult, type WorkflowStatusParityEntry, type WorkflowStatusParityResult, type PostClassifierMutationTrace } from "./workflow-status-classifier";
+  import { classifyFromArchiveBuffer, buildWorkflowStatusParity, normalizeClassifierFileName, AUTHORITATIVE_STUB_PATTERNS, verifyAndReclassifyFromArchive, assertClassificationFreshness, freezeArchiveWorkflows, isArchiveFrozen, getArchiveFreezePoint, resetArchiveFreeze, checkPostFreezeDeferredWriteMutation, getMutationTrace, recordMutationAttempt, assertNoPostFreezeStatusMutation, createGuardedDeferredWrites, createGuardedPostGateEntries, verifyFrozenArchiveBuffer, type WorkflowStatusClassifierResult, type WorkflowStatusParityEntry, type WorkflowStatusParityResult, type PostClassifierMutationTrace } from "./workflow-status-classifier";
 
 interface DomCorrectionResult {
   content: string;
@@ -7076,7 +7076,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       console.log(`[Post-Assembly Validation] PASSED — all dependency versions validated, entry point verified, studio version confirmed`);
     }
 
-    const postGateXamlEntries: Array<{ name: string; content: string }> = [];
+    let postGateXamlEntries: Array<{ name: string; content: string }> = [];
 
     for (const [path, content] of deferredWrites.entries()) {
       if (path.endsWith(".xaml")) {
@@ -7271,12 +7271,29 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             console.error(`[Pre-Archive Enforcement] Replacing malformed "${shortName}" with handoff stub — defects: ${defectSummary.substring(0, 200)}`);
             const safeDefectSummary = escapeXml(defectSummary.substring(0, 300));
             const safeStubName = escapeXml(stubName);
-            entry.content = `<?xml version="1.0" encoding="utf-8"?>
+            const handoffStubContent = `<?xml version="1.0" encoding="utf-8"?>
 <Activity x:Class="${safeStubName}" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
   <Sequence DisplayName="${safeStubName} — Handoff Required">
     <ui:LogMessage Level="Warn" Message="&quot;[CannonBall] This workflow requires manual implementation — pre-archive canonicalization detected unresolvable structural defects: ${safeDefectSummary}&quot;" DisplayName="Handoff Notice" />
   </Sequence>
 </Activity>`;
+            const preStubHash = createHash("sha256").update(entry.content).digest("hex");
+            entry.content = handoffStubContent;
+            deferredWrites.set(entry.name, handoffStubContent);
+            const postStubHash = createHash("sha256").update(handoffStubContent).digest("hex");
+            recordMutationAttempt({
+              stage: "pre-archive-handoff-stub-injection",
+              function: "buildNuGetPackage:preArchiveEnforcement",
+              file: shortName,
+              mutationType: "stub_injection",
+              preHash: preStubHash,
+              postHash: postStubHash,
+              allowed: true,
+              reason: `Handoff stub injected for "${shortName}" due to pre-archive structural defects (before freeze)`,
+              changedBytes: preStubHash !== postStubHash,
+              changedStatus: false,
+              enforcementAction: "none",
+            });
           }
         }
       }
@@ -7286,6 +7303,15 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
     for (const entry of postGateXamlEntries) {
       const shortName = entry.name.split("/").pop() || entry.name;
+      const deferredContent = deferredWrites.get(entry.name);
+      if (deferredContent !== undefined && deferredContent !== entry.content) {
+        const entryHash = createHash("sha256").update(entry.content).digest("hex").substring(0, 12);
+        const deferredHash = createHash("sha256").update(deferredContent).digest("hex").substring(0, 12);
+        throw new Error(
+          `[Pre-Archive Integrity] FATAL: postGateXamlEntries and deferredWrites diverge for "${shortName}" at archive append. ` +
+          `postGate=${entryHash}, deferred=${deferredHash}. Single authoritative source invariant violated.`
+        );
+      }
       const preHash = preCanonicalizationHashes.get(entry.name) || "unknown";
       const canonicalizedHash = createHash("sha256").update(entry.content).digest("hex");
       const archivedContent = entry.content;
@@ -7437,9 +7463,41 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     archive.append(finalProjectJsonStr, { name: `${libPath}/project.json` });
 
     {
-      const postGateArchiveXamlEntries = Array.from(deferredWrites.entries())
-        .filter(([k]) => k.endsWith(".xaml"))
-        .map(([name, content]) => ({ name, content }));
+      for (const entry of postGateXamlEntries) {
+        const currentDeferred = deferredWrites.get(entry.name);
+        if (currentDeferred !== entry.content) {
+          const preHash = currentDeferred ? createHash("sha256").update(currentDeferred).digest("hex") : "missing";
+          const postHash = createHash("sha256").update(entry.content).digest("hex");
+          deferredWrites.set(entry.name, entry.content);
+          recordMutationAttempt({
+            stage: "pre-freeze-authoritative-sync",
+            function: "buildNuGetPackage:authoritativeSync",
+            file: entry.name.split("/").pop() || entry.name,
+            mutationType: "deferred_write",
+            preHash,
+            postHash,
+            allowed: true,
+            reason: `Synced deferredWrites from authoritative postGateXamlEntries before freeze`,
+            changedBytes: true,
+            changedStatus: false,
+            enforcementAction: "none",
+          });
+        }
+      }
+      console.log(`[Authoritative Source Sync] postGateXamlEntries is the single authoritative content source — deferredWrites synced to match before freeze`);
+
+      for (const entry of postGateXamlEntries) {
+        if (!entry.name.endsWith(".xaml")) continue;
+        const dwContent = deferredWrites.get(entry.name);
+        if (dwContent !== entry.content) {
+          throw new Error(
+            `[Single Authority Violation] deferredWrites diverged from authoritative postGateXamlEntries for "${entry.name}" after pre-freeze sync. ` +
+            `This indicates a bug in the sync logic — deferredWrites must be derived from postGateXamlEntries.`
+          );
+        }
+      }
+
+      const postGateArchiveXamlEntries = postGateXamlEntries.filter(e => e.name.endsWith(".xaml"));
       const postGateRemediationCount = outcomeRemediations.length;
       const dhgAnalysis = runDhgAnalysis(
         postGateArchiveXamlEntries,
@@ -7453,10 +7511,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         emptyContainerCount,
       );
       dhgAnalysis.hasBlockedWorkflows = dhgStudioCompatibility.some(sc => sc.level === "studio-blocked");
-      const finalArchiveWfNames = Array.from(deferredWrites.keys())
-        .filter(k => k.endsWith(".xaml"))
-        .map(k => {
-          const baseName = (k.split("/").pop() || k);
+      const finalArchiveWfNames = postGateXamlEntries
+        .filter(e => e.name.endsWith(".xaml"))
+        .map(e => {
+          const baseName = (e.name.split("/").pop() || e.name);
           return baseName.replace(/\.xaml$/i, "");
         });
       const phase1Archive = new AdmZip();
@@ -7486,7 +7544,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
       const isPackageMode = true;
       deferredWrites = createGuardedDeferredWrites(deferredWrites, isPackageMode);
-      console.log(`[Archive Freeze] deferredWrites now guarded — any post-freeze XAML mutation will be intercepted`);
+      postGateXamlEntries = createGuardedPostGateEntries(postGateXamlEntries, isPackageMode);
+      console.log(`[Archive Freeze] deferredWrites and postGateXamlEntries now guarded — any post-freeze XAML mutation will be intercepted`);
 
       const dhgContext: DhgContext = {
         projectName,
@@ -8005,6 +8064,7 @@ ${depEntries}
     canonicalizationArchiveParity: canonicalizationArchiveParity.length > 0 ? canonicalizationArchiveParity : undefined,
     preArchiveStructuralDefects: preArchiveStructuralDefects.length > 0 ? preArchiveStructuralDefects : undefined,
     postClassifierMutationTrace: getMutationTrace(),
+    postFreezeMutationTrace: getMutationTrace(),
   };
 
   if (buildCacheKey && fingerprint) {
