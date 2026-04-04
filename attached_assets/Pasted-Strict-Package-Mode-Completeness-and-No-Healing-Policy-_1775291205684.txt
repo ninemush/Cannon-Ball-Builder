@@ -1,0 +1,118 @@
+Strict Package-Mode Completeness and No-Healing Policy
+
+What & Why
+The recent fixes have improved parity, freeze, and truthfulness of failure, but they have not improved package quality enough. The package is still structurally invalid and still fails in Studio. The current pipeline is still too willing to heal around structural problems in package mode by:
+- injecting PLACEHOLDER into required executable properties
+- replacing broken workflows with stubs
+- tolerating generated-but-unwired critical workflows
+- allowing structurally incomplete executable activities into the final package path
+
+This task changes package mode policy. Package mode must now prioritize correctness over continuity. If a package-critical condition is not satisfied, the package must fail rather than be healed into a misleading artifact.
+
+Goals
+1. Make package mode strict about required executable completeness.
+2. Disallow stub substitution and placeholder injection in package mode.
+3. Fail package mode on structurally incomplete or unwired critical workflows.
+4. Keep developer handoff generation available, but separate that behavior from package generation.
+5. Improve trust that a generated package is either genuinely package-worthy or clearly rejected.
+
+Done looks like
+- In package mode, no required executable property may be auto-filled with PLACEHOLDER, TODO, HANDOFF, or STUB values.
+- In package mode, no workflow with XML well-formedness failure may be replaced with a stub and still be included in the package.
+- In package mode, generated-but-unwired critical workflows are package-fatal, not degradations.
+- In package mode, missing required properties on execution-critical activities are package-fatal.
+- Developer handoff guidance may still be generated, but package generation must fail when package-critical completeness is not met.
+- Final status/reporting clearly distinguishes:
+  - package failed because completeness rules were violated
+  - handoff guidance still available for developer remediation
+- No misleading "package generated" messaging when package-critical conditions fail.
+
+Out of scope
+- Broad catalog/filter alignment
+- New canonicalization concepts
+- Reworking decomposition strategy
+- Changing SDD/PDD generation prompts
+- Deep business-logic repair
+
+Tasks
+
+1. Define package-critical completeness rules
+Create an explicit ruleset for package mode covering:
+- missing required executable activity properties
+- XML well-formedness failures
+- malformed executable expressions
+- generated-but-unwired critical workflows
+- blocked or malformed workflows
+- placeholder/sentinel values in required executable slots
+
+Document which classes are package-fatal versus handoff-only.
+
+2. Remove placeholder injection in package mode
+Any path that currently injects PLACEHOLDER, TODO, HANDOFF, or STUB into required executable properties must:
+- fail package mode
+- record a structured remediation finding
+- allow DHG generation
+- not continue as if the package is still viable
+
+3. Remove stub substitution in package mode
+Any path that currently replaces malformed or blocked workflows with stubs must:
+- fail package mode
+- record the workflow as package-fatal
+- still allow DHG analysis if desired
+- not include the stubbed workflow in an archive presented as a package candidate
+
+4. Promote unwired critical workflows to package-fatal
+If generated workflows are required for the declared process but are unreachable/unwired from Main or required entry paths, package mode must fail instead of downgrading to a warning/degradation.
+
+5. Enforce critical activity completeness
+For execution-critical activities such as mail/message send, task creation, invoke workflow, retry, and entity update operations:
+- missing required runtime properties must be package-fatal in package mode
+- no post-assembly healing may convert them into "good enough" package content
+
+6. Separate package-mode and handoff-mode outcomes
+Ensure reporting and UI make this distinction:
+- package mode failed due to completeness violations
+- DHG and remediation guidance are still available
+Do not present the result as a generated package ready for review if package-critical conditions failed.
+
+7. Add diagnostics and reporting
+Add or extend a structured artifact such as:
+`packageCompletenessViolations`
+including:
+- file
+- workflow
+- activityType
+- propertyName
+- violationType
+- severity
+- packageFatal: true/false
+- handoffGuidanceAvailable: true/false
+- remediationHint
+
+Also add a compact summary:
+- totalPackageFatalViolations
+- totalPlaceholderInjectionPrevented
+- totalStubSubstitutionsPrevented
+- totalUnwiredCriticalWorkflows
+- totalCriticalMissingProperties
+
+8. Add regression tests
+Cover:
+- Send Gmail Message missing Body in package mode fails package generation
+- Send SMTP Mail Message missing Body in package mode fails package generation
+- XML-broken workflow is not stubbed into package mode
+- generated-but-unwired critical workflow fails package mode
+- handoff guide still generates when package mode fails
+- UI/reporting clearly shows package failure but DHG availability
+- no misleading package-produced state when package-critical completeness fails
+
+Relevant files
+- server/package-assembler.ts
+- server/final-artifact-validation.ts
+- server/uipath-pipeline.ts
+- server/dhg-generator.ts
+- server/xaml/executable-path-validator.ts
+- server/xaml/workflow-graph-validator.ts
+- server/xaml/xaml-compliance.ts
+- server/__tests__/pipeline-regression.test.ts
+- server/__tests__/workflow-status-classifier.test.ts
