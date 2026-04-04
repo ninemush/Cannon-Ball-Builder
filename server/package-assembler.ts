@@ -35,6 +35,7 @@ import archiver from "archiver";
   import type { XamlGenerationContext, UiPathPackage } from "./types/uipath-package";
   import { enrichWithAITree, type EnrichmentResult, type TreeEnrichmentResult } from "./ai-xaml-enricher";
   import { assembleWorkflowFromSpec } from "./workflow-tree-assembler";
+  import { runPreEmissionLoweringGate, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics } from "./critical-activity-lowering";
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
@@ -2648,6 +2649,7 @@ export type BuildResult = {
   propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
+  preEmissionLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -3209,6 +3211,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const apEnabled = !!pkg.internal?.autopilotEnabled || !!(_probeCacheSnapshot?.flags?.autopilot);
     const earlyStubFallbacks: string[] = [];
     const complianceFallbacks: Array<{ file: string; reason: string; wasFullStub: boolean }> = [];
+    const collectedPreEmissionDiagnostics: CriticalActivityLoweringDiagnostics[] = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
     const collectedQualityIssues: DhgQualityIssue[] = [];
     const priorCompliantWorkflows = pkg.internal?.priorCompliantWorkflows || [];
@@ -3635,6 +3638,44 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           xamlEntries.push({ name: `${wfName}.xaml`, content: priorContent });
           console.log(`[UiPath] Reused prior compliant workflow "${wfName}" — skipping regeneration`);
           continue;
+        }
+        const loweringVerifiedPackages = new Set(Object.keys(deps));
+        const loweringTargetFw = (tf === "Windows" || tf === "Portable") ? tf : "Windows";
+        const preEmissionGate = runPreEmissionLoweringGate(
+          { name: wfName, rootSequence: spec.rootSequence },
+          loweringTargetFw as "Windows" | "Portable",
+          loweringVerifiedPackages,
+        );
+        if (preEmissionGate.diagnostics.perStepResults.length > 0) {
+          collectedPreEmissionDiagnostics.push(preEmissionGate.diagnostics);
+        }
+        if (!preEmissionGate.passed) {
+          for (const failure of preEmissionGate.fatalFailures) {
+            console.warn(`[UiPath] Pre-emission critical activity lowering REJECTED "${failure.sourceStep}" in "${wfName}": ${failure.remediationHint}`);
+            dependencyWarnings.push({
+              code: "CRITICAL_ACTIVITY_LOWERING_FAILURE",
+              message: `Pre-emission lowering rejected "${failure.sourceStep}" (${failure.loweringOutcome}): ${failure.remediationHint}`,
+              stage: "pre-emission-lowering",
+              recoverable: false,
+            });
+          }
+          console.warn(`[UiPath] Pre-emission lowering gate FAILED for "${wfName}" — ${preEmissionGate.fatalFailures.length} fatal failure(s), blocking XAML emission`);
+          const spResult = tryStructuralPreservationOrStub("", wfName, `Pre-emission critical activity lowering failed — ${preEmissionGate.fatalFailures.map(f => f.remediationHint).join("; ")}`);
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, spResult.content);
+          generatedWorkflowNames.add(wfName);
+          complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Critical activity lowering gate blocked emission`, wasFullStub: spResult.wasFullStub });
+          if (wfName !== "Main" && wfName !== "Process") {
+            nonMainWorkflowNames.push(wfName);
+          }
+          xamlResults.push({
+            xaml: spResult.content,
+            gaps: [],
+            usedPackages: ["UiPath.System.Activities"],
+            variables: [],
+          });
+          continue;
+        } else if (preEmissionGate.diagnostics.summary.totalCriticalSteps > 0) {
+          console.log(`[UiPath] Pre-emission lowering gate PASSED for "${wfName}" — ${preEmissionGate.diagnostics.summary.totalLoweredSuccessfully} critical step(s) validated`);
         }
         try {
           const { xaml, variables } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
@@ -8168,7 +8209,22 @@ ${depEntries}
     });
     console.log(`[UiPath Cache] Stored build for ${buildCacheKey} (${buffer.length} bytes, v${version}) with per-stage fingerprints [enrichment=${stageEnrichment.fingerprint.slice(0, 8)}, xaml=${xamlFp.slice(0, 8)}, qg=${qgFp.slice(0, 8)}]`);
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined };
+  const mergedPreEmissionDiag: CriticalActivityLoweringDiagnostics | undefined = collectedPreEmissionDiagnostics.length > 0
+    ? {
+        perStepResults: collectedPreEmissionDiagnostics.flatMap(d => d.perStepResults),
+        summary: {
+          totalCriticalSteps: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalCriticalSteps, 0),
+          totalLoweredSuccessfully: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalLoweredSuccessfully, 0),
+          totalRejectedForIncompleteContract: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalRejectedForIncompleteContract, 0),
+          totalRejectedForNoConcreteMapping: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalRejectedForNoConcreteMapping, 0),
+          totalMixedFamilyConflicts: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalMixedFamilyConflicts, 0),
+          totalPseudoRepresentationRejections: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalPseudoRepresentationRejections, 0),
+          totalFrameworkIncompatible: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalFrameworkIncompatible, 0),
+          totalPackageUnavailable: collectedPreEmissionDiagnostics.reduce((s, d) => s + d.summary.totalPackageUnavailable, 0),
+        },
+      }
+    : undefined;
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag };
 }
 
 export function createTrackedArchive() {

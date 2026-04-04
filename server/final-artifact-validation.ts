@@ -43,6 +43,14 @@ import {
   type ExpressionLoweringFailure,
   type InvalidRequiredPropertySubstitution,
 } from "./required-property-enforcer";
+import {
+  runXamlLevelCriticalActivityLowering,
+  loweringDiagnosticsToPackageViolations,
+  mergeLoweringDiagnostics,
+  type CriticalActivityLoweringDiagnostics,
+  type CriticalStepLoweringResult,
+} from "./critical-activity-lowering";
+import { catalogService } from "./catalog/catalog-service";
 
 export interface FinalArtifactValidationInput {
   xamlEntries: { name: string; content: string }[];
@@ -52,6 +60,7 @@ export interface FinalArtifactValidationInput {
   archiveContentHashes?: Record<string, string>;
   automationPattern?: AutomationPattern;
   hasNupkg: boolean;
+  preEmissionLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
   contextMetadata: {
     downgrades: DowngradeEvent[];
     usedAIFallback: boolean;
@@ -94,7 +103,8 @@ export type PackageCompletenessViolationType =
   | "unwired_critical_workflow"
   | "missing_critical_activity_property"
   | "malformed_executable_expression"
-  | "blocked_workflow_in_package";
+  | "blocked_workflow_in_package"
+  | "critical_activity_lowering_failure";
 
 export interface PackageCompletenessViolation {
   file: string;
@@ -174,6 +184,7 @@ export interface FinalQualityReport {
   };
   packageCompletenessViolations: PackageCompletenessViolationsArtifact;
   packageViable: boolean;
+  criticalActivityLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
 }
 
 const STUDIO_BLOCKING_CHECKS = new Set([
@@ -244,6 +255,7 @@ function buildPackageCompletenessViolations(
   invalidSubstitutions: InvalidRequiredPropertySubstitution[],
   preComplianceGuard: PreComplianceGuardResult,
   outcomeReport?: PipelineOutcomeReport,
+  criticalLoweringDiagnostics?: CriticalActivityLoweringDiagnostics,
 ): PackageCompletenessViolationsArtifact {
   const violations: PackageCompletenessViolation[] = [];
 
@@ -450,6 +462,23 @@ function buildPackageCompletenessViolations(
     }
   }
 
+  if (criticalLoweringDiagnostics) {
+    const loweringViolations = loweringDiagnosticsToPackageViolations(criticalLoweringDiagnostics);
+    for (const lv of loweringViolations) {
+      violations.push({
+        file: lv.file,
+        workflow: lv.workflow,
+        activityType: lv.activityType,
+        propertyName: lv.propertyName,
+        violationType: lv.violationType,
+        severity: lv.severity,
+        packageFatal: lv.packageFatal,
+        handoffGuidanceAvailable: lv.handoffGuidanceAvailable,
+        remediationHint: lv.remediationHint,
+      });
+    }
+  }
+
   const totalPackageFatalViolations = violations.filter(v => v.packageFatal).length;
   const totalPlaceholderInjectionPrevented = violations.filter(
     v => v.violationType === "sentinel_in_required_property"
@@ -539,6 +568,24 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const preComplianceGuard = enforcementApplication.guardResult;
   const enforcedEntries = enforcementApplication.entries;
 
+  const studioProfile = catalogService.isLoaded() ? catalogService.getStudioProfile() : null;
+  const verifiedPackages = new Set<string>();
+  try {
+    const projJson = JSON.parse(projectJsonContent);
+    if (projJson.dependencies) {
+      for (const pkgId of Object.keys(projJson.dependencies)) {
+        verifiedPackages.add(pkgId);
+      }
+    }
+  } catch {}
+  const xamlLevelDiagnostics = runXamlLevelCriticalActivityLowering(
+    xamlEntries, studioProfile, verifiedPackages,
+  );
+  const criticalLoweringDiagnostics = mergeLoweringDiagnostics(
+    input.preEmissionLoweringDiagnostics,
+    xamlLevelDiagnostics,
+  );
+
   const perFileResults: PerFileValidation[] = enforcedEntries.map(entry => {
     const shortName = entry.name.split("/").pop() || entry.name;
 
@@ -617,7 +664,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const hasExpressionLoweringFailures = requiredPropertyEnforcement.expressionLoweringFailures.length > 0;
   const hasInvalidSubstitutions = requiredPropertyEnforcement.invalidRequiredPropertySubstitutions.length > 0;
   const preComplianceGuardFailed = !preComplianceGuard.passed;
-  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.hasWorkflowGraphIntegrityIssues || contractIntegrityResult.hasContractIntegrityIssues || hasResidualDefects || hasSymbolScopeDefects || hasSentinelReplacements || hasUnresolvableJsonDefects || hasRequiredPropertyDefects || hasExpressionLoweringFailures || hasInvalidSubstitutions || preComplianceGuardFailed;
+  const hasCriticalLoweringFailures = criticalLoweringDiagnostics.perStepResults.some(r => r.packageFatal);
+  const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.hasWorkflowGraphIntegrityIssues || contractIntegrityResult.hasContractIntegrityIssues || hasResidualDefects || hasSymbolScopeDefects || hasSentinelReplacements || hasUnresolvableJsonDefects || hasRequiredPropertyDefects || hasExpressionLoweringFailures || hasInvalidSubstitutions || preComplianceGuardFailed || hasCriticalLoweringFailures;
 
   let derivedStatus: PackageStatus;
   let statusReason: string;
@@ -646,7 +694,7 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     if (entryPointHasBlockers) reasons.push("entry point (Main.xaml) has structural blockers or stub content");
     if (hasStructuralBlockers) reasons.push(`${studioBlockedCount} file(s) structurally blocked in final validation`);
     statusReason = `Structurally invalid: ${reasons.join(", ")}`;
-  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking") || allResidualDefects.some(d => d.severity === "execution_blocking") || targetValueResult.sentinelReplacements.some(d => d.severity === "execution_blocking") || targetValueResult.symbolScopeDefects.some(d => d.severity === "execution_blocking") || hasUnresolvableJsonDefects || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "execution_blocking") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "execution_blocking") || preComplianceGuardFailed) {
+  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking") || allResidualDefects.some(d => d.severity === "execution_blocking") || targetValueResult.sentinelReplacements.some(d => d.severity === "execution_blocking") || targetValueResult.symbolScopeDefects.some(d => d.severity === "execution_blocking") || hasUnresolvableJsonDefects || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "execution_blocking") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "execution_blocking") || preComplianceGuardFailed || hasCriticalLoweringFailures) {
     derivedStatus = "structurally_invalid";
     const reasons: string[] = [];
     const graphBlockingCount = graphValidation.workflowGraphDefects.filter(d => d.severity === "execution_blocking").length;
@@ -665,6 +713,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     const exprLoweringBlockingCount = requiredPropertyEnforcement.expressionLoweringFailures.filter(d => d.severity === "execution_blocking").length;
     if (exprLoweringBlockingCount > 0) reasons.push(`${exprLoweringBlockingCount} expression lowering failure(s)`);
     if (preComplianceGuardFailed) reasons.push(`pre-compliance guard failed: ${preComplianceGuard.violations.length} sentinel violation(s) detected`);
+    const loweringFatalCount = criticalLoweringDiagnostics.perStepResults.filter(r => r.packageFatal).length;
+    if (loweringFatalCount > 0) reasons.push(`${loweringFatalCount} critical activity lowering failure(s)`);
     statusReason = `Structurally invalid: ${reasons.join(", ")} detected`;
   } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.workflowGraphDefects.some(d => d.severity === "handoff_required") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "handoff_required") || allResidualDefects.some(d => d.severity === "handoff_required") || hasSymbolScopeDefects || hasSentinelReplacements || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "handoff_required") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "handoff_required")) {
     derivedStatus = "handoff_only";
@@ -723,6 +773,7 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     requiredPropertyEnforcement.invalidRequiredPropertySubstitutions,
     preComplianceGuard,
     contextMetadata.outcomeReport,
+    criticalLoweringDiagnostics,
   );
 
   if (!packageCompletenessViolations.packageViable && derivedStatus !== "structurally_invalid") {
@@ -784,5 +835,6 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     },
     packageCompletenessViolations,
     packageViable: packageCompletenessViolations.packageViable,
+    criticalActivityLoweringDiagnostics: criticalLoweringDiagnostics,
   };
 }

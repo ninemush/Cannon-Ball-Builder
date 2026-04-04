@@ -1762,6 +1762,7 @@ export async function compilePackageFromSpecs(
         archiveManifest: buildResult.archiveManifest,
         archiveContentHashes: {},
         hasNupkg,
+        preEmissionLoweringDiagnostics: buildResult.preEmissionLoweringDiagnostics,
         contextMetadata: {
           downgrades,
           usedAIFallback,
