@@ -539,6 +539,55 @@ export function buildDependencyDiagnosticsArtifact(
   };
 }
 
+export function checkDependencyDriftAgainstMailFamilyLocks(
+  resolvedPackages: Record<string, { version: string | null; resolutionSource: ResolutionSource }>,
+  mailFamilyLockResults: Array<{ clusterId: string; selectedFamily: string | null; locked: boolean }>,
+): Array<{ clusterId: string; lockedFamily: string; violatingPackage: string; detail: string; packageFatal: boolean }> {
+  const violations: Array<{ clusterId: string; lockedFamily: string; violatingPackage: string; detail: string; packageFatal: boolean }> = [];
+
+  const CROSS_FAMILY_PKG: Record<string, Set<string>> = {
+    "gmail-send": new Set(["UiPath.Mail.Activities"]),
+    "smtp-send": new Set(["UiPath.GSuite.Activities"]),
+    "outlook-send": new Set(["UiPath.GSuite.Activities"]),
+  };
+
+  const packageList = Object.keys(resolvedPackages);
+
+  const FAMILY_REQUIRED_PKG: Record<string, string> = {
+    "gmail-send": "UiPath.GSuite.Activities",
+    "smtp-send": "UiPath.Mail.Activities",
+    "outlook-send": "UiPath.Mail.Activities",
+  };
+
+  const legitimatePackages = new Set<string>();
+  for (const lock of mailFamilyLockResults) {
+    if (!lock.locked || !lock.selectedFamily) continue;
+    const needed = FAMILY_REQUIRED_PKG[lock.selectedFamily];
+    if (needed) legitimatePackages.add(needed);
+  }
+
+  for (const lock of mailFamilyLockResults) {
+    if (!lock.locked || !lock.selectedFamily) continue;
+    const wrongPkgs = CROSS_FAMILY_PKG[lock.selectedFamily];
+    if (!wrongPkgs) continue;
+
+    for (const pkg of wrongPkgs) {
+      if (!packageList.includes(pkg)) continue;
+      if (legitimatePackages.has(pkg)) continue;
+
+      violations.push({
+        clusterId: lock.clusterId,
+        lockedFamily: lock.selectedFamily,
+        violatingPackage: pkg,
+        detail: `Locked to ${lock.selectedFamily} but dependency analysis resolved wrong-family package ${pkg} not attributable to any locked cluster`,
+        packageFatal: true,
+      });
+    }
+  }
+
+  return violations;
+}
+
 export function runPostEmissionDependencyAnalysis(
   finalXamlEntries: XamlEntry[],
   targetFramework: "Windows" | "Portable",

@@ -1774,6 +1774,8 @@ export async function compilePackageFromSpecs(
         archiveContentHashes: {},
         hasNupkg,
         preEmissionLoweringDiagnostics: buildResult.preEmissionLoweringDiagnostics,
+        assemblerDriftViolations: buildResult.crossFamilyDriftViolations,
+        preEmissionMailFamilyLockDiagnostics: buildResult.preEmissionMailFamilyLockDiagnostics,
         contextMetadata: {
           downgrades,
           usedAIFallback,

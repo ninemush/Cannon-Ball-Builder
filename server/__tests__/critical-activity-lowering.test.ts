@@ -10,9 +10,21 @@ import {
   runXamlLevelCriticalActivityLowering,
   loweringDiagnosticsToPackageViolations,
   mergeLoweringDiagnostics,
+  detectMailSendClusters,
+  lockClusterToFamily,
+  buildMailFamilyLockDiagnostics,
+  runMailFamilyLockAnalysis,
+  runXamlLevelMailFamilyLockAnalysis,
+  checkCrossFamilyDriftInXaml,
+  checkCrossFamilyDriftInDependencies,
+  mailFamilyLockToPackageViolations,
+  crossFamilyDriftToPackageViolations,
   type CriticalActivityFamilyContract,
   type CriticalStepLoweringResult,
   type CriticalActivityLoweringDiagnostics,
+  type MailSendCluster,
+  type MailFamilyLockResult,
+  type MailFamilyLockDiagnostics,
 } from "../critical-activity-lowering";
 import type { StudioProfile } from "../catalog/metadata-service";
 import type { ActivityNode, WorkflowNode } from "../workflow-spec-types";
@@ -1288,5 +1300,701 @@ describe("mergeLoweringDiagnostics", () => {
     expect(merged.perStepResults[0].loweringOutcome).toBe("rejected_incomplete_contract");
     expect(merged.perStepResults[0].missingRequiredProperties).toContain("Body");
     expect(merged.summary.totalRejectedForIncompleteContract).toBe(1);
+  });
+});
+
+describe("Mail family lock — cluster detection", () => {
+  it("detects a standalone Gmail send as a single cluster", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "activity" as const,
+        template: "GmailSendMessage",
+        displayName: "Send Gmail",
+        properties: { To: "a@b.com", Subject: "S", Body: "B" },
+        errorHandling: "none" as const,
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].concreteSendNode).toBeDefined();
+    expect(clusters[0].concreteSendNode!.template).toBe("GmailSendMessage");
+    expect(clusters[0].detectedFamilies.has("gmail-send")).toBe(true);
+    expect(clusters[0].hasNarrativeContainer).toBe(false);
+  });
+
+  it("detects Gmail inside TryCatch as a cluster", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "tryCatch" as const,
+        displayName: "Try Send Email",
+        tryChildren: [
+          {
+            kind: "activity" as const,
+            template: "GmailSendMessage",
+            displayName: "Send Gmail",
+            properties: { To: "a@b.com", Subject: "S", Body: "B" },
+            errorHandling: "none" as const,
+          },
+        ],
+        catchChildren: [
+          {
+            kind: "activity" as const,
+            template: "LogMessage",
+            displayName: "Log Error",
+            properties: { Message: "Failed" },
+            errorHandling: "none" as const,
+          },
+        ],
+        finallyChildren: [],
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].concreteSendNode).toBeDefined();
+    expect(clusters[0].concreteSendNode!.template).toBe("GmailSendMessage");
+    expect(clusters[0].nodes.some(n => n.role === "trycatch-wrapper")).toBe(true);
+    expect(clusters[0].nodes.some(n => n.role === "catch-step")).toBe(true);
+  });
+
+  it("detects Gmail inside RetryScope as a cluster", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "retryScope" as const,
+        displayName: "Retry Send",
+        numberOfRetries: 3,
+        retryInterval: "00:00:05",
+        bodyChildren: [
+          {
+            kind: "activity" as const,
+            template: "GmailSendMessage",
+            displayName: "Send Gmail",
+            properties: { To: "a@b.com", Subject: "S", Body: "B" },
+            errorHandling: "none" as const,
+          },
+        ],
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].nodes.some(n => n.role === "retryscope-wrapper")).toBe(true);
+  });
+
+  it("detects mail send nested inside an if-then branch", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "if" as const,
+        displayName: "Check condition",
+        condition: "True",
+        thenChildren: [
+          {
+            kind: "activity" as const,
+            template: "GmailSendMessage",
+            displayName: "Send Gmail",
+            properties: { To: "a@b.com", Subject: "S", Body: "B" },
+            errorHandling: "none" as const,
+          },
+        ],
+        elseChildren: [],
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].concreteSendNode!.template).toBe("GmailSendMessage");
+  });
+
+  it("detects mail send nested inside a sequence inside a while loop", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "while" as const,
+        displayName: "Retry loop",
+        condition: "retryCount < 3",
+        bodyChildren: [
+          {
+            kind: "sequence" as const,
+            displayName: "Inner Sequence",
+            children: [
+              {
+                kind: "activity" as const,
+                template: "SendSmtpMailMessage",
+                displayName: "Send SMTP",
+                properties: { To: "a@b.com", Subject: "S", Body: "B", Server: "smtp.x.com", Port: "25" },
+                errorHandling: "none" as const,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].concreteSendNode!.template).toBe("SendSmtpMailMessage");
+    expect(clusters[0].detectedFamilies.has("smtp-send")).toBe(true);
+  });
+
+  it("detects mail send nested inside a forEach loop", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "forEach" as const,
+        displayName: "For Each Recipient",
+        itemType: "System.String",
+        valuesExpression: "recipients",
+        iteratorName: "item",
+        bodyChildren: [
+          {
+            kind: "activity" as const,
+            template: "SendOutlookMailMessage",
+            displayName: "Send Outlook",
+            properties: { To: "item", Subject: "S", Body: "B" },
+            errorHandling: "none" as const,
+          },
+        ],
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].concreteSendNode!.template).toBe("SendOutlookMailMessage");
+    expect(clusters[0].detectedFamilies.has("outlook-send")).toBe(true);
+  });
+
+  it("detects mail sends at multiple nesting depths", () => {
+    const nodes: WorkflowNode[] = [
+      {
+        kind: "activity" as const,
+        template: "GmailSendMessage",
+        displayName: "Top-level Gmail",
+        properties: { To: "a@b.com", Subject: "S", Body: "B" },
+        errorHandling: "none" as const,
+      },
+      {
+        kind: "if" as const,
+        displayName: "Conditional",
+        condition: "True",
+        thenChildren: [
+          {
+            kind: "sequence" as const,
+            displayName: "Nested Seq",
+            children: [
+              {
+                kind: "activity" as const,
+                template: "SendSmtpMailMessage",
+                displayName: "Nested SMTP",
+                properties: { To: "b@c.com", Subject: "S2", Body: "B2", Server: "smtp.x.com", Port: "25" },
+                errorHandling: "none" as const,
+              },
+            ],
+          },
+        ],
+        elseChildren: [],
+      },
+    ];
+
+    const clusters = detectMailSendClusters(nodes, "Main.xaml", "Main");
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0].concreteSendNode!.template).toBe("GmailSendMessage");
+    expect(clusters[1].concreteSendNode!.template).toBe("SendSmtpMailMessage");
+  });
+});
+
+describe("Mail family lock — locking", () => {
+  it("locks a Gmail cluster successfully with all properties", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [{
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: "B" },
+      }],
+      concreteSendNode: {
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: "B" },
+      },
+      detectedFamilies: new Set(["gmail-send"]),
+      hasNarrativeContainer: false,
+      narrativeRepresentationsFound: [],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(true);
+    expect(result.selectedFamily).toBe("gmail-send");
+    expect(result.concreteActivityType).toBe("UiPath.GSuite.Activities.GmailSendMessage");
+    expect(result.packageFatal).toBe(false);
+  });
+
+  it("rejects cluster with missing Body property", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [{
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S" },
+      }],
+      concreteSendNode: {
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S" },
+      },
+      detectedFamilies: new Set(["gmail-send"]),
+      hasNarrativeContainer: false,
+      narrativeRepresentationsFound: [],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.packageFatal).toBe(true);
+    expect(result.missingRequiredProperties).toContain("Body");
+  });
+
+  it("rejects cluster with ambiguous mail family", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [{
+        nodeIndex: 0,
+        displayName: "Send Mail",
+        template: "SendMail",
+        detectedFamily: "ambiguous-mail",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: "B" },
+      }],
+      concreteSendNode: {
+        nodeIndex: 0,
+        displayName: "Send Mail",
+        template: "SendMail",
+        detectedFamily: "ambiguous-mail",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: "B" },
+      },
+      detectedFamilies: new Set(["ambiguous-mail-send"]),
+      hasNarrativeContainer: false,
+      narrativeRepresentationsFound: [],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.packageFatal).toBe(true);
+    expect(result.lockRejectionReason).toContain("ambiguous");
+  });
+
+  it("rejects cluster with ambiguous-mail via dedicated branch", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [],
+      concreteSendNode: null,
+      detectedFamilies: new Set(["ambiguous-mail-send"]),
+      hasNarrativeContainer: false,
+      narrativeRepresentationsFound: [],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.packageFatal).toBe(true);
+  });
+
+  it("rejects cluster with conflicting families", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [],
+      concreteSendNode: null,
+      detectedFamilies: new Set(["gmail-send", "smtp-send"]),
+      hasNarrativeContainer: false,
+      narrativeRepresentationsFound: [],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.packageFatal).toBe(true);
+    expect(result.crossFamilyDriftViolation).toBe(true);
+  });
+});
+
+describe("Mail family lock — narrative container elimination", () => {
+  it("rejects cluster with narrative TryCatch representation", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [{
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: 'Try = "GmailSendMessage(to=user)"' },
+      }],
+      concreteSendNode: {
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: 'Try = "GmailSendMessage(to=user)"' },
+      },
+      detectedFamilies: new Set(["gmail-send"]),
+      hasNarrativeContainer: true,
+      narrativeRepresentationsFound: ["narrative-try-send"],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.packageFatal).toBe(true);
+    expect(result.narrativeRepresentationsRejected).toContain("narrative-try-send");
+    expect(result.lockRejectionReason).toContain("narrative container");
+  });
+
+  it("rejects cluster with catch narrative representation", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [{
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: 'B', Catches: '"Exception -> LogError"' },
+      }],
+      concreteSendNode: null,
+      detectedFamilies: new Set(["gmail-send"]),
+      hasNarrativeContainer: true,
+      narrativeRepresentationsFound: ["narrative-catch-block"],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.packageFatal).toBe(true);
+    expect(result.narrativeRepresentationsRejected).toContain("narrative-catch-block");
+  });
+
+  it("does not inject placeholders for rejected narrative clusters", () => {
+    const cluster: MailSendCluster = {
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      nodes: [{
+        nodeIndex: 0,
+        displayName: "Send Gmail",
+        template: "GmailSendMessage",
+        detectedFamily: "gmail-send",
+        role: "concrete-send",
+        properties: { To: "a@b.com", Subject: "S", Body: 'Try = "GmailSendMessage(to=user)"' },
+      }],
+      concreteSendNode: null,
+      detectedFamilies: new Set(["gmail-send"]),
+      hasNarrativeContainer: true,
+      narrativeRepresentationsFound: ["narrative-try-send"],
+    };
+
+    const result = lockClusterToFamily(cluster, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.locked).toBe(false);
+    expect(result.concreteActivityType).toBeNull();
+    expect(result.concretePackage).toBeNull();
+  });
+});
+
+describe("Mail family lock — cross-family drift guardrails", () => {
+  it("detects Gmail-locked cluster producing SMTP activity tag in XAML", () => {
+    const lockResults: MailFamilyLockResult[] = [{
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      selectedFamily: "gmail-send",
+      concreteActivityType: "UiPath.GSuite.Activities.GmailSendMessage",
+      concretePackage: "UiPath.GSuite.Activities",
+      locked: true,
+      lockRejectionReason: null,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: false,
+      crossFamilyDriftViolation: false,
+    }];
+
+    const xaml = `<Activity>
+      <Sequence DisplayName="Main">
+        <ui:GmailSendMessage DisplayName="Send Gmail" To="a@b.com" Subject="S" Body="B" />
+        <ui:SendSmtpMailMessage DisplayName="Send SMTP" To="b@c.com" Subject="S2" Body="B2" Server="smtp.x.com" Port="25" />
+      </Sequence>
+    </Activity>`;
+
+    const violations = checkCrossFamilyDriftInXaml(xaml, lockResults, "Main.xaml");
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0].violationType).toBe("wrong-family-activity-tag");
+    expect(violations[0].packageFatal).toBe(true);
+    expect(violations[0].lockedFamily).toBe("gmail-send");
+  });
+
+  it("detects Gmail-locked cluster with UiPath.Mail.Activities in dependencies", () => {
+    const lockResults: MailFamilyLockResult[] = [{
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      selectedFamily: "gmail-send",
+      concreteActivityType: "UiPath.GSuite.Activities.GmailSendMessage",
+      concretePackage: "UiPath.GSuite.Activities",
+      locked: true,
+      lockRejectionReason: null,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: false,
+      crossFamilyDriftViolation: false,
+    }];
+
+    const violations = checkCrossFamilyDriftInDependencies(
+      { "UiPath.GSuite.Activities": {}, "UiPath.Mail.Activities": {} },
+      lockResults,
+    );
+
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0].violationType).toBe("wrong-family-package");
+    expect(violations[0].violatingArtifact).toBe("UiPath.Mail.Activities");
+    expect(violations[0].packageFatal).toBe(true);
+  });
+
+  it("no violations when Gmail-locked and only GSuite package present", () => {
+    const lockResults: MailFamilyLockResult[] = [{
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      file: "Main.xaml",
+      workflow: "Main",
+      selectedFamily: "gmail-send",
+      concreteActivityType: "UiPath.GSuite.Activities.GmailSendMessage",
+      concretePackage: "UiPath.GSuite.Activities",
+      locked: true,
+      lockRejectionReason: null,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: false,
+      crossFamilyDriftViolation: false,
+    }];
+
+    const violations = checkCrossFamilyDriftInDependencies(
+      { "UiPath.GSuite.Activities": {} },
+      lockResults,
+    );
+
+    expect(violations).toHaveLength(0);
+  });
+});
+
+describe("Mail family lock — diagnostics and package violations", () => {
+  it("buildMailFamilyLockDiagnostics produces correct summary", () => {
+    const lockResults: MailFamilyLockResult[] = [
+      {
+        clusterId: "c1", file: "Main.xaml", workflow: "Main",
+        selectedFamily: "gmail-send", concreteActivityType: "GmailSendMessage",
+        concretePackage: "UiPath.GSuite.Activities", locked: true,
+        lockRejectionReason: null, narrativeRepresentationsRejected: [],
+        missingRequiredProperties: [], packageFatal: false, crossFamilyDriftViolation: false,
+      },
+      {
+        clusterId: "c2", file: "Main.xaml", workflow: "Main",
+        selectedFamily: null, concreteActivityType: null,
+        concretePackage: null, locked: false,
+        lockRejectionReason: "ambiguous mail family", narrativeRepresentationsRejected: [],
+        missingRequiredProperties: [], packageFatal: true, crossFamilyDriftViolation: false,
+      },
+      {
+        clusterId: "c3", file: "Main.xaml", workflow: "Main",
+        selectedFamily: "gmail-send", concreteActivityType: "GmailSendMessage",
+        concretePackage: "UiPath.GSuite.Activities", locked: false,
+        lockRejectionReason: "narrative container", narrativeRepresentationsRejected: ["narrative-try-send"],
+        missingRequiredProperties: [], packageFatal: true, crossFamilyDriftViolation: false,
+      },
+    ];
+
+    const diag = buildMailFamilyLockDiagnostics(lockResults);
+    expect(diag.summary.totalClusters).toBe(3);
+    expect(diag.summary.totalLocked).toBe(1);
+    expect(diag.summary.totalRejectedAmbiguous).toBe(1);
+    expect(diag.summary.totalRejectedNarrative).toBe(1);
+  });
+
+  it("rejected clusters feed into packageCompletenessViolations", () => {
+    const diag: MailFamilyLockDiagnostics = {
+      perClusterResults: [{
+        clusterId: "Main.xaml:Main:mail-cluster-0",
+        file: "Main.xaml",
+        workflow: "Main",
+        selectedFamily: null,
+        concreteActivityType: null,
+        concretePackage: null,
+        locked: false,
+        lockRejectionReason: "Cluster has ambiguous mail family",
+        narrativeRepresentationsRejected: [],
+        missingRequiredProperties: [],
+        packageFatal: true,
+        crossFamilyDriftViolation: false,
+      }],
+      summary: {
+        totalClusters: 1, totalLocked: 0, totalRejectedAmbiguous: 1,
+        totalRejectedNarrative: 0, totalRejectedMissingProperties: 0,
+        totalCrossFamilyDriftViolations: 0,
+      },
+    };
+
+    const violations = mailFamilyLockToPackageViolations(diag);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].packageFatal).toBe(true);
+    expect(violations[0].violationType).toBe("critical_activity_lowering_failure");
+    expect(violations[0].severity).toBe("execution_blocking");
+  });
+
+  it("cross-family drift violations feed into packageCompletenessViolations", () => {
+    const driftViolations = [{
+      clusterId: "Main.xaml:Main:mail-cluster-0",
+      lockedFamily: "gmail-send" as const,
+      violatingArtifact: "SendSmtpMailMessage",
+      violationType: "wrong-family-activity-tag" as const,
+      detail: "Locked to gmail-send but emitted XAML contains <SendSmtpMailMessage>",
+      packageFatal: true,
+    }];
+
+    const violations = crossFamilyDriftToPackageViolations(driftViolations);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].packageFatal).toBe(true);
+    expect(violations[0].activityType).toBe("SendSmtpMailMessage");
+    expect(violations[0].propertyName).toBe("CrossFamilyDrift");
+  });
+});
+
+describe("Mail family lock — runMailFamilyLockAnalysis integration", () => {
+  it("locks Gmail-only workflow successfully", () => {
+    const specs = [{
+      file: "Main.xaml",
+      workflow: "Main",
+      rootSequence: {
+        kind: "sequence" as const,
+        displayName: "Main",
+        children: [
+          {
+            kind: "activity" as const,
+            template: "GmailSendMessage",
+            displayName: "Send Gmail",
+            properties: { To: "a@b.com", Subject: "S", Body: "B" },
+            errorHandling: "none" as const,
+          },
+        ] as WorkflowNode[],
+      },
+    }];
+
+    const result = runMailFamilyLockAnalysis(specs, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.summary.totalClusters).toBe(1);
+    expect(result.summary.totalLocked).toBe(1);
+    expect(result.perClusterResults[0].selectedFamily).toBe("gmail-send");
+  });
+
+  it("rejects Gmail cluster with missing properties via lock analysis", () => {
+    const specs = [{
+      file: "Main.xaml",
+      workflow: "Main",
+      rootSequence: {
+        kind: "sequence" as const,
+        displayName: "Main",
+        children: [
+          {
+            kind: "activity" as const,
+            template: "GmailSendMessage",
+            displayName: "Send Gmail",
+            properties: { To: "a@b.com" },
+            errorHandling: "none" as const,
+          },
+        ] as WorkflowNode[],
+      },
+    }];
+
+    const result = runMailFamilyLockAnalysis(specs, WINDOWS_PROFILE, ALL_PACKAGES);
+    expect(result.summary.totalClusters).toBe(1);
+    expect(result.summary.totalLocked).toBe(0);
+    expect(result.summary.totalRejectedMissingProperties).toBe(1);
+    expect(result.perClusterResults[0].packageFatal).toBe(true);
+  });
+});
+
+describe("Mail family lock — XAML-level analysis", () => {
+  it("locks Gmail XAML with all properties", () => {
+    const xaml = `<Activity>
+  <Sequence DisplayName="Main">
+    <ui:GmailSendMessage DisplayName="Send Gmail" To="a@b.com" Subject="Test" Body="Hello" />
+  </Sequence>
+</Activity>`;
+
+    const { diagnostics } = runXamlLevelMailFamilyLockAnalysis(
+      [{ name: "Main.xaml", content: xaml }],
+      WINDOWS_PROFILE,
+      ALL_PACKAGES,
+    );
+
+    expect(diagnostics.summary.totalClusters).toBeGreaterThanOrEqual(1);
+    const gmailLock = diagnostics.perClusterResults.find(r => r.selectedFamily === "gmail-send");
+    expect(gmailLock).toBeDefined();
+    expect(gmailLock!.locked).toBe(true);
+  });
+
+  it("allows independent clusters of different families in the same XAML (no false-positive drift)", () => {
+    const xaml = `<Activity>
+  <Sequence DisplayName="Main">
+    <ui:GmailSendMessage DisplayName="Send Gmail" To="a@b.com" Subject="S" Body="B" />
+    <ui:SendSmtpMailMessage DisplayName="Send SMTP" To="b@c.com" Subject="S2" Body="B2" Server="smtp.x.com" Port="25" />
+  </Sequence>
+</Activity>`;
+
+    const { crossFamilyViolations, diagnostics } = runXamlLevelMailFamilyLockAnalysis(
+      [{ name: "Main.xaml", content: xaml }],
+      WINDOWS_PROFILE,
+      ALL_PACKAGES,
+    );
+
+    expect(diagnostics.summary.totalClusters).toBeGreaterThanOrEqual(2);
+    expect(crossFamilyViolations.length).toBe(0);
+  });
+
+  it("detects cross-family drift when unattributed wrong-family tag appears in XAML", () => {
+    const lockResults: MailFamilyLockResult[] = [{
+      clusterId: "test.xaml:Main:mail-cluster-0",
+      file: "test.xaml",
+      workflow: "Main",
+      selectedFamily: "gmail-send",
+      concreteActivityType: "GmailSendMessage",
+      concretePackage: "UiPath.GSuite.Activities",
+      locked: true,
+      lockRejectionReason: null,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: false,
+      crossFamilyDriftViolation: false,
+    }];
+
+    const xamlWithDrift = `<Activity><Sequence><ui:GmailSendMessage /><ui:SendSmtpMailMessage /></Sequence></Activity>`;
+    const violations = checkCrossFamilyDriftInXaml(xamlWithDrift, lockResults, "test.xaml");
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0].violationType).toBe("wrong-family-activity-tag");
+    expect(violations[0].packageFatal).toBe(true);
   });
 });

@@ -35,7 +35,7 @@ import archiver from "archiver";
   import type { XamlGenerationContext, UiPathPackage } from "./types/uipath-package";
   import { enrichWithAITree, type EnrichmentResult, type TreeEnrichmentResult } from "./ai-xaml-enricher";
   import { assembleWorkflowFromSpec } from "./workflow-tree-assembler";
-  import { runPreEmissionLoweringGate, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics } from "./critical-activity-lowering";
+  import { runPreEmissionLoweringGate, runMailFamilyLockAnalysis, buildMailFamilyLockDiagnostics, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics, type MailFamilyLockDiagnostics, type MailFamilyLockResult } from "./critical-activity-lowering";
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
@@ -60,7 +60,7 @@ import archiver from "archiver";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
   import { XMLParser, XMLBuilder } from "fast-xml-parser";
-  import { runPostEmissionDependencyAnalysis, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
+  import { runPostEmissionDependencyAnalysis, checkDependencyDriftAgainstMailFamilyLocks, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
   import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
   import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
   import { canonicalizeInvokeBindings, canonicalizeTargetValueExpressions, type InvokeCanonicalizationResult, type TargetValueCanonicalizationResult } from "./xaml/invoke-binding-canonicalizer";
@@ -2650,6 +2650,8 @@ export type BuildResult = {
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
   preEmissionLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
+  crossFamilyDriftViolations?: Array<{ clusterId: string; lockedFamily: string; violatingArtifact: string; violationType: string; detail: string; packageFatal: boolean }>;
+  preEmissionMailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -3212,6 +3214,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const earlyStubFallbacks: string[] = [];
     const complianceFallbacks: Array<{ file: string; reason: string; wasFullStub: boolean }> = [];
     const collectedPreEmissionDiagnostics: CriticalActivityLoweringDiagnostics[] = [];
+    const collectedMailFamilyLockResults: MailFamilyLockResult[] = [];
+    const crossFamilyDriftViolationsList: Array<{ clusterId: string; lockedFamily: string; violatingArtifact: string; violationType: string; detail: string; packageFatal: boolean }> = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
     const collectedQualityIssues: DhgQualityIssue[] = [];
     const priorCompliantWorkflows = pkg.internal?.priorCompliantWorkflows || [];
@@ -3648,6 +3652,43 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         );
         if (preEmissionGate.diagnostics.perStepResults.length > 0) {
           collectedPreEmissionDiagnostics.push(preEmissionGate.diagnostics);
+        }
+
+        const mailFamilyLock = runMailFamilyLockAnalysis(
+          [{ file: `${wfName}.xaml`, workflow: wfName, rootSequence: spec.rootSequence }],
+          { studioLine: "StudioX", studioVersion: "2024.10", targetFramework: loweringTargetFw as "Windows" | "Portable", projectType: "Process", expressionLanguage: "VisualBasic", minimumRequiredPackages: [] },
+          loweringVerifiedPackages,
+        );
+        let mailFamilyLockBlocksEmission = false;
+        if (mailFamilyLock.perClusterResults.length > 0) {
+          for (const lockResult of mailFamilyLock.perClusterResults) {
+            collectedMailFamilyLockResults.push(lockResult);
+            if (lockResult.packageFatal) {
+              mailFamilyLockBlocksEmission = true;
+              console.warn(`[UiPath] Mail family lock REJECTED cluster "${lockResult.clusterId}" in "${wfName}": ${lockResult.lockRejectionReason}`);
+              dependencyWarnings.push({
+                code: "MAIL_FAMILY_LOCK_FAILURE",
+                message: `Mail family lock rejected cluster "${lockResult.clusterId}" (${lockResult.lockRejectionReason})`,
+                stage: "pre-emission-lowering",
+                recoverable: false,
+              });
+            } else if (lockResult.locked) {
+              console.log(`[UiPath] Mail family lock LOCKED cluster "${lockResult.clusterId}" to family "${lockResult.selectedFamily}" in "${wfName}"`);
+            }
+          }
+        }
+        if (mailFamilyLockBlocksEmission) {
+          const fatalReasons = mailFamilyLock.perClusterResults.filter(r => r.packageFatal).map(r => r.lockRejectionReason).join("; ");
+          console.error(`[UiPath] Mail family lock gate HARD REJECTION for "${wfName}" — XAML emission blocked, no fallback emitted: ${fatalReasons}`);
+          for (const fatalResult of mailFamilyLock.perClusterResults.filter(r => r.packageFatal)) {
+            dependencyWarnings.push({
+              code: "MAIL_FAMILY_LOCK_HARD_REJECTION",
+              message: `Mail family lock hard rejection for cluster "${fatalResult.clusterId}" in "${wfName}" — ${fatalResult.lockRejectionReason}. No XAML emitted.`,
+              stage: "pre-emission-lowering",
+              recoverable: false,
+            });
+          }
+          continue;
         }
         if (!preEmissionGate.passed) {
           for (const failure of preEmissionGate.fatalFailures) {
@@ -7472,6 +7513,29 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
 
         console.log(`[Post-Emission Analyzer] XAML-derived dependency set: ${Object.keys(deps).length} packages (speculative had ${Object.keys(speculativeDepsSnapshot).length}, ${droppedSpeculative.length} speculative dropped)`);
+
+        if (collectedMailFamilyLockResults.length > 0) {
+          const depDrift = checkDependencyDriftAgainstMailFamilyLocks(derivedReport.resolvedPackages, collectedMailFamilyLockResults);
+          if (depDrift.length > 0) {
+            for (const v of depDrift) {
+              console.error(`[Post-Emission Analyzer] Cross-family dependency drift VIOLATION (execution-blocking): ${v.detail}`);
+              dependencyWarnings.push({
+                code: "CROSS_FAMILY_DEPENDENCY_DRIFT",
+                message: v.detail,
+                stage: "post-emission-analysis",
+                recoverable: false,
+              });
+            }
+            crossFamilyDriftViolationsList.push(...depDrift.map(v => ({
+              clusterId: v.clusterId,
+              lockedFamily: v.lockedFamily,
+              violatingArtifact: v.violatingPackage,
+              violationType: "wrong-family-package" as const,
+              detail: v.detail,
+              packageFatal: true,
+            })));
+          }
+        }
       } catch (analyzerErr: unknown) {
         const errMsg = analyzerErr instanceof Error ? analyzerErr.message : String(analyzerErr);
         console.warn(`[Post-Emission Analyzer] Analyzer failed — falling back to speculative dependencies: ${errMsg}`);
@@ -8246,7 +8310,8 @@ ${depEntries}
         },
       }
     : undefined;
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag };
+  const preEmissionMailFamilyLockDiagnostics = collectedMailFamilyLockResults.length > 0 ? buildMailFamilyLockDiagnostics(collectedMailFamilyLockResults) : undefined;
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics };
 }
 
 export function createTrackedArchive() {

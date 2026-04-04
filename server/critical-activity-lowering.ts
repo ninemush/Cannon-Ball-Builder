@@ -1023,6 +1023,810 @@ export function runXamlLevelCriticalActivityLowering(
   };
 }
 
+export type MailFamily = "gmail-send" | "smtp-send" | "outlook-send";
+
+const MAIL_FAMILY_SET = new Set<string>(["gmail-send", "smtp-send", "outlook-send"]);
+
+const MAIL_FAMILY_PACKAGE_MAP: Record<MailFamily, string> = {
+  "gmail-send": "UiPath.GSuite.Activities",
+  "smtp-send": "UiPath.Mail.Activities",
+  "outlook-send": "UiPath.Mail.Activities",
+};
+
+const MAIL_FAMILY_ACTIVITY_MAP: Record<MailFamily, string> = {
+  "gmail-send": "GmailSendMessage",
+  "smtp-send": "SendSmtpMailMessage",
+  "outlook-send": "SendOutlookMailMessage",
+};
+
+const CROSS_FAMILY_ACTIVITY_TAGS: Record<MailFamily, Set<string>> = {
+  "gmail-send": new Set(["SendSmtpMailMessage", "SendOutlookMailMessage", "ui:SendSmtpMailMessage", "ui:SendOutlookMailMessage"]),
+  "smtp-send": new Set(["GmailSendMessage", "SendOutlookMailMessage", "ui:GmailSendMessage", "ui:SendOutlookMailMessage"]),
+  "outlook-send": new Set(["GmailSendMessage", "SendSmtpMailMessage", "ui:GmailSendMessage", "ui:SendSmtpMailMessage"]),
+};
+
+const CROSS_FAMILY_PACKAGE_MAP: Record<MailFamily, Set<string>> = {
+  "gmail-send": new Set(["UiPath.Mail.Activities"]),
+  "smtp-send": new Set(["UiPath.GSuite.Activities"]),
+  "outlook-send": new Set(["UiPath.GSuite.Activities"]),
+};
+
+export interface MailSendClusterNode {
+  nodeIndex: number;
+  displayName: string;
+  template: string;
+  detectedFamily: string | null;
+  role: "concrete-send" | "trycatch-wrapper" | "retryscope-wrapper" | "catch-step" | "logging-step";
+  properties: Record<string, any>;
+}
+
+export interface MailSendCluster {
+  clusterId: string;
+  file: string;
+  workflow: string;
+  nodes: MailSendClusterNode[];
+  concreteSendNode: MailSendClusterNode | null;
+  detectedFamilies: Set<string>;
+  hasNarrativeContainer: boolean;
+  narrativeRepresentationsFound: string[];
+}
+
+export interface MailFamilyLockResult {
+  clusterId: string;
+  file: string;
+  workflow: string;
+  selectedFamily: MailFamily | null;
+  concreteActivityType: string | null;
+  concretePackage: string | null;
+  locked: boolean;
+  lockRejectionReason: string | null;
+  narrativeRepresentationsRejected: string[];
+  missingRequiredProperties: string[];
+  packageFatal: boolean;
+  crossFamilyDriftViolation: boolean;
+}
+
+export interface MailFamilyLockDiagnostics {
+  perClusterResults: MailFamilyLockResult[];
+  summary: {
+    totalClusters: number;
+    totalLocked: number;
+    totalRejectedAmbiguous: number;
+    totalRejectedNarrative: number;
+    totalRejectedMissingProperties: number;
+    totalCrossFamilyDriftViolations: number;
+  };
+}
+
+const NARRATIVE_TRYCATCH_PATTERNS = [
+  { pattern: /Try\s*[:=]\s*["'][^"']*(?:GmailSendMessage|SendSmtpMailMessage|SendOutlookMailMessage)/i, kind: "narrative-try-send" },
+  { pattern: /Catches\s*[:=]\s*["'][^"']*Exception\s*->/i, kind: "narrative-catch-block" },
+  { pattern: /TryCatch\s*[\(\{].*(?:GmailSendMessage|SendSmtpMailMessage|SendOutlookMailMessage)/i, kind: "narrative-trycatch-container" },
+  { pattern: /Try\s*=\s*["'][^"']*Send/i, kind: "narrative-try-attribute" },
+  { pattern: /Finally\s*[:=]\s*["'][^"']*(?:Log|Cleanup|Close)/i, kind: "narrative-finally-block" },
+];
+
+function detectNarrativeContainerRepresentations(properties: Record<string, any>): string[] {
+  const found: string[] = [];
+  for (const [, value] of Object.entries(properties)) {
+    const strVal = typeof value === "string" ? value : (value && typeof value === "object" && "value" in value ? String(value.value) : "");
+    if (!strVal) continue;
+    for (const { pattern, kind } of NARRATIVE_TRYCATCH_PATTERNS) {
+      if (pattern.test(strVal) && !found.includes(kind)) {
+        found.push(kind);
+      }
+    }
+  }
+  return found;
+}
+
+function isMailSendTemplate(template: string): boolean {
+  const tLower = template.toLowerCase().replace(/^ui:/, "");
+  return MAIL_SEND_TEMPLATES.has(tLower);
+}
+
+function isTryCatchOrRetryWrapper(node: WorkflowNode): boolean {
+  return node.kind === "tryCatch" || node.kind === "retryScope";
+}
+
+function isLoggingOrCatchStep(node: ActivityNode): boolean {
+  const tLower = node.template.toLowerCase();
+  return tLower === "logmessage" || tLower === "log" || tLower === "writeline" || tLower === "comment";
+}
+
+function collectMailSendClustersRecursive(
+  nodes: WorkflowNode[],
+  file: string,
+  workflow: string,
+  clusters: MailSendCluster[],
+  clusterCounter: { value: number },
+  parentWrapper: { kind: string; displayName: string } | null,
+): void {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+
+    if (node.kind === "activity" && isMailSendTemplate(node.template)) {
+      const clusterId = `${file}:${workflow}:mail-cluster-${clusterCounter.value++}`;
+      const family = detectMailFamily(node.template, node.displayName, node.properties || {});
+      const narrativeReps = detectNarrativeContainerRepresentations(node.properties || {});
+      const pseudoReps = detectPseudoRepresentations(node.properties || {});
+
+      const clusterNodes: MailSendClusterNode[] = [];
+
+      if (parentWrapper) {
+        clusterNodes.push({
+          nodeIndex: i,
+          displayName: parentWrapper.displayName,
+          template: parentWrapper.kind === "tryCatch" ? "TryCatch" : parentWrapper.kind === "retryScope" ? "RetryScope" : parentWrapper.kind,
+          detectedFamily: null,
+          role: parentWrapper.kind === "tryCatch" ? "trycatch-wrapper" : parentWrapper.kind === "retryScope" ? "retryscope-wrapper" : "logging-step",
+          properties: {},
+        });
+      }
+
+      clusterNodes.push({
+        nodeIndex: i,
+        displayName: node.displayName,
+        template: node.template,
+        detectedFamily: family,
+        role: "concrete-send",
+        properties: node.properties || {},
+      });
+
+      if (i > 0) {
+        const prev = nodes[i - 1];
+        if (prev.kind === "activity" && isLoggingOrCatchStep(prev)) {
+          clusterNodes.unshift({
+            nodeIndex: i - 1,
+            displayName: prev.displayName,
+            template: prev.template,
+            detectedFamily: null,
+            role: "logging-step",
+            properties: prev.properties || {},
+          });
+        }
+      }
+
+      if (i + 1 < nodes.length) {
+        const next = nodes[i + 1];
+        if (next.kind === "activity" && isLoggingOrCatchStep(next)) {
+          clusterNodes.push({
+            nodeIndex: i + 1,
+            displayName: next.displayName,
+            template: next.template,
+            detectedFamily: null,
+            role: "logging-step",
+            properties: next.properties || {},
+          });
+        }
+      }
+
+      const detectedFamilies = new Set<string>();
+      if (family) detectedFamilies.add(family);
+
+      clusters.push({
+        clusterId,
+        file,
+        workflow,
+        nodes: clusterNodes,
+        concreteSendNode: clusterNodes.find(n => n.role === "concrete-send") || null,
+        detectedFamilies,
+        hasNarrativeContainer: narrativeReps.length > 0 || pseudoReps.some(p =>
+          p === "TryCatch-as-text-property" || p === "narrative-send-description"
+        ),
+        narrativeRepresentationsFound: [...narrativeReps, ...pseudoReps.filter(p =>
+          p === "TryCatch-as-text-property" || p === "narrative-send-description"
+        )],
+      });
+      continue;
+    }
+
+    if (node.kind === "tryCatch") {
+      const innerActivities = collectActivityNodes(node);
+      const mailActivities = innerActivities.filter(a => isMailSendTemplate(a.template));
+
+      if (mailActivities.length > 0) {
+        const clusterId = `${file}:${workflow}:mail-cluster-${clusterCounter.value++}`;
+        const detectedFamilies = new Set<string>();
+        const allNarrativeReps: string[] = [];
+        let concreteSendClusterNode: MailSendClusterNode | null = null;
+
+        const clusterNodes: MailSendClusterNode[] = [{
+          nodeIndex: i,
+          displayName: node.displayName,
+          template: "TryCatch",
+          detectedFamily: null,
+          role: "trycatch-wrapper",
+          properties: {},
+        }];
+
+        for (const mailAct of mailActivities) {
+          const actFamily = detectMailFamily(mailAct.template, mailAct.displayName, mailAct.properties || {});
+          if (actFamily) detectedFamilies.add(actFamily);
+          const narr = detectNarrativeContainerRepresentations(mailAct.properties || {});
+          allNarrativeReps.push(...narr);
+
+          const sendNode: MailSendClusterNode = {
+            nodeIndex: i,
+            displayName: mailAct.displayName,
+            template: mailAct.template,
+            detectedFamily: actFamily,
+            role: "concrete-send",
+            properties: mailAct.properties || {},
+          };
+          clusterNodes.push(sendNode);
+          if (!concreteSendClusterNode) concreteSendClusterNode = sendNode;
+        }
+
+        const nonMailActivities = innerActivities.filter(a => !isMailSendTemplate(a.template));
+        for (const nonMail of nonMailActivities) {
+          if (isLoggingOrCatchStep(nonMail)) {
+            clusterNodes.push({
+              nodeIndex: i,
+              displayName: nonMail.displayName,
+              template: nonMail.template,
+              detectedFamily: null,
+              role: "catch-step",
+              properties: nonMail.properties || {},
+            });
+          }
+        }
+
+        clusters.push({
+          clusterId,
+          file,
+          workflow,
+          nodes: clusterNodes,
+          concreteSendNode: concreteSendClusterNode,
+          detectedFamilies,
+          hasNarrativeContainer: allNarrativeReps.length > 0,
+          narrativeRepresentationsFound: allNarrativeReps,
+        });
+      } else {
+        collectMailSendClustersRecursive(node.tryChildren, file, workflow, clusters, clusterCounter, { kind: "tryCatch", displayName: node.displayName });
+        collectMailSendClustersRecursive(node.catchChildren, file, workflow, clusters, clusterCounter, null);
+        collectMailSendClustersRecursive(node.finallyChildren, file, workflow, clusters, clusterCounter, null);
+      }
+      continue;
+    }
+
+    if (node.kind === "retryScope") {
+      const innerActivities = collectActivityNodes(node);
+      const mailActivities = innerActivities.filter(a => isMailSendTemplate(a.template));
+
+      if (mailActivities.length > 0) {
+        const clusterId = `${file}:${workflow}:mail-cluster-${clusterCounter.value++}`;
+        const detectedFamilies = new Set<string>();
+        const allNarrativeReps: string[] = [];
+        let concreteSendClusterNode: MailSendClusterNode | null = null;
+
+        const clusterNodes: MailSendClusterNode[] = [{
+          nodeIndex: i,
+          displayName: node.displayName,
+          template: "RetryScope",
+          detectedFamily: null,
+          role: "retryscope-wrapper",
+          properties: {},
+        }];
+
+        for (const mailAct of mailActivities) {
+          const actFamily = detectMailFamily(mailAct.template, mailAct.displayName, mailAct.properties || {});
+          if (actFamily) detectedFamilies.add(actFamily);
+          const narr = detectNarrativeContainerRepresentations(mailAct.properties || {});
+          allNarrativeReps.push(...narr);
+
+          const sendNode: MailSendClusterNode = {
+            nodeIndex: i,
+            displayName: mailAct.displayName,
+            template: mailAct.template,
+            detectedFamily: actFamily,
+            role: "concrete-send",
+            properties: mailAct.properties || {},
+          };
+          clusterNodes.push(sendNode);
+          if (!concreteSendClusterNode) concreteSendClusterNode = sendNode;
+        }
+
+        clusters.push({
+          clusterId,
+          file,
+          workflow,
+          nodes: clusterNodes,
+          concreteSendNode: concreteSendClusterNode,
+          detectedFamilies,
+          hasNarrativeContainer: allNarrativeReps.length > 0,
+          narrativeRepresentationsFound: allNarrativeReps,
+        });
+      } else {
+        collectMailSendClustersRecursive(node.bodyChildren, file, workflow, clusters, clusterCounter, { kind: "retryScope", displayName: node.displayName });
+      }
+      continue;
+    }
+
+    if (node.kind === "sequence") {
+      collectMailSendClustersRecursive(node.children, file, workflow, clusters, clusterCounter, parentWrapper);
+    } else if (node.kind === "if") {
+      collectMailSendClustersRecursive(node.thenChildren, file, workflow, clusters, clusterCounter, parentWrapper);
+      collectMailSendClustersRecursive(node.elseChildren, file, workflow, clusters, clusterCounter, parentWrapper);
+    } else if (node.kind === "while") {
+      collectMailSendClustersRecursive(node.bodyChildren, file, workflow, clusters, clusterCounter, parentWrapper);
+    } else if (node.kind === "forEach") {
+      collectMailSendClustersRecursive(node.bodyChildren, file, workflow, clusters, clusterCounter, parentWrapper);
+    }
+  }
+}
+
+export function detectMailSendClusters(
+  nodes: WorkflowNode[],
+  file: string,
+  workflow: string,
+): MailSendCluster[] {
+  const clusters: MailSendCluster[] = [];
+  const clusterCounter = { value: 0 };
+  collectMailSendClustersRecursive(nodes, file, workflow, clusters, clusterCounter, null);
+  return clusters;
+}
+
+export function lockClusterToFamily(
+  cluster: MailSendCluster,
+  profile: StudioProfile | null,
+  verifiedPackages: Set<string>,
+): MailFamilyLockResult {
+  const { clusterId, file, workflow } = cluster;
+
+  if (cluster.hasNarrativeContainer && cluster.narrativeRepresentationsFound.length > 0) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily: null,
+      concreteActivityType: null,
+      concretePackage: null,
+      locked: false,
+      lockRejectionReason: `Cluster contains narrative container representations: ${cluster.narrativeRepresentationsFound.join(", ")} — must be lowered into real TryCatch containers or rejected`,
+      narrativeRepresentationsRejected: cluster.narrativeRepresentationsFound,
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: false,
+    };
+  }
+
+  const concreteFamilies = Array.from(cluster.detectedFamilies).filter(f => MAIL_FAMILY_SET.has(f));
+  const ambiguousFamilies = Array.from(cluster.detectedFamilies).filter(f => f === AMBIGUOUS_MAIL_FAMILY);
+
+  if (concreteFamilies.length === 0 && ambiguousFamilies.length > 0) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily: null,
+      concreteActivityType: null,
+      concretePackage: null,
+      locked: false,
+      lockRejectionReason: `Cluster has ambiguous mail family — cannot determine concrete family for locking`,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: false,
+    };
+  }
+
+  if (concreteFamilies.length > 1) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily: null,
+      concreteActivityType: null,
+      concretePackage: null,
+      locked: false,
+      lockRejectionReason: `Cluster has conflicting mail families: ${concreteFamilies.join(", ")} — cannot lock to single family`,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: true,
+    };
+  }
+
+  if (concreteFamilies.length === 0) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily: null,
+      concreteActivityType: null,
+      concretePackage: null,
+      locked: false,
+      lockRejectionReason: `Cluster has no detectable mail family`,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: false,
+    };
+  }
+
+  const selectedFamily = concreteFamilies[0] as MailFamily;
+  const contract = lookupContractByFamilyId(selectedFamily);
+  if (!contract) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily,
+      concreteActivityType: null,
+      concretePackage: null,
+      locked: false,
+      lockRejectionReason: `No contract found for family "${selectedFamily}"`,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: false,
+    };
+  }
+
+  const targetFramework = profile?.targetFramework || "Windows";
+  if (!isFrameworkCompatible(contract, targetFramework)) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily,
+      concreteActivityType: contract.concreteType,
+      concretePackage: contract.packageId,
+      locked: false,
+      lockRejectionReason: `Family "${selectedFamily}" is only compatible with ${contract.targetFrameworkCompat} but target is ${targetFramework}`,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: false,
+    };
+  }
+
+  if (!isPackageInVerifiedSet(contract.packageId, verifiedPackages)) {
+    return {
+      clusterId,
+      file,
+      workflow,
+      selectedFamily,
+      concreteActivityType: contract.concreteType,
+      concretePackage: contract.packageId,
+      locked: false,
+      lockRejectionReason: `Package ${contract.packageId} is not in the verified dependency set`,
+      narrativeRepresentationsRejected: [],
+      missingRequiredProperties: [],
+      packageFatal: true,
+      crossFamilyDriftViolation: false,
+    };
+  }
+
+  if (cluster.concreteSendNode) {
+    const missingProps = checkRequiredPropertyCompleteness(contract, cluster.concreteSendNode.properties);
+    if (missingProps.length > 0) {
+      return {
+        clusterId,
+        file,
+        workflow,
+        selectedFamily,
+        concreteActivityType: contract.concreteType,
+        concretePackage: contract.packageId,
+        locked: false,
+        lockRejectionReason: `Missing required properties: ${missingProps.join(", ")}`,
+        narrativeRepresentationsRejected: [],
+        missingRequiredProperties: missingProps,
+        packageFatal: true,
+        crossFamilyDriftViolation: false,
+      };
+    }
+  }
+
+  return {
+    clusterId,
+    file,
+    workflow,
+    selectedFamily,
+    concreteActivityType: contract.concreteType,
+    concretePackage: contract.packageId,
+    locked: true,
+    lockRejectionReason: null,
+    narrativeRepresentationsRejected: [],
+    missingRequiredProperties: [],
+    packageFatal: false,
+    crossFamilyDriftViolation: false,
+  };
+}
+
+export function buildMailFamilyLockDiagnostics(
+  lockResults: MailFamilyLockResult[],
+): MailFamilyLockDiagnostics {
+  return {
+    perClusterResults: lockResults,
+    summary: {
+      totalClusters: lockResults.length,
+      totalLocked: lockResults.filter(r => r.locked).length,
+      totalRejectedAmbiguous: lockResults.filter(r => !r.locked && r.lockRejectionReason?.includes("ambiguous")).length,
+      totalRejectedNarrative: lockResults.filter(r => r.narrativeRepresentationsRejected.length > 0).length,
+      totalRejectedMissingProperties: lockResults.filter(r => r.missingRequiredProperties.length > 0).length,
+      totalCrossFamilyDriftViolations: lockResults.filter(r => r.crossFamilyDriftViolation).length,
+    },
+  };
+}
+
+export interface CrossFamilyDriftViolation {
+  clusterId: string;
+  lockedFamily: MailFamily;
+  violatingArtifact: string;
+  violationType: "wrong-family-activity-tag" | "wrong-family-package" | "wrong-family-fallback";
+  detail: string;
+  packageFatal: boolean;
+}
+
+export function checkCrossFamilyDriftInXaml(
+  xamlContent: string,
+  lockResults: MailFamilyLockResult[],
+  fileName: string,
+): CrossFamilyDriftViolation[] {
+  const violations: CrossFamilyDriftViolation[] = [];
+
+  const lockedConcreteTags = new Set<string>();
+  for (const lock of lockResults) {
+    if (!lock.locked || !lock.selectedFamily) continue;
+    if (lock.file !== fileName && !fileName.endsWith(lock.file)) continue;
+    const expectedTag = MAIL_FAMILY_ACTIVITY_MAP[lock.selectedFamily as MailFamily];
+    if (expectedTag) {
+      lockedConcreteTags.add(expectedTag);
+      lockedConcreteTags.add(`ui:${expectedTag}`);
+    }
+  }
+
+  const fileLocks = lockResults.filter(l => l.locked && l.selectedFamily && (l.file === fileName || fileName.endsWith(l.file)));
+
+  for (const lock of fileLocks) {
+    if (!lock.selectedFamily) continue;
+    const family = lock.selectedFamily as MailFamily;
+    const wrongTags = CROSS_FAMILY_ACTIVITY_TAGS[family];
+    if (!wrongTags) continue;
+
+    for (const tag of wrongTags) {
+      if (lockedConcreteTags.has(tag)) continue;
+
+      const plainTag = tag.replace(/^ui:/, "");
+      if (xamlContent.includes(`<${tag}`) || xamlContent.includes(`<ui:${plainTag}`)) {
+        violations.push({
+          clusterId: lock.clusterId,
+          lockedFamily: family,
+          violatingArtifact: tag,
+          violationType: "wrong-family-activity-tag",
+          detail: `Cluster "${lock.clusterId}" locked to ${family} but emitted XAML contains unattributed wrong-family activity tag <${tag}>`,
+          packageFatal: true,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
+export function checkCrossFamilyDriftInDependencies(
+  resolvedPackages: Record<string, any> | string[],
+  lockResults: MailFamilyLockResult[],
+): CrossFamilyDriftViolation[] {
+  const violations: CrossFamilyDriftViolation[] = [];
+  const packageList = Array.isArray(resolvedPackages) ? resolvedPackages : Object.keys(resolvedPackages);
+
+  const allLockedFamilies = new Set<string>();
+  const neededPackages = new Set<string>();
+  for (const lock of lockResults) {
+    if (!lock.locked || !lock.selectedFamily) continue;
+    allLockedFamilies.add(lock.selectedFamily);
+    if (lock.concretePackage) neededPackages.add(lock.concretePackage);
+  }
+
+  for (const lock of lockResults) {
+    if (!lock.locked || !lock.selectedFamily) continue;
+
+    const family = lock.selectedFamily as MailFamily;
+    const wrongPackages = CROSS_FAMILY_PACKAGE_MAP[family];
+    if (!wrongPackages) continue;
+
+    for (const pkg of wrongPackages) {
+      if (!packageList.includes(pkg)) continue;
+      if (neededPackages.has(pkg)) continue;
+
+      violations.push({
+        clusterId: lock.clusterId,
+        lockedFamily: family,
+        violatingArtifact: pkg,
+        violationType: "wrong-family-package",
+        detail: `Cluster "${lock.clusterId}" locked to ${family} but dependency analysis includes wrong-family package ${pkg} not attributable to any locked cluster`,
+        packageFatal: true,
+      });
+    }
+  }
+
+  return violations;
+}
+
+export function mailFamilyLockToPackageViolations(
+  diagnostics: MailFamilyLockDiagnostics,
+): Array<{
+  file: string;
+  workflow: string;
+  activityType: string;
+  propertyName: string;
+  violationType: "critical_activity_lowering_failure";
+  severity: "execution_blocking";
+  packageFatal: boolean;
+  handoffGuidanceAvailable: boolean;
+  remediationHint: string;
+}> {
+  const violations: Array<{
+    file: string;
+    workflow: string;
+    activityType: string;
+    propertyName: string;
+    violationType: "critical_activity_lowering_failure";
+    severity: "execution_blocking";
+    packageFatal: boolean;
+    handoffGuidanceAvailable: boolean;
+    remediationHint: string;
+  }> = [];
+
+  for (const result of diagnostics.perClusterResults) {
+    if (result.packageFatal) {
+      violations.push({
+        file: result.file,
+        workflow: result.workflow,
+        activityType: result.concreteActivityType || "MailSendCluster",
+        propertyName: result.missingRequiredProperties.join(", ") || "FamilyLock",
+        violationType: "critical_activity_lowering_failure",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: result.lockRejectionReason || `Mail family lock failed for cluster ${result.clusterId}`,
+      });
+    }
+  }
+
+  return violations;
+}
+
+export function crossFamilyDriftToPackageViolations(
+  violations: CrossFamilyDriftViolation[],
+): Array<{
+  file: string;
+  workflow: string;
+  activityType: string;
+  propertyName: string;
+  violationType: "critical_activity_lowering_failure";
+  severity: "execution_blocking";
+  packageFatal: boolean;
+  handoffGuidanceAvailable: boolean;
+  remediationHint: string;
+}> {
+  return violations.map(v => ({
+    file: v.clusterId.split(":")[0] || "unknown",
+    workflow: v.clusterId.split(":")[1] || "unknown",
+    activityType: v.violatingArtifact,
+    propertyName: "CrossFamilyDrift",
+    violationType: "critical_activity_lowering_failure" as const,
+    severity: "execution_blocking" as const,
+    packageFatal: true,
+    handoffGuidanceAvailable: true,
+    remediationHint: v.detail,
+  }));
+}
+
+export function runMailFamilyLockAnalysis(
+  specs: Array<{ file: string; workflow: string; rootSequence: { kind: "sequence"; displayName: string; children: WorkflowNode[] } }>,
+  profile: StudioProfile | null,
+  verifiedPackages: Set<string>,
+): MailFamilyLockDiagnostics {
+  const lockResults: MailFamilyLockResult[] = [];
+
+  for (const spec of specs) {
+    const clusters = detectMailSendClusters(spec.rootSequence.children, spec.file, spec.workflow);
+    for (const cluster of clusters) {
+      const result = lockClusterToFamily(cluster, profile, verifiedPackages);
+      lockResults.push(result);
+    }
+  }
+
+  return buildMailFamilyLockDiagnostics(lockResults);
+}
+
+export function runXamlLevelMailFamilyLockAnalysis(
+  xamlEntries: { name: string; content: string }[],
+  profile: StudioProfile | null,
+  verifiedPackages: Set<string>,
+): { diagnostics: MailFamilyLockDiagnostics; crossFamilyViolations: CrossFamilyDriftViolation[] } {
+  const lockResults: MailFamilyLockResult[] = [];
+  const allCrossViolations: CrossFamilyDriftViolation[] = [];
+
+  for (const entry of xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const workflow = shortName.replace(/\.xaml$/i, "");
+    const content = entry.content;
+
+    const mailNodes: Array<{ displayName: string; template: string; family: string | null; properties: Record<string, string> }> = [];
+    const activityPattern = /<(ui:)?(\w+)\s+([^>]*?)(?:\/>|>)/g;
+    let match;
+    while ((match = activityPattern.exec(content)) !== null) {
+      const prefix = match[1] || "";
+      const activityName = match[2];
+      const attrs = match[3] || "";
+      const templateLower = activityName.toLowerCase();
+      if (!MAIL_SEND_TEMPLATES.has(templateLower)) continue;
+
+      const displayNameMatch = attrs.match(/DisplayName="([^"]*)"/);
+      const displayName = displayNameMatch ? displayNameMatch[1] : activityName;
+
+      const properties: Record<string, string> = {};
+      const attrPattern = /(\w+)="([^"]*)"/g;
+      let attrMatch;
+      while ((attrMatch = attrPattern.exec(attrs)) !== null) {
+        if (attrMatch[1] !== "DisplayName" && !attrMatch[1].startsWith("xmlns") && !attrMatch[1].startsWith("sap2010")) {
+          properties[attrMatch[1]] = attrMatch[2];
+        }
+      }
+
+      const family = detectMailFamily(activityName, displayName, properties);
+      mailNodes.push({ displayName, template: activityName, family, properties });
+    }
+
+    if (mailNodes.length === 0) continue;
+
+    let clusterIdx = 0;
+    for (const mailNode of mailNodes) {
+      const clusterId = `${shortName}:${workflow}:mail-cluster-${clusterIdx++}`;
+      const narrativeReps = detectNarrativeContainerRepresentations(mailNode.properties);
+      const pseudoReps = detectPseudoRepresentationsFromStrings(mailNode.properties);
+      const allNarr = [
+        ...narrativeReps,
+        ...pseudoReps.filter(p => p === "TryCatch-as-text-property" || p === "narrative-send-description"),
+      ];
+
+      const detectedFamilies = new Set<string>();
+      if (mailNode.family) detectedFamilies.add(mailNode.family);
+
+      const cluster: MailSendCluster = {
+        clusterId,
+        file: shortName,
+        workflow,
+        nodes: [{
+          nodeIndex: 0,
+          displayName: mailNode.displayName,
+          template: mailNode.template,
+          detectedFamily: mailNode.family,
+          role: "concrete-send",
+          properties: mailNode.properties,
+        }],
+        concreteSendNode: {
+          nodeIndex: 0,
+          displayName: mailNode.displayName,
+          template: mailNode.template,
+          detectedFamily: mailNode.family,
+          role: "concrete-send",
+          properties: mailNode.properties,
+        },
+        detectedFamilies,
+        hasNarrativeContainer: allNarr.length > 0,
+        narrativeRepresentationsFound: allNarr,
+      };
+
+      const result = lockClusterToFamily(cluster, profile, verifiedPackages);
+      lockResults.push(result);
+    }
+
+    const crossViolations = checkCrossFamilyDriftInXaml(content, lockResults.filter(r => r.file === shortName), shortName);
+    allCrossViolations.push(...crossViolations);
+  }
+
+  return {
+    diagnostics: buildMailFamilyLockDiagnostics(lockResults),
+    crossFamilyViolations: allCrossViolations,
+  };
+}
+
 export function mergeLoweringDiagnostics(
   ...sources: (CriticalActivityLoweringDiagnostics | undefined)[]
 ): CriticalActivityLoweringDiagnostics {

@@ -47,8 +47,13 @@ import {
   runXamlLevelCriticalActivityLowering,
   loweringDiagnosticsToPackageViolations,
   mergeLoweringDiagnostics,
+  runXamlLevelMailFamilyLockAnalysis,
+  mailFamilyLockToPackageViolations,
+  crossFamilyDriftToPackageViolations,
   type CriticalActivityLoweringDiagnostics,
   type CriticalStepLoweringResult,
+  type MailFamilyLockDiagnostics,
+  type CrossFamilyDriftViolation,
 } from "./critical-activity-lowering";
 import { catalogService } from "./catalog/catalog-service";
 
@@ -61,6 +66,8 @@ export interface FinalArtifactValidationInput {
   automationPattern?: AutomationPattern;
   hasNupkg: boolean;
   preEmissionLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
+  assemblerDriftViolations?: CrossFamilyDriftViolation[];
+  preEmissionMailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
   contextMetadata: {
     downgrades: DowngradeEvent[];
     usedAIFallback: boolean;
@@ -185,6 +192,7 @@ export interface FinalQualityReport {
   packageCompletenessViolations: PackageCompletenessViolationsArtifact;
   packageViable: boolean;
   criticalActivityLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
+  mailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
 }
 
 const STUDIO_BLOCKING_CHECKS = new Set([
@@ -257,6 +265,8 @@ function buildPackageCompletenessViolations(
   preComplianceGuard: PreComplianceGuardResult,
   outcomeReport?: PipelineOutcomeReport,
   criticalLoweringDiagnostics?: CriticalActivityLoweringDiagnostics,
+  mailFamilyLockDiagnostics?: MailFamilyLockDiagnostics,
+  crossFamilyDriftViolationsList?: CrossFamilyDriftViolation[],
 ): PackageCompletenessViolationsArtifact {
   const violations: PackageCompletenessViolation[] = [];
 
@@ -480,6 +490,40 @@ function buildPackageCompletenessViolations(
     }
   }
 
+  if (mailFamilyLockDiagnostics) {
+    const mailLockViolations = mailFamilyLockToPackageViolations(mailFamilyLockDiagnostics);
+    for (const mv of mailLockViolations) {
+      violations.push({
+        file: mv.file,
+        workflow: mv.workflow,
+        activityType: mv.activityType,
+        propertyName: mv.propertyName,
+        violationType: mv.violationType,
+        severity: mv.severity,
+        packageFatal: mv.packageFatal,
+        handoffGuidanceAvailable: mv.handoffGuidanceAvailable,
+        remediationHint: mv.remediationHint,
+      });
+    }
+  }
+
+  if (crossFamilyDriftViolationsList && crossFamilyDriftViolationsList.length > 0) {
+    const driftPackageViolations = crossFamilyDriftToPackageViolations(crossFamilyDriftViolationsList);
+    for (const dv of driftPackageViolations) {
+      violations.push({
+        file: dv.file,
+        workflow: dv.workflow,
+        activityType: dv.activityType,
+        propertyName: dv.propertyName,
+        violationType: dv.violationType,
+        severity: dv.severity,
+        packageFatal: dv.packageFatal,
+        handoffGuidanceAvailable: dv.handoffGuidanceAvailable,
+        remediationHint: dv.remediationHint,
+      });
+    }
+  }
+
   const totalPackageFatalViolations = violations.filter(v => v.packageFatal).length;
   const totalPlaceholderInjectionPrevented = violations.filter(
     v => v.violationType === "sentinel_in_required_property"
@@ -586,6 +630,42 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     input.preEmissionLoweringDiagnostics,
     xamlLevelDiagnostics,
   );
+
+  const mailFamilyLockResult = runXamlLevelMailFamilyLockAnalysis(
+    xamlEntries, studioProfile, verifiedPackages,
+  );
+  const xamlLevelMailDiag = mailFamilyLockResult.diagnostics;
+  const preEmissionMailDiag = input.preEmissionMailFamilyLockDiagnostics;
+  const mailFamilyLockDiag: MailFamilyLockDiagnostics = preEmissionMailDiag
+    ? {
+        perClusterResults: [...preEmissionMailDiag.perClusterResults, ...xamlLevelMailDiag.perClusterResults.filter(
+          xr => !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+        )],
+        summary: {
+          totalClusters: preEmissionMailDiag.summary.totalClusters + xamlLevelMailDiag.perClusterResults.filter(
+            xr => !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+          ).length,
+          totalLocked: preEmissionMailDiag.summary.totalLocked + xamlLevelMailDiag.perClusterResults.filter(
+            xr => xr.locked && !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+          ).length,
+          totalRejectedAmbiguous: preEmissionMailDiag.summary.totalRejectedAmbiguous + xamlLevelMailDiag.perClusterResults.filter(
+            xr => !xr.locked && xr.lockRejectionReason?.includes("ambiguous") && !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+          ).length,
+          totalRejectedNarrative: preEmissionMailDiag.summary.totalRejectedNarrative + xamlLevelMailDiag.perClusterResults.filter(
+            xr => xr.narrativeRepresentationsRejected.length > 0 && !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+          ).length,
+          totalRejectedMissingProperties: preEmissionMailDiag.summary.totalRejectedMissingProperties + xamlLevelMailDiag.perClusterResults.filter(
+            xr => xr.missingRequiredProperties.length > 0 && !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+          ).length,
+          totalCrossFamilyDriftViolations: preEmissionMailDiag.summary.totalCrossFamilyDriftViolations + xamlLevelMailDiag.perClusterResults.filter(
+            xr => xr.crossFamilyDriftViolation && !preEmissionMailDiag.perClusterResults.some(pr => pr.clusterId === xr.clusterId)
+          ).length,
+        },
+      }
+    : xamlLevelMailDiag;
+  const xamlLevelDriftViolations = mailFamilyLockResult.crossFamilyViolations;
+  const assemblerDrift = input.assemblerDriftViolations || [];
+  const crossFamilyDriftViolations = [...xamlLevelDriftViolations, ...assemblerDrift];
 
   const perFileResults: PerFileValidation[] = enforcedEntries.map(entry => {
     const shortName = entry.name.split("/").pop() || entry.name;
@@ -775,6 +855,8 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     preComplianceGuard,
     contextMetadata.outcomeReport,
     criticalLoweringDiagnostics,
+    mailFamilyLockDiag,
+    crossFamilyDriftViolations,
   );
 
   if (!packageCompletenessViolations.packageViable && derivedStatus !== "structurally_invalid") {
@@ -837,5 +919,6 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     packageCompletenessViolations,
     packageViable: packageCompletenessViolations.packageViable,
     criticalActivityLoweringDiagnostics: criticalLoweringDiagnostics,
+    mailFamilyLockDiagnostics: mailFamilyLockDiag,
   };
 }
