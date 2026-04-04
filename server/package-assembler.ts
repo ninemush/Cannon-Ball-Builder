@@ -3473,8 +3473,18 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           const preserved = compliancePass(spResult.content, `${wfName}.xaml`, true);
           return { content: preserved, wasFullStub: false };
         } catch {
-          console.log(`[UiPath] Structural preservation output failed compliance for "${wfName}" — falling back to full stub`);
+          console.log(`[UiPath Package Mode] Structural preservation output failed compliance for "${wfName}" — stub fallback BLOCKED by completeness policy`);
         }
+      }
+      if (generationMode === "package") {
+        console.log(`[UiPath Package Mode] Full stub injection BLOCKED for "${wfName}" after compliance failure — recording as completeness violation`);
+        collectedQualityIssues.push({
+          severity: "blocking",
+          file: `${wfName}.xaml`,
+          check: "compliance-failure-no-stub",
+          detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — stub injection prevented by package-mode completeness policy`,
+        });
+        return { content: rawXaml, wasFullStub: true };
       }
       return { content: compliancePass(generateStubWorkflow(wfName, { reason: `Compliance transform failed — ${compErrMessage}` }), `${wfName}.xaml`, true), wasFullStub: true };
     }
@@ -3492,30 +3502,31 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
         return result;
       } catch (err: any) {
-        console.log(`[UiPath Early Stub] Generator failed for ${wfName}: ${err.message} — emitting stub`);
-        const stubXaml = generateStubWorkflow(wfName, {
-          reason: `Generator could not safely produce this workflow: ${err.message}`,
-          isBlockingFallback: true,
-        });
-        const stubCompliant = compliancePass(stubXaml, `${wfName}.xaml`);
-        deferredWrites.set(`${libPath}/${wfName}.xaml`, stubCompliant);
         earlyStubFallbacks.push(`${wfName}.xaml`);
-        collectedQualityIssues.push({
-          severity: "blocking",
-          file: `${wfName}.xaml`,
-          check: "generator-failure",
-          detail: `Generator failed: ${err.message} — replaced with Studio-openable stub`,
-          stubbedWorkflow: `${wfName}.xaml`,
-        });
-        outcomeRemediations.push({
-          level: "workflow",
-          file: `${wfName}.xaml`,
-          remediationCode: "STUB_WORKFLOW_BLOCKING",
-          reason: `Generator failed: ${err.message} — replaced with stub`,
-          classifiedCheck: "generator-failure",
-          developerAction: `Re-implement ${wfName}.xaml — generator could not produce valid XAML`,
-          estimatedEffortMinutes: 60,
-        });
+        if (generationMode === "package") {
+          console.log(`[UiPath Package Mode] Generator failed for ${wfName}: ${err.message} — stub injection BLOCKED by completeness policy`);
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: `${wfName}.xaml`,
+            check: "generator-failure",
+            detail: `Generator failed: ${err.message} — stub injection prevented by package-mode completeness policy`,
+          });
+        } else {
+          console.log(`[UiPath Early Stub] Generator failed for ${wfName}: ${err.message} — emitting stub`);
+          const stubXaml = generateStubWorkflow(wfName, {
+            reason: `Generator could not safely produce this workflow: ${err.message}`,
+            isBlockingFallback: true,
+          });
+          const stubCompliant = compliancePass(stubXaml, `${wfName}.xaml`);
+          deferredWrites.set(`${libPath}/${wfName}.xaml`, stubCompliant);
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: `${wfName}.xaml`,
+            check: "generator-failure",
+            detail: `Generator failed: ${err.message} — replaced with Studio-openable stub`,
+            stubbedWorkflow: `${wfName}.xaml`,
+          });
+        }
         return null;
       }
     }
@@ -4941,6 +4952,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
     const preArchiveViolations = validateXamlContent(xamlEntries);
 
+    const earlyRemediations: Array<{ level: string; file: string; remediationCode: string; reason: string; classifiedCheck: string; developerAction: string; estimatedEffortMinutes: number }> = [];
     const missingFileViolations = preArchiveViolations.filter(v => v.check === "invoked-file");
     const stubsGenerated: string[] = [];
     if (missingFileViolations.length > 0) {
@@ -4954,12 +4966,31 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const baseName = rawCleaned.replace(/\.xaml$/i, "");
         const normalizedBase = normalizeWorkflowName(baseName);
         const missingFile = normalizedBase + (rawCleaned.toLowerCase().endsWith(".xaml") ? ".xaml" : "");
-        const stubXaml = generateStubWorkflow(missingFile);
-        const stubCompliant = compliancePass(stubXaml, missingFile, true);
-        deferredWrites.set(`${libPath}/${missingFile}`, stubCompliant);
-        xamlEntries.push({ name: missingFile, content: stubCompliant });
-        stubsGenerated.push(missingFile);
-        console.log(`[UiPath Validation] Generated stub workflow for missing file: ${missingFile} (tracked in xamlEntries)`);
+        if (generationMode === "package") {
+          console.log(`[UiPath Package Mode] Stub injection BLOCKED for missing file: ${missingFile} — recording as completeness violation`);
+          earlyRemediations.push({
+            level: "workflow",
+            file: missingFile,
+            remediationCode: "STUB_WORKFLOW_BLOCKING",
+            reason: `Missing invoked workflow ${missingFile} — stub injection prevented by package-mode completeness policy`,
+            classifiedCheck: "invoked-file",
+            developerAction: `Create and implement ${missingFile} — it is referenced but does not exist`,
+            estimatedEffortMinutes: 60,
+          });
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: missingFile,
+            check: "missing-invoked-file-no-stub",
+            detail: `Missing invoked workflow ${missingFile} — stub injection prevented in package mode`,
+          });
+        } else {
+          const stubXaml = generateStubWorkflow(missingFile);
+          const stubCompliant = compliancePass(stubXaml, missingFile, true);
+          deferredWrites.set(`${libPath}/${missingFile}`, stubCompliant);
+          xamlEntries.push({ name: missingFile, content: stubCompliant });
+          stubsGenerated.push(missingFile);
+          console.log(`[UiPath Validation] Generated stub workflow for missing file: ${missingFile} (tracked in xamlEntries)`);
+        }
       }
     }
 
@@ -4967,12 +4998,31 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const entryBasenames = new Set(xamlEntries.map(e => (e.name.split("/").pop() || e.name)));
     for (const mb of manifestBasenames) {
       if (!entryBasenames.has(mb)) {
-        const stubXaml = generateStubWorkflow(mb.replace(".xaml", ""));
-        const stubCompliant = compliancePass(stubXaml, mb, true);
-        deferredWrites.set(`${libPath}/${mb}`, stubCompliant);
-        xamlEntries.push({ name: mb, content: stubCompliant });
-        stubsGenerated.push(mb);
-        console.log(`[UiPath Pre-Package Check] Archive manifest had ${mb} without validated entry — generated stub`);
+        if (generationMode === "package") {
+          console.log(`[UiPath Package Mode] Stub injection BLOCKED for manifest entry: ${mb} — recording as completeness violation`);
+          earlyRemediations.push({
+            level: "workflow",
+            file: mb,
+            remediationCode: "STUB_WORKFLOW_BLOCKING",
+            reason: `Archive manifest references ${mb} without validated entry — stub injection prevented by package-mode completeness policy`,
+            classifiedCheck: "manifest-missing-entry",
+            developerAction: `Create and implement ${mb} — it is listed in the archive manifest but has no content`,
+            estimatedEffortMinutes: 60,
+          });
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: mb,
+            check: "manifest-missing-entry-no-stub",
+            detail: `Manifest entry ${mb} has no validated content — stub injection prevented in package mode`,
+          });
+        } else {
+          const stubXaml = generateStubWorkflow(mb.replace(".xaml", ""));
+          const stubCompliant = compliancePass(stubXaml, mb, true);
+          deferredWrites.set(`${libPath}/${mb}`, stubCompliant);
+          xamlEntries.push({ name: mb, content: stubCompliant });
+          stubsGenerated.push(mb);
+          console.log(`[UiPath Pre-Package Check] Archive manifest had ${mb} without validated entry — generated stub`);
+        }
       }
     }
     const placeholderCleanupRepairs: { repairCode: "REPAIR_PLACEHOLDER_CLEANUP"; file: string; description: string; developerAction: string; estimatedEffortMinutes: number }[] = [];
@@ -4980,47 +5030,57 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       const content = xamlEntries[i].content;
       if (content.includes("PLACEHOLDER_") || content.includes("TODO_") || /\bTODO\b/.test(content) || /\bPLACEHOLDER\b/.test(content)) {
         const placeholderCount = (content.match(/\bPLACEHOLDER\b|\bTODO\b|PLACEHOLDER_|TODO_/g) || []).length;
-        const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
-        const afterTagSafety = content
-          .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
-          .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
-        let cleaned = afterTagSafety;
-
-        cleaned = cleaned.replace(/\s+\w+="(?:\[?(?:PLACEHOLDER_?\w*|TODO_?\w*|STUB_?\w*|HANDOFF_?\w*)\]?)"/g, '');
-
-        cleaned = cleaned.replace(/\s+(\w+)="([^"]*)"/g, (attrMatch, _name, val) => {
-          const trimmed = val.trim();
-          if (/^(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)$/i.test(trimmed)) return '';
-          const unwrapped = trimmed.replace(/^\[|\]$/g, '').trim();
-          if (/^(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)$/i.test(unwrapped)) return '';
-          return attrMatch;
-        });
-
-        cleaned = cleaned.replace(/>([^<]*)</g, (_match, textContent) => {
-          const trimmed = textContent.trim();
-          if (/^(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)$/i.test(trimmed)) {
-            return `><`;
-          }
-          return _match;
-        });
-        xamlEntries[i] = { ...xamlEntries[i], content: cleaned };
-        const archivePath = Array.from(deferredWrites.keys()).find(
-          p => (p.split("/").pop() || p) === (xamlEntries[i].name.split("/").pop() || xamlEntries[i].name)
-        );
-        if (archivePath) {
-          deferredWrites.set(archivePath, cleaned);
-        } else {
-          console.warn(`[UiPath Parity] No deferredWrites key found for basename "${xamlEntries[i].name}" during placeholder cleanup — skipping deferred update`);
-        }
         const fileName = xamlEntries[i].name.split("/").pop() || xamlEntries[i].name;
-        placeholderCleanupRepairs.push({
-          repairCode: "REPAIR_PLACEHOLDER_CLEANUP" as const,
-          file: fileName,
-          description: `Stripped ${placeholderCount} placeholder token(s) from ${fileName}`,
-          developerAction: `Review ${fileName} for Comment elements marking where placeholder activities were removed`,
-          estimatedEffortMinutes: 5,
-        });
-        console.log(`[UiPath Pre-Package Check] ${xamlEntries[i].name}: stripped ${placeholderCount} placeholder token(s)`);
+        if (generationMode === "package") {
+          console.log(`[UiPath Package Mode] Placeholder cleanup BLOCKED for ${fileName}: ${placeholderCount} sentinel(s) remain — recording as completeness violation`);
+          placeholderCleanupRepairs.push({
+            repairCode: "REPAIR_PLACEHOLDER_CLEANUP" as const,
+            file: fileName,
+            description: `${placeholderCount} placeholder token(s) remain in ${fileName} — cleanup prevented by package-mode completeness policy`,
+            developerAction: `Resolve all placeholder/sentinel values in ${fileName} before package can be generated`,
+            estimatedEffortMinutes: 15,
+          });
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: fileName,
+            check: "sentinel-values-remain",
+            detail: `${placeholderCount} sentinel value(s) remain in ${fileName} — placeholder cleanup prevented in package mode`,
+          });
+        } else {
+          const commentReplacement = '<ui:Comment Text="REVIEW: Unknown activity type was generated here — implement manually" />';
+          const afterTagSafety = content
+            .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)(\w+)\b[^>]*?>[\s\S]*?<\/\1?(?:TODO_|PLACEHOLDER_)\2>/g, commentReplacement)
+            .replace(/<(ui:)?(?:TODO_|PLACEHOLDER_)\w+\b[^>]*?\/>/g, commentReplacement);
+          let cleaned = afterTagSafety;
+          cleaned = cleaned.replace(/\s+\w+="(?:\[?(?:PLACEHOLDER_?\w*|TODO_?\w*|STUB_?\w*|HANDOFF_?\w*)\]?)"/g, '');
+          cleaned = cleaned.replace(/\s+(\w+)="([^"]*)"/g, (attrMatch, _name, val) => {
+            const trimmed = val.trim();
+            if (/^(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)$/i.test(trimmed)) return '';
+            const unwrapped = trimmed.replace(/^\[|\]$/g, '').trim();
+            if (/^(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)$/i.test(unwrapped)) return '';
+            return attrMatch;
+          });
+          cleaned = cleaned.replace(/>([^<]*)</g, (_match, textContent) => {
+            const trimmed = textContent.trim();
+            if (/^(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)$/i.test(trimmed)) return `><`;
+            return _match;
+          });
+          xamlEntries[i] = { ...xamlEntries[i], content: cleaned };
+          const archivePath = Array.from(deferredWrites.keys()).find(
+            p => (p.split("/").pop() || p) === (xamlEntries[i].name.split("/").pop() || xamlEntries[i].name)
+          );
+          if (archivePath) {
+            deferredWrites.set(archivePath, cleaned);
+          }
+          placeholderCleanupRepairs.push({
+            repairCode: "REPAIR_PLACEHOLDER_CLEANUP" as const,
+            file: fileName,
+            description: `Stripped ${placeholderCount} placeholder token(s) from ${fileName}`,
+            developerAction: `Review ${fileName} for Comment elements marking where placeholder activities were removed`,
+            estimatedEffortMinutes: 5,
+          });
+          console.log(`[UiPath Pre-Package Check] ${xamlEntries[i].name}: stripped ${placeholderCount} placeholder token(s)`);
+        }
       }
     }
     for (const [depName, depVer] of Object.entries(deps)) {
@@ -5060,6 +5120,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
     const autoFixSummary: string[] = [];
     const outcomeRemediations: RemediationEntry[] = [];
+    for (const er of earlyRemediations) {
+      outcomeRemediations.push(er as RemediationEntry);
+    }
     for (const fb of complianceFallbacks) {
       const wfBaseName = fb.file.replace(/\.xaml$/, "");
       const matchingSpec = allTreeEnrichments.get(wfBaseName);
@@ -5959,127 +6022,80 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
       let remediationFailed = false;
       for (const corruptedFile of corruptedFiles) {
-        const stubName = corruptedFile.replace(/\.xaml$/i, "");
-        const corruptedEntry = xamlEntries.find(e => e.name === corruptedFile || (e.name.split("/").pop() || e.name) === corruptedFile);
-        const corruptedContent = corruptedEntry?.content || "";
-        const extractedArgs: Array<{ name: string; direction: string; type: string }> = [];
-        const extractedVars: Array<{ name: string; type: string; defaultValue?: string }> = [];
-        const propPattern = /<x:Property\s+Name="([^"]+)"\s+Type="([^"]+)"/g;
-        let propMatch;
-        while ((propMatch = propPattern.exec(corruptedContent)) !== null) {
-          const argName = propMatch[1];
-          const typeStr = propMatch[2];
-          let direction = "InArgument";
-          if (typeStr.includes("OutArgument")) direction = "OutArgument";
-          else if (typeStr.includes("InOutArgument")) direction = "InOutArgument";
-          const typeMatch = typeStr.match(/Argument\(([^)]+)\)/);
-          const baseType = typeMatch ? typeMatch[1] : "x:String";
-          extractedArgs.push({ name: argName, direction, type: baseType });
-        }
-        const varPattern = /<Variable\s+(?:x:TypeArguments="([^"]+)"\s+Name="([^"]+)"|Name="([^"]+)"\s+x:TypeArguments="([^"]+)")(?:\s+Default="([^"]*)")?/g;
-        let varMatch;
-        while ((varMatch = varPattern.exec(corruptedContent)) !== null) {
-          const varType = varMatch[1] || varMatch[4] || "x:String";
-          const varName = varMatch[2] || varMatch[3] || "";
-          const defVal = varMatch[5];
-          if (varName) extractedVars.push({ name: varName, type: varType, ...(defVal ? { defaultValue: defVal } : {}) });
-        }
-        let finalArgs = extractedArgs;
-        let finalVars = extractedVars;
-        if (finalVars.length === 0) {
-          const matchingSpec = workflows.find(wf => {
-            const specName = (wf.name || "").replace(/\s+/g, "_");
-            return specName === stubName || specName + ".xaml" === corruptedFile;
-          });
-          if (matchingSpec && matchingSpec.variables && matchingSpec.variables.length > 0) {
-            finalVars = matchingSpec.variables.map(v => ({
-              name: v.name,
-              type: v.type || "x:String",
-              ...(v.defaultValue ? { defaultValue: v.defaultValue } : {}),
-            }));
-          }
-        }
-        if (finalArgs.length === 0) {
-          const specArgs = treeEnrichment?.status === "success" && treeEnrichment.workflowSpec?.arguments?.length
-            ? treeEnrichment.workflowSpec.arguments
-            : enrichment?.arguments?.length ? enrichment.arguments : null;
-          if (specArgs) {
-            finalArgs = specArgs.map(a => ({
-              name: a.name,
-              direction: a.direction || "InArgument",
-              type: a.type || "x:String",
-            }));
-          }
-        }
-        const isMainFile = corruptedFile === "Main.xaml" || corruptedFile === `${mainWfName}.xaml`;
-        let invokeWorkflows: Array<{ displayName: string; fileName: string }> | undefined;
-        if (isMainFile) {
-          const effectiveWorkflowNames = nonMainWorkflowNames.length > 0
-            ? nonMainWorkflowNames
-            : Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process");
-          if (effectiveWorkflowNames.length > 0) {
-            const seenFiles = new Set<string>();
-            invokeWorkflows = [];
-            const initFile = "InitAllSettings.xaml";
-            if (!seenFiles.has(initFile)) {
-              seenFiles.add(initFile);
-              invokeWorkflows.push({ displayName: "Initialize All Settings", fileName: initFile });
-            }
-            for (const name of effectiveWorkflowNames) {
-              const fn = `${name}.xaml`;
-              if (!seenFiles.has(fn) && name !== stubName) {
-                seenFiles.add(fn);
-                invokeWorkflows.push({ displayName: name, fileName: fn });
-              }
-            }
-            console.log(`[UiPath Pre-Package Validation] Main.xaml stub will preserve ${invokeWorkflows.length} InvokeWorkflowFile reference(s) to maintain sub-workflow reachability`);
-          }
-        }
-        const stubXaml = generateStubWorkflow(stubName, {
-          reason: `Final validation remediation — original XAML had well-formedness violations`,
-          arguments: finalArgs.length > 0 ? finalArgs : undefined,
-          variables: finalVars.length > 0 ? finalVars : undefined,
-          invokeWorkflows: invokeWorkflows && invokeWorkflows.length > 0 ? invokeWorkflows : undefined,
-        });
-        let stubCompliant: string;
-        try {
-          stubCompliant = compliancePass(stubXaml, corruptedFile, true);
-        } catch (stubCompErr: any) {
-          if (corruptedFile === "Main.xaml") {
-            remediationFailed = true;
-            console.error(`[UiPath Pre-Package Validation] Cannot remediate entry-point Main.xaml — stub compliance also failed: ${stubCompErr.message}`);
-            continue;
-          }
-          stubCompliant = stubXaml;
-        }
-        const entryIdx = xamlEntries.findIndex(e => e.name === corruptedFile || (e.name.split("/").pop() || e.name) === corruptedFile);
-        if (entryIdx >= 0) {
-          xamlEntries[entryIdx] = { ...xamlEntries[entryIdx], content: stubCompliant };
-        }
-        const archivePath = Array.from(deferredWrites.keys()).find(
-          p => (p.split("/").pop() || p) === corruptedFile
-        );
-        if (archivePath) {
-          deferredWrites.set(archivePath, stubCompliant);
-        } else {
-          console.warn(`[UiPath Parity] No deferredWrites key found for basename "${corruptedFile}" during final validation remediation — skipping deferred update`);
-        }
         const fileSpecificErrors = severeValidationErrors
           .filter(v => v.file === corruptedFile)
           .map(v => `[${v.check}] ${v.detail}`);
         const specificErrorDetail = fileSpecificErrors.length > 0
           ? fileSpecificErrors.join("; ")
           : "No specific error details captured";
-        outcomeRemediations.push({
-          level: "workflow",
-          file: corruptedFile,
-          remediationCode: "STUB_WORKFLOW_BLOCKING",
-          reason: `Final validation: XAML well-formedness violations — replaced with stub. Details: ${specificErrorDetail}`,
-          classifiedCheck: "xml-wellformedness",
-          developerAction: `Fix XML structure in ${corruptedFile} — ${specificErrorDetail}`,
-          estimatedEffortMinutes: 15,
-        });
-        console.warn(`[UiPath Pre-Package Validation] Remediated corrupted file "${corruptedFile}" with stub workflow. Specific errors: ${specificErrorDetail}`);
+        if (generationMode === "package") {
+          console.log(`[UiPath Package Mode] Stub remediation BLOCKED for corrupted file "${corruptedFile}" — recording as completeness violation. Errors: ${specificErrorDetail}`);
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: corruptedFile,
+            check: "xml-wellformedness-no-stub",
+            detail: `XAML well-formedness violations in ${corruptedFile} — stub remediation prevented by package-mode completeness policy. Details: ${specificErrorDetail}`,
+          });
+          outcomeRemediations.push({
+            level: "workflow",
+            file: corruptedFile,
+            remediationCode: "STUB_WORKFLOW_BLOCKING",
+            reason: `Final validation: XAML well-formedness violations — stub remediation prevented in package mode. Details: ${specificErrorDetail}`,
+            classifiedCheck: "xml-wellformedness",
+            developerAction: `Fix XML structure in ${corruptedFile} — ${specificErrorDetail}`,
+            estimatedEffortMinutes: 15,
+          });
+        } else {
+          const stubName = corruptedFile.replace(/\.xaml$/i, "");
+          const corruptedEntry = xamlEntries.find(e => e.name === corruptedFile || (e.name.split("/").pop() || e.name) === corruptedFile);
+          const corruptedContent = corruptedEntry?.content || "";
+          const extractedArgs: Array<{ name: string; direction: string; type: string }> = [];
+          const propPattern = /<x:Property\s+Name="([^"]+)"\s+Type="([^"]+)"/g;
+          let propMatch;
+          while ((propMatch = propPattern.exec(corruptedContent)) !== null) {
+            const argName = propMatch[1];
+            const typeStr = propMatch[2];
+            let direction = "InArgument";
+            if (typeStr.includes("OutArgument")) direction = "OutArgument";
+            else if (typeStr.includes("InOutArgument")) direction = "InOutArgument";
+            const typeMatch = typeStr.match(/Argument\(([^)]+)\)/);
+            const baseType = typeMatch ? typeMatch[1] : "x:String";
+            extractedArgs.push({ name: argName, direction, type: baseType });
+          }
+          const stubXaml = generateStubWorkflow(stubName, {
+            reason: `Final validation remediation — original XAML had well-formedness violations`,
+            arguments: extractedArgs.length > 0 ? extractedArgs : undefined,
+          });
+          let stubCompliant: string;
+          try {
+            stubCompliant = compliancePass(stubXaml, corruptedFile, true);
+          } catch (stubCompErr: any) {
+            if (corruptedFile === "Main.xaml") {
+              remediationFailed = true;
+              console.error(`[UiPath Pre-Package Validation] Cannot remediate entry-point Main.xaml — stub compliance also failed: ${stubCompErr.message}`);
+              continue;
+            }
+            stubCompliant = stubXaml;
+          }
+          const entryIdx = xamlEntries.findIndex(e => e.name === corruptedFile || (e.name.split("/").pop() || e.name) === corruptedFile);
+          if (entryIdx >= 0) {
+            xamlEntries[entryIdx] = { ...xamlEntries[entryIdx], content: stubCompliant };
+          }
+          const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === corruptedFile);
+          if (archivePath) {
+            deferredWrites.set(archivePath, stubCompliant);
+          }
+          outcomeRemediations.push({
+            level: "workflow",
+            file: corruptedFile,
+            remediationCode: "STUB_WORKFLOW_BLOCKING",
+            reason: `Final validation: XAML well-formedness violations — replaced with stub. Details: ${specificErrorDetail}`,
+            classifiedCheck: "xml-wellformedness",
+            developerAction: `Fix XML structure in ${corruptedFile} — ${specificErrorDetail}`,
+            estimatedEffortMinutes: 15,
+          });
+          console.warn(`[UiPath Pre-Package Validation] Remediated corrupted file "${corruptedFile}" with stub workflow. Specific errors: ${specificErrorDetail}`);
+        }
       }
 
       if (remediationFailed) {
@@ -7142,49 +7158,44 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
           const recheck = validateXmlWellFormedness(sanitized);
           if (!recheck.valid) {
-            console.error(`[XML Well-Formedness Gate] ${fileName}: still invalid after targeted fix — replacing with Studio-openable stub`);
-            const stubName = fileName.replace(/\.xaml$/i, "");
-            const isMainStub = fileName === "Main.xaml" || fileName === `${mainWfName}.xaml`;
-            let stubInvokes: Array<{ displayName: string; fileName: string }> | undefined;
-            if (isMainStub) {
-              const effectiveWfNames = nonMainWorkflowNames.length > 0
-                ? nonMainWorkflowNames
-                : Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process");
-              if (effectiveWfNames.length > 0) {
-                const seenFiles = new Set<string>();
-                stubInvokes = [];
-                const initFile = "InitAllSettings.xaml";
-                if (!seenFiles.has(initFile)) {
-                  seenFiles.add(initFile);
-                  stubInvokes.push({ displayName: "Initialize All Settings", fileName: initFile });
-                }
-                for (const name of effectiveWfNames) {
-                  const fn = `${name}.xaml`;
-                  if (!seenFiles.has(fn) && fn !== fileName) {
-                    seenFiles.add(fn);
-                    stubInvokes.push({ displayName: name, fileName: fn });
-                  }
-                }
-                console.log(`[XML Well-Formedness Gate] Main.xaml stub preserving ${stubInvokes.length} InvokeWorkflowFile reference(s)`);
-              }
-            }
-            const stubXaml = generateStubWorkflow(stubName, {
-              reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}`,
-              invokeWorkflows: stubInvokes && stubInvokes.length > 0 ? stubInvokes : undefined,
-            });
-            sanitized = stubXaml;
-            deferredWrites.set(path, sanitized);
             const archiveGateErrors = recheck.errors.length > 0 ? recheck.errors.join("; ") : wellFormed.errors.join("; ");
-            outcomeRemediations.push({
-              level: "workflow",
-              file: fileName,
-              remediationCode: "STUB_WORKFLOW_BLOCKING",
-              reason: `Archive gate: XAML well-formedness failure — replaced with stub. Details: ${archiveGateErrors}`,
-              classifiedCheck: "xml-wellformedness",
-              developerAction: `Fix XML structure in ${fileName} — ${archiveGateErrors}`,
-              estimatedEffortMinutes: 15,
-            });
-            autoFixSummary.push(`Replaced ${fileName} with Studio-openable stub due to XML well-formedness failure`);
+            if (generationMode === "package") {
+              console.error(`[XML Well-Formedness Gate] ${fileName}: still invalid after targeted fix — stub injection BLOCKED by package-mode completeness policy`);
+              collectedQualityIssues.push({
+                severity: "blocking",
+                file: fileName,
+                check: "xml-wellformedness-archive-gate",
+                detail: `XAML well-formedness failure at archive gate — stub injection prevented in package mode. Details: ${archiveGateErrors}`,
+              });
+              outcomeRemediations.push({
+                level: "workflow",
+                file: fileName,
+                remediationCode: "STUB_WORKFLOW_BLOCKING",
+                reason: `Archive gate: XAML well-formedness failure — stub injection prevented in package mode. Details: ${archiveGateErrors}`,
+                classifiedCheck: "xml-wellformedness",
+                developerAction: `Fix XML structure in ${fileName} — ${archiveGateErrors}`,
+                estimatedEffortMinutes: 15,
+              });
+              autoFixSummary.push(`${fileName} has XML well-formedness failure — stub injection prevented by package-mode completeness policy`);
+            } else {
+              console.error(`[XML Well-Formedness Gate] ${fileName}: still invalid after targeted fix — replacing with Studio-openable stub`);
+              const stubName = fileName.replace(/\.xaml$/i, "");
+              const stubXaml = generateStubWorkflow(stubName, {
+                reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}`,
+              });
+              sanitized = stubXaml;
+              deferredWrites.set(path, sanitized);
+              outcomeRemediations.push({
+                level: "workflow",
+                file: fileName,
+                remediationCode: "STUB_WORKFLOW_BLOCKING",
+                reason: `Archive gate: XAML well-formedness failure — replaced with stub. Details: ${archiveGateErrors}`,
+                classifiedCheck: "xml-wellformedness",
+                developerAction: `Fix XML structure in ${fileName} — ${archiveGateErrors}`,
+                estimatedEffortMinutes: 15,
+              });
+              autoFixSummary.push(`Replaced ${fileName} with Studio-openable stub due to XML well-formedness failure`);
+            }
           } else {
             autoFixSummary.push(`Fixed XML well-formedness issues in ${fileName} via targeted repair`);
           }
@@ -7298,32 +7309,26 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             if (!fileDefects || fileDefects.length === 0) continue;
 
             const defectSummary = fileDefects.map(d => `${d.pattern}: ${d.detail}`).join("; ");
-            const stubName = shortName.replace(/\.xaml$/i, "");
-            console.error(`[Pre-Archive Enforcement] Replacing malformed "${shortName}" with handoff stub — defects: ${defectSummary.substring(0, 200)}`);
-            const safeDefectSummary = escapeXml(defectSummary.substring(0, 300));
-            const safeStubName = escapeXml(stubName);
-            const handoffStubContent = `<?xml version="1.0" encoding="utf-8"?>
-<Activity x:Class="${safeStubName}" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
-  <Sequence DisplayName="${safeStubName} — Handoff Required">
-    <ui:LogMessage Level="Warn" Message="&quot;[CannonBall] This workflow requires manual implementation — pre-archive canonicalization detected unresolvable structural defects: ${safeDefectSummary}&quot;" DisplayName="Handoff Notice" />
-  </Sequence>
-</Activity>`;
-            const preStubHash = createHash("sha256").update(entry.content).digest("hex");
-            entry.content = handoffStubContent;
-            deferredWrites.set(entry.name, handoffStubContent);
-            const postStubHash = createHash("sha256").update(handoffStubContent).digest("hex");
+            console.error(`[UiPath Package Mode] Handoff stub injection BLOCKED for "${shortName}" — structural defects remain: ${defectSummary.substring(0, 200)}`);
+            collectedQualityIssues.push({
+              severity: "blocking",
+              file: shortName,
+              check: "pre-archive-structural-defect-no-stub",
+              detail: `Pre-archive structural defects in ${shortName} — handoff stub injection prevented by package-mode completeness policy. Defects: ${defectSummary.substring(0, 300)}`,
+            });
+            const preHash = createHash("sha256").update(entry.content).digest("hex");
             recordMutationAttempt({
               stage: "pre-archive-handoff-stub-injection",
               function: "buildNuGetPackage:preArchiveEnforcement",
               file: shortName,
               mutationType: "stub_injection",
-              preHash: preStubHash,
-              postHash: postStubHash,
-              allowed: true,
-              reason: `Handoff stub injected for "${shortName}" due to pre-archive structural defects (before freeze)`,
-              changedBytes: preStubHash !== postStubHash,
+              preHash: preHash,
+              postHash: preHash,
+              allowed: false,
+              reason: `Handoff stub injection BLOCKED for "${shortName}" — package-mode completeness policy prevents stub substitution`,
+              changedBytes: false,
               changedStatus: false,
-              enforcementAction: "none",
+              enforcementAction: "blocked",
             });
           }
         }

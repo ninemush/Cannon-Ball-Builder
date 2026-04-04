@@ -11,6 +11,8 @@ import {
 } from "../workflow-tree-assembler";
 import type { PropertyValue } from "../workflow-spec-types";
 import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity } from "../package-assembler";
+import { runFinalArtifactValidation, type PackageCompletenessViolation, type PackageCompletenessViolationsArtifact } from "../final-artifact-validation";
+import { validateWorkflowGraph } from "../xaml/workflow-graph-validator";
 import {
   classifyWorkflowStatus,
   freezeArchiveWorkflows,
@@ -2508,6 +2510,329 @@ describe("Compiler-invariant regression tests", () => {
         const result = resolveSourceForProperty(prop, sources, "Main.xaml", "Main", "SendMail");
         expect(result.resolved).not.toBeNull();
         expect(result.resolved!.sourceName).toBe("Body");
+      });
+    });
+  });
+
+  describe("Package Completeness and No-Healing Policy (Task #438)", () => {
+    const VALID_MAIN_XAML = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:LogMessage Message="Hello" Level="Info" />
+  </Sequence>
+</Activity>`;
+
+    const STUB_MAIN_XAML = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Main">
+    <ui:Comment Text="STUB: Manual implementation required" />
+    <ui:LogMessage Message="STUB_BLOCKING_FALLBACK" Level="Info" />
+  </Sequence>
+</Activity>`;
+
+    const SENTINEL_XAML = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="Process">
+    <ui:SendSmtpMailMessage To="PLACEHOLDER" Subject="Test" Body="TODO_IMPLEMENT" Host="smtp.test.com" Port="587" />
+  </Sequence>
+</Activity>`;
+
+    const MALFORMED_XAML = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities">
+</Activity>`;
+
+    const GMAIL_MISSING_BODY_XAML = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="SendEmail">
+    <ui:GmailSendMessage To="test@example.com" Subject="Test" DisplayName="Send Gmail" />
+  </Sequence>
+</Activity>`;
+
+    const SMTP_MISSING_BODY_XAML = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="SendEmail">
+    <ui:SendSmtpMailMessage To="test@example.com" Subject="Test" Host="smtp.test.com" Port="587" DisplayName="Send SMTP Mail" />
+  </Sequence>
+</Activity>`;
+
+    function buildMinimalValidationInput(entries: { name: string; content: string }[], hasNupkg = true) {
+      return {
+        xamlEntries: entries,
+        projectJsonContent: JSON.stringify({ name: "TestProject", dependencies: {} }),
+        targetFramework: "Windows" as const,
+        archiveManifest: entries.map(e => e.name),
+        archiveContentHashes: {},
+        hasNupkg,
+        contextMetadata: {
+          downgrades: [],
+          usedAIFallback: false,
+          pipelineWarnings: [],
+          metaValidationFlatStructureWarnings: 0,
+          outcomeReport: undefined,
+        },
+      };
+    }
+
+    describe("packageCompletenessViolations artifact production", () => {
+      it("produces packageCompletenessViolations artifact on clean input", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageCompletenessViolations).toBeDefined();
+        expect(report.packageCompletenessViolations.violations).toBeInstanceOf(Array);
+        expect(report.packageCompletenessViolations.summary).toBeDefined();
+        expect(report.packageCompletenessViolations.summary.totalPackageFatalViolations).toBeTypeOf("number");
+        expect(report.packageViable).toBeTypeOf("boolean");
+      });
+
+      it("reports packageViable=true for clean packages", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(true);
+        expect(report.packageCompletenessViolations.packageViable).toBe(true);
+        expect(report.packageCompletenessViolations.summary.totalPackageFatalViolations).toBe(0);
+      });
+    });
+
+    describe("stub workflow detection prevents package viability", () => {
+      it("flags stub workflow content as package-fatal", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: STUB_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(false);
+        expect(report.packageCompletenessViolations.packageViable).toBe(false);
+        const stubViolations = report.packageCompletenessViolations.violations.filter(
+          v => v.violationType === "stub_workflow_in_package"
+        );
+        expect(stubViolations.length).toBeGreaterThan(0);
+        expect(stubViolations[0].packageFatal).toBe(true);
+        expect(stubViolations[0].severity).toBe("execution_blocking");
+        expect(report.packageCompletenessViolations.summary.totalStubSubstitutionsPrevented).toBeGreaterThan(0);
+      });
+    });
+
+    describe("sentinel value detection prevents package viability", () => {
+      it("detects PLACEHOLDER/TODO sentinel values in XAML as package-fatal", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "Process.xaml", content: SENTINEL_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(false);
+        const sentinelViolations = report.packageCompletenessViolations.violations.filter(
+          v => v.violationType === "sentinel_in_required_property"
+        );
+        expect(sentinelViolations.length).toBeGreaterThan(0);
+        expect(sentinelViolations[0].packageFatal).toBe(true);
+        expect(report.packageCompletenessViolations.summary.totalPlaceholderInjectionPrevented).toBeGreaterThan(0);
+      });
+    });
+
+    describe("XML well-formedness failures prevent package viability", () => {
+      it("detects malformed XML as package-fatal", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "BrokenWorkflow.xaml", content: MALFORMED_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(false);
+        const xmlViolations = report.packageCompletenessViolations.violations.filter(
+          v => v.violationType === "xml_wellformedness_failure"
+        );
+        expect(xmlViolations.length).toBeGreaterThan(0);
+        expect(xmlViolations[0].packageFatal).toBe(true);
+        expect(xmlViolations[0].file).toBe("BrokenWorkflow.xaml");
+      });
+    });
+
+    describe("DHG generation remains decoupled from package viability", () => {
+      it("derivedStatus reflects package failure but report still has all data for DHG", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: STUB_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(false);
+        expect(report.derivedStatus).toBe("structurally_invalid");
+        expect(report.perFileResults).toBeDefined();
+        expect(report.perFileResults.length).toBe(1);
+        expect(report.analysisReports).toBeDefined();
+        expect(report.analysisReports.length).toBe(1);
+        expect(report.packageCompletenessViolations.violations[0].handoffGuidanceAvailable).toBe(true);
+      });
+    });
+
+    describe("per-violation detail structure", () => {
+      it("each violation has complete structured detail", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "Process.xaml", content: SENTINEL_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        const violations = report.packageCompletenessViolations.violations;
+        for (const v of violations) {
+          expect(v).toHaveProperty("file");
+          expect(v).toHaveProperty("workflow");
+          expect(v).toHaveProperty("activityType");
+          expect(v).toHaveProperty("propertyName");
+          expect(v).toHaveProperty("violationType");
+          expect(v).toHaveProperty("severity");
+          expect(v).toHaveProperty("packageFatal");
+          expect(v).toHaveProperty("handoffGuidanceAvailable");
+          expect(v).toHaveProperty("remediationHint");
+          expect(typeof v.remediationHint).toBe("string");
+          expect(v.remediationHint.length).toBeGreaterThan(0);
+        }
+      });
+
+      it("summary counts match violation details", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: STUB_MAIN_XAML },
+          { name: "Process.xaml", content: SENTINEL_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        const violations = report.packageCompletenessViolations.violations;
+        const summary = report.packageCompletenessViolations.summary;
+        expect(summary.totalPackageFatalViolations).toBe(
+          violations.filter(v => v.packageFatal).length
+        );
+        expect(summary.totalStubSubstitutionsPrevented).toBe(
+          violations.filter(v => v.violationType === "stub_workflow_in_package").length
+        );
+        expect(summary.totalPlaceholderInjectionPrevented).toBe(
+          violations.filter(v => v.violationType === "sentinel_in_required_property").length
+        );
+        expect(summary.totalUnwiredCriticalWorkflows).toBe(
+          violations.filter(v => v.violationType === "unwired_critical_workflow").length
+        );
+      });
+    });
+
+    describe("critical activity missing required properties", () => {
+      it("GmailSendMessage missing Body produces package-fatal completeness violation", () => {
+        const gmailWithSentinelBody = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="SendEmail">
+    <ui:GmailSendMessage To="test@example.com" Subject="Test" Body="PLACEHOLDER" DisplayName="Send Gmail" />
+  </Sequence>
+</Activity>`;
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "SendEmail.xaml", content: gmailWithSentinelBody },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(false);
+        const sentinelViolations = report.packageCompletenessViolations.violations.filter(
+          v => v.file === "SendEmail.xaml" && v.violationType === "sentinel_in_required_property"
+        );
+        expect(sentinelViolations.length).toBeGreaterThan(0);
+        expect(sentinelViolations[0].packageFatal).toBe(true);
+        expect(sentinelViolations[0].severity).toBe("execution_blocking");
+        expect(sentinelViolations[0].propertyName).toContain("Body");
+      });
+
+      it("SendSmtpMailMessage missing Body produces package-fatal completeness violation", () => {
+        const smtpWithSentinelBody = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Sequence DisplayName="SendEmail">
+    <ui:SendSmtpMailMessage To="test@example.com" Subject="Test" Body="TODO_IMPLEMENT" Host="smtp.test.com" Port="587" DisplayName="Send SMTP Mail" />
+  </Sequence>
+</Activity>`;
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "SendEmail.xaml", content: smtpWithSentinelBody },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageViable).toBe(false);
+        const sentinelViolations = report.packageCompletenessViolations.violations.filter(
+          v => v.file === "SendEmail.xaml" && v.violationType === "sentinel_in_required_property"
+        );
+        expect(sentinelViolations.length).toBeGreaterThan(0);
+        expect(sentinelViolations[0].packageFatal).toBe(true);
+        expect(sentinelViolations[0].severity).toBe("execution_blocking");
+        expect(sentinelViolations[0].propertyName).toContain("Body");
+      });
+    });
+
+    describe("missing required property detection uses required-property-enforcer", () => {
+      it("unresolvedRequiredPropertyDefects are surfaced as package-fatal completeness violations", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.packageCompletenessViolations).toBeDefined();
+        expect(report.packageCompletenessViolations.summary.totalCriticalMissingProperties).toBeTypeOf("number");
+      });
+
+      it("packageCompletenessViolations propagates enforcer-detected missing properties", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        const missingPropTypes = report.packageCompletenessViolations.violations.filter(
+          v => v.violationType === "missing_critical_activity_property"
+        );
+        expect(report.packageCompletenessViolations.summary.totalCriticalMissingProperties).toBe(missingPropTypes.length);
+      });
+    });
+
+    describe("unwired critical workflow promotion (workflow-graph-validator)", () => {
+      it("critical workflow (Process.xaml) orphan is execution_blocking", () => {
+        const entries = [
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "Process.xaml", content: `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"><Sequence DisplayName="Process"><ui:LogMessage Message="Process" Level="Info" xmlns:ui="http://schemas.uipath.com/workflow/activities" /></Sequence></Activity>` },
+        ];
+        const result = validateWorkflowGraph(entries);
+        const processDefects = result.workflowGraphDefects.filter(
+          d => d.file.toLowerCase().includes("process.xaml")
+        );
+        expect(processDefects.length).toBeGreaterThan(0);
+        expect(processDefects[0].severity).toBe("execution_blocking");
+        expect(processDefects[0].notes).toContain("critical workflow");
+      });
+
+      it("non-critical orphan workflow remains handoff_required", () => {
+        const entries = [
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "HelperUtility.xaml", content: `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"><Sequence DisplayName="Helper"><ui:LogMessage Message="Helper" Level="Info" xmlns:ui="http://schemas.uipath.com/workflow/activities" /></Sequence></Activity>` },
+        ];
+        const result = validateWorkflowGraph(entries);
+        const helperDefects = result.workflowGraphDefects.filter(
+          d => d.file.toLowerCase().includes("helperutility.xaml")
+        );
+        expect(helperDefects.length).toBeGreaterThan(0);
+        expect(helperDefects[0].severity).toBe("handoff_required");
+      });
+
+      it("unwired critical workflow produces package-fatal violation in final validation", () => {
+        const entries = [
+          { name: "Main.xaml", content: VALID_MAIN_XAML },
+          { name: "Process.xaml", content: `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"><Sequence DisplayName="Process"><ui:LogMessage Message="Process" Level="Info" xmlns:ui="http://schemas.uipath.com/workflow/activities" /></Sequence></Activity>` },
+        ];
+        const input = buildMinimalValidationInput(entries);
+        const report = runFinalArtifactValidation(input);
+        const unwiredViolations = report.packageCompletenessViolations.violations.filter(
+          v => v.violationType === "unwired_critical_workflow"
+        );
+        expect(unwiredViolations.length).toBeGreaterThan(0);
+        expect(unwiredViolations[0].packageFatal).toBe(true);
+        expect(report.packageCompletenessViolations.summary.totalUnwiredCriticalWorkflows).toBeGreaterThan(0);
+      });
+    });
+
+    describe("status derivation with completeness violations", () => {
+      it("derivedStatus is structurally_invalid when completeness violations exist", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: STUB_MAIN_XAML },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.derivedStatus).toBe("structurally_invalid");
+        expect(report.statusReason).toBeDefined();
+      });
+
+      it("no misleading package-produced state when completeness fails", () => {
+        const input = buildMinimalValidationInput([
+          { name: "Main.xaml", content: SENTINEL_XAML.replace("Process", "Main") },
+        ]);
+        const report = runFinalArtifactValidation(input);
+        expect(report.derivedStatus).not.toBe("studio_stable");
+        expect(report.derivedStatus).not.toBe("openable_with_warnings");
+        expect(report.packageViable).toBe(false);
       });
     });
   });

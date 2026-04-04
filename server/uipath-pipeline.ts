@@ -396,6 +396,7 @@ export interface PipelineResult {
   metaValidationResult?: MetaValidationResult;
   outcomeReport?: PipelineOutcomeReport;
   finalQualityReport?: FinalQualityReport;
+  packageViable: boolean;
   dependencyDiagnostics?: import("./post-emission-dependency-analyzer").DependencyDiagnosticsArtifact;
   dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
   ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
@@ -1831,8 +1832,25 @@ export async function compilePackageFromSpecs(
       templateComplianceScore,
     });
 
+    const packageViable = finalQualityReport
+      ? finalQualityReport.packageViable
+      : false;
+
+    if (!finalQualityReport) {
+      console.warn(`[Pipeline] Final quality report unavailable — package viability fails closed (packageViable=false)`);
+    }
+
+    if (!packageViable) {
+      if (dhgResult.dhgContent) {
+        console.log(`[Pipeline] Package not viable due to completeness violations — DHG remains available for developer handoff`);
+      }
+      console.log(`[Pipeline] Package buffer suppressed: completeness violations prevent viable package archive`);
+    }
+
+    const effectivePackageBuffer = packageViable ? finalPackageBuffer : Buffer.alloc(0);
+
     const result: PipelineResult = {
-      packageBuffer: finalPackageBuffer,
+      packageBuffer: effectivePackageBuffer,
       gaps: buildResult.gaps,
       usedPackages: buildResult.usedPackages,
       qualityGateResult: finalQualityReport?.qualityGateResult || postCorrectionQualityGate || buildResult.qualityGateResult,
@@ -1855,6 +1873,7 @@ export async function compilePackageFromSpecs(
       metaValidationResult,
       outcomeReport: buildResult.outcomeReport,
       finalQualityReport,
+      packageViable,
       dependencyDiagnostics: buildResult.dependencyDiagnostics,
       dependencyGaps: buildResult.dependencyGaps,
       ambiguousResolutions: buildResult.ambiguousResolutions,

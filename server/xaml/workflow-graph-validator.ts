@@ -282,6 +282,24 @@ const REFRAMEWORK_NAMING_PATTERNS = [
   /closeallapplications/i, /killallprocesses/i,
 ];
 
+const CRITICAL_WORKFLOW_PATTERNS = [
+  /^main\.xaml$/i,
+  /^process\.xaml$/i,
+  /^processtransaction/i,
+  /^settransactionstatus/i,
+  /^gettransactiondata/i,
+  /^initallapplications/i,
+  /^initallapps/i,
+  /^closeallapplications/i,
+  /^closeallapps/i,
+  /^initallsettings/i,
+];
+
+function isCriticalWorkflow(fileName: string): boolean {
+  const basename = (fileName.split("/").pop() || fileName).toLowerCase();
+  return CRITICAL_WORKFLOW_PATTERNS.some(p => p.test(basename));
+}
+
 function detectReframeworkStructurally(
   mainContent: string,
   smAnalysis: StateMachineAnalysis,
@@ -565,6 +583,7 @@ export function validateWorkflowGraph(
     if (alreadyReportedAsReframework) return;
 
     const isDecomposedCandidate = REFRAMEWORK_NAMING_PATTERNS.some(p => p.test(basename));
+    const critical = isCriticalWorkflow(file);
 
     if (isDecomposedCandidate && !reframeworkResult.isReframework) {
       defects.push({
@@ -573,9 +592,9 @@ export function validateWorkflowGraph(
         defectType: "decomposed_unwired_workflow",
         referencedFrom: null,
         referencedTarget: null,
-        severity: "handoff_required",
+        severity: critical ? "execution_blocking" : "handoff_required",
         detectionMethod: "bfs_reachability",
-        notes: `Workflow matches a known decomposition pattern but is not reachable from ${rootFile}`,
+        notes: `Workflow matches a known decomposition pattern but is not reachable from ${rootFile}${critical ? " — critical workflow, package-fatal" : ""}`,
       });
     } else {
       defects.push({
@@ -584,9 +603,9 @@ export function validateWorkflowGraph(
         defectType: "orphan_workflow",
         referencedFrom: null,
         referencedTarget: null,
-        severity: "handoff_required",
+        severity: critical ? "execution_blocking" : "handoff_required",
         detectionMethod: "bfs_reachability",
-        notes: `Workflow is not reachable from root entry point ${rootFile}`,
+        notes: `Workflow is not reachable from root entry point ${rootFile}${critical ? " — critical workflow, package-fatal" : ""}`,
       });
     }
   });

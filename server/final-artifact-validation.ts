@@ -87,6 +87,41 @@ export interface EnumComplianceSummary {
   totalEnumComplianceIssues: number;
 }
 
+export type PackageCompletenessViolationType =
+  | "sentinel_in_required_property"
+  | "stub_workflow_in_package"
+  | "xml_wellformedness_failure"
+  | "unwired_critical_workflow"
+  | "missing_critical_activity_property"
+  | "malformed_executable_expression"
+  | "blocked_workflow_in_package";
+
+export interface PackageCompletenessViolation {
+  file: string;
+  workflow: string;
+  activityType: string;
+  propertyName: string;
+  violationType: PackageCompletenessViolationType;
+  severity: "execution_blocking" | "handoff_required";
+  packageFatal: boolean;
+  handoffGuidanceAvailable: boolean;
+  remediationHint: string;
+}
+
+export interface PackageCompletenessViolationsSummary {
+  totalPackageFatalViolations: number;
+  totalPlaceholderInjectionPrevented: number;
+  totalStubSubstitutionsPrevented: number;
+  totalUnwiredCriticalWorkflows: number;
+  totalCriticalMissingProperties: number;
+}
+
+export interface PackageCompletenessViolationsArtifact {
+  violations: PackageCompletenessViolation[];
+  summary: PackageCompletenessViolationsSummary;
+  packageViable: boolean;
+}
+
 export interface FinalQualityReport {
   perFileResults: PerFileValidation[];
   qualityGateResult: QualityGateResult;
@@ -137,6 +172,8 @@ export interface FinalQualityReport {
     pipelineWarningCount: number;
     flatStructureWarningCount: number;
   };
+  packageCompletenessViolations: PackageCompletenessViolationsArtifact;
+  packageViable: boolean;
 }
 
 const STUDIO_BLOCKING_CHECKS = new Set([
@@ -179,6 +216,267 @@ function checkFinalStudioLoadability(xamlContent: string): { loadable: boolean; 
 
 function hasStubMarkers(xamlContent: string): boolean {
   return STUB_CONTENT_PATTERNS.some(pattern => xamlContent.includes(pattern));
+}
+
+const SENTINEL_SCAN_PATTERN = /\b(?:PLACEHOLDER(?:_\w*)?|TODO(?:_\w*)?|STUB(?:_\w*)?|HANDOFF(?:_\w*)?)\b/i;
+
+const CRITICAL_EXECUTION_ACTIVITIES: Record<string, string[]> = {
+  "SendSmtpMailMessage": ["To", "Subject", "Body", "Host", "Port"],
+  "ui:SendSmtpMailMessage": ["To", "Subject", "Body", "Host", "Port"],
+  "GmailSendMessage": ["To", "Subject", "Body"],
+  "ui:GmailSendMessage": ["To", "Subject", "Body"],
+  "SendOutlookMailMessage": ["To", "Subject", "Body"],
+  "ui:SendOutlookMailMessage": ["To", "Subject", "Body"],
+  "InvokeWorkflowFile": ["WorkflowFileName"],
+  "ui:InvokeWorkflowFile": ["WorkflowFileName"],
+  "CreateFormTask": ["Title", "FormData"],
+  "ui:CreateFormTask": ["Title", "FormData"],
+  "RetryScope": [],
+  "ui:RetryScope": [],
+};
+
+function buildPackageCompletenessViolations(
+  perFileResults: PerFileValidation[],
+  xamlEntries: { name: string; content: string }[],
+  graphDefects: WorkflowGraphDefect[],
+  unresolvedDefects: UnresolvedRequiredPropertyDefect[],
+  expressionLoweringFailures: ExpressionLoweringFailure[],
+  invalidSubstitutions: InvalidRequiredPropertySubstitution[],
+  preComplianceGuard: PreComplianceGuardResult,
+  outcomeReport?: PipelineOutcomeReport,
+): PackageCompletenessViolationsArtifact {
+  const violations: PackageCompletenessViolation[] = [];
+
+  for (const fileResult of perFileResults) {
+    if (fileResult.hasStubContent) {
+      violations.push({
+        file: fileResult.file,
+        workflow: fileResult.file.replace(/\.xaml$/i, ""),
+        activityType: "Workflow",
+        propertyName: "Implementation",
+        violationType: "stub_workflow_in_package",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Workflow ${fileResult.file} contains stub content — must be fully implemented before package is viable`,
+      });
+    }
+
+    if (fileResult.studioCompatibilityLevel === "studio-blocked" && !fileResult.isStudioLoadable) {
+      violations.push({
+        file: fileResult.file,
+        workflow: fileResult.file.replace(/\.xaml$/i, ""),
+        activityType: "Workflow",
+        propertyName: "XmlStructure",
+        violationType: "xml_wellformedness_failure",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Workflow ${fileResult.file} failed XML well-formedness validation — ${fileResult.blockers.join("; ")}`,
+      });
+    } else if (fileResult.studioCompatibilityLevel === "studio-blocked" && fileResult.isStudioLoadable) {
+      violations.push({
+        file: fileResult.file,
+        workflow: fileResult.file.replace(/\.xaml$/i, ""),
+        activityType: "Workflow",
+        propertyName: "StudioCompatibility",
+        violationType: "blocked_workflow_in_package",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Workflow ${fileResult.file} is blocked in Studio — ${fileResult.blockers.join("; ")}`,
+      });
+    }
+  }
+
+  const knownRequiredProperties = new Set<string>();
+  for (const props of Object.values(CRITICAL_EXECUTION_ACTIVITIES)) {
+    for (const p of props) knownRequiredProperties.add(p);
+  }
+  knownRequiredProperties.add("Selector");
+  knownRequiredProperties.add("Target");
+  knownRequiredProperties.add("FilePath");
+  knownRequiredProperties.add("FileName");
+  knownRequiredProperties.add("Url");
+  knownRequiredProperties.add("InputPath");
+  knownRequiredProperties.add("OutputPath");
+  knownRequiredProperties.add("Expression");
+  knownRequiredProperties.add("Value");
+  knownRequiredProperties.add("Condition");
+  knownRequiredProperties.add("Password");
+  knownRequiredProperties.add("Username");
+  knownRequiredProperties.add("Database");
+  knownRequiredProperties.add("ConnectionString");
+  knownRequiredProperties.add("SheetName");
+  knownRequiredProperties.add("Range");
+
+  const nonExecutableAttrs = new Set(["DisplayName", "sap2010:Annotation.AnnotationText", "sap2010:WorkflowViewState.IdRef", "Text", "xmlns"]);
+
+  for (const entry of xamlEntries) {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    const attrSentinelPattern = /\s+(\w+)="([^"]*)"/g;
+    let attrMatch;
+    let sentinelAttrCount = 0;
+    const sentinelProperties: string[] = [];
+    while ((attrMatch = attrSentinelPattern.exec(entry.content)) !== null) {
+      const attrName = attrMatch[1];
+      const attrValue = attrMatch[2].trim();
+      if (nonExecutableAttrs.has(attrName) || attrName.startsWith("xmlns:") || attrName.startsWith("sap2010:")) continue;
+      if (!knownRequiredProperties.has(attrName)) continue;
+      if (SENTINEL_SCAN_PATTERN.test(attrValue)) {
+        sentinelAttrCount++;
+        if (!sentinelProperties.includes(attrName)) sentinelProperties.push(attrName);
+      }
+    }
+    if (sentinelAttrCount > 0) {
+      violations.push({
+        file: shortName,
+        workflow: shortName.replace(/\.xaml$/i, ""),
+        activityType: "Workflow",
+        propertyName: sentinelProperties.join(", "),
+        violationType: "sentinel_in_required_property",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `${sentinelAttrCount} sentinel value(s) in required executable property(ies) [${sentinelProperties.join(", ")}] in ${shortName} — these must be resolved before package is viable`,
+      });
+    }
+  }
+
+  for (const defect of unresolvedDefects) {
+    if (defect.severity === "execution_blocking") {
+      violations.push({
+        file: defect.file,
+        workflow: defect.workflow,
+        activityType: defect.activityType,
+        propertyName: defect.propertyName,
+        violationType: "missing_critical_activity_property",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Required property ${defect.propertyName} on ${defect.activityType} is unresolved: ${defect.failureReason}`,
+      });
+    }
+  }
+
+  for (const failure of expressionLoweringFailures) {
+    if (failure.severity === "execution_blocking") {
+      violations.push({
+        file: failure.file,
+        workflow: failure.workflow,
+        activityType: failure.activityType,
+        propertyName: failure.propertyName,
+        violationType: "malformed_executable_expression",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Expression lowering failed for ${failure.propertyName} on ${failure.activityType}: ${failure.failureReason}`,
+      });
+    }
+  }
+
+  for (const sub of invalidSubstitutions) {
+    violations.push({
+      file: sub.file,
+      workflow: sub.workflow,
+      activityType: sub.activityType,
+      propertyName: sub.propertyName,
+      violationType: "missing_critical_activity_property",
+      severity: "execution_blocking",
+      packageFatal: true,
+      handoffGuidanceAvailable: true,
+      remediationHint: `Invalid substitution blocked for ${sub.propertyName} on ${sub.activityType}: ${sub.reasonRejected}`,
+    });
+  }
+
+  for (const guardViolation of preComplianceGuard.violations) {
+    const alreadyCovered = violations.some(
+      v => v.file === guardViolation.file && v.violationType === "sentinel_in_required_property"
+    );
+    if (!alreadyCovered) {
+      violations.push({
+        file: guardViolation.file,
+        workflow: guardViolation.file.replace(/\.xaml$/i, ""),
+        activityType: guardViolation.activityType || "Unknown",
+        propertyName: guardViolation.propertyName || "Unknown",
+        violationType: "sentinel_in_required_property",
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Sentinel value in required property ${guardViolation.propertyName || "unknown"} on ${guardViolation.activityType || "unknown activity"}`,
+      });
+    }
+  }
+
+  for (const graphDefect of graphDefects) {
+    if (graphDefect.severity === "execution_blocking") {
+      const isUnwired = graphDefect.defectType === "orphan_workflow" || graphDefect.defectType === "decomposed_unwired_workflow" || graphDefect.defectType === "missing_target_workflow" || graphDefect.defectType === "unparseable_target_workflow";
+      const violationType: PackageCompletenessViolationType = isUnwired ? "unwired_critical_workflow" : "blocked_workflow_in_package";
+      violations.push({
+        file: graphDefect.file,
+        workflow: graphDefect.workflow,
+        activityType: graphDefect.defectType === "orphan_workflow" ? "Workflow" : "InvokeWorkflowFile",
+        propertyName: graphDefect.defectType === "orphan_workflow" ? "Reachability" : "WorkflowFileName",
+        violationType,
+        severity: "execution_blocking",
+        packageFatal: true,
+        handoffGuidanceAvailable: true,
+        remediationHint: `Workflow graph defect (${graphDefect.defectType}): ${graphDefect.notes}`,
+      });
+    }
+  }
+
+  if (outcomeReport) {
+    const stubRemediations = outcomeReport.remediations?.filter(
+      r => r.remediationCode === "STUB_WORKFLOW_BLOCKING" || r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE"
+    ) || [];
+    for (const stubRem of stubRemediations) {
+      const alreadyCovered = violations.some(
+        v => v.file === stubRem.file && v.violationType === "stub_workflow_in_package"
+      );
+      if (!alreadyCovered) {
+        violations.push({
+          file: stubRem.file,
+          workflow: stubRem.file.replace(/\.xaml$/i, ""),
+          activityType: "Workflow",
+          propertyName: "Implementation",
+          violationType: "stub_workflow_in_package",
+          severity: "execution_blocking",
+          packageFatal: true,
+          handoffGuidanceAvailable: true,
+          remediationHint: stubRem.reason || `Stub workflow was substituted — must be fully implemented`,
+        });
+      }
+    }
+  }
+
+  const totalPackageFatalViolations = violations.filter(v => v.packageFatal).length;
+  const totalPlaceholderInjectionPrevented = violations.filter(
+    v => v.violationType === "sentinel_in_required_property"
+  ).length;
+  const totalStubSubstitutionsPrevented = violations.filter(
+    v => v.violationType === "stub_workflow_in_package"
+  ).length;
+  const totalUnwiredCriticalWorkflows = violations.filter(
+    v => v.violationType === "unwired_critical_workflow"
+  ).length;
+  const totalCriticalMissingProperties = violations.filter(
+    v => v.violationType === "missing_critical_activity_property" || v.violationType === "malformed_executable_expression"
+  ).length;
+
+  const packageViable = totalPackageFatalViolations === 0;
+
+  return {
+    violations,
+    summary: {
+      totalPackageFatalViolations,
+      totalPlaceholderInjectionPrevented,
+      totalStubSubstitutionsPrevented,
+      totalUnwiredCriticalWorkflows,
+      totalCriticalMissingProperties,
+    },
+    packageViable,
+  };
 }
 
 function buildDeclarationSummary(violations: QualityGateViolation[]): DeclarationValidationSummary {
@@ -416,6 +714,24 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     statusReason = `${statusReason} (note: ${contractIntegrityResult.contractNormalizationActions.length} contract normalization(s) were applied — run was not clean from first principles)`;
   }
 
+  const packageCompletenessViolations = buildPackageCompletenessViolations(
+    perFileResults,
+    xamlEntries,
+    graphValidation.workflowGraphDefects,
+    requiredPropertyEnforcement.unresolvedRequiredPropertyDefects,
+    requiredPropertyEnforcement.expressionLoweringFailures,
+    requiredPropertyEnforcement.invalidRequiredPropertySubstitutions,
+    preComplianceGuard,
+    contextMetadata.outcomeReport,
+  );
+
+  if (!packageCompletenessViolations.packageViable && derivedStatus !== "structurally_invalid") {
+    derivedStatus = "structurally_invalid";
+    statusReason = `Package completeness violations prevent viable package: ${packageCompletenessViolations.summary.totalPackageFatalViolations} package-fatal violation(s) — ${statusReason}`;
+  }
+
+  console.log(`[Final Artifact Validation] Package completeness: viable=${packageCompletenessViolations.packageViable}, fatal=${packageCompletenessViolations.summary.totalPackageFatalViolations}, stubs=${packageCompletenessViolations.summary.totalStubSubstitutionsPrevented}, sentinels=${packageCompletenessViolations.summary.totalPlaceholderInjectionPrevented}, unwired=${packageCompletenessViolations.summary.totalUnwiredCriticalWorkflows}, missingProps=${packageCompletenessViolations.summary.totalCriticalMissingProperties}`);
+
   return {
     perFileResults,
     qualityGateResult,
@@ -466,5 +782,7 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
       pipelineWarningCount: contextMetadata.pipelineWarnings.length,
       flatStructureWarningCount: contextMetadata.metaValidationFlatStructureWarnings || 0,
     },
+    packageCompletenessViolations,
+    packageViable: packageCompletenessViolations.packageViable,
   };
 }
