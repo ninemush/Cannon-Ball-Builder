@@ -1,0 +1,106 @@
+Required Property Source Resolution and Generic Default Substitution Elimination
+
+What & Why
+Task 436 improved diagnostics and reduced raw PLACEHOLDER-style pseudo-XAML fallback, but the latest package still fails structurally because unresolved required properties are being replaced with generic defaults such as empty string ("") or Nothing. The final-quality report now proves this clearly:
+- unresolved required-property defects remain high
+- generic default substitutions are being emitted into required executable properties
+- those substitutions are themselves flagged as not documented contract-valid fallbacks
+- required-property resolution is still not actually being solved
+
+This is a systemic defect family, not a mail-only problem. Mail Body is only the most visible symptom. The same pattern now appears in other required properties such as LogMessage.Message and Assign.To.
+
+This task removes generic default substitution as a fallback strategy for unresolved required executable properties and replaces it with source-resolution-first enforcement.
+
+Goals
+1. Resolve required properties from real upstream sources wherever possible.
+2. Eliminate generic default substitution (`""`, `Nothing`, zero-like defaults) for unresolved required executable properties unless explicitly allowed by the activity contract.
+3. Distinguish true contract-valid fallbacks from invalid synthetic substitutes.
+4. Reduce unresolved required-property defects by improving source resolution, not by changing the placeholder style.
+
+Done looks like
+- Required executable properties are resolved from real source bindings where available.
+- Generic default substitution is no longer used as a fallback for unresolved required executable properties unless the activity contract explicitly defines it as a valid deterministic fallback.
+- Unresolved required properties that cannot be resolved remain structured defects without being disguised as runnable defaults.
+- The current visible mail-body symptom is reduced as a result of generic required-property source resolution, not via a one-off mail patch.
+- Final-quality reporting clearly separates:
+  - source-resolved bindings
+  - contract-valid deterministic fallbacks
+  - invalid generic default substitution attempts
+  - unresolved required-property defects
+- Structurally invalid packages are no longer driven by synthetic `""` / `Nothing` substitutions in required executable slots.
+
+Out of scope
+- Broad catalog/filter alignment
+- Archive/freeze/source-of-truth architecture
+- Business-logic invention
+- Reworking decomposition strategy
+- Mail-only activity patching
+
+Tasks
+
+1. Add source-resolution-first required-property binding
+Before any fallback is considered, attempt to resolve each required executable property from:
+- workflow arguments
+- declared variables
+- invoke outputs / prior-step outputs
+- deterministic contract mappings already present in the workflow spec/tree
+- activity-family-specific source rules already encoded in the catalog or registry
+
+Only if no valid source exists should the property remain unresolved.
+
+2. Remove generic default substitution as fallback
+Block any package-mode path that substitutes unresolved required executable properties with:
+- empty string
+- Nothing
+- zero-like defaults
+- generic type defaults
+unless that exact fallback is explicitly documented as contract-valid for that activity/property pair.
+
+3. Add contract-valid fallback registry/check
+Introduce or strengthen a lookup that determines whether a fallback is:
+- documented
+- deterministic
+- semantically valid
+for the specific activity/property pair.
+If not, it must not be emitted as the final value.
+
+4. Emit explicit invalid-substitution diagnostics
+Add diagnostics such as:
+- invalidRequiredPropertySubstitutions[]
+with:
+- file
+- workflow
+- activityType
+- propertyName
+- attemptedValue
+- reasonRejected
+- expectedSourceKinds
+- packageModeOutcome
+
+5. Strengthen required-property resolution reporting
+Extend diagnostics so you can see:
+- which required properties were resolved from real upstream sources
+- which used contract-valid fallbacks
+- which remained unresolved
+- which attempted generic invalid substitutions were blocked
+
+6. Add regression tests
+Cover:
+- required Body resolved from real upstream draft/approved content
+- required Message resolved from real source rather than empty string
+- required Assign.To not replaced with generic Nothing
+- contract-valid fallback accepted only where explicitly allowed
+- invalid generic default substitution blocked
+- unresolved required property remains structured defect rather than runnable fake default
+- non-mail activity family obeys the same rule
+
+Relevant files
+- server/package-assembler.ts
+- server/workflow-tree-assembler.ts
+- server/xaml-generator.ts
+- server/xaml/expression-builder.ts
+- server/xaml/xaml-compliance.ts
+- server/final-artifact-validation.ts
+- server/catalog/spec-validator.ts
+- server/catalog/catalog-service.ts
+- server/__tests__/pipeline-regression.test.ts
