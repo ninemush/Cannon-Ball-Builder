@@ -1,6 +1,7 @@
 import { ACTIVITY_DEFINITIONS_REGISTRY, type ActivityPropertyDef, type PackageActivityDefs, type ActivityDef } from "./catalog/activity-definitions";
 import type { StudioProfile } from "./catalog/metadata-service";
 import type { WorkflowNode, ActivityNode } from "./workflow-spec-types";
+import { checkLoweringReceivedNormalizedOnly, markLoweringAdoptionResult, type ActivePathAdoptionTraceEntry } from "./pre-lowering-spec-normalization";
 
 export type TargetFrameworkCompat = "Windows" | "Portable" | "Both";
 
@@ -657,6 +658,7 @@ export function runPreEmissionLoweringGate(
   spec: { name: string; rootSequence: { kind: "sequence"; displayName: string; children: WorkflowNode[] } },
   targetFramework: "Windows" | "Portable",
   verifiedPackages: Set<string>,
+  adoptionTrace?: ActivePathAdoptionTraceEntry[],
 ): PreEmissionLoweringGateResult {
   const profile: StudioProfile = {
     studioLine: "StudioX",
@@ -668,6 +670,15 @@ export function runPreEmissionLoweringGate(
   };
   const file = `${spec.name || "Workflow"}.xaml`;
   const workflow = spec.name || "Workflow";
+
+  if (adoptionTrace) {
+    const sawNormalized = checkLoweringReceivedNormalizedOnly(
+      adoptionTrace,
+      workflow,
+      spec.rootSequence.children,
+    );
+    markLoweringAdoptionResult(adoptionTrace, workflow, sawNormalized);
+  }
 
   const diagnostics = runCriticalActivityLowering(
     [{ file, workflow, rootSequence: spec.rootSequence }],

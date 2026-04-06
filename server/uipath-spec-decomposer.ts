@@ -297,6 +297,17 @@ ERROR HANDLING:
 - Wire arguments explicitly: every InvokeWorkflowFile must specify all required in/out/in_out arguments in its properties with correct variable references.
 - Do NOT create separate error-handler .xaml files — all error handling belongs inline within the workflow.
 
+CRITICAL OPERATION REPRESENTATION RULES — ONE CANONICAL FORM ONLY:
+For critical operations (mail send, task create/wait, invoke workflow, Data Service CRUD), you MUST emit exactly ONE representation per logical operation. Do NOT emit both:
+  1. A narrative/prose TryCatch container describing the operation in text, AND
+  2. A concrete executable step (e.g. GmailSendMessage, SendOutlookMailMessage, CreateFormTask) for the same logical operation.
+Pick the concrete executable step as the canonical representation. If TryCatch wrapping is needed, use the "errorHandling" field on the step — do NOT create a separate narrative TryCatch sequence that describes the same send/create/invoke action in prose.
+- Each mail send operation → exactly one concrete send step (GmailSendMessage, SendSmtpMailMessage, or SendOutlookMailMessage) with To, Subject, Body populated.
+- Each Action Center task → exactly one CreateFormTask or WaitForFormTask step with required properties.
+- Each Data Service CRUD → exactly one concrete step (CreateEntity, UpdateEntity, QueryEntity, DeleteEntity).
+- Each InvokeWorkflowFile → exactly one invocation step with all required arguments wired.
+- NEVER duplicate a critical operation as both a high-level narrative container AND a concrete activity step. The downstream build system will reject duplicate representations.
+
 Return ONLY the JSON object, no other text.`;
 }
 

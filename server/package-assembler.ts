@@ -37,6 +37,7 @@ import archiver from "archiver";
   import { enrichWithAITree, type EnrichmentResult, type TreeEnrichmentResult } from "./ai-xaml-enricher";
   import { assembleWorkflowFromSpec } from "./workflow-tree-assembler";
   import { runPreEmissionLoweringGate, runMailFamilyLockAnalysis, buildMailFamilyLockDiagnostics, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics, type MailFamilyLockDiagnostics, type MailFamilyLockResult } from "./critical-activity-lowering";
+  import { runPreLoweringSpecNormalization, validateAdoptionTrace, type SpecNormalizationDiagnostics, type ActivePathAdoptionTraceEntry } from "./pre-lowering-spec-normalization";
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
@@ -2659,6 +2660,8 @@ export type BuildResult = {
   preEmissionLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
   crossFamilyDriftViolations?: Array<{ clusterId: string; lockedFamily: string; violatingArtifact: string; violationType: string; detail: string; packageFatal: boolean }>;
   preEmissionMailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
+  criticalOperationSpecNormalizationDiagnostics?: SpecNormalizationDiagnostics;
+  specNormAdoptionTrace?: ActivePathAdoptionTraceEntry[];
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -3235,6 +3238,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const complianceFallbacks: Array<{ file: string; reason: string; wasFullStub: boolean }> = [];
     const collectedPreEmissionDiagnostics: CriticalActivityLoweringDiagnostics[] = [];
     const collectedMailFamilyLockResults: MailFamilyLockResult[] = [];
+    let specNormDiagnosticsResult: SpecNormalizationDiagnostics | undefined;
+    let specNormAdoptionTraceResult: ActivePathAdoptionTraceEntry[] | undefined;
     const crossFamilyDriftViolationsList: Array<{ clusterId: string; lockedFamily: string; violatingArtifact: string; violationType: string; detail: string; packageFatal: boolean }> = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
     const collectedQualityIssues: DhgQualityIssue[] = [];
@@ -3583,6 +3588,31 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         enrichmentsToProcess.unshift(mainEntry);
       }
 
+      const preNormSpecs = enrichmentsToProcess.map(e => ({ name: e.name, spec: e.spec }));
+      const { normalizedSpecs: postNormSpecs, allDiagnostics: specNormDiagnostics, adoptionTrace: specNormAdoptionTrace } = runPreLoweringSpecNormalization(preNormSpecs);
+      specNormDiagnosticsResult = specNormDiagnostics;
+      specNormAdoptionTraceResult = specNormAdoptionTrace;
+      for (let i = 0; i < enrichmentsToProcess.length; i++) {
+        const normEntry = postNormSpecs.find(ns => ns.name === enrichmentsToProcess[i].name);
+        if (normEntry) {
+          enrichmentsToProcess[i].spec = normEntry.spec;
+        }
+      }
+      const specNormBlockedWorkflows = new Set<string>();
+      if (specNormDiagnostics.summary.totalClusters > 0) {
+        console.log(`[UiPath] Pre-lowering spec normalization: ${specNormDiagnostics.summary.totalClusters} cluster(s), ${specNormDiagnostics.summary.normalizedSuccessfully} normalized, ${specNormDiagnostics.summary.rejectedForConflict} rejected, ${specNormDiagnostics.summary.narrativePseudoContainersRemoved} narrative pseudo-container(s) removed`);
+        for (const opResult of specNormDiagnostics.perOperationResults) {
+          if (opResult.rejected) {
+            specNormBlockedWorkflows.add(opResult.workflowName);
+            dependencyWarnings.push({
+              code: "CRITICAL_OPERATION_SPEC_NORMALIZATION_REJECTED",
+              message: `Spec normalization rejected ${opResult.operationType} in workflow "${opResult.workflowName}": ${opResult.rejectionReason} — workflow blocked from lowering`,
+              stage: "pre-lowering-normalization",
+              recoverable: false,
+            });
+          }
+        }
+      }
       let totalStrippedProperties = 0;
       let totalExcessiveStripping = 0;
       const excessiveStrippingFiles = new Set<string>();
@@ -3649,6 +3679,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             continue;
           }
         }
+        if (specNormBlockedWorkflows.has(enrichEntry.name) || specNormBlockedWorkflows.has(wfName)) {
+          console.warn(`[UiPath] Workflow "${wfName}" blocked from lowering due to unresolved spec normalization rejection`);
+          continue;
+        }
         if (priorCompliantMap.has(wfName)) {
           const priorContent = priorCompliantMap.get(wfName)!;
           deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
@@ -3669,6 +3703,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           { name: wfName, rootSequence: spec.rootSequence },
           loweringTargetFw as "Windows" | "Portable",
           loweringVerifiedPackages,
+          specNormAdoptionTrace,
         );
         if (preEmissionGate.diagnostics.perStepResults.length > 0) {
           collectedPreEmissionDiagnostics.push(preEmissionGate.diagnostics);
@@ -8399,7 +8434,22 @@ ${depEntries}
       }
     : undefined;
   const preEmissionMailFamilyLockDiagnostics = collectedMailFamilyLockResults.length > 0 ? buildMailFamilyLockDiagnostics(collectedMailFamilyLockResults) : undefined;
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics };
+  if (specNormAdoptionTraceResult && specNormAdoptionTraceResult.length > 0) {
+    const debugMode = process.env.CANNONBALL_DEBUG_NORMALIZATION === "true";
+    const adoptionValidation = validateAdoptionTrace(specNormAdoptionTraceResult, debugMode);
+    if (!adoptionValidation.valid) {
+      for (const violation of adoptionValidation.violations) {
+        console.warn(`[UiPath] Adoption trace violation: ${violation}`);
+        dependencyWarnings.push({
+          code: "SPEC_NORMALIZATION_ADOPTION_VIOLATION",
+          message: violation,
+          stage: "pre-lowering-normalization",
+          recoverable: false,
+        });
+      }
+    }
+  }
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult };
 }
 
 export function createTrackedArchive() {
