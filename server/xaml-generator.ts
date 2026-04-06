@@ -343,7 +343,7 @@ function classifyDataFabric(ctx: ActivityContext, combined: string): ReturnType<
       activityPackage: "UiPath.DataService.Activities",
       properties: {
         EntityType: "[str_EntityName]",
-        Entity: "[entityRecord]",
+        EntityObject: "[entityRecord]",
       },
       errorHandling: "catch",
       variables,
@@ -366,7 +366,7 @@ function classifyDataFabric(ctx: ActivityContext, combined: string): ReturnType<
       activityPackage: "UiPath.DataService.Activities",
       properties: {
         EntityType: "[str_EntityName]",
-        Entity: "[entityRecord]",
+        EntityObject: "[entityRecord]",
       },
       errorHandling: "catch",
       variables,

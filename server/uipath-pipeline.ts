@@ -415,6 +415,7 @@ export interface PipelineResult {
   propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
+  criticalActivityContractDiagnostics?: import("./required-property-diagnostics").RequiredPropertyDiagnosticsResult;
 }
 
 export interface DhgResult {
@@ -1897,6 +1898,7 @@ export async function compilePackageFromSpecs(
       propertySerializationTrace: buildResult.propertySerializationTrace,
       invokeContractTrace: buildResult.invokeContractTrace,
       stageHashParity: buildResult.stageHashParity,
+      criticalActivityContractDiagnostics: buildResult.criticalActivityContractDiagnostics,
     };
 
     evictOldestPipelineCacheEntry();

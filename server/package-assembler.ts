@@ -39,6 +39,21 @@ import archiver from "archiver";
   import { assembleWorkflowFromSpec } from "./workflow-tree-assembler";
   import { runPreEmissionLoweringGate, runMailFamilyLockAnalysis, buildMailFamilyLockDiagnostics, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics, type MailFamilyLockDiagnostics, type MailFamilyLockResult } from "./critical-activity-lowering";
   import { runPreLoweringSpecNormalization, validateAdoptionTrace, type SpecNormalizationDiagnostics, type ActivePathAdoptionTraceEntry } from "./pre-lowering-spec-normalization";
+  import { traceRequiredPropertyThroughSpec, updateTraceAfterPreNormalization, updateTraceAfterLowering, updateTraceAfterEmission, updateTraceAfterCompliance, updateTraceAfterEnforcement, updateTraceAfterFinalXaml, buildDiagnosticsResult, resetInstanceCounter, type RequiredPropertyTraceEntry, type RequiredPropertyDiagnosticsResult } from "./required-property-diagnostics";
+
+  function findActivityNodeRecursive(nodes: any[], predicate: (n: any) => boolean): any | null {
+    for (const n of nodes) {
+      if (predicate(n)) return n;
+      const childArrays = [n.children, n.tryChildren, n.catchChildren, n.finallyChildren, n.thenChildren, n.elseChildren, n.bodyChildren];
+      for (const arr of childArrays) {
+        if (Array.isArray(arr)) {
+          const found = findActivityNodeRecursive(arr, predicate);
+          if (found) return found;
+        }
+      }
+    }
+    return null;
+  }
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
@@ -2664,6 +2679,7 @@ export type BuildResult = {
   preEmissionMailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
   criticalOperationSpecNormalizationDiagnostics?: SpecNormalizationDiagnostics;
   specNormAdoptionTrace?: ActivePathAdoptionTraceEntry[];
+  criticalActivityContractDiagnostics?: RequiredPropertyDiagnosticsResult;
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -3239,6 +3255,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const earlyStubFallbacks: string[] = [];
     const complianceFallbacks: Array<{ file: string; reason: string; wasFullStub: boolean }> = [];
     const collectedPreEmissionDiagnostics: CriticalActivityLoweringDiagnostics[] = [];
+    resetInstanceCounter();
+    const collectedRequiredPropertyTraces: RequiredPropertyTraceEntry[] = [];
     const collectedMailFamilyLockResults: MailFamilyLockResult[] = [];
     let specNormDiagnosticsResult: SpecNormalizationDiagnostics | undefined;
     let specNormAdoptionTraceResult: ActivePathAdoptionTraceEntry[] | undefined;
@@ -3591,6 +3609,26 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
 
       const preNormSpecs = enrichmentsToProcess.map(e => ({ name: e.name, spec: e.spec }));
+      const preNormPropertySnapshots = new Map<string, Record<string, any>>();
+      for (const entry of preNormSpecs) {
+        const children = entry.spec?.rootSequence?.children;
+        if (Array.isArray(children)) {
+          const allNodes: any[] = [];
+          const collectAll = (nodes: any[]) => {
+            for (const n of nodes) {
+              if (n.kind === "activity" && n.properties) allNodes.push(n);
+              for (const arr of [n.children, n.tryChildren, n.catchChildren, n.finallyChildren, n.thenChildren, n.elseChildren, n.bodyChildren]) {
+                if (Array.isArray(arr)) collectAll(arr);
+              }
+            }
+          };
+          collectAll(children);
+          for (const n of allNodes) {
+            const key = `${entry.name}::${n.displayName || ""}::${n.template || ""}`;
+            preNormPropertySnapshots.set(key, { ...n.properties });
+          }
+        }
+      }
       const { normalizedSpecs: postNormSpecs, allDiagnostics: specNormDiagnostics, adoptionTrace: specNormAdoptionTrace } = runPreLoweringSpecNormalization(preNormSpecs);
       specNormDiagnosticsResult = specNormDiagnostics;
       specNormAdoptionTraceResult = specNormAdoptionTrace;
@@ -3709,6 +3747,35 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         );
         if (preEmissionGate.diagnostics.perStepResults.length > 0) {
           collectedPreEmissionDiagnostics.push(preEmissionGate.diagnostics);
+          for (const stepResult of preEmissionGate.diagnostics.perStepResults) {
+            if (stepResult.loweringOutcome === "skipped_not_critical") continue;
+            let specNode = spec.rootSequence?.children
+              ? findActivityNodeRecursive(spec.rootSequence.children, (n: any) =>
+                  n.displayName === stepResult.sourceStep
+                )
+              : null;
+            if (!specNode && spec.rootSequence?.children) {
+              specNode = findActivityNodeRecursive(spec.rootSequence.children, (n: any) =>
+                n.template === stepResult.detectedIntent
+              );
+            }
+            if (specNode && specNode.properties) {
+              const nodeDisplayName = specNode.displayName || stepResult.sourceStep;
+              const preNormKey = `${enrichEntry.name}::${nodeDisplayName}::${specNode.template || stepResult.detectedIntent}`;
+              const preNormProps = preNormPropertySnapshots.get(preNormKey);
+              const traces = traceRequiredPropertyThroughSpec(
+                stepResult.detectedIntent,
+                preNormProps || specNode.properties,
+                `${wfName}.xaml`,
+                nodeDisplayName,
+              );
+              if (preNormProps) {
+                updateTraceAfterPreNormalization(traces, specNode.properties);
+              }
+              updateTraceAfterLowering(traces, stepResult.loweringOutcome, stepResult.missingRequiredProperties);
+              collectedRequiredPropertyTraces.push(...traces);
+            }
+          }
         }
 
         const mailFamilyLock = runMailFamilyLockAnalysis(
@@ -3778,6 +3845,16 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
         try {
           const { xaml, variables } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
+          {
+            const wfTraces = collectedRequiredPropertyTraces.filter(t => t.workflowFile === `${wfName}.xaml`);
+            for (const trace of wfTraces) {
+              const tagVariants = [`ui:${trace.activityType}`, `ugs:${trace.activityType}`, trace.activityType];
+              for (const tag of tagVariants) {
+                updateTraceAfterEmission([trace], xaml, tag);
+                if (trace.emissionStagePresent) break;
+              }
+            }
+          }
           let compliant: string;
           let complianceFailed = false;
           try {
@@ -3788,6 +3865,16 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             const spResult = tryStructuralPreservationOrStub(xaml, wfName, compErr.message);
             compliant = spResult.content;
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
+          }
+          {
+            const wfTraces = collectedRequiredPropertyTraces.filter(t => t.workflowFile === `${wfName}.xaml`);
+            for (const trace of wfTraces) {
+              const tagVariants = [`ui:${trace.activityType}`, `ugs:${trace.activityType}`, trace.activityType];
+              for (const tag of tagVariants) {
+                updateTraceAfterCompliance([trace], compliant, tag);
+                if (trace.complianceStagePresent) break;
+              }
+            }
           }
           updateStageHash(`${wfName}.xaml`, "postGeneration", compliant);
           const implRepair = repairMissingImplementation(compliant, `${wfName}.xaml`);
@@ -7577,6 +7664,48 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       if (preArchiveEnforcement.enforcementResult.totalEnforced > 0 || preArchiveEnforcement.enforcementResult.totalDefects > 0) {
         console.log(`[Pre-Archive Enforcement] ${preArchiveEnforcement.enforcementResult.summary}`);
       }
+      if (collectedRequiredPropertyTraces.length > 0) {
+        const extractDisplayNameFromXaml = (xamlEntries: Array<{ name: string; content: string }>, file: string, activityType: string, occurrenceIndex: number): string | undefined => {
+          const entry = xamlEntries.find(e => e.name === file || e.name.endsWith(`/${file}`) || file.endsWith(`/${e.name}`));
+          if (!entry) return undefined;
+          const tagVariants = [`ui:${activityType}`, `ugs:${activityType}`, activityType];
+          for (const tag of tagVariants) {
+            const pattern = new RegExp(`<${tag}\\s[^>]*?DisplayName="([^"]*)"`, "g");
+            let match: RegExpExecArray | null;
+            let idx = 0;
+            while ((match = pattern.exec(entry.content)) !== null) {
+              if (idx === occurrenceIndex) return match[1];
+              idx++;
+            }
+          }
+          return undefined;
+        };
+        const enforcerBindings = (preArchiveEnforcement.enforcementResult.requiredPropertyBindings || []).map(b => ({
+          activityType: b.activityType,
+          propertyName: b.propertyName,
+          displayName: extractDisplayNameFromXaml(postGateXamlEntries, b.file, b.activityType, b.occurrenceIndex),
+          occurrenceIndex: b.occurrenceIndex,
+        }));
+        const enforcerDefects = (preArchiveEnforcement.enforcementResult.unresolvedRequiredPropertyDefects || []).map(d => ({
+          activityType: d.activityType,
+          propertyName: d.propertyName,
+          displayName: extractDisplayNameFromXaml(postGateXamlEntries, d.file, d.activityType, 0),
+        }));
+        updateTraceAfterEnforcement(collectedRequiredPropertyTraces, enforcerBindings, enforcerDefects);
+        for (const entry of postGateXamlEntries) {
+          const fileName = entry.name.split("/").pop() || entry.name;
+          const wfTraces = collectedRequiredPropertyTraces.filter(t => t.workflowFile === fileName);
+          for (const trace of wfTraces) {
+            if (!trace.emissionStagePresent) {
+              const tagVariants = [`ui:${trace.activityType}`, `ugs:${trace.activityType}`, trace.activityType];
+              for (const tag of tagVariants) {
+                updateTraceAfterEmission([trace], entry.content, tag);
+                if (trace.emissionStagePresent) break;
+              }
+            }
+          }
+        }
+      }
       if (!preArchiveEnforcement.guardResult.passed) {
         console.warn(`[Pre-Archive Enforcement] Pre-compliance guard FAILED: ${preArchiveEnforcement.guardResult.violations.length} sentinel value(s) remain in required properties`);
       }
@@ -7588,6 +7717,24 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (archiveKey) {
             deferredWrites.set(archiveKey, updatedEntry.content);
           }
+        }
+      }
+
+      if (collectedRequiredPropertyTraces.length > 0) {
+        for (const entry of postGateXamlEntries) {
+          const fileName = entry.name.split("/").pop() || entry.name;
+          const finalTraces = collectedRequiredPropertyTraces.filter(t => t.workflowFile === fileName);
+          for (const trace of finalTraces) {
+            const tagVariants = [`ui:${trace.activityType}`, `ugs:${trace.activityType}`, trace.activityType];
+            for (const tag of tagVariants) {
+              updateTraceAfterFinalXaml([trace], entry.content, tag);
+              if (trace.finalXamlStagePresent) break;
+            }
+          }
+        }
+        const contractDiag = buildDiagnosticsResult(collectedRequiredPropertyTraces);
+        if (contractDiag.summary.totalTracked > 0) {
+          console.log(`[Required Property Diagnostics] ${contractDiag.summary.totalTracked} property(ies) tracked: ${contractDiag.summary.totalPreserved} preserved, ${contractDiag.summary.totalLost} lost${contractDiag.summary.totalLost > 0 ? ` (loss stages: ${JSON.stringify(contractDiag.summary.lossStageBreakdown)})` : ""}${contractDiag.summary.totalShapeChanged > 0 ? ` (shape changes: ${JSON.stringify(contractDiag.summary.shapeChangeStageBreakdown)})` : ""}`);
         }
       }
 
@@ -8579,7 +8726,7 @@ ${depEntries}
       }
     }
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult, criticalActivityContractDiagnostics: collectedRequiredPropertyTraces.length > 0 ? buildDiagnosticsResult(collectedRequiredPropertyTraces) : undefined };
 }
 
 export function createTrackedArchive() {
