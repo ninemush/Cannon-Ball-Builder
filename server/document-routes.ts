@@ -702,6 +702,134 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
   }
 }
 
+export type DownloadZipEntry = { name: string; content: string | Buffer };
+
+export type DownloadSource = "viable-buffer" | "reconstructed-from-cache" | "raw-nupkg" | null;
+
+export interface DownloadPathResult {
+  zipEntries: DownloadZipEntry[] | null;
+  downloadSource: DownloadSource;
+  isHandoffOnly: boolean;
+  failReason?: string;
+}
+
+export interface DownloadPathInput {
+  packageBuffer: Buffer;
+  packageViable: boolean;
+  xamlEntries: { name: string; content: string }[];
+  archiveManifest: string[];
+  projectName: string;
+  dependencyMap: Record<string, string>;
+  dhgContent: string;
+  libPrefix: string;
+  sddContent: string;
+  pkgDescription: string;
+  resolveProjectJson: () => string;
+}
+
+export function resolveDownloadPath(input: DownloadPathInput): DownloadPathResult {
+  const hasViableBuffer = !!(input.packageBuffer && input.packageBuffer.length > 0);
+  const hasCachedXaml = !!(input.xamlEntries && input.xamlEntries.length > 0 && input.archiveManifest);
+  const isHandoffOnly = input.packageViable === false;
+
+  console.log(`[Download] packageBuffer present: ${hasViableBuffer}, cached XAML entries present: ${hasCachedXaml}, packageViable: ${input.packageViable}, handoff-only: ${isHandoffOnly}`);
+
+  let zipEntries: DownloadZipEntry[] | null = null;
+  let downloadSource: DownloadSource = null;
+
+  if (hasViableBuffer) {
+    try {
+      const nupkgZip = new AdmZip(input.packageBuffer);
+      const nupkgEntries = nupkgZip.getEntries();
+      const entries: DownloadZipEntry[] = [];
+      for (const entry of nupkgEntries) {
+        if (entry.isDirectory) continue;
+        const entryName: string = entry.entryName;
+        if (entryName.startsWith("_rels/") || entryName.startsWith("package/") || entryName === "[Content_Types].xml" || entryName.endsWith(".nuspec")) {
+          continue;
+        }
+        const flatName = entryName.startsWith(input.libPrefix) ? entryName.slice(input.libPrefix.length) : entryName;
+        entries.push({ name: flatName, content: entry.getData() });
+      }
+      zipEntries = entries;
+      downloadSource = "viable-buffer";
+      console.log(`[Download] Built ${entries.length} entries from viable packageBuffer`);
+    } catch (zipErr: unknown) {
+      const msg = zipErr instanceof Error ? zipErr.message : String(zipErr);
+      console.warn(`[Download] Failed to extract from packageBuffer: ${msg} — will attempt cached XAML reconstruction`);
+    }
+  }
+
+  if (!zipEntries && hasCachedXaml) {
+    console.log(`[Download] Attempting reconstruction from ${input.xamlEntries.length} cached XAML entries`);
+    try {
+      const entries: DownloadZipEntry[] = [];
+      const xamlByBasename = new Map<string, string>();
+      const xamlByFullPath = new Map<string, string>();
+      for (const entry of input.xamlEntries) {
+        xamlByBasename.set(entry.name, entry.content);
+        xamlByFullPath.set(entry.name, entry.content);
+      }
+
+      const nugetMetaPrefixes = ["_rels/", "package/", "[Content_Types].xml"];
+      for (const archivePath of input.archiveManifest) {
+        if (nugetMetaPrefixes.some(p => archivePath.startsWith(p)) || archivePath.endsWith(".nuspec")) {
+          continue;
+        }
+        const flatName = archivePath.startsWith(input.libPrefix) ? archivePath.slice(input.libPrefix.length) : archivePath;
+        const basename = archivePath.split("/").pop() || archivePath;
+
+        if (archivePath.endsWith(".xaml")) {
+          const xamlContent = xamlByFullPath.get(archivePath) || xamlByFullPath.get(flatName) || xamlByBasename.get(basename);
+          if (xamlContent) {
+            entries.push({ name: flatName, content: xamlContent });
+          } else {
+            console.warn(`[Download] XAML entry not found in cached entries: ${archivePath}`);
+          }
+        } else if (archivePath.endsWith("project.json")) {
+          entries.push({ name: flatName, content: input.resolveProjectJson() });
+        } else if (archivePath.endsWith("DeveloperHandoffGuide.md") && input.dhgContent) {
+          entries.push({ name: flatName, content: input.dhgContent });
+        } else if (archivePath.endsWith("Config.xlsx") || archivePath.endsWith("Data/Config.xlsx")) {
+          const configContent = generateConfigXlsx(input.projectName, input.sddContent);
+          entries.push({ name: flatName, content: configContent });
+        } else {
+          console.warn(`[Download] Skipping non-reconstructable entry: ${archivePath}`);
+        }
+      }
+      if (entries.length > 0 && entries.some(e => e.name === "Main.xaml" || e.name.endsWith("/Main.xaml"))) {
+        zipEntries = entries;
+        downloadSource = "reconstructed-from-cache";
+        console.log(`[Download] Reconstruction succeeded: ${entries.length} entries from ${input.xamlEntries.length} cached XAML entries`);
+      } else {
+        console.warn(`[Download] Reconstruction produced ${entries.length} entries (missing Main.xaml) — reconstruction failed`);
+      }
+    } catch (entryErr: unknown) {
+      const msg = entryErr instanceof Error ? entryErr.message : String(entryErr);
+      console.warn(`[Download] Reconstruction from cached XAML failed: ${msg}`);
+      zipEntries = null;
+    }
+  }
+
+  if (!zipEntries && hasViableBuffer) {
+    downloadSource = "raw-nupkg";
+    console.log(`[Download] Falling back to raw nupkg delivery (handoff-only: ${isHandoffOnly})`);
+    return { zipEntries: null, downloadSource, isHandoffOnly };
+  }
+
+  if (!zipEntries) {
+    const reason = !hasViableBuffer && !hasCachedXaml
+      ? "No package buffer and no cached XAML entries available."
+      : !hasViableBuffer
+        ? "Package buffer is empty and reconstruction from cached XAML entries failed."
+        : "Package extraction and reconstruction both failed.";
+    console.error(`[Download] Download failed: ${reason}`);
+    return { zipEntries: null, downloadSource: null, isHandoffOnly, failReason: reason };
+  }
+
+  return { zipEntries, downloadSource, isHandoffOnly };
+}
+
 export function registerDocumentRoutes(app: Express): void {
   app.get("/api/ideas/:ideaId/artifacts", async (req: Request, res: Response) => {
     const ideaId = await verifyIdeaAccess(req, res);
@@ -1240,157 +1368,105 @@ export function registerDocumentRoutes(app: Express): void {
         return res.status(500).json({ message: "Invalid package data" });
       }
 
-      if (!pipelineResult.packageBuffer || pipelineResult.packageBuffer.length === 0) {
-        return res.status(500).json({
-          error: "PACKAGE_EMPTY",
-          message: "Package buffer is empty. Please regenerate the package.",
-        });
-      }
-
       const approvedSdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
       const sddContent = approvedSdd?.content || "";
 
       const isServerless = pkg.internal?.targetFramework === "Portable" || pkg.internal?.isServerless;
       const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";
 
-      type ZipEntry = { name: string; content: string | Buffer };
-      let zipEntries: ZipEntry[] | null = null;
-
-      if (pipelineResult.xamlEntries && pipelineResult.xamlEntries.length > 0 && pipelineResult.archiveManifest) {
-        try {
-          const entries: ZipEntry[] = [];
-          const xamlByBasename = new Map<string, string>();
-          const xamlByFullPath = new Map<string, string>();
-          for (const entry of pipelineResult.xamlEntries) {
-            xamlByBasename.set(entry.name, entry.content);
-            xamlByFullPath.set(entry.name, entry.content);
+      const downloadResult = resolveDownloadPath({
+        packageBuffer: pipelineResult.packageBuffer,
+        packageViable: pipelineResult.packageViable,
+        xamlEntries: pipelineResult.xamlEntries,
+        archiveManifest: pipelineResult.archiveManifest,
+        projectName: pipelineResult.projectName,
+        dependencyMap: pipelineResult.dependencyMap,
+        dhgContent: pipelineResult.dhgContent,
+        libPrefix,
+        sddContent,
+        pkgDescription: pkg.description || "",
+        resolveProjectJson: () => {
+          const _metaTarget = metadataService.getStudioTarget();
+          if (!_metaTarget) {
+            console.error("[document-routes] MetadataService has no studio target — project.json fields will use fallback defaults.");
           }
+          const _resolvedFramework = _metaTarget ? (isServerless ? "Portable" : _metaTarget.targetFramework) : (isServerless ? "Portable" : "Windows");
+          const _resolvedLang = _resolvedFramework === "Portable" ? "CSharp" : (_metaTarget?.expressionLanguage || "VisualBasic");
+          return JSON.stringify({
+            name: pipelineResult.projectName,
+            description: pkg.description || "",
+            main: "Main.xaml",
+            dependencies: pipelineResult.dependencyMap || {},
+            webServices: [],
+            entitiesStores: [],
+            schemaVersion: "4.0",
+            studioVersion: _metaTarget?.version || "",
+            projectVersion: "1.0.0",
+            runtimeOptions: {
+              autoDispose: false,
+              netFrameworkLazyLoading: false,
+              isPausable: true,
+              isAttended: false,
+              requiresUserInteraction: false,
+              supportsPersistence: false,
+              executionType: "Workflow",
+              readyForPiP: false,
+              startsInPiP: false,
+              mustRestoreAllDependencies: true,
+            },
+            designOptions: {
+              projectProfile: "Development",
+              outputType: "Process",
+              libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
+              processOptions: { ignoredFiles: [] },
+              fileInfoCollection: [],
+              modernBehavior: true,
+            },
+            expressionLanguage: _resolvedLang,
+            entryPoints: [{ filePath: "Main.xaml", uniqueId: "00000000-0000-0000-0000-000000000000", input: [], output: [] }],
+            isTemplate: false,
+            templateProjectData: {},
+            publishData: {},
+            targetFramework: _resolvedFramework,
+            sourceLanguage: _resolvedLang,
+          }, null, 2);
+        },
+      });
 
-          const nugetMetaPrefixes = ["_rels/", "package/", "[Content_Types].xml"];
-          for (const archivePath of pipelineResult.archiveManifest) {
-            if (nugetMetaPrefixes.some(p => archivePath.startsWith(p)) || archivePath.endsWith(".nuspec")) {
-              continue;
-            }
-            const flatName = archivePath.startsWith(libPrefix) ? archivePath.slice(libPrefix.length) : archivePath;
-            const basename = archivePath.split("/").pop() || archivePath;
-
-            if (archivePath.endsWith(".xaml")) {
-              const xamlContent = xamlByFullPath.get(archivePath) || xamlByFullPath.get(flatName) || xamlByBasename.get(basename);
-              if (xamlContent) {
-                entries.push({ name: flatName, content: xamlContent });
-              } else {
-                console.warn(`[Download] XAML entry not found in cached entries: ${archivePath}`);
-              }
-            } else if (archivePath.endsWith("project.json")) {
-              // Fallback audit: studioVersion, expressionLanguage, targetFramework,
-              // sourceLanguage all resolve from MetadataService below. Audited files:
-              // - document-routes.ts: this site (was hardcoded 23.10.6/22.10.11, now MetadataService)
-              // - package-assembler.ts: uses _studioProfile/_metaTarget chain, no version literals
-              // - metadata-service.ts: reads from catalog JSON, no hardcoded versions
-              // - studio-profile.ts: reads from catalog JSON, no hardcoded versions
-              const _metaTarget = metadataService.getStudioTarget();
-              if (!_metaTarget) {
-                console.error("[document-routes] MetadataService has no studio target — project.json fields will use fallback defaults.");
-              }
-              const _resolvedFramework = _metaTarget ? (isServerless ? "Portable" : _metaTarget.targetFramework) : (isServerless ? "Portable" : "Windows");
-              const _resolvedLang = _resolvedFramework === "Portable" ? "CSharp" : (_metaTarget?.expressionLanguage || "VisualBasic");
-              const projectJson: Record<string, any> = {
-                name: pipelineResult.projectName,
-                description: pkg.description || "",
-                main: "Main.xaml",
-                dependencies: pipelineResult.dependencyMap || {},
-                webServices: [],
-                entitiesStores: [],
-                schemaVersion: "4.0",
-                studioVersion: _metaTarget?.version || "",
-                projectVersion: "1.0.0",
-                runtimeOptions: {
-                  autoDispose: false,
-                  netFrameworkLazyLoading: false,
-                  isPausable: true,
-                  isAttended: false,
-                  requiresUserInteraction: false,
-                  supportsPersistence: false,
-                  executionType: "Workflow",
-                  readyForPiP: false,
-                  startsInPiP: false,
-                  mustRestoreAllDependencies: true,
-                },
-                designOptions: {
-                  projectProfile: "Development",
-                  outputType: "Process",
-                  libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
-                  processOptions: { ignoredFiles: [] },
-                  fileInfoCollection: [],
-                  modernBehavior: true,
-                },
-                expressionLanguage: _resolvedLang,
-                entryPoints: [{ filePath: "Main.xaml", uniqueId: "00000000-0000-0000-0000-000000000000", input: [], output: [] }],
-                isTemplate: false,
-                templateProjectData: {},
-                publishData: {},
-                targetFramework: _resolvedFramework,
-                sourceLanguage: _resolvedLang,
-              };
-              entries.push({ name: flatName, content: JSON.stringify(projectJson, null, 2) });
-            } else if (archivePath.endsWith("DeveloperHandoffGuide.md") && pipelineResult.dhgContent) {
-              entries.push({ name: flatName, content: pipelineResult.dhgContent });
-            } else if (archivePath.endsWith("Config.xlsx") || archivePath.endsWith("Data/Config.xlsx")) {
-              const configContent = generateConfigXlsx(pipelineResult.projectName, sddContent);
-              entries.push({ name: flatName, content: configContent });
-            } else {
-              console.warn(`[Download] Skipping non-reconstructable entry: ${archivePath}`);
-            }
-          }
-          if (entries.length > 0 && entries.some(e => e.name === "Main.xaml" || e.name.endsWith("/Main.xaml"))) {
-            zipEntries = entries;
-            console.log(`[Download] Prepared ${entries.length} entries from ${pipelineResult.xamlEntries.length} cached XAML entries`);
-          } else {
-            console.warn(`[Download] Cache-based build produced ${entries.length} entries (missing Main.xaml) — falling back`);
-          }
-        } catch (entryErr: unknown) {
-          const msg = entryErr instanceof Error ? entryErr.message : String(entryErr);
-          console.warn(`[Download] Failed to build entries from cache: ${msg} — falling back`);
-          zipEntries = null;
+      if (downloadResult.downloadSource === "raw-nupkg") {
+        res.setHeader("Content-Type", "application/octet-stream");
+        res.setHeader("Content-Disposition", `attachment; filename="${pkg.projectName || "UiPathPackage"}.nupkg"`);
+        if (downloadResult.isHandoffOnly) {
+          res.setHeader("X-Package-Readiness", "handoff-only");
+          res.setHeader("X-Package-Warning", "This package is not deployment-ready. It requires developer remediation before use.");
         }
+        console.log(`[Download] Serving raw nupkg for ${ideaId} (handoff-only: ${downloadResult.isHandoffOnly})`);
+        res.end(pipelineResult.packageBuffer);
+        return;
       }
 
-      if (!zipEntries) {
-        if (!pipelineResult.packageBuffer || pipelineResult.packageBuffer.length === 0) {
-          return res.status(500).json({
-            error: "PACKAGE_EMPTY",
-            message: "Package buffer is empty. Please regenerate the package.",
-          });
-        }
-
-        try {
-          const nupkgZip = new AdmZip(pipelineResult.packageBuffer);
-          const nupkgEntries = nupkgZip.getEntries();
-          const entries: ZipEntry[] = [];
-          for (const entry of nupkgEntries) {
-            if (entry.isDirectory) continue;
-            const entryName: string = entry.entryName;
-            if (entryName.startsWith("_rels/") || entryName.startsWith("package/") || entryName === "[Content_Types].xml" || entryName.endsWith(".nuspec")) {
-              continue;
-            }
-            const flatName = entryName.startsWith(libPrefix) ? entryName.slice(libPrefix.length) : entryName;
-            entries.push({ name: flatName, content: entry.getData() });
-          }
-          zipEntries = entries;
-          console.log(`[Download] Built entries from nupkg buffer via adm-zip fallback`);
-        } catch (zipErr: unknown) {
-          const msg = zipErr instanceof Error ? zipErr.message : String(zipErr);
-          console.error(`[Download] adm-zip fallback also failed: ${msg} — serving raw nupkg`);
-          res.setHeader("Content-Type", "application/octet-stream");
-          res.setHeader("Content-Disposition", `attachment; filename="${pkg.projectName || "UiPathPackage"}.nupkg"`);
-          res.end(pipelineResult.packageBuffer);
-          return;
-        }
+      if (!downloadResult.zipEntries) {
+        console.error(`[Download] Download failed for ${ideaId}: ${downloadResult.failReason}`);
+        return res.status(500).json({
+          error: "PACKAGE_UNRECONSTRUCTABLE",
+          message: `Unable to produce a downloadable package. ${downloadResult.failReason} Please regenerate the package.`,
+        });
       }
+
+      const { zipEntries, downloadSource, isHandoffOnly } = downloadResult;
+      const isReconstructedHandoff = isHandoffOnly && downloadSource === "reconstructed-from-cache";
+      console.log(`[Download] Serving package for ${ideaId} (source: ${downloadSource}, handoff-only: ${isHandoffOnly}, reconstructed-handoff: ${isReconstructedHandoff})`);
 
       const archive = archiver("zip", { zlib: { level: 9 } });
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename="${pkg.projectName || "UiPathPackage"}.zip"`);
+      if (isHandoffOnly) {
+        res.setHeader("X-Package-Readiness", "handoff-only");
+        res.setHeader("X-Package-Warning", "This package is not deployment-ready. It requires developer remediation before use.");
+      }
+      if (isReconstructedHandoff) {
+        res.setHeader("X-Package-Source", "reconstructed-from-cache");
+      }
       archive.pipe(res);
 
       for (const entry of zipEntries) {
