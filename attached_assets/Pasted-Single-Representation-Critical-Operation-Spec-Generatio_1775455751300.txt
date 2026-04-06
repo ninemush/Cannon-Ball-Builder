@@ -1,0 +1,140 @@
+Single-Representation Critical Operation Spec Generation
+
+What & Why
+The pipeline is still drifting too far from the SDD because the structured spec often carries more than one representation of the same logical business operation. The clearest recurring example is mail send:
+- a narrative TryCatch-style description of sending mail via connector/integration context
+- a separate concrete executable Gmail/SMTP/mail step with overlapping To/Subject/Body data
+
+Once both survive into the workflow spec, downstream lowering has to guess, merge, or reject. Even when the intent is mostly correct, this duplication creates family drift, property loss, and package/dependency divergence.
+
+This task moves upstream. It strengthens prompt generation and structured intermediate representation rules so that each critical business operation is represented exactly once in the generated spec, in a canonical machine-lowerable form.
+
+The goal is not to eliminate all compiler logic. The goal is to stop feeding the compiler ambiguous multi-representation intent.
+
+Goals
+1. Ensure one logical critical operation becomes one canonical structured representation in the generated workflow spec.
+2. Eliminate narrative pseudo-containers for executable operations when a concrete structured representation exists.
+3. Make critical operation family/source selection explicit in the spec.
+4. Preserve required business properties in the spec so lowering does not need to guess or reconstruct intent later.
+5. Reduce downstream ambiguity before workflow-tree assembly and XAML emission.
+
+Done looks like
+- The generated structured spec contains exactly one canonical representation for each critical operation cluster.
+- Critical operations such as mail send, task creation/wait, invoke workflow, and Data Service CRUD are emitted in machine-lowerable structured form, not duplicated as both prose and executable steps.
+- Narrative Try/Catch text for executable operations is either:
+  - converted into an explicit structured container model in the spec
+  - or omitted entirely when a concrete structured step already exists
+- The spec explicitly records the chosen operation family/source where relevant, for example:
+  - mailSource = connector / gmail / smtp / outlook
+  - taskSource = action_center
+  - invokeContractMode = callee_first
+- Required business fields such as To, Subject, Body, connection/context identifiers, and key operation inputs/outputs remain present in the canonical representation.
+- A structured diagnostics artifact shows where duplicate representations were prevented or normalized during spec generation.
+- Existing downstream lowering gets cleaner, lower-entropy input.
+
+Out of scope
+- Broad catalog/filter alignment
+- XAML namespace/prefix fixes
+- Post-emission repair
+- Package-mode parity/freeze changes
+- Deep business-logic invention beyond the SDD/PDD
+
+Tasks
+
+1. Define canonical spec forms for critical operation families
+Create explicit canonical structured-spec forms for at least:
+- mail send
+- task creation / wait
+- invoke workflow
+- Data Service create/update/query
+- retry-wrapped critical operation
+
+For each family, define:
+- required fields
+- allowed structured fields
+- allowed container structure
+- forbidden pseudo-representations
+- family/source selection field where applicable
+
+2. Update prompt instructions for critical operation generation
+Strengthen the spec-generation prompt so the model is explicitly told:
+- do not emit both a narrative container and a concrete executable representation for the same logical operation
+- if a Try/Catch is needed, represent it as a structured container with explicit child operation nodes
+- when mail intent exists, choose one explicit source/family and represent it once
+- preserve required business properties like To, Subject, Body, connection/context fields in the canonical node
+
+3. Add duplicate-operation normalization before handoff to lowering
+Introduce a structured-spec normalization pass that detects when the LLM produced two representations of the same logical critical operation, for example:
+- narrative Try/Catch send description + concrete Gmail send step
+- abstract connector send description + concrete SMTP/mail step
+- prose invoke description + concrete InvokeWorkflowFile step
+
+If both representations are semantically the same operation:
+- preserve one canonical structured form
+- record normalization diagnostics
+- reject only when conflict cannot be resolved deterministically
+
+4. Add explicit source/family fields to structured spec
+Extend the relevant structured spec types so critical operations can carry explicit source-of-truth fields, for example:
+- mailSource
+- selectedActivityFamily
+- connectionIntent
+- containerRepresentationType
+- operationClusterId
+
+These fields should be available to downstream lowering and diagnostics.
+
+5. Eliminate narrative pseudo-container leakage
+Narrative fields like:
+- Try = "Send email..."
+- Catches = "Exception -> log..."
+- Finally = "None"
+must not survive into the canonical spec for executable operations unless converted into a structured container form.
+If a real concrete child operation exists, the narrative duplicate should be normalized away or rejected.
+
+6. Emit structured diagnostics
+Add:
+`criticalOperationSpecNormalizationDiagnostics`
+with per normalized/rejected cluster:
+- workflow/file
+- operationClusterId
+- operationType
+- representationsDetected
+- canonicalRepresentationChosen
+- preservedFields
+- droppedRepresentations
+- conflictFields
+- deterministicResolutionApplied
+- rejected: true/false
+- remediationHint
+
+Also include summary counts:
+- totalCriticalOperationClusters
+- totalDuplicateRepresentationsDetected
+- totalNormalizedSuccessfully
+- totalRejectedForConflict
+- totalNarrativePseudoContainersRemoved
+
+7. Integrate with downstream lowering
+Ensure the normalized canonical spec form is what downstream stages consume.
+Downstream lowering should not see both the narrative and concrete representation for the same logical operation after this stage.
+
+8. Add regression tests
+Cover:
+- mail cluster generated as both narrative Try/Catch and concrete send step normalizes to one canonical representation
+- canonical representation preserves To, Subject, Body
+- conflicting non-empty Body values across two representations cause rejection, not guessing
+- task/create/wait pseudo-container plus concrete task step normalizes correctly
+- abstract invoke narrative plus concrete invoke step normalizes correctly
+- downstream lowering input contains only the canonical representation
+- no placeholder-style pseudo-fields are introduced during normalization
+
+Relevant files
+- server/uipath-spec-decomposer.ts
+- server/deterministic-scaffold.ts
+- server/workflow-spec-types.ts
+- server/workflow-tree-assembler.ts
+- server/document-routes.ts
+- server/uipath-pipeline.ts
+- server/__tests__/pipeline-regression.test.ts
+- server/__tests__/critical-activity-lowering.test.ts
