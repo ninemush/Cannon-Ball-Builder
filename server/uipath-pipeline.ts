@@ -380,6 +380,7 @@ export interface PipelineOutcomeReport {
   _preArchiveClassification?: import("./workflow-status-classifier").WorkflowStatusClassifierResult;
   postClassifierMutationTrace?: import("./workflow-status-classifier").PostClassifierMutationTrace;
   postFreezeMutationTrace?: import("./workflow-status-classifier").PostClassifierMutationTrace;
+  workflowAutoWiringDiagnostics?: import("./auto-wiring-diagnostics").WorkflowAutoWiringDiagnostics;
 }
 
 export interface PipelineResult {

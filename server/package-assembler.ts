@@ -4,6 +4,7 @@ import archiver from "archiver";
   import { PassThrough } from "stream";
   import { recordTransform, getCurrentRunId } from "./llm-trace-collector";
   import { applyRequiredPropertyEnforcement } from "./required-property-enforcer";
+  import { collectAutoWiringDiagnostics, computeWorkflowSetHash } from "./auto-wiring-diagnostics";
   import {
     generateRichXamlFromSpec,
     generateRichXamlFromNodes,
@@ -4444,6 +4445,23 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     });
     const prePruningXamlContent = prePruningXamlParts.join("\n");
 
+    let _wiringDiag_mainStubInjectionAttempted = false;
+    let _wiringDiag_mainStubInjectionSucceeded = false;
+    let _wiringDiag_processStubInjectionAttempted = false;
+    let _wiringDiag_processStubInjectionSucceeded = false;
+    let _wiringDiag_specRetained = new Set<string>();
+    let _wiringDiag_trulyOrphaned = new Set<string>();
+    let _wiringDiag_injectedFiles: string[] = [];
+    let _wiringDiag_reachable = new Set<string>();
+    let _wiringDiag_unreachable = new Set<string>();
+    let _wiringDiag_graph = new Map<string, string[]>();
+    let _wiringDiag_reachabilitySkipped = false;
+    let _wiringDiag_mainHadFallback = false;
+    let _wiringDiag_processHadFallback = false;
+    const _wiringDiag_perWorkflowRejections = new Map<string, string>();
+    let _wiringDiag_wiringTimeHash = "";
+    let _wiringDiag_reachabilityTimeHash = "";
+
     {
       const mainDeferredKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Main.xaml");
       const mainContent = mainDeferredKey ? deferredWrites.get(mainDeferredKey) || "" : "";
@@ -4491,7 +4509,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         complianceFallbacks.some(fb => fb.file === "Process.xaml" && fb.wasFullStub);
       const processHadFallback = processIsFullStub ||
         complianceFallbacks.some(fb => fb.file === "Process.xaml");
+      _wiringDiag_mainHadFallback = mainHadFallback;
+      _wiringDiag_processHadFallback = processHadFallback;
       if ((mainIsFullStub || mainIsFunctionallyEmpty) && mainDeferredKey) {
+        _wiringDiag_mainStubInjectionAttempted = true;
         let stubbedMainXaml = deferredWrites.get(mainDeferredKey) || "";
         const allWorkflowNames = new Set([...nonMainWorkflowNames, ...Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process")]);
         const invokeRefsToInject: string[] = [];
@@ -4519,11 +4540,15 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             if (existingIdx >= 0) {
               xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: stubbedMainXaml };
             }
+            _wiringDiag_mainStubInjectionSucceeded = true;
             console.log(`[UiPath] Injected ${invokeRefsToInject.length} InvokeWorkflowFile reference(s) into stubbed Main.xaml to preserve invocation graph`);
           }
+        } else {
+          _wiringDiag_mainStubInjectionSucceeded = true;
         }
       }
       if (processIsFullStub) {
+        _wiringDiag_processStubInjectionAttempted = true;
         const processDeferredKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Process.xaml");
         if (processDeferredKey) {
           let stubbedProcessXaml = deferredWrites.get(processDeferredKey) || "";
@@ -4550,14 +4575,22 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               if (existingIdx >= 0) {
                 xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: stubbedProcessXaml };
               }
+              _wiringDiag_processStubInjectionSucceeded = true;
               console.log(`[UiPath] Injected ${processInvokeRefs.length} InvokeWorkflowFile reference(s) into stubbed Process.xaml to preserve invocation graph`);
             }
+          } else {
+            _wiringDiag_processStubInjectionSucceeded = true;
           }
         }
       }
+      _wiringDiag_wiringTimeHash = computeWorkflowSetHash(deferredWrites, xamlEntries);
+
       if (mainHadFallback || processHadFallback) {
         console.log(`[Structural Dedup] ${mainHadFallback ? "Main.xaml" : ""}${mainHadFallback && processHadFallback ? " and " : ""}${processHadFallback ? "Process.xaml" : ""} had fallback — skipping reachability pruning to preserve child workflows`);
-        const { graph } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
+        const { reachable: fbReachable, graph } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
+        _wiringDiag_reachabilitySkipped = true;
+        _wiringDiag_graph = graph;
+        _wiringDiag_reachable = fbReachable;
         Array.from(graph.entries()).forEach(([file, refs]) => {
           if (refs.length > 0) {
             console.log(`[Structural Dedup] ${file} -> ${refs.join(", ")}`);
@@ -4566,10 +4599,15 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       } else {
         console.log(`[Structural Dedup] Building reachability graph from Main.xaml entry point...`);
         const { reachable, unreachable, graph } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
+        _wiringDiag_reachable = reachable;
+        _wiringDiag_unreachable = unreachable;
+        _wiringDiag_graph = graph;
         console.log(`[Structural Dedup] Reachability analysis: ${reachable.size} reachable, ${unreachable.size} unreachable out of ${reachable.size + unreachable.size} total XAML files`);
 
         if (unreachable.size > 0) {
           const { trulyOrphaned, specRetained } = filterUnreachableBySpecDecomposition(unreachable, generatedWorkflowNames);
+          _wiringDiag_specRetained = specRetained;
+          _wiringDiag_trulyOrphaned = trulyOrphaned;
 
           if (specRetained.size > 0) {
             console.log(`[Structural Dedup] Retained ${specRetained.size} spec-decomposed workflow(s) despite being unreachable from fallback Main.xaml: ${Array.from(specRetained).join(", ")}`);
@@ -4611,6 +4649,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                       `      </ui:InvokeWorkflowFile.Arguments>\n` +
                       `    </ui:InvokeWorkflowFile>\n`;
                     injectedFiles.push(basename);
+                  } else {
+                    _wiringDiag_perWorkflowRejections.set(basename, `already referenced in Process.xaml (matched WorkflowFileName="${basename}" or "${basenameNoExt}" or "${basenameNoExt}.xaml")`);
                   }
                 });
                 if (invokeBlock) {
@@ -4623,8 +4663,21 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                   }
                   console.log(`[Structural Dedup] Injected InvokeWorkflowFile calls into Process.xaml for: ${injectedFiles.join(", ")}`);
                 }
+              } else {
+                Array.from(specRetained).forEach(retained => {
+                  const rBasename = retained.split("/").pop() || retained;
+                  if (!_wiringDiag_perWorkflowRejections.has(rBasename)) {
+                    _wiringDiag_perWorkflowRejections.set(rBasename, "no valid </Sequence> or </Activity> insertion point found in Process.xaml");
+                  }
+                });
               }
+            } else {
+              Array.from(specRetained).forEach(retained => {
+                const rBasename = retained.split("/").pop() || retained;
+                _wiringDiag_perWorkflowRejections.set(rBasename, "Process.xaml content is empty or not found — no wiring target available");
+              });
             }
+            _wiringDiag_injectedFiles = injectedFiles;
             Array.from(specRetained).forEach(retained => {
               const basename = retained.split("/").pop() || retained;
               if (injectedFiles.includes(basename)) {
@@ -4670,6 +4723,49 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
         });
       }
+    }
+
+    _wiringDiag_reachabilityTimeHash = computeWorkflowSetHash(deferredWrites, xamlEntries);
+
+    {
+      const finalizedGraph = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
+      _wiringDiag_reachable = finalizedGraph.reachable;
+      _wiringDiag_unreachable = finalizedGraph.unreachable;
+      _wiringDiag_graph = finalizedGraph.graph;
+    }
+
+    const wiringDiagnostics = collectAutoWiringDiagnostics({
+      generatedWorkflowNames,
+      deferredWrites,
+      xamlEntries,
+      libPath,
+      reachable: _wiringDiag_reachable,
+      unreachable: _wiringDiag_unreachable,
+      graph: _wiringDiag_graph,
+      specRetained: _wiringDiag_specRetained,
+      trulyOrphaned: _wiringDiag_trulyOrphaned,
+      injectedFiles: _wiringDiag_injectedFiles,
+      mainHadFallback: _wiringDiag_mainHadFallback,
+      processHadFallback: _wiringDiag_processHadFallback,
+      mainStubInjectionAttempted: _wiringDiag_mainStubInjectionAttempted,
+      mainStubInjectionSucceeded: _wiringDiag_mainStubInjectionSucceeded,
+      processStubInjectionAttempted: _wiringDiag_processStubInjectionAttempted,
+      processStubInjectionSucceeded: _wiringDiag_processStubInjectionSucceeded,
+      reachabilitySkipped: _wiringDiag_reachabilitySkipped,
+      perWorkflowRejections: _wiringDiag_perWorkflowRejections,
+      wiringTimeHash: _wiringDiag_wiringTimeHash,
+      reachabilityTimeHash: _wiringDiag_reachabilityTimeHash,
+    });
+
+    if (wiringDiagnostics.summary.totalGeneratedButUnwired > 0 || wiringDiagnostics.summary.totalUnreachableFromMain > 0) {
+      console.log(`[Auto-Wiring Diagnostics] ${wiringDiagnostics.summary.totalGeneratedWorkflows} generated, ${wiringDiagnostics.summary.totalRequiredWorkflowsWired}/${wiringDiagnostics.summary.totalRequiredWorkflows} required wired, ${wiringDiagnostics.summary.totalGeneratedButUnwired} generated-but-unwired, ${wiringDiagnostics.summary.totalUnreachableFromMain} unreachable`);
+      for (const entry of wiringDiagnostics.entries) {
+        if (entry.rootCauseCategory !== "none") {
+          console.log(`[Auto-Wiring Diagnostics] ${entry.file}: status=${entry.finalWiringStatus}, rootCause=${entry.rootCauseCategory}, hint=${entry.remediationHint || "none"}`);
+        }
+      }
+    } else {
+      console.log(`[Auto-Wiring Diagnostics] All ${wiringDiagnostics.summary.totalGeneratedWorkflows} generated workflows wired successfully (${wiringDiagnostics.summary.totalRequiredWorkflowsWired}/${wiringDiagnostics.summary.totalRequiredWorkflows} required)`);
     }
 
     {
@@ -8394,6 +8490,7 @@ ${depEntries}
     preArchiveStructuralDefects: preArchiveStructuralDefects.length > 0 ? preArchiveStructuralDefects : undefined,
     postClassifierMutationTrace: getMutationTrace(),
     postFreezeMutationTrace: getMutationTrace(),
+    workflowAutoWiringDiagnostics: wiringDiagnostics,
   };
 
   if (buildCacheKey && fingerprint) {
