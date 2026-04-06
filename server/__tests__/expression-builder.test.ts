@@ -7,7 +7,7 @@ import {
   ValueIntentSchema,
   type ValueIntent,
 } from "../xaml/expression-builder";
-import { resolvePropertyValue, resolvePropertyValueRaw, resolveActivityTemplate, assembleNode } from "../workflow-tree-assembler";
+import { resolvePropertyValue, resolvePropertyValueRaw, resolveActivityTemplate, assembleNode, assembleWorkflowFromSpec } from "../workflow-tree-assembler";
 import { validateWorkflowSpec, type ActivityNode } from "../workflow-spec-types";
 
 describe("ValueIntent Expression Builder", () => {
@@ -767,6 +767,411 @@ describe("ValueIntent Expression Builder", () => {
       sanitizeValueIntentExpressions(arr);
       expect(arr[0].type).toBe("vb_expression");
       expect(arr[1].type).toBe("literal");
+    });
+  });
+});
+
+import { tryParseJsonValueIntent, containsValueIntentJson } from "../xaml/expression-builder";
+
+describe("Expression and Value Passthrough Authority", () => {
+  describe("tryParseJsonValueIntent — bracket-wrapped values", () => {
+    it("parses bracket-wrapped JSON expression [{}]", () => {
+      const input = '[{"type":"expression","left":"x","operator":"=","right":"y"}]';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).not.toBeNull();
+      expect(result!.intent.type).toBe("expression");
+      if (result!.intent.type === "expression") {
+        expect(result!.intent.left).toBe("x");
+        expect(result!.intent.operator).toBe("=");
+        expect(result!.intent.right).toBe("y");
+      }
+    });
+
+    it("lowers bracket-wrapped expression to VB", () => {
+      const input = '[{"type":"expression","left":"x","operator":"=","right":"y"}]';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).not.toBeNull();
+      const expr = buildExpression(result!.intent);
+      expect(expr).toBe("[x = y]");
+    });
+
+    it("parses bracket-wrapped variable", () => {
+      const input = '[{"type":"variable","name":"invoiceStatus"}]';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).not.toBeNull();
+      expect(result!.intent.type).toBe("variable");
+      if (result!.intent.type === "variable") {
+        expect(result!.intent.name).toBe("invoiceStatus");
+      }
+    });
+  });
+
+  describe("tryParseJsonValueIntent — XML-entity-encoded values", () => {
+    it("parses XML-entity-encoded variable JSON", () => {
+      const input = '{&quot;type&quot;:&quot;variable&quot;,&quot;name&quot;:&quot;str_Status&quot;}';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).not.toBeNull();
+      expect(result!.intent.type).toBe("variable");
+      if (result!.intent.type === "variable") {
+        expect(result!.intent.name).toBe("str_Status");
+      }
+    });
+
+    it("parses XML-entity-encoded literal JSON", () => {
+      const input = '{&quot;type&quot;:&quot;literal&quot;,&quot;value&quot;:&quot;Hello World&quot;}';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).not.toBeNull();
+      expect(result!.intent.type).toBe("literal");
+    });
+
+    it("handles XML-entity-encoded value that doesn't start with brace after decoding", () => {
+      const input = 'prefix{&quot;type&quot;:&quot;variable&quot;}';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("containsValueIntentJson — bracket-wrapped detection", () => {
+    it("detects bracket-wrapped JSON value intent", () => {
+      expect(containsValueIntentJson('[{"type":"variable","name":"x"}]')).toBe(true);
+    });
+
+    it("detects standard JSON value intent", () => {
+      expect(containsValueIntentJson('{"type":"variable","name":"x"}')).toBe(true);
+    });
+  });
+
+  describe("Assign.To resolves ValueIntent JSON", () => {
+    it("resolves variable ValueIntent in Assign.To property", () => {
+      const node: ActivityNode = {
+        kind: "activity",
+        template: "Assign",
+        displayName: "Set Invoice Status",
+        properties: {
+          To: '{"type":"variable","name":"invoiceStatus"}',
+          Value: '"Approved"',
+        },
+        errorHandling: "none",
+      };
+      const result = resolveActivityTemplate(node, []);
+      expect(result).toContain("invoiceStatus");
+      expect(result).not.toContain("Nothing");
+      expect(result).not.toContain('"type"');
+    });
+  });
+
+  describe("LogMessage.Message resolves ValueIntent JSON", () => {
+    it("resolves literal ValueIntent in LogMessage.Message", () => {
+      const node: ActivityNode = {
+        kind: "activity",
+        template: "LogMessage",
+        displayName: "Log Status",
+        properties: {
+          Level: "Info",
+          Message: '{"type":"literal","value":"Processing complete"}',
+        },
+        errorHandling: "none",
+      };
+      const result = resolveActivityTemplate(node, []);
+      expect(result).toContain("Processing complete");
+      expect(result).not.toContain('"type"');
+    });
+
+    it("resolves variable ValueIntent in LogMessage.Message", () => {
+      const node: ActivityNode = {
+        kind: "activity",
+        template: "LogMessage",
+        displayName: "Log Variable",
+        properties: {
+          Level: "Info",
+          Message: '{"type":"variable","name":"str_Result"}',
+        },
+        errorHandling: "none",
+      };
+      const result = resolveActivityTemplate(node, []);
+      expect(result).toContain("str_Result");
+      expect(result).not.toContain('"type"');
+    });
+  });
+
+  describe("Idempotence", () => {
+    it("already-lowered VB expression [myVar = True] is not altered", () => {
+      const input = "[myVar = True]";
+      const result = tryParseJsonValueIntent(input);
+      expect(result).toBeNull();
+    });
+
+    it("already-correct literal string is not converted to expression", () => {
+      const input = "Hello World";
+      const result = tryParseJsonValueIntent(input);
+      expect(result).toBeNull();
+    });
+
+    it("already-valid quoted string passes through unchanged", () => {
+      const input = '"Hello World"';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).toBeNull();
+    });
+
+    it("already-lowered variable reference [str_Name] passes through", () => {
+      const input = "[str_Name]";
+      const result = tryParseJsonValueIntent(input);
+      expect(result).toBeNull();
+    });
+
+    it("ValueIntent-derived output is byte-stable on second lowering pass", () => {
+      const originalJson = '{"type":"variable","name":"invoiceStatus"}';
+      const first = tryParseJsonValueIntent(originalJson);
+      expect(first).not.toBeNull();
+      const firstExpr = buildExpression(first!.intent);
+      expect(firstExpr).toBe("[invoiceStatus]");
+      const second = tryParseJsonValueIntent(firstExpr);
+      expect(second).toBeNull();
+    });
+
+    it("expression ValueIntent-derived output is byte-stable on second pass", () => {
+      const originalJson = '{"type":"expression","left":"x","operator":"=","right":"y"}';
+      const first = tryParseJsonValueIntent(originalJson);
+      expect(first).not.toBeNull();
+      const firstExpr = buildExpression(first!.intent);
+      expect(firstExpr).toBe("[x = y]");
+      const second = tryParseJsonValueIntent(firstExpr);
+      expect(second).toBeNull();
+    });
+
+    it("literal ValueIntent-derived output is byte-stable on second pass", () => {
+      const originalJson = '{"type":"literal","value":"Hello World"}';
+      const first = tryParseJsonValueIntent(originalJson);
+      expect(first).not.toBeNull();
+      const firstExpr = buildExpression(first!.intent);
+      expect(firstExpr).toBe('"Hello World"');
+      const second = tryParseJsonValueIntent(firstExpr);
+      expect(second).toBeNull();
+    });
+  });
+
+  describe("Symbol auto-discovery via assembleWorkflowFromSpec", () => {
+    it("auto-declares argument referenced in If.condition", () => {
+      const spec = {
+        name: "ConditionArgTest",
+        variables: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "if" as const,
+              displayName: "Check Status",
+              condition: "in_Status = \"Active\"",
+              thenChildren: [
+                {
+                  kind: "activity" as const,
+                  template: "LogMessage",
+                  displayName: "Log Active",
+                  properties: { Level: "Info", Message: '"Active"' },
+                  errorHandling: "none" as const,
+                },
+              ],
+              elseChildren: [],
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("in_Status");
+      expect(result.xaml).toContain("InArgument");
+    });
+
+    it("auto-declares argument referenced in While.condition", () => {
+      const spec = {
+        name: "WhileArgTest",
+        variables: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "while" as const,
+              displayName: "Retry Loop",
+              condition: "in_RetryCount > 0",
+              bodyChildren: [
+                {
+                  kind: "activity" as const,
+                  template: "LogMessage",
+                  displayName: "Log Retry",
+                  properties: { Level: "Info", Message: '"Retrying"' },
+                  errorHandling: "none" as const,
+                },
+              ],
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("in_RetryCount");
+    });
+
+    it("auto-declares argument referenced in TryCatch catch body", () => {
+      const spec = {
+        name: "TryCatchArgTest",
+        variables: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "tryCatch" as const,
+              displayName: "Handle Error",
+              tryChildren: [
+                {
+                  kind: "activity" as const,
+                  template: "LogMessage",
+                  displayName: "Try Step",
+                  properties: { Level: "Info", Message: '"Trying"' },
+                  errorHandling: "none" as const,
+                },
+              ],
+              catchChildren: [
+                {
+                  kind: "activity" as const,
+                  template: "Assign",
+                  displayName: "Set Error",
+                  properties: {
+                    To: "out_ErrorMessage",
+                    Value: '"Error occurred"',
+                  },
+                  errorHandling: "none" as const,
+                },
+              ],
+              finallyChildren: [],
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("out_ErrorMessage");
+    });
+
+    it("resolves nested property ValueIntent objects before emission", () => {
+      const spec = {
+        name: "NestedPropTest",
+        variables: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "LogMessage",
+              displayName: "Log Status",
+              properties: {
+                Level: "Info",
+                Message: { type: "literal" as const, value: "Process started" },
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("Process started");
+      expect(result.xaml).not.toContain('"type"');
+    });
+
+    it("full-pipeline idempotence: assembling same spec twice produces byte-identical XAML", () => {
+      const spec = {
+        name: "IdempotenceTest",
+        variables: [{ name: "str_Status", type: "String" }],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "Assign",
+              displayName: "Set Status",
+              properties: {
+                To: '{"type":"variable","name":"str_Status"}',
+                Value: '{"type":"literal","value":"Active"}',
+              },
+              errorHandling: "none" as const,
+            },
+            {
+              kind: "if" as const,
+              displayName: "Check Status",
+              condition: "str_Status = \"Active\"",
+              thenChildren: [
+                {
+                  kind: "activity" as const,
+                  template: "LogMessage",
+                  displayName: "Log Active",
+                  properties: { Level: "Info", Message: '"Status is active"' },
+                  errorHandling: "none" as const,
+                },
+              ],
+              elseChildren: [],
+            },
+          ],
+        },
+      };
+      const deepCopy = () => JSON.parse(JSON.stringify(spec));
+      const result1 = assembleWorkflowFromSpec(deepCopy());
+      const result2 = assembleWorkflowFromSpec(deepCopy());
+      expect(result1.xaml).toBe(result2.xaml);
+      expect(result1.xaml).toContain("str_Status");
+      expect(result1.xaml).not.toContain('"type"');
+    });
+  });
+
+  describe("XML-encoded url_with_params lowering", () => {
+    it("parses XML-entity-encoded url_with_params JSON", () => {
+      const input = '{&quot;type&quot;:&quot;url_with_params&quot;,&quot;baseUrl&quot;:&quot;https://api.example.com&quot;,&quot;params&quot;:{}}';
+      const result = tryParseJsonValueIntent(input);
+      expect(result).not.toBeNull();
+      expect(result!.intent.type).toBe("url_with_params");
+      if (result!.intent.type === "url_with_params") {
+        expect(result!.intent.baseUrl).toBe("https://api.example.com");
+      }
+    });
+  });
+
+  describe("Deeply nested property ValueIntent resolution", () => {
+    it("resolves deeply nested JSON ValueIntent strings in activity properties", () => {
+      const spec = {
+        name: "DeepNestedTest",
+        variables: [{ name: "str_Name", type: "String" }],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "Assign",
+              displayName: "Set Name",
+              properties: {
+                To: '{"type":"variable","name":"str_Name"}',
+                Value: '{"type":"literal","value":"TestValue"}',
+              },
+              errorHandling: "none" as const,
+            },
+            {
+              kind: "activity" as const,
+              template: "LogMessage",
+              displayName: "Log Name",
+              properties: {
+                Level: "Info",
+                Message: '{"type":"variable","name":"str_Name"}',
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("str_Name");
+      expect(result.xaml).not.toContain("[object Object]");
+      expect(result.xaml).not.toContain('{"type"');
+      expect(result.xaml).not.toContain('"variable"');
     });
   });
 });

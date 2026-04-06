@@ -21,8 +21,23 @@ export function getJsonValueIntentDiagnostics(): ReadonlyArray<JsonValueIntentDi
 }
 
 export function tryParseJsonValueIntent(s: string): { intent: ValueIntent; fallbackUsed: boolean } | null {
-  const trimmed = s.trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  let trimmed = s.trim();
+
+  if (trimmed.startsWith('[{') && trimmed.endsWith('}]')) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    const decoded = trimmed
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+    if (decoded !== trimmed && decoded.trim().startsWith('{') && decoded.trim().endsWith('}')) {
+      return tryParseJsonValueIntent(decoded);
+    }
+    return null;
+  }
   if (!/"type"/.test(trimmed) && !/&quot;type&quot;/.test(trimmed)) return null;
 
   const literalOrVbMatch = trimmed.match(
@@ -557,6 +572,7 @@ export function containsValueIntentJson(s: string): boolean {
   if (typeof s !== "string") return false;
   const trimmed = s.trim();
   if (trimmed.startsWith('{') && /"type"\s*:/.test(trimmed)) return true;
+  if (trimmed.startsWith('[{') && /"type"\s*:/.test(trimmed)) return true;
   if (/\{(?:&quot;|")(?:type|value|name)(?:&quot;|")/.test(s)) return true;
   return false;
 }

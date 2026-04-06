@@ -478,6 +478,45 @@ function discoverAndRegisterArgRef(argName: string, registry: DeclarationRegistr
   console.log(`[Argument Declaration] Pre-emission walk: auto-declared ${direction} "${argName}" (${inferredType}) in "${workflowName}"`);
 }
 
+function extractRefsFromStrings(strings: string[], registry: DeclarationRegistry, workflowName: string): void {
+  for (const str of strings) {
+    const refs = extractArgumentRefsFromString(str);
+    for (const argName of refs) {
+      discoverAndRegisterArgRef(argName, registry, workflowName);
+    }
+    const varRefs = extractPrefixedVarRefsFromString(str);
+    for (const varName of varRefs) {
+      discoverAndRegisterVarRef(varName, registry, workflowName);
+    }
+  }
+}
+
+function collectStringsFromValue(val: unknown, out: string[]): void {
+  if (typeof val === "string") {
+    out.push(val);
+    if (containsValueIntentJson(val)) {
+      const jsonResult = tryParseJsonValueIntent(val);
+      if (jsonResult) {
+        try { out.push(buildExpression(jsonResult.intent)); } catch (e) {
+          console.warn(`[Ref Discovery] Failed to build expression from JSON ValueIntent in property value: ${(e as Error).message}`);
+        }
+      }
+    }
+  } else if (isValueIntent(val)) {
+    try { out.push(buildExpression(val as ValueIntent)); } catch (e) {
+      console.warn(`[Ref Discovery] Failed to build expression from ValueIntent: ${(e as Error).message}`);
+    }
+  } else if (val !== null && val !== undefined && typeof val === "object") {
+    if (Array.isArray(val)) {
+      for (const item of val) collectStringsFromValue(item, out);
+    } else {
+      for (const v of Object.values(val as Record<string, unknown>)) {
+        collectStringsFromValue(v, out);
+      }
+    }
+  }
+}
+
 function walkNodeForArgumentRefs(node: WorkflowNode, registry: DeclarationRegistry, workflowName: string): void {
   if (node.kind === "activity") {
     const actNode = node as ActivityNode;
@@ -486,54 +525,52 @@ function walkNodeForArgumentRefs(node: WorkflowNode, registry: DeclarationRegist
     if (actNode.outputVar) allStrings.push(actNode.outputVar);
 
     for (const [, val] of Object.entries(actNode.properties || {})) {
-      if (typeof val === "string") {
-        allStrings.push(val);
-      } else if (isValueIntent(val)) {
-        const built = buildExpression(val as ValueIntent);
-        allStrings.push(built);
-      }
+      collectStringsFromValue(val, allStrings);
     }
 
-    for (const str of allStrings) {
-      const refs = extractArgumentRefsFromString(str);
-      for (const argName of refs) {
-        discoverAndRegisterArgRef(argName, registry, workflowName);
-      }
-      const varRefs = extractPrefixedVarRefsFromString(str);
-      for (const varName of varRefs) {
-        discoverAndRegisterVarRef(varName, registry, workflowName);
-      }
-    }
+    extractRefsFromStrings(allStrings, registry, workflowName);
   }
 
   if (node.kind === "if") {
     const ifNode = node as IfNode;
-    const condStr = typeof ifNode.condition === "string"
-      ? ifNode.condition
-      : buildExpression(ifNode.condition as ValueIntent);
-    const refs = extractArgumentRefsFromString(condStr);
-    for (const argName of refs) {
-      discoverAndRegisterArgRef(argName, registry, workflowName);
+    const condStrings: string[] = [];
+    if (typeof ifNode.condition === "string") {
+      condStrings.push(ifNode.condition);
+      if (containsValueIntentJson(ifNode.condition)) {
+        const jsonResult = tryParseJsonValueIntent(ifNode.condition);
+        if (jsonResult) {
+          try { condStrings.push(buildExpression(jsonResult.intent)); } catch (e) {
+            console.warn(`[Ref Discovery] Failed to build expression from If condition JSON: ${(e as Error).message}`);
+          }
+        }
+      }
+    } else {
+      try { condStrings.push(buildExpression(ifNode.condition as ValueIntent)); } catch (e) {
+        console.warn(`[Ref Discovery] Failed to build expression from If condition ValueIntent: ${(e as Error).message}`);
+      }
     }
-    const varRefs = extractPrefixedVarRefsFromString(condStr);
-    for (const varName of varRefs) {
-      discoverAndRegisterVarRef(varName, registry, workflowName);
-    }
+    extractRefsFromStrings(condStrings, registry, workflowName);
   }
 
   if (node.kind === "while") {
     const whileNode = node as WhileNode;
-    const condStr = typeof whileNode.condition === "string"
-      ? whileNode.condition
-      : buildExpression(whileNode.condition as ValueIntent);
-    const refs = extractArgumentRefsFromString(condStr);
-    for (const argName of refs) {
-      discoverAndRegisterArgRef(argName, registry, workflowName);
+    const condStrings: string[] = [];
+    if (typeof whileNode.condition === "string") {
+      condStrings.push(whileNode.condition);
+      if (containsValueIntentJson(whileNode.condition)) {
+        const jsonResult = tryParseJsonValueIntent(whileNode.condition);
+        if (jsonResult) {
+          try { condStrings.push(buildExpression(jsonResult.intent)); } catch (e) {
+            console.warn(`[Ref Discovery] Failed to build expression from While condition JSON: ${(e as Error).message}`);
+          }
+        }
+      }
+    } else {
+      try { condStrings.push(buildExpression(whileNode.condition as ValueIntent)); } catch (e) {
+        console.warn(`[Ref Discovery] Failed to build expression from While condition ValueIntent: ${(e as Error).message}`);
+      }
     }
-    const varRefs = extractPrefixedVarRefsFromString(condStr);
-    for (const varName of varRefs) {
-      discoverAndRegisterVarRef(varName, registry, workflowName);
-    }
+    extractRefsFromStrings(condStrings, registry, workflowName);
   }
 
   if (node.kind === "forEach") {
@@ -541,14 +578,16 @@ function walkNodeForArgumentRefs(node: WorkflowNode, registry: DeclarationRegist
     const scopeId = `forEach::${forEachNode.displayName}`;
     registry.pushScope(scopeId);
 
-    const refs = extractArgumentRefsFromString(forEachNode.valuesExpression);
-    for (const argName of refs) {
-      discoverAndRegisterArgRef(argName, registry, workflowName);
+    const forEachStrings: string[] = [forEachNode.valuesExpression];
+    if (containsValueIntentJson(forEachNode.valuesExpression)) {
+      const jsonResult = tryParseJsonValueIntent(forEachNode.valuesExpression);
+      if (jsonResult) {
+        try { forEachStrings.push(buildExpression(jsonResult.intent)); } catch (e) {
+          console.warn(`[Ref Discovery] Failed to build expression from ForEach values JSON: ${(e as Error).message}`);
+        }
+      }
     }
-    const varRefs = extractPrefixedVarRefsFromString(forEachNode.valuesExpression);
-    for (const varName of varRefs) {
-      discoverAndRegisterVarRef(varName, registry, workflowName);
-    }
+    extractRefsFromStrings(forEachStrings, registry, workflowName);
 
     if (forEachNode.bodyChildren) {
       for (const child of forEachNode.bodyChildren) {
@@ -580,6 +619,16 @@ function walkNodeForArgumentRefs(node: WorkflowNode, registry: DeclarationRegist
 
     if (tryCatchNode.finallyChildren) {
       for (const child of tryCatchNode.finallyChildren) {
+        walkNodeForArgumentRefs(child, registry, workflowName);
+      }
+    }
+    return;
+  }
+
+  if (node.kind === "retryScope") {
+    const retryScopeNode = node as RetryScopeNode;
+    if (retryScopeNode.bodyChildren) {
+      for (const child of retryScopeNode.bodyChildren) {
         walkNodeForArgumentRefs(child, registry, workflowName);
       }
     }
@@ -1491,7 +1540,21 @@ export function resolveActivityTemplate(
     const rawLevel = (getPropString(props, "Level", "level") || "Info")
       .replace(/&quot;/g, "").replace(/^"+|"+$/g, "").trim();
     const level = ENUM_NORMALIZE[rawLevel.toLowerCase()] || rawLevel;
-    const message = getPropString(props, "Message", "message") || `"${displayName}"`;
+    const messageRaw = props.Message || props.message;
+    let message: string;
+    if (messageRaw !== undefined && isValueIntent(messageRaw)) {
+      message = buildExpression(messageRaw as ValueIntent);
+    } else if (typeof messageRaw === "string" && containsValueIntentJson(messageRaw)) {
+      const jsonResult = tryParseJsonValueIntent(messageRaw);
+      if (jsonResult) {
+        message = buildExpression(jsonResult.intent);
+        emitJsonResolutionDiagnostic(messageRaw, jsonResult.intent, message, jsonResult.fallbackUsed);
+      } else {
+        message = getPropString(props, "Message", "message") || `"${displayName}"`;
+      }
+    } else {
+      message = getPropString(props, "Message", "message") || `"${displayName}"`;
+    }
     let wrappedMessage: string;
     if (looksLikePlainText(message, _activeDeclarationLookup || undefined)) {
       wrappedMessage = `"${message.replace(/"/g, '""')}"`;
@@ -3716,6 +3779,100 @@ function demoteUndeclaredBracketReferences(xml: string, registry: DeclarationReg
   });
 }
 
+function lowerPropertyValueInPlace(obj: Record<string, any>, key: string): void {
+  const val = obj[key];
+  if (typeof val === "string" && containsValueIntentJson(val)) {
+    const jsonResult = tryParseJsonValueIntent(val);
+    if (jsonResult) {
+      try {
+        const resolved = buildExpression(jsonResult.intent);
+        obj[key] = jsonResult.intent;
+        emitJsonResolutionDiagnostic(val, jsonResult.intent, resolved, jsonResult.fallbackUsed);
+        console.log(`[Pre-Assembly Lowering] Resolved JSON ValueIntent in property "${key}": ${val.substring(0, 80)} → ${resolved.substring(0, 80)}`);
+      } catch (e) {
+        console.warn(`[Pre-Assembly Lowering] Failed to lower property "${key}": ${(e as Error).message}`);
+      }
+    }
+  } else if (val !== null && val !== undefined && typeof val === "object" && !isValueIntent(val)) {
+    if (Array.isArray(val)) {
+      for (let i = 0; i < val.length; i++) {
+        lowerPropertyValueInPlace(val, String(i));
+      }
+    } else {
+      for (const nestedKey of Object.keys(val)) {
+        lowerPropertyValueInPlace(val, nestedKey);
+      }
+    }
+  }
+}
+
+function preAssemblyLowerValueIntents(node: WorkflowNode): void {
+  if (node.kind === "activity") {
+    const actNode = node as ActivityNode;
+    const props = actNode.properties;
+    if (props) {
+      for (const key of Object.keys(props)) {
+        lowerPropertyValueInPlace(props as Record<string, any>, key);
+      }
+    }
+  }
+
+  if (node.kind === "if") {
+    const ifNode = node as IfNode;
+    if (typeof ifNode.condition === "string" && containsValueIntentJson(ifNode.condition)) {
+      const jsonResult = tryParseJsonValueIntent(ifNode.condition);
+      if (jsonResult) {
+        ifNode.condition = jsonResult.intent as ValueIntent;
+        console.log(`[Pre-Assembly Lowering] Resolved JSON ValueIntent in If condition`);
+      }
+    }
+  }
+
+  if (node.kind === "while") {
+    const whileNode = node as WhileNode;
+    if (typeof whileNode.condition === "string" && containsValueIntentJson(whileNode.condition)) {
+      const jsonResult = tryParseJsonValueIntent(whileNode.condition);
+      if (jsonResult) {
+        whileNode.condition = jsonResult.intent as ValueIntent;
+        console.log(`[Pre-Assembly Lowering] Resolved JSON ValueIntent in While condition`);
+      }
+    }
+  }
+
+  if (node.kind === "forEach") {
+    const forEachNode = node as ForEachNode;
+    if (containsValueIntentJson(forEachNode.valuesExpression)) {
+      const originalValuesExpr = forEachNode.valuesExpression;
+      const jsonResult = tryParseJsonValueIntent(originalValuesExpr);
+      if (jsonResult) {
+        try {
+          const resolved = buildExpression(jsonResult.intent);
+          forEachNode.valuesExpression = resolved;
+          emitJsonResolutionDiagnostic(originalValuesExpr, jsonResult.intent, resolved, jsonResult.fallbackUsed);
+          console.log(`[Pre-Assembly Lowering] Resolved JSON ValueIntent in ForEach valuesExpression: ${originalValuesExpr.substring(0, 80)} → ${resolved}`);
+        } catch (e) {
+          console.warn(`[Pre-Assembly Lowering] Failed to lower ForEach valuesExpression: ${(e as Error).message}`);
+        }
+      }
+    }
+  }
+
+  const childArrays: WorkflowNode[][] = [];
+  if ("children" in node && Array.isArray((node as any).children)) childArrays.push((node as any).children);
+  if ("thenChildren" in node && Array.isArray((node as any).thenChildren)) childArrays.push((node as any).thenChildren);
+  if ("elseChildren" in node && Array.isArray((node as any).elseChildren)) childArrays.push((node as any).elseChildren);
+  if ("bodyChildren" in node && Array.isArray((node as any).bodyChildren)) childArrays.push((node as any).bodyChildren);
+  if ("tryChildren" in node && Array.isArray((node as any).tryChildren)) childArrays.push((node as any).tryChildren);
+  if ("catchChildren" in node && Array.isArray((node as any).catchChildren)) childArrays.push((node as any).catchChildren);
+  if ("finallyChildren" in node && Array.isArray((node as any).finallyChildren)) childArrays.push((node as any).finallyChildren);
+
+  for (const arr of childArrays) {
+    for (const child of arr) {
+      preAssemblyLowerValueIntents(child);
+    }
+  }
+}
+
 export function assembleWorkflowFromSpec(
   spec: WorkflowSpec,
   processType: ProcessType = "general",
@@ -3806,6 +3963,10 @@ export function assembleWorkflowFromSpec(
   registerScopedDeclarations(sanitizedRootChildren, registry);
 
   validateStructurallyKnownLocals(sanitizedRootChildren, registry, workflowName);
+
+  for (const child of sanitizedRootChildren) {
+    preAssemblyLowerValueIntents(child);
+  }
 
   const syntheticRoot: SequenceNode = { kind: "sequence", displayName: workflowName, children: sanitizedRootChildren };
   walkNodeForArgumentRefs(syntheticRoot, registry, workflowName);

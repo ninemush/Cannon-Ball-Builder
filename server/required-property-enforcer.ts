@@ -1212,6 +1212,79 @@ function stripSentinelValuesFromRequiredProperties(content: string): string {
   return result;
 }
 
+function extractBalancedBraceBlock(content: string, startIdx: number): string | null {
+  if (content[startIdx] !== '{') return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = startIdx; i < content.length; i++) {
+    const ch = content[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"' && !escaped) { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return content.substring(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+function lowerBalancedJsonValueIntents(
+  content: string,
+  fileName: string,
+  workflowName: string,
+  failures?: ExpressionLoweringFailure[],
+): string {
+  const typeMarker = /"type"\s*:\s*"(?:url_with_params|expression|variable|literal|vb_expression)"/;
+  let result = content;
+  let searchFrom = 0;
+
+  while (searchFrom < result.length) {
+    const braceIdx = result.indexOf('{"type"', searchFrom);
+    if (braceIdx === -1) break;
+
+    const block = extractBalancedBraceBlock(result, braceIdx);
+    if (!block) { searchFrom = braceIdx + 1; continue; }
+    if (!typeMarker.test(block)) { searchFrom = braceIdx + block.length; continue; }
+
+    const optionalBracketStart = braceIdx > 0 && result[braceIdx - 1] === '[';
+    const optionalBracketEnd = braceIdx + block.length < result.length && result[braceIdx + block.length] === ']';
+    const fullMatch = optionalBracketStart && optionalBracketEnd
+      ? result.substring(braceIdx - 1, braceIdx + block.length + 1)
+      : block;
+    const matchStart = optionalBracketStart && optionalBracketEnd ? braceIdx - 1 : braceIdx;
+
+    const jsonResult = tryParseJsonValueIntent(fullMatch);
+    if (jsonResult) {
+      try {
+        const built = buildExpression(jsonResult.intent);
+        if (built && !isSentinelValue(built)) {
+          result = result.substring(0, matchStart) + built + result.substring(matchStart + fullMatch.length);
+          searchFrom = matchStart + built.length;
+          continue;
+        }
+      } catch {}
+      if (failures) {
+        failures.push({
+          file: fileName,
+          workflow: workflowName,
+          activityType: "unknown",
+          propertyName: "unknown",
+          originalValue: fullMatch.substring(0, 200),
+          failureReason: `Balanced JSON lowering failed for structured expression in ${fileName}`,
+          severity: "execution_blocking",
+          packageModeOutcome: "structured_defect",
+        });
+      }
+    }
+    searchFrom = braceIdx + block.length;
+  }
+  return result;
+}
+
 function lowerStructuredExpressionsInContent(
   content: string,
   entryName?: string,
@@ -1224,6 +1297,12 @@ function lowerStructuredExpressionsInContent(
   const viPatterns = [
     /\{"type":"[^"]*","value":"([^"]*)"\}/g,
     /\{&quot;type&quot;:&quot;[^&]*&quot;,&quot;value&quot;:&quot;([^&]*)&quot;\}/g,
+    /\{"type"\s*:\s*"expression"\s*,\s*"left"\s*:\s*"[^"]*"\s*,\s*"operator"\s*:\s*"[^"]*"\s*,\s*"right"\s*:\s*"[^"]*"\s*\}/g,
+    /\{"type"\s*:\s*"variable"\s*,\s*"name"\s*:\s*"[^"]*"\s*\}/g,
+    /\{"name"\s*:\s*"[^"]*"\s*,\s*"type"\s*:\s*"variable"\s*\}/g,
+    /\{&quot;type&quot;\s*:\s*&quot;expression&quot;\s*,\s*&quot;left&quot;\s*:\s*&quot;[^&]*&quot;\s*,\s*&quot;operator&quot;\s*:\s*&quot;[^&]*&quot;\s*,\s*&quot;right&quot;\s*:\s*&quot;[^&]*&quot;\s*\}/g,
+    /\{&quot;type&quot;\s*:\s*&quot;variable&quot;\s*,\s*&quot;name&quot;\s*:\s*&quot;[^&]*&quot;\s*\}/g,
+    /\[?\{"type"\s*:\s*"[^"]*"[^}]*\}\]?/g,
   ];
 
   for (const pattern of viPatterns) {
@@ -1237,7 +1316,6 @@ function lowerStructuredExpressionsInContent(
             return built;
           }
         } catch {
-          // fall through to failure recording
         }
       }
       if (failures) {
@@ -1255,6 +1333,8 @@ function lowerStructuredExpressionsInContent(
       return fullMatch;
     });
   }
+
+  result = lowerBalancedJsonValueIntents(result, fileName, workflowName, failures);
 
   return result;
 }
