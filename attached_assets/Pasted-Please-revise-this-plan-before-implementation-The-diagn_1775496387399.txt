@@ -1,0 +1,40 @@
+Please revise this plan before implementation.
+
+The diagnosis is strong, but the task is still too broad. It currently combines five major root-cause classes into one implementation unit:
+1. JSON expression lowering authority
+2. InvokeWorkflowFile argument serialization
+3. Cross-workflow target argument declaration in x:Members
+4. REFramework wiring behavior when LLM Main.xaml exists
+5. Required-property value passthrough and variable/argument auto-discovery
+
+That is too much blast radius for one task and will make it hard to validate causality, isolate regressions, or safely rollback.
+
+Please split this into two narrower tasks:
+
+Task A: Expression and Value Passthrough Authority
+Scope:
+- Fix JSON expression intermediate lowering coverage
+- Handle bracket-wrapped JSON forms
+- Handle XML-entity-encoded JSON forms
+- Add pre-assembly lowering so JSON intermediates never reach XML serialization
+- Fix required-property value passthrough for dedicated templates that currently bypass dynamic ValueIntent resolution, especially:
+  - Assign.To
+  - LogMessage.Message
+  - and any other dedicated templates that currently rely on getPropString in ways that lose structured values
+- Extend pre-emission variable/argument discovery to control-flow conditions, catch/finally bodies, and nested structured property values
+- Add focused regression tests only for expression/value lowering and symbol discovery
+
+Task B: Workflow Contract and REFramework Wiring Authority
+Scope:
+- Fix InvokeWorkflowFile argument serialization from tree spec
+- Define how target workflow arguments are declared in x:Members / x:Property blocks
+- Do not guess types or directions without explicit evidence from tree spec structure or the existing in_/out_/io_ naming convention
+- Define authoritative REFramework behavior when LLM Main.xaml exists
+- Align package-assembler reachability and workflow-graph-validator infrastructure classification
+- Add focused regression tests only for invoke contracts, target workflow declarations, and REFramework graph connectivity
+
+Keep the diagnosis, goals, and out-of-scope philosophy.
+Do not broaden scope.
+Do not merge the two split tasks back together.
+
+Output the two revised final task prompts only.
