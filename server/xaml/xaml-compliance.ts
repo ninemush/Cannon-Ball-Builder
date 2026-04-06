@@ -1655,6 +1655,62 @@ export function validateActivityTagSemantics(xml: string): { valid: boolean; err
   return { valid: errors.length === 0, errors, warnings, repairedXml };
 }
 
+export function repairDottedTagPrefixConsistency(xml: string): string {
+  const dottedOpenPrefixed = /<([a-zA-Z]+):([A-Za-z]+(?:\.[A-Za-z]+)+)[\s>\/]/g;
+  const dottedPrefixMap = new Map<string, string>();
+  let dm;
+  while ((dm = dottedOpenPrefixed.exec(xml)) !== null) {
+    const prefix = dm[1];
+    const localName = dm[2];
+    if (!dottedPrefixMap.has(localName)) {
+      dottedPrefixMap.set(localName, prefix);
+    }
+  }
+
+  const unprefixedDottedOpen = /<(?![a-zA-Z]+:)([A-Za-z]+)((?:\.[A-Za-z]+)+)([\s>\/])/g;
+  xml = xml.replace(unprefixedDottedOpen, (match, baseName, dottedSuffix, after) => {
+    const localName = `${baseName}${dottedSuffix}`;
+    let prefix = dottedPrefixMap.get(localName);
+    if (!prefix) {
+      const strictPrefix = getActivityPrefixStrict(baseName);
+      if (strictPrefix) {
+        prefix = strictPrefix;
+      }
+    }
+    if (prefix) {
+      return `<${prefix}:${baseName}${dottedSuffix}${after}`;
+    }
+    return match;
+  });
+
+  const unprefixedDottedClose = /<\/(?![a-zA-Z]+:)([A-Za-z]+(?:\.[A-Za-z]+)+)>/g;
+  xml = xml.replace(unprefixedDottedClose, (match, localName) => {
+    let prefix = dottedPrefixMap.get(localName);
+    if (!prefix) {
+      const baseName = localName.split(".")[0];
+      const strictPrefix = getActivityPrefixStrict(baseName);
+      if (strictPrefix) {
+        prefix = strictPrefix;
+      }
+    }
+    if (prefix) {
+      return `</${prefix}:${localName}>`;
+    }
+    return match;
+  });
+
+  const closingDottedPrefixed = /<\/([a-zA-Z]+):([A-Za-z]+(?:\.[A-Za-z]+)+)>/g;
+  xml = xml.replace(closingDottedPrefixed, (match, closingPrefix, localName) => {
+    const expectedPrefix = dottedPrefixMap.get(localName);
+    if (expectedPrefix && expectedPrefix !== closingPrefix) {
+      return `</${expectedPrefix}:${localName}>`;
+    }
+    return match;
+  });
+
+  return xml;
+}
+
 export function validateXmlWellFormedness(xml: string): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
@@ -1974,6 +2030,8 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
     xml = xml.replace(new RegExp(`<\\/ui:${escaped}\\.`, "g"), `</${sysActivity}.`);
   }
 
+  xml = repairDottedTagPrefixConsistency(xml);
+
   const aliasNormalization = normalizeNamespaceAliases(xml);
   if (aliasNormalization.warnings.length > 0) {
     xml = aliasNormalization.xml;
@@ -1998,6 +2056,8 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
     }
     throw new Error(`XAML activity tag semantic validation failed: ${semanticValidation.errors.join("; ")}`);
   }
+
+  xml = repairDottedTagPrefixConsistency(xml);
 
   xml = injectDynamicNamespaceDeclarations(xml, isCrossPlatform);
 

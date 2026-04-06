@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { assembleNode, assembleWorkflowFromSpec, resolveActivityTemplate, lintAndFixVbExpression, CSharpExpressionBlockedError, validateContainerChildModel } from "../workflow-tree-assembler";
 import { validateWorkflowSpec, type WorkflowNode, type WorkflowSpec, type ActivityNode, type VariableDeclaration } from "../workflow-spec-types";
 import { makeUiPathCompliant } from "../xaml-generator";
-import { collapseDoubledArgumentsXmlParser } from "../xaml/xaml-compliance";
+import { collapseDoubledArgumentsXmlParser, repairDottedTagPrefixConsistency } from "../xaml/xaml-compliance";
 
 describe("Workflow Tree Architecture", () => {
   describe("WorkflowSpec Zod Validation", () => {
@@ -1048,6 +1048,185 @@ describe("Workflow Tree Architecture", () => {
       const result = validateContainerChildModel(xaml, "TestWf");
       expect(result.repairs.length).toBeGreaterThan(0);
       expect(result.repairedXaml).toContain("Transition.Condition");
+    });
+  });
+
+  describe("Dotted tag prefix consistency (InvokeWorkflowFile.Arguments)", () => {
+    it("repairs mismatched prefix: unprefixed opening + prefixed closing dotted tag", () => {
+      const xml = `<ui:InvokeWorkflowFile WorkflowFileName="Sub.xaml" DisplayName="Call Sub">
+  <InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String">[str_Input]</InArgument>
+  </ui:InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>`;
+      const result = repairDottedTagPrefixConsistency(xml);
+      expect(result).toContain("<ui:InvokeWorkflowFile.Arguments>");
+      expect(result).toContain("</ui:InvokeWorkflowFile.Arguments>");
+      const openCount = (result.match(/<ui:InvokeWorkflowFile\.Arguments[\s>]/g) || []).length;
+      const closeCount = (result.match(/<\/ui:InvokeWorkflowFile\.Arguments>/g) || []).length;
+      expect(openCount).toBe(closeCount);
+    });
+
+    it("repairs mismatched prefix: prefixed opening + unprefixed closing dotted tag", () => {
+      const xml = `<ui:InvokeWorkflowFile WorkflowFileName="Sub.xaml" DisplayName="Call Sub">
+  <ui:InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String">[str_Input]</InArgument>
+  </InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>`;
+      const result = repairDottedTagPrefixConsistency(xml);
+      expect(result).toContain("<ui:InvokeWorkflowFile.Arguments>");
+      expect(result).toContain("</ui:InvokeWorkflowFile.Arguments>");
+    });
+
+    it("repairs both opening and closing unprefixed dotted tags", () => {
+      const xml = `<ui:InvokeWorkflowFile WorkflowFileName="Sub.xaml" DisplayName="Call Sub">
+  <InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String">[str_Input]</InArgument>
+  </InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>`;
+      const result = repairDottedTagPrefixConsistency(xml);
+      expect(result).toContain("<ui:InvokeWorkflowFile.Arguments>");
+      expect(result).toContain("</ui:InvokeWorkflowFile.Arguments>");
+    });
+
+    it("is idempotent — already-correct XAML passes through unchanged", () => {
+      const xml = `<ui:InvokeWorkflowFile WorkflowFileName="Sub.xaml" DisplayName="Call Sub">
+  <ui:InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String">[str_Input]</InArgument>
+  </ui:InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>`;
+      const pass1 = repairDottedTagPrefixConsistency(xml);
+      const pass2 = repairDottedTagPrefixConsistency(pass1);
+      expect(pass2).toBe(pass1);
+    });
+
+    it("handles multiple dotted child-element tags generically", () => {
+      const xml = `<ui:GetCredential DisplayName="Get Creds">
+  <GetCredential.Username>
+    <OutArgument x:TypeArguments="x:String">[str_User]</OutArgument>
+  </GetCredential.Username>
+  <GetCredential.Password>
+    <OutArgument x:TypeArguments="x:String">[sec_Pass]</OutArgument>
+  </ui:GetCredential.Password>
+</ui:GetCredential>`;
+      const result = repairDottedTagPrefixConsistency(xml);
+      expect(result).toContain("<ui:GetCredential.Username>");
+      expect(result).toContain("</ui:GetCredential.Username>");
+      expect(result).toContain("<ui:GetCredential.Password>");
+      expect(result).toContain("</ui:GetCredential.Password>");
+    });
+
+    it("idempotency on diverse dotted tags — second pass produces byte-identical output", () => {
+      const xml = `<ui:InvokeWorkflowFile WorkflowFileName="Sub.xaml" DisplayName="Call Sub">
+  <ui:InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String">[str_Input]</InArgument>
+  </ui:InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>
+<ui:GetCredential DisplayName="Get Creds">
+  <ui:GetCredential.Username>
+    <OutArgument x:TypeArguments="x:String">[str_User]</OutArgument>
+  </ui:GetCredential.Username>
+  <ui:GetCredential.Password>
+    <OutArgument x:TypeArguments="x:String">[sec_Pass]</OutArgument>
+  </ui:GetCredential.Password>
+</ui:GetCredential>`;
+      const pass1 = repairDottedTagPrefixConsistency(xml);
+      const pass2 = repairDottedTagPrefixConsistency(pass1);
+      expect(pass2).toBe(pass1);
+      expect(pass1).toBe(xml);
+    });
+
+    it("InvokeWorkflowFile with Input/Output through full compliance produces consistent prefixes", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Test"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <ui:InvokeWorkflowFile WorkflowFileName="ProcessBirthday.xaml" DisplayName="Process Birthday">
+      <ui:InvokeWorkflowFile.Arguments>
+        <InArgument x:TypeArguments="x:String" x:Key="in_Name">[str_Name]</InArgument>
+      </ui:InvokeWorkflowFile.Arguments>
+    </ui:InvokeWorkflowFile>
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml);
+      expect(result).toContain("<ui:InvokeWorkflowFile.Arguments>");
+      expect(result).toContain("</ui:InvokeWorkflowFile.Arguments>");
+      expect(result).not.toMatch(/<(?!ui:)InvokeWorkflowFile\.Arguments/);
+      expect(result).not.toMatch(/<\/(?!ui:)InvokeWorkflowFile\.Arguments>/);
+    });
+
+    it("already-resolved VB.NET expressions pass through unchanged", () => {
+      const xml = `<ui:InvokeWorkflowFile WorkflowFileName="Sub.xaml" DisplayName="Call Sub">
+  <ui:InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String">[str_AlreadyResolved]</InArgument>
+    <OutArgument x:TypeArguments="x:Int32">[int_Result]</OutArgument>
+  </ui:InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>`;
+      const result = repairDottedTagPrefixConsistency(xml);
+      expect(result).toContain("[str_AlreadyResolved]");
+      expect(result).toContain("[int_Result]");
+      expect(result).toBe(xml);
+    });
+
+    it("InvokeWorkflowFile with both Input and Output attributes through full compliance — expansion path", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <ui:InvokeWorkflowFile WorkflowFileName="ProcessBirthday.xaml" DisplayName="Process Birthday" Input="{&quot;in_Name&quot;: &quot;str_Name&quot;, &quot;in_Date&quot;: &quot;str_Date&quot;}" Output="{&quot;out_Result&quot;: &quot;str_Result&quot;}" />
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml);
+      expect(result).toContain("<ui:InvokeWorkflowFile.Arguments>");
+      expect(result).toContain("</ui:InvokeWorkflowFile.Arguments>");
+      expect(result).not.toMatch(/<(?![a-zA-Z]+:)InvokeWorkflowFile\.Arguments[\s>]/);
+      expect(result).not.toMatch(/<\/(?![a-zA-Z]+:)InvokeWorkflowFile\.Arguments>/);
+      const openMatches = result.match(/<ui:InvokeWorkflowFile\.Arguments>/g) || [];
+      const closeMatches = result.match(/<\/ui:InvokeWorkflowFile\.Arguments>/g) || [];
+      expect(openMatches.length).toBe(closeMatches.length);
+      expect(openMatches.length).toBeGreaterThanOrEqual(1);
+      expect(result).toContain("in_Name");
+      expect(result).toContain("out_Result");
+    });
+
+    it("timing/order: pre-existing dotted tags and expansion-generated dotted tags receive identical prefix treatment", () => {
+      const xaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence DisplayName="Main">
+    <ui:InvokeWorkflowFile WorkflowFileName="SubA.xaml" DisplayName="Call SubA">
+      <ui:InvokeWorkflowFile.Arguments>
+        <InArgument x:TypeArguments="x:String" x:Key="in_Existing">[str_Existing]</InArgument>
+      </ui:InvokeWorkflowFile.Arguments>
+    </ui:InvokeWorkflowFile>
+    <ui:InvokeWorkflowFile WorkflowFileName="SubB.xaml" DisplayName="Call SubB" Input="{&quot;in_Expanded&quot;: &quot;str_Expanded&quot;}" Output="{&quot;out_Expanded&quot;: &quot;str_ExpandedOut&quot;}" />
+  </Sequence>
+</Activity>`;
+      const result = makeUiPathCompliant(xaml);
+      const allDottedOpens = result.match(/<[a-zA-Z]*:?InvokeWorkflowFile\.Arguments[\s>]/g) || [];
+      const allDottedCloses = result.match(/<\/[a-zA-Z]*:?InvokeWorkflowFile\.Arguments>/g) || [];
+      for (const tag of allDottedOpens) {
+        expect(tag).toMatch(/^<ui:InvokeWorkflowFile\.Arguments/);
+      }
+      for (const tag of allDottedCloses) {
+        expect(tag).toBe("</ui:InvokeWorkflowFile.Arguments>");
+      }
+      expect(allDottedOpens.length).toBe(allDottedCloses.length);
+      expect(allDottedOpens.length).toBeGreaterThanOrEqual(2);
     });
   });
 });
