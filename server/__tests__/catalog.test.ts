@@ -294,6 +294,21 @@ describe("Activity Catalog", () => {
       const pkg = catalogService.getPackageForActivity("ui:NonExistent");
       expect(pkg).toBeNull();
     });
+
+    it("returns UiPath.Excel.Activities for ExcelReadRange (Task #447)", () => {
+      const pkg = catalogService.getPackageForActivity("ExcelReadRange");
+      expect(pkg).toBe("UiPath.Excel.Activities");
+    });
+
+    it("returns UiPath.Excel.Activities for ExcelApplicationScope (Task #447)", () => {
+      const pkg = catalogService.getPackageForActivity("ExcelApplicationScope");
+      expect(pkg).toBe("UiPath.Excel.Activities");
+    });
+
+    it("returns UiPath.Excel.Activities for ExcelWriteRange (Task #447)", () => {
+      const pkg = catalogService.getPackageForActivity("ExcelWriteRange");
+      expect(pkg).toBe("UiPath.Excel.Activities");
+    });
   });
 
   describe("Catalog Service - getActivitiesForPackage", () => {

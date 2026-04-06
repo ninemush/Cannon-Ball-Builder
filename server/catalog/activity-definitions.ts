@@ -2766,6 +2766,12 @@ const SYSTEM_ACTIVITIES_ENRICHED: PackageActivityDefs = {
       processTypes: ["general", "api-integration", "orchestration", "attended-ui", "unattended-ui"],
       properties: [],
     },
+  ],
+};
+
+const EXCEL_ACTIVITIES: PackageActivityDefs = {
+  packageId: "UiPath.Excel.Activities",
+  activities: [
     {
       className: "ExcelApplicationScope",
       displayName: "Excel Application Scope",
@@ -3084,6 +3090,7 @@ const SYSTEM_CORE_ACTIVITIES_ENRICHED: PackageActivityDefs = {
 export const ACTIVITY_DEFINITIONS_REGISTRY: PackageActivityDefs[] = [
   SYSTEM_CORE_ACTIVITIES_ENRICHED,
   SYSTEM_ACTIVITIES_ENRICHED,
+  EXCEL_ACTIVITIES,
   UIAUTOMATION_ACTIVITIES_ENRICHED,
   PDF_ACTIVITIES,
   WORD_ACTIVITIES,

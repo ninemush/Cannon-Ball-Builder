@@ -2235,12 +2235,13 @@ export function resolveDependencies(
     for (const xamlContent of xamlContentSources) {
       for (const [pkgName, triggers] of Object.entries(PROACTIVE_COMMON_PACKAGES)) {
         for (const trigger of triggers) {
-          if (xamlContent.includes(trigger)) {
+          const tagPattern = new RegExp(`<[A-Za-z]*:?${trigger}[\\s/>]`);
+          if (tagPattern.test(xamlContent)) {
             const normalized = normalizePackageName(pkgName);
             if (!referencedPackages.has(normalized)) {
               referencedPackages.add(normalized);
               specPredictedPackages.add(normalized);
-              console.log(`[Dependency Resolution] Proactively added ${pkgName} — XAML content references activity "${trigger}"`);
+              console.log(`[Dependency Resolution] Proactively added ${pkgName} — XAML content references activity tag "${trigger}"`);
             }
             break;
           }
@@ -4699,6 +4700,22 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     });
     const allXamlContent = allXamlParts.join("\n");
     const depAlignmentXamlContent = prePruningXamlContent;
+
+    {
+      const emittedXamlSources = prePruningXamlParts.length > 0 ? prePruningXamlParts : [];
+      if (emittedXamlSources.length > 0) {
+        const emittedDepRes = resolveDependencies({ workflows: [] }, _studioProfile, null, tf as "Windows" | "Portable", emittedXamlSources);
+        for (const [pkgName, version] of Object.entries(emittedDepRes.deps)) {
+          if (!deps[pkgName]) {
+            deps[pkgName] = version;
+            proactivelyResolvedPackages.add(pkgName);
+            specPredictedPackages.add(pkgName);
+            console.log(`[Dependency Resolution] Proactively added ${pkgName}@${version} — discovered via emitted XAML content re-resolution`);
+          }
+        }
+      }
+    }
+
     const scannedPackages = scanXamlForRequiredPackages(depAlignmentXamlContent);
 
     {

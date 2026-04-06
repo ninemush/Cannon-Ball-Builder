@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { wrapVariableDefault } from "../workflow-tree-assembler";
 import { canonicalizeWorkflowName, detectFinalDedupCollisions, resolveDependencies, assertDhgArchiveParity } from "../package-assembler";
 import { ACTIVITY_DEFINITIONS_REGISTRY } from "../catalog/activity-definitions";
+import type { WorkflowSpec as TreeWorkflowSpec } from "../workflow-spec-types";
 
 describe("Task 388: Pipeline integrity — dependencies, namespaces, and package-DHG parity", () => {
 
@@ -141,6 +142,91 @@ describe("Task 388: Pipeline integrity — dependencies, namespaces, and package
         "Windows",
       );
       expect(result.deps["UiPath.UIAutomation.Activities"]).toBeUndefined();
+    });
+  });
+
+  describe("Task #447: Excel activities proactive resolution via catalog", () => {
+    function makeTreeSpec(activities: Array<{ template: string; displayName: string }>): TreeWorkflowSpec {
+      return {
+        name: "Main",
+        description: "Test workflow",
+        variables: [],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence",
+          displayName: "Main Sequence",
+          children: activities.map(a => ({
+            kind: "activity" as const,
+            template: a.template,
+            displayName: a.displayName,
+            properties: {},
+            errorHandling: "none" as const,
+          })),
+        },
+        useReFramework: false,
+        dhgNotes: [],
+        decomposition: [],
+      };
+    }
+
+    it("resolveDependencies proactively adds UiPath.Excel.Activities when spec mentions ExcelReadRange", () => {
+      const treeSpec = makeTreeSpec([
+        { template: "ExcelApplicationScope", displayName: "Excel Application Scope" },
+        { template: "ExcelReadRange", displayName: "Read Range" },
+      ]);
+      const result = resolveDependencies(
+        { workflows: [] },
+        null,
+        [treeSpec],
+        "Windows",
+      );
+      expect(result.deps["UiPath.Excel.Activities"]).toBeDefined();
+      expect(result.specPredictedPackages.has("UiPath.Excel.Activities")).toBe(true);
+      const discoveredWarning = result.warnings.find(w => w.code === "DEPENDENCY_DISCOVERED_IN_XAML" && w.message.includes("UiPath.Excel.Activities"));
+      expect(discoveredWarning).toBeUndefined();
+    });
+
+    it("resolveDependencies proactively adds packages from xamlContentSources — no DEPENDENCY_DISCOVERED_IN_XAML warning", () => {
+      const xamlContent = `<umail:SendSmtpMailMessage Subject="Test" />`;
+      const result = resolveDependencies(
+        { workflows: [] },
+        null,
+        null,
+        "Windows",
+        [xamlContent],
+      );
+      expect(result.deps["UiPath.Mail.Activities"]).toBeDefined();
+      const discoveredWarning = result.warnings.find(w => w.code === "DEPENDENCY_DISCOVERED_IN_XAML" && w.message.includes("UiPath.Mail.Activities"));
+      expect(discoveredWarning).toBeUndefined();
+    });
+
+    it("resolveDependencies proactively adds Newtonsoft.Json when spec references DeserializeJson — no late discovery", () => {
+      const treeSpec = makeTreeSpec([
+        { template: "DeserializeJson", displayName: "Deserialize JSON" },
+      ]);
+      const result = resolveDependencies(
+        { workflows: [] },
+        null,
+        [treeSpec],
+        "Windows",
+      );
+      expect(result.deps["Newtonsoft.Json"]).toBeDefined();
+      const discoveredWarning = result.warnings.find(w => w.code === "DEPENDENCY_DISCOVERED_IN_XAML" && w.message.includes("Newtonsoft.Json"));
+      expect(discoveredWarning).toBeUndefined();
+    });
+
+    it("resolveDependencies proactively adds UiPath.Excel.Activities from xamlContentSources with tag matching", () => {
+      const xamlContent = `<uexcel:ExcelReadRange SheetName="Sheet1" />`;
+      const result = resolveDependencies(
+        { workflows: [] },
+        null,
+        null,
+        "Windows",
+        [xamlContent],
+      );
+      expect(result.deps["UiPath.Excel.Activities"]).toBeDefined();
+      const discoveredWarning = result.warnings.find(w => w.code === "DEPENDENCY_DISCOVERED_IN_XAML" && w.message.includes("UiPath.Excel.Activities"));
+      expect(discoveredWarning).toBeUndefined();
     });
   });
 
