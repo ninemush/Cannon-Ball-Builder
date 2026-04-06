@@ -1,4 +1,5 @@
 import { runQualityGate, type QualityGateResult, type QualityGateViolation } from "./uipath-quality-gate";
+import { getQuoteRepairDiagnostics } from "./lib/quote-repair-diagnostics";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
 import type {
   PackageStatus,
@@ -193,6 +194,38 @@ export interface FinalQualityReport {
   packageViable: boolean;
   criticalActivityLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
   mailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
+  quoteRepairDiagnostics?: QuoteRepairDiagnosticsReport;
+}
+
+export interface QuoteRepairDiagnosticsReport {
+  attempts: Array<{
+    file: string;
+    workflow: string;
+    attributePath: string;
+    originalValue: string;
+    repairedValue: string;
+    repairApplied: boolean;
+    repairReason: string;
+    repairFailedReason?: string;
+    savedFromStub: boolean;
+    packageFatal: boolean;
+  }>;
+  summary: {
+    totalMalformedQuoteFindings: number;
+    totalQuoteRepairsApplied: number;
+    totalQuoteRepairsFailed: number;
+    totalWorkflowsSavedFromStub: number;
+    totalFilesStillStubbedAfterRepairAttempt: number;
+  };
+  activePathProof: Array<{
+    file: string;
+    workflow: string;
+    stageWhereDetected: string;
+    stageWhereApplied: string;
+    preRepairHash: string;
+    postRepairHash: string;
+    downstreamConsumedRepairedVersion: boolean;
+  }>;
 }
 
 const STUDIO_BLOCKING_CHECKS = new Set([
@@ -920,5 +953,14 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     packageViable: packageCompletenessViolations.packageViable,
     criticalActivityLoweringDiagnostics: criticalLoweringDiagnostics,
     mailFamilyLockDiagnostics: mailFamilyLockDiag,
+    quoteRepairDiagnostics: _getQuoteRepairDiagnosticsSnapshot(),
   };
+}
+
+function _getQuoteRepairDiagnosticsSnapshot(): QuoteRepairDiagnosticsReport | undefined {
+  const diag = getQuoteRepairDiagnostics();
+  if (!diag || (diag.attempts.length === 0 && diag.activePathProof.length === 0)) {
+    return undefined;
+  }
+  return diag;
 }

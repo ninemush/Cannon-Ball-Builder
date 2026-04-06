@@ -41,8 +41,10 @@ export {
   type SequenceStubResult,
   type StubWorkflowOptions,
   type StructuralPreservationResult,
+  type QuoteRepairValidationResult,
   extractSystemFromGap,
   validateXamlContent,
+  validateAndRepairXamlContent,
   replaceActivityWithStub,
   replaceSequenceChildrenWithStub,
   generateStubWorkflow,
@@ -1935,7 +1937,9 @@ export function renderActivity(
     if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
     const sanitized = sanitizePropertyValue(key, value);
     if (sanitized === "") continue;
-    propAttrs += ` ${key}="${escapeXmlExpression(sanitized)}"`;
+    const escaped = escapeXmlExpression(sanitized);
+    propAttrs += ` ${key}="${escaped}"`;
+
   }
 
   if (selectorHint && !isCrossPlatform) {

@@ -53,3 +53,136 @@ export function normalizeXmlExpression(str: string): string {
   } while (result !== prev);
   return result;
 }
+
+export function escapeXmlAttributeValue(raw: string): string {
+  const decoded = decodeXmlEntities(raw);
+  return escapeXml(decoded);
+}
+
+export interface QuoteRepairResult {
+  repaired: boolean;
+  content: string;
+  repairs: QuoteRepairDetail[];
+}
+
+export interface QuoteRepairDetail {
+  line: number;
+  attributeName: string;
+  originalValue: string;
+  repairedValue: string;
+  repairReason: string;
+}
+
+export function repairMalformedQuotesInXaml(xamlContent: string): QuoteRepairResult {
+  const lines = xamlContent.split("\n");
+  const repairs: QuoteRepairDetail[] = [];
+  let anyRepaired = false;
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
+    const repairedLine = repairLineQuotes(line, lineIdx + 1, repairs);
+    if (repairedLine !== line) {
+      lines[lineIdx] = repairedLine;
+      anyRepaired = true;
+    }
+  }
+
+  return {
+    repaired: anyRepaired,
+    content: anyRepaired ? lines.join("\n") : xamlContent,
+    repairs,
+  };
+}
+
+function repairLineQuotes(line: string, lineNum: number, repairs: QuoteRepairDetail[]): string {
+  const attrPattern = /(\w[\w:.]*)\s*=\s*"/g;
+  let result = line;
+  let offset = 0;
+
+  let attrMatch;
+  const lineForScan = line;
+  while ((attrMatch = attrPattern.exec(lineForScan)) !== null) {
+    const attrName = attrMatch[1];
+    if (attrName === "Selector") continue;
+
+    const valueStart = attrMatch.index + attrMatch[0].length;
+    const closingQuoteIdx = findClosingAttributeQuote(lineForScan, valueStart);
+    if (closingQuoteIdx < 0) continue;
+
+    const rawValue = lineForScan.substring(valueStart, closingQuoteIdx);
+
+    const withoutEntities = rawValue
+      .replace(/&quot;/g, "")
+      .replace(/&apos;/g, "")
+      .replace(/&amp;/g, "")
+      .replace(/&lt;/g, "")
+      .replace(/&gt;/g, "");
+
+    const isVbStringLiteral = /^'.*'$/.test(withoutEntities.trim());
+    if (isVbStringLiteral) continue;
+    const isBracketedExpr = /^\[.*\]$/.test(withoutEntities.trim());
+    if (isBracketedExpr && !withoutEntities.includes('"')) continue;
+
+    if (!withoutEntities.includes('"')) continue;
+
+    const repairedValue = deterministicQuoteRepair(rawValue);
+    if (repairedValue === null) continue;
+    if (repairedValue === rawValue) continue;
+
+    repairs.push({
+      line: lineNum,
+      attributeName: attrName,
+      originalValue: rawValue,
+      repairedValue,
+      repairReason: "raw_quote_escaped_to_entity",
+    });
+
+    const adjValueStart = valueStart + offset;
+    const adjClosingQuoteIdx = closingQuoteIdx + offset;
+    result = result.substring(0, adjValueStart) + repairedValue + result.substring(adjClosingQuoteIdx);
+    offset += repairedValue.length - rawValue.length;
+  }
+
+  return result;
+}
+
+export function findClosingAttributeQuote(line: string, startIdx: number): number {
+  let lastCandidateIdx = -1;
+  for (let i = startIdx; i < line.length; i++) {
+    if (line[i] !== '"') continue;
+    const after = line.substring(i + 1).trimStart();
+    if (/^(\/?>|\w[\w:.]*\s*=|$)/.test(after)) {
+      return i;
+    }
+    lastCandidateIdx = i;
+  }
+  return lastCandidateIdx;
+}
+
+export function deterministicQuoteRepair(attrValue: string): string | null {
+  const ENTITY_PLACEHOLDER = "\x00ENTITY_";
+  let work = attrValue;
+  const entities: string[] = [];
+
+  work = work.replace(/&(quot|apos|amp|lt|gt);/g, (match) => {
+    const idx = entities.length;
+    entities.push(match);
+    return `${ENTITY_PLACEHOLDER}${idx}\x00`;
+  });
+
+  if (!work.includes('"')) {
+    return attrValue;
+  }
+
+  work = work.replace(/"/g, "&quot;");
+
+  for (let i = entities.length - 1; i >= 0; i--) {
+    work = work.replace(`${ENTITY_PLACEHOLDER}${i}\x00`, entities[i]);
+  }
+
+  if (work.includes("&amp;quot;") || work.includes("&amp;amp;")) {
+    return null;
+  }
+
+  return work;
+}

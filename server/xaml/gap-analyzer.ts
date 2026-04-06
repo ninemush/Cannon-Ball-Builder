@@ -1,4 +1,11 @@
-import { escapeXml } from "../lib/xml-utils";
+import { escapeXml, repairMalformedQuotesInXaml, findClosingAttributeQuote, type QuoteRepairResult } from "../lib/xml-utils";
+import {
+  recordRepairsFromDetails,
+  recordRepairFailure,
+  recordActivePathProof,
+  computeContentHash,
+  markFilesSavedFromStub,
+} from "../lib/quote-repair-diagnostics";
 import { XMLValidator } from "fast-xml-parser";
 import type { DeploymentResult } from "@shared/models/deployment";
 
@@ -110,7 +117,7 @@ export function validateXamlContent(xamlEntries: { name: string; content: string
       while ((attrMatch = attrPattern.exec(line)) !== null) {
         const attrName = attrMatch[1];
         const valueStart = attrMatch.index + attrMatch[0].length;
-        const closingQuote = line.indexOf('"', valueStart);
+        const closingQuote = findClosingAttributeQuote(line, valueStart);
         if (closingQuote < 0) continue;
         const attrValue = line.substring(valueStart, closingQuote);
         if (attrName === "Selector") continue;
@@ -122,11 +129,9 @@ export function validateXamlContent(xamlEntries: { name: string; content: string
           .replace(/&gt;/g, "");
         const isVbStringLiteral = /^'.*'$/.test(withoutEntities.trim());
         if (isVbStringLiteral) continue;
-        const isVbExprWithStrings = /^\[.*\]$/.test(withoutEntities.trim());
-        if (isVbExprWithStrings) continue;
-        const startsWithQuote = /^['"]/.test(withoutEntities.trim());
-        if (startsWithQuote) continue;
-        if (withoutEntities.includes("'") || withoutEntities.includes('"')) {
+        const isBracketedExpr = /^\[.*\]$/.test(withoutEntities.trim());
+        if (isBracketedExpr && !withoutEntities.includes('"')) continue;
+        if (withoutEntities.includes('"')) {
           violations.push({
             check: "malformed-quote",
             file: shortName,
@@ -181,6 +186,133 @@ export function validateXamlContent(xamlEntries: { name: string; content: string
   });
 
   return violations;
+}
+
+export interface QuoteRepairValidationResult {
+  violations: XamlValidationViolation[];
+  repairedEntries: { name: string; content: string }[];
+  repairSummary: {
+    filesRepaired: number;
+    totalRepairs: number;
+    filesSavedFromStub: string[];
+    filesStillFailing: string[];
+  };
+}
+
+export function validateAndRepairXamlContent(
+  xamlEntries: { name: string; content: string }[],
+): QuoteRepairValidationResult {
+  const initialViolations = validateXamlContent(xamlEntries);
+
+  const repairCandidateFiles = new Set<string>();
+  for (const v of initialViolations) {
+    if (v.check === "malformed-quote" || v.check === "xml-wellformedness") {
+      repairCandidateFiles.add(v.file);
+    }
+  }
+
+  if (repairCandidateFiles.size === 0) {
+    return {
+      violations: initialViolations,
+      repairedEntries: xamlEntries,
+      repairSummary: {
+        filesRepaired: 0,
+        totalRepairs: 0,
+        filesSavedFromStub: [],
+        filesStillFailing: [],
+      },
+    };
+  }
+
+  const repairedEntries = xamlEntries.map(entry => {
+    const shortName = entry.name.split("/").pop() || entry.name;
+    if (!repairCandidateFiles.has(shortName)) {
+      return entry;
+    }
+
+    const preRepairHash = computeContentHash(entry.content);
+    const repairResult = repairMalformedQuotesInXaml(entry.content);
+
+    if (!repairResult.repaired) {
+      recordRepairFailure(
+        shortName,
+        "full-file",
+        "(see original content)",
+        "no_deterministic_repair_possible",
+      );
+      return entry;
+    }
+
+    const postRepairHash = computeContentHash(repairResult.content);
+    recordRepairsFromDetails(shortName, repairResult.repairs);
+
+    recordActivePathProof({
+      file: shortName,
+      workflow: shortName.replace(/\.xaml$/i, ""),
+      stageWhereDetected: "gap-analyzer-validateXamlContent",
+      stageWhereApplied: "gap-analyzer-repairBeforeStub",
+      preRepairHash,
+      postRepairHash,
+      downstreamConsumedRepairedVersion: true,
+    });
+
+    console.log(`[Quote Repair] Repaired ${repairResult.repairs.length} malformed quote(s) in ${shortName}`);
+
+    return { ...entry, content: repairResult.content };
+  });
+
+  const postRepairViolations = validateXamlContent(repairedEntries);
+
+  const filesSavedFromStub: string[] = [];
+  const filesStillFailing: string[] = [];
+  let totalRepairs = 0;
+
+  for (const file of repairCandidateFiles) {
+    const hadViolation = initialViolations.some(
+      v => v.file === file && (v.check === "malformed-quote" || v.check === "xml-wellformedness")
+    );
+    const stillHasQuoteViolation = postRepairViolations.some(
+      v => v.file === file && v.check === "malformed-quote"
+    );
+    const stillHasWellformedness = postRepairViolations.some(
+      v => v.file === file && v.check === "xml-wellformedness"
+    );
+
+    if (hadViolation && !stillHasQuoteViolation && !stillHasWellformedness) {
+      filesSavedFromStub.push(file);
+    } else if (hadViolation && (stillHasQuoteViolation || stillHasWellformedness)) {
+      filesStillFailing.push(file);
+    }
+
+    const entry = repairedEntries.find(e => (e.name.split("/").pop() || e.name) === file);
+    const origEntry = xamlEntries.find(e => (e.name.split("/").pop() || e.name) === file);
+    if (entry && origEntry && entry.content !== origEntry.content) {
+      const repairResult = repairMalformedQuotesInXaml(origEntry.content);
+      totalRepairs += repairResult.repairs.length;
+    }
+  }
+
+  if (filesSavedFromStub.length > 0) {
+    markFilesSavedFromStub(filesSavedFromStub);
+  }
+
+  if (filesSavedFromStub.length > 0) {
+    console.log(`[Quote Repair] Saved ${filesSavedFromStub.length} file(s) from stub: ${filesSavedFromStub.join(", ")}`);
+  }
+  if (filesStillFailing.length > 0) {
+    console.warn(`[Quote Repair] ${filesStillFailing.length} file(s) still failing after repair: ${filesStillFailing.join(", ")}`);
+  }
+
+  return {
+    violations: postRepairViolations,
+    repairedEntries,
+    repairSummary: {
+      filesRepaired: filesSavedFromStub.length,
+      totalRepairs,
+      filesSavedFromStub,
+      filesStillFailing,
+    },
+  };
 }
 
 export interface ActivityStubResult {

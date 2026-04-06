@@ -19,6 +19,7 @@ import archiver from "archiver";
     ensureBracketWrapped,
     normalizeAssignArgumentNesting,
     validateXamlContent,
+    validateAndRepairXamlContent,
     generateStubWorkflow,
     selectGenerationMode,
     applyActivityPolicy,
@@ -40,7 +41,13 @@ import archiver from "archiver";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
   import { runQualityGate, validatePackage, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue, type PackageReadiness } from "./uipath-quality-gate";
-  import { escapeXml } from "./lib/xml-utils";
+  import { escapeXml, repairMalformedQuotesInXaml } from "./lib/xml-utils";
+  import {
+    resetQuoteRepairDiagnostics,
+    recordActivePathProof,
+    computeContentHash,
+    verifyActivePathProofIntegrity,
+  } from "./lib/quote-repair-diagnostics";
   import { computePackageFingerprint, computeEnrichmentFingerprint, computeXamlFingerprint, computeQualityGateFingerprint } from "./lib/utils";
   import { buildDeterministicScaffold as buildGenericDeterministicScaffold } from "./deterministic-scaffold";
   import { computeDhgAccuracy } from "./pipeline-health";
@@ -59,7 +66,7 @@ import archiver from "archiver";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
-  import { XMLParser, XMLBuilder } from "fast-xml-parser";
+  import { XMLParser, XMLBuilder, XMLValidator } from "fast-xml-parser";
   import { runPostEmissionDependencyAnalysis, checkDependencyDriftAgainstMailFamilyLocks, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
   import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
   import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
@@ -2817,6 +2824,8 @@ export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1
 }
 
 async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier): Promise<BuildResult> {
+  resetQuoteRepairDiagnostics();
+
   if (!catalogService.isLoaded()) {
     console.warn(`[Package Assembler] Catalog not loaded at buildNuGetPackage entry — attempting synchronous load`);
     try {
@@ -6089,7 +6098,37 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
     }
 
-    const finalValidation = validateXamlContent(xamlEntries);
+    const repairResult = validateAndRepairXamlContent(xamlEntries);
+    const finalValidation = repairResult.violations;
+
+    if (repairResult.repairSummary.filesRepaired > 0) {
+      console.log(`[UiPath Quote Repair] Repaired ${repairResult.repairSummary.totalRepairs} quote defect(s) across ${repairResult.repairSummary.filesRepaired} file(s): ${repairResult.repairSummary.filesSavedFromStub.join(", ")}`);
+      for (let i = 0; i < xamlEntries.length; i++) {
+        const repairedEntry = repairResult.repairedEntries.find(re => re.name === xamlEntries[i].name);
+        if (repairedEntry && repairedEntry.content !== xamlEntries[i].content) {
+          const preHash = computeContentHash(xamlEntries[i].content);
+          xamlEntries[i] = repairedEntry;
+          const postHash = computeContentHash(repairedEntry.content);
+          const shortName = (repairedEntry.name.split("/").pop() || repairedEntry.name);
+          const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === shortName);
+          if (archivePath) {
+            deferredWrites.set(archivePath, repairedEntry.content);
+          }
+          const deferredContent = archivePath ? deferredWrites.get(archivePath) : undefined;
+          const downstreamConsumed = deferredContent !== undefined && computeContentHash(deferredContent) === postHash;
+          recordActivePathProof({
+            file: shortName,
+            workflow: shortName.replace(/\.xaml$/i, ""),
+            stageWhereDetected: "package-assembler-prePackageValidation",
+            stageWhereApplied: "package-assembler-repairBeforeStub",
+            preRepairHash: preHash,
+            postRepairHash: postHash,
+            downstreamConsumedRepairedVersion: downstreamConsumed,
+          });
+        }
+      }
+    }
+
     const malformedQuotes = finalValidation.filter(v => v.check === "malformed-quote");
     const pseudoXaml = finalValidation.filter(v => v.check === "pseudo-xaml");
     const placeholders = finalValidation.filter(v => v.check === "placeholder");
@@ -6098,6 +6137,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const xmlWellformedness = finalValidation.filter(v => v.check === "xml-wellformedness");
     console.log(`[UiPath Pre-Package Validation Report]`);
     console.log(`  No malformed quotes:       ${malformedQuotes.length === 0 ? "PASS" : `FAIL (${malformedQuotes.length} violation(s))`}`);
+    console.log(`  Quote repairs applied:     ${repairResult.repairSummary.totalRepairs > 0 ? `YES (${repairResult.repairSummary.totalRepairs} repair(s), ${repairResult.repairSummary.filesRepaired} file(s) saved)` : "N/A"}`);
     console.log(`  No pseudo-XAML:             ${pseudoXaml.length === 0 ? "PASS" : `FAIL (${pseudoXaml.length} violation(s))`}`);
     console.log(`  No placeholder values:      ${placeholders.length === 0 ? "PASS" : `FAIL (${placeholders.length} violation(s))`}`);
     console.log(`  Every invoked file exists:  ${invokedFiles.length === 0 ? "PASS" : `FAIL (${invokedFiles.length} violation(s))`}`);
@@ -6131,6 +6171,37 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const specificErrorDetail = fileSpecificErrors.length > 0
           ? fileSpecificErrors.join("; ")
           : "No specific error details captured";
+
+        const corruptedEntryIdx = xamlEntries.findIndex(e => e.name === corruptedFile || (e.name.split("/").pop() || e.name) === corruptedFile);
+        if (corruptedEntryIdx >= 0) {
+          const lastChanceRepair = repairMalformedQuotesInXaml(xamlEntries[corruptedEntryIdx].content);
+          if (lastChanceRepair.repaired) {
+            const xmlHeader = '<?xml version="1.0" encoding="utf-8"?>';
+            const testContent = lastChanceRepair.content.startsWith("<?xml") ? lastChanceRepair.content : xmlHeader + "\n" + lastChanceRepair.content;
+            const validationResult = XMLValidator.validate(testContent, { allowBooleanAttributes: true });
+            if (validationResult === true) {
+              console.log(`[UiPath Quote Repair] Last-chance repair succeeded for "${corruptedFile}" — ${lastChanceRepair.repairs.length} repair(s) applied, skipping stub`);
+              const preHash = computeContentHash(xamlEntries[corruptedEntryIdx].content);
+              xamlEntries[corruptedEntryIdx] = { ...xamlEntries[corruptedEntryIdx], content: lastChanceRepair.content };
+              const postHash = computeContentHash(lastChanceRepair.content);
+              const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === corruptedFile);
+              if (archivePath) {
+                deferredWrites.set(archivePath, lastChanceRepair.content);
+              }
+              recordActivePathProof({
+                file: corruptedFile,
+                workflow: corruptedFile.replace(/\.xaml$/i, ""),
+                stageWhereDetected: "package-assembler-preStubDecision",
+                stageWhereApplied: "package-assembler-lastChanceRepair",
+                preRepairHash: preHash,
+                postRepairHash: postHash,
+                downstreamConsumedRepairedVersion: preHash !== postHash,
+              });
+              continue;
+            }
+          }
+        }
+
         if (generationMode === "package") {
           console.log(`[UiPath Package Mode] Stub remediation BLOCKED for corrupted file "${corruptedFile}" — recording as completeness violation. Errors: ${specificErrorDetail}`);
           collectedQualityIssues.push({
@@ -7680,6 +7751,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         });
       const phase1Archive = new AdmZip();
       for (const [path, content] of deferredWrites.entries()) {
+        if (path.endsWith(".xaml")) {
+          const shortName = path.split("/").pop() || path;
+          const contentHash = computeContentHash(content);
+          verifyActivePathProofIntegrity(shortName, contentHash);
+        }
         phase1Archive.addFile(path, Buffer.from(content, "utf-8"));
       }
       const phase1Buffer = phase1Archive.toBuffer();
