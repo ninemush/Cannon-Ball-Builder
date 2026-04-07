@@ -1,0 +1,37 @@
+Please revise the task before implementation.
+
+The direction is right, but the problem framing is too narrow. Update the task from "raw quote / executable attribute serialization" to "attribute well-formedness serialization authority."
+
+Required adjustments:
+
+1. Broaden the defect target
+Do not frame the task as only raw quote escaping.
+Explicitly include the broader attribute well-formedness failure classes still present in benchmark runs, including:
+- raw quote contamination
+- JSON or structured object leaks into attribute values
+- array serialization that introduces unsafe raw quotes
+- dictionary/object serialization that introduces unsafe raw quotes or malformed attribute structure
+- other attribute-shape / malformed-attribute issues that lead to xml-wellformedness failures
+
+2. Add server/xaml-generator.ts to the primary files
+Make server/xaml-generator.ts a primary file to modify.
+Specifically call out sanitizePropertyValue and the generic property emission loops as central change surfaces.
+Do not treat workflow-tree-assembler.ts alone as the main layer for this work.
+
+3. Explicitly inspect unsafe array/dictionary serialization
+Call out the current array and dictionary serialization branches in sanitizePropertyValue as evidence targets.
+The task should require reviewing and fixing these branches so they cannot emit malformed attribute content.
+
+4. Acknowledge overlap with prior work
+Add a note that prior tasks improved parts of JSON/expression serialization and invoke cleanup, but did not establish a single authoritative attribute well-formedness serializer across all emission paths.
+This task is about unifying and hardening the remaining emission paths, not redoing prior tasks wholesale.
+
+5. Keep the same architectural guardrails
+Retain:
+- idempotence
+- semantics preservation
+- no double-escaping
+- post-emission repair remains a safety net
+- no scope drift into graph/contracts/spec redesign
+
+Output the corrected final task only.

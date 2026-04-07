@@ -1,0 +1,138 @@
+#459 - Executable Attribute Serialization Authority
+
+What & Why
+Recent benchmark runs show that after symbol authority and spec-level contract/interface improvements, one of the biggest remaining execution-blocking defect classes is malformed executable XML attributes reaching final validation.
+
+The latest runs still show high-volume failures such as:
+- attribute Message contains raw quote
+- attribute Value contains raw quote
+- attribute EntityObject contains raw quote
+- attribute EndPoint contains raw quote
+- XML parse errors caused by invalid attributes
+
+This indicates the pipeline still does not have one authoritative serialization path for executable/string-bearing XML attributes. Some code paths are still interpolating values directly into XML attributes without a single guaranteed-safe serializer. The result is malformed XAML, parse failures, and structurally invalid packages.
+
+This task must make executable attribute serialization authoritative before final XAML validation. It must reduce dependence on post-emission malformed-quote repair and ensure all executable attribute values flow through one safe, semantics-preserving serialization path.
+
+This task is not about broad expression redesign, symbol discovery, workflow contracts, or graph wiring. It is specifically about preventing malformed executable attribute content from reaching emitted XAML.
+
+Done looks like
+- Executable XML attributes no longer contain raw quote characters that break XML parsing on the benchmark runs.
+- XML parse errors caused by malformed attribute values drop materially on the benchmark runs.
+- Attributes such as Message, Value, EntityObject, EndPoint, and similar executable/string-bearing properties are emitted through a single authoritative safe-serialization path.
+- Dedicated template paths and generic emission paths behave consistently for executable attributes.
+- Existing post-emission malformed-quote repair remains as a safety net, but it is no longer the primary mechanism preventing invalid XML.
+- Benchmark packages show a material reduction in malformed-quote and xml-wellformedness defects.
+
+Out of scope
+- Workflow interface derivation
+- Invoke contract resolution
+- Broad activity schema timing changes
+- Required-property completeness redesign
+- Graph connectivity fixes
+- Prompt engineering
+- Rewriting all expression logic
+- Removing existing post-emission repair layers
+
+Design rules
+Authoritative serializer
+All executable/string-bearing XML attribute values must flow through one authoritative serializer before being interpolated into XAML output.
+
+This serializer must:
+- preserve valid existing XML entities
+- escape raw quote characters safely
+- avoid double-escaping already-correct values
+- preserve semantics for VB expressions and plain literal strings
+- be idempotent: a second pass over an already-safe value must not change it
+
+No direct raw interpolation
+Do not allow dedicated templates or generic emission paths to directly interpolate raw executable values into XML attributes without going through the authoritative serializer.
+
+Dedicated-template parity
+If specific templates (for example LogMessage, Assign, Data Service activities, endpoint-bearing activities, mail activities, or other custom emission branches) currently bypass the safer path, they must be routed through the same authoritative serializer rather than maintaining template-specific ad hoc escaping logic.
+
+Safety-net preservation
+Keep existing post-emission malformed-quote repair in place. This task is about making it rarely needed, not removing it.
+
+Tasks
+1. Trace executable attribute emission paths
+Identify the active code paths that emit XML attributes for executable/string-bearing properties, especially:
+- Message
+- Value
+- EntityObject
+- EndPoint
+- other similar free-text or expression-bearing attributes seen in benchmark failures
+
+Trace both:
+- dedicated template paths in workflow-tree-assembler.ts
+- generic/property-loop emission paths
+- any helper functions that serialize values into attribute form
+
+Use the benchmark failures as evidence targets.
+
+2. Identify or create the single authoritative serializer
+Review the current XML escaping / serialization helpers already present in the codebase and determine which one should become the single authoritative executable-attribute serializer.
+
+If an existing helper can be extended safely, prefer that.
+Do not create parallel escaping mechanisms if one can be centralized.
+
+3. Route all executable attribute emission through the authoritative serializer
+Update the emission paths so that all executable/string-bearing attributes flow through the authoritative serializer before XAML is built.
+This includes both:
+- dedicated templates
+- generic emission/property iteration paths
+
+4. Preserve semantics and idempotence
+Ensure the serializer:
+- does not double-escape valid entities
+- does not corrupt already-valid VB expressions
+- does not convert literal values into expressions
+- does not alter values that are already safe
+
+5. Add lightweight diagnostics
+Extend an existing reporting surface lightly so benchmark runs can show:
+- which attributes were serialized through the authoritative path
+- whether any unsafe raw content was corrected before emission
+- whether any paths still attempted raw interpolation
+
+Keep this lightweight. Do not create a large new diagnostics subsystem.
+
+6. Add focused regression tests
+Add tests covering:
+- raw quotes in Message are emitted safely
+- raw quotes in Value are emitted safely
+- raw quotes in EntityObject are emitted safely
+- raw quotes in EndPoint are emitted safely
+- already-correct escaped values remain unchanged
+- valid VB expressions remain semantically intact
+- dedicated template and generic emission paths both use the same serializer
+- benchmark-style malformed attribute cases no longer produce xml-wellformedness failures
+
+Primary files to modify
+- server/workflow-tree-assembler.ts
+- server/lib/xml-utils.ts
+- server/__tests__/pipeline-regression.test.ts
+
+Reference files
+- server/xaml/gap-analyzer.ts
+- server/xaml/xaml-compliance.ts
+- server/package-assembler.ts
+- server/final-artifact-validation.ts
+- server/uipath-quality-gate.ts
+- server/xaml/expression-builder.ts
+
+What this does not touch
+- spec-to-tree-mapper.ts
+- deterministic-scaffold.ts
+- workflow-contract-integrity.ts
+- invoke-binding-canonicalizer.ts
+- declaration-registry.ts
+- graph validator logic
+
+Success measure
+Benchmark runs should show a clear reduction in:
+- malformed-quote findings
+- XML parse errors caused by invalid attributes
+- downstream reliance on post-emission malformed-quote repair
+
+The emitted XAML should be safer on first pass rather than being rescued later.
