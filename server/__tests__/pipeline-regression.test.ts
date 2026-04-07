@@ -4210,4 +4210,100 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
       if (result.kind === "scalar") expect(result.value).toBe("Hello");
     });
   });
+
+  describe("Template dispatch prefix normalization (Task #463)", () => {
+    it("ui:LogMessage dispatches to dedicated LogMessage template", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "ui:LogMessage", displayName: "Log Test", properties: { Message: "hello", Level: "Info" } },
+        [],
+      );
+      expect(xml).toContain("ui:LogMessage");
+      expect(xml).toContain('Level="Info"');
+      expect(xml).toContain('Message=');
+      expect(xml).not.toContain("[TODO");
+      expect(xml).not.toContain("BLOCKED");
+    });
+
+    it("ui:SendSmtpMailMessage dispatches to dedicated SMTP template", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "ui:SendSmtpMailMessage", displayName: "Send Email", properties: { To: "test@example.com", Subject: "Test", Server: "smtp.test.com", Port: "587" } },
+        [],
+      );
+      expect(xml).toContain("SendSmtpMailMessage");
+      expect(xml).toContain("SendSmtpMailMessage.Body>");
+      expect(xml).not.toContain("[TODO");
+      expect(xml).not.toContain("BLOCKED");
+    });
+
+    it("umail:SendOutlookMailMessage dispatches to dedicated Outlook template", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "umail:SendOutlookMailMessage", displayName: "Send Outlook", properties: { To: "test@example.com", Subject: "Test" } },
+        [],
+      );
+      expect(xml).toContain("SendOutlookMailMessage");
+      expect(xml).toContain("SendOutlookMailMessage.Body>");
+      expect(xml).not.toContain("[TODO");
+      expect(xml).not.toContain("BLOCKED");
+    });
+
+    it("bare LogMessage still dispatches correctly after normalization", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "LogMessage", displayName: "Log Bare", properties: { Message: "test", Level: "Info" } },
+        [],
+      );
+      expect(xml).toContain("ui:LogMessage");
+      expect(xml).toContain('Level="Info"');
+      expect(xml).not.toContain("[TODO");
+    });
+
+    it("bare SendSmtpMailMessage still dispatches correctly after normalization", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "SendSmtpMailMessage", displayName: "Send SMTP Bare", properties: { To: "a@b.com", Subject: "S", Server: "smtp", Port: "25" } },
+        [],
+      );
+      expect(xml).toContain("SendSmtpMailMessage");
+      expect(xml).toContain("SendSmtpMailMessage.Body>");
+      expect(xml).not.toContain("[TODO");
+    });
+
+    it("ui:Assign dispatches to dedicated Assign template", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "ui:Assign", displayName: "Set Variable", properties: { To: "myVar", Value: "42" } },
+        [],
+      );
+      expect(xml).toContain("Assign");
+      expect(xml).not.toContain("[TODO");
+      expect(xml).not.toContain("BLOCKED");
+    });
+
+    it("ui:HttpClient dispatches to dedicated HttpClient template", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "ui:HttpClient", displayName: "Call API", properties: { Endpoint: "https://api.example.com", Method: "GET" } },
+        [],
+      );
+      expect(xml).toContain("HttpClient");
+      expect(xml).not.toContain("[TODO");
+      expect(xml).not.toContain("BLOCKED");
+    });
+
+    it("prefixed unsupported activity still falls through to dynamic/fallback path", async () => {
+      const { resolveActivityTemplate } = await import("../../server/workflow-tree-assembler");
+      const xml = resolveActivityTemplate(
+        { kind: "activity" as const, template: "ui:SomeCustomActivity", displayName: "Custom Step", properties: { Param1: "value1" } },
+        [],
+      );
+      expect(xml).not.toContain('Level="Info"');
+      expect(xml).not.toContain("SendSmtpMailMessage");
+      expect(xml).not.toContain("Assign");
+      expect(xml).toMatch(/Custom Step/);
+      expect(xml).toMatch(/(Comment|WARNING|BLOCKED|SomeCustomActivity)/);
+    });
+  });
 });

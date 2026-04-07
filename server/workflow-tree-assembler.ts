@@ -2079,11 +2079,17 @@ export function resolveActivityTemplate(
   const props = node.properties || {};
   const displayName = escapeXml(node.displayName);
 
-  if (templateName === "Assign") {
+  const dispatchKey = templateName.includes(":") ? templateName.replace(/^[A-Za-z0-9]+:/, "") : templateName;
+  const wasNormalized = dispatchKey !== templateName;
+  if (wasNormalized) {
+    console.log(`[Template Dispatch] Normalized "${templateName}" → dispatchKey "${dispatchKey}"`);
+  }
+
+  if (dispatchKey === "Assign") {
     return applyCatalogConformance(resolveAssignTemplate(node, allVariables));
   }
 
-  if (templateName === "LogMessage") {
+  if (dispatchKey === "LogMessage") {
     const ENUM_NORMALIZE: Record<string, string> = {
       "information": "Info", "warning": "Warn", "debug": "Trace",
       "info": "Info", "warn": "Warn", "error": "Error", "trace": "Trace", "fatal": "Fatal",
@@ -2116,16 +2122,16 @@ export function resolveActivityTemplate(
     return applyCatalogConformance(`<ui:LogMessage Level="${serializeSafeAttributeValue(level)}" Message="${serializeSafeAttributeValue(wrappedMessage)}" DisplayName="${displayName}" />`);
   }
 
-  if (templateName === "Delay") {
+  if (dispatchKey === "Delay") {
     const duration = getPropString(props, "Duration", "duration") || "00:00:05";
     return applyCatalogConformance(`<Delay Duration="${serializeSafeAttributeValue(duration)}" DisplayName="${displayName}" />`);
   }
 
-  if (templateName === "Rethrow") {
+  if (dispatchKey === "Rethrow") {
     return applyCatalogConformance(`<Rethrow DisplayName="${displayName}" />`);
   }
 
-  if (templateName === "InvokeWorkflowFile") {
+  if (dispatchKey === "InvokeWorkflowFile") {
     let fileName = (getPropString(props, "WorkflowFileName", "workflowFileName") || "Workflow.xaml")
       .replace(/&quot;/g, "").replace(/^"+|"+$/g, "").trim();
     fileName = fileName.replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1").replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1").replace(/[{}]/g, "");
@@ -2193,47 +2199,47 @@ export function resolveActivityTemplate(
       `</ui:InvokeWorkflowFile>`);
   }
 
-  if (templateName === "GetAsset") {
+  if (dispatchKey === "GetAsset") {
     return applyCatalogConformance(resolveGetAssetTemplate(node));
   }
 
-  if (templateName === "GetCredential") {
+  if (dispatchKey === "GetCredential") {
     return applyCatalogConformance(resolveGetCredentialTemplate(node));
   }
 
-  if (templateName === "SendSmtpMailMessage") {
+  if (dispatchKey === "SendSmtpMailMessage") {
     return applyCatalogConformance(resolveSendSmtpMailMessageTemplate(node));
   }
 
-  if (templateName === "GmailSendMessage") {
+  if (dispatchKey === "GmailSendMessage") {
     return applyCatalogConformance(resolveGmailSendMessageTemplate(node));
   }
 
-  if (templateName === "SendOutlookMailMessage") {
+  if (dispatchKey === "SendOutlookMailMessage") {
     return applyCatalogConformance(resolveSendOutlookMailMessageTemplate(node));
   }
 
-  if (templateName === "GetImapMailMessage") {
+  if (dispatchKey === "GetImapMailMessage") {
     return applyCatalogConformance(resolveGetImapMailMessageTemplate(node));
   }
 
-  if (templateName === "CreateFormTask") {
+  if (dispatchKey === "CreateFormTask") {
     return applyCatalogConformance(resolveCreateFormTaskTemplate(node));
   }
 
-  if (templateName === "HttpClient") {
+  if (dispatchKey === "HttpClient") {
     return applyCatalogConformance(resolveHttpClientTemplate(node));
   }
 
-  if (templateName === "ExcelApplicationScope") {
+  if (dispatchKey === "ExcelApplicationScope") {
     return applyCatalogConformance(resolveExcelApplicationScopeTemplate(node, allVariables, processType, emissionContext));
   }
 
-  if (templateName === "UseExcel") {
+  if (dispatchKey === "UseExcel") {
     return applyCatalogConformance(resolveUseExcelTemplate(node, allVariables, processType, emissionContext));
   }
 
-  if (templateName === "DeserializeJson") {
+  if (dispatchKey === "DeserializeJson") {
     const input = getPropString(props, "JsonString", "jsonString", "Input") || "";
     const outputVar = node.outputVar || "obj_Result";
     const djTag = getActivityTag("DeserializeJson");
@@ -2244,16 +2250,20 @@ export function resolveActivityTemplate(
       `</${djTag}>`);
   }
 
-  if (templateName === "Comment") {
+  if (dispatchKey === "Comment") {
     const text = getPropString(props, "Text", "text") || "";
     return applyCatalogConformance(`<ui:Comment Text="${serializeSafeAttributeValue(text)}" DisplayName="${displayName}" />`);
+  }
+
+  if (wasNormalized) {
+    console.log(`[Template Dispatch] No dedicated template matched for dispatchKey "${dispatchKey}" (original: "${templateName}") — falling through to dynamic/fallback path`);
   }
 
   const UNSUPPORTED_ACTIVITIES = new Set([
     "InvokeAgent", "DownloadFile", "UploadFile",
   ]);
 
-  if (UNSUPPORTED_ACTIVITIES.has(templateName)) {
+  if (UNSUPPORTED_ACTIVITIES.has(dispatchKey)) {
     const isMandatoryPath = emissionContext === "mandatory-catch" || emissionContext === "mandatory-finally";
     console.warn(`[Tree Assembler] Unsupported activity "${templateName}" — "${node.displayName}"${isMandatoryPath ? " (in mandatory path)" : ""}. Emitting fallback.`);
     if (_activeRemediationContext) {
