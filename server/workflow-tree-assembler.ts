@@ -69,6 +69,101 @@ let _activeTargetFramework: "Windows" | "Portable" = "Windows";
 let _lateDiscoveredVariables: VariableDeclaration[] = [];
 let _residualJsonDefects: ResidualJsonDefect[] = [];
 
+export interface WorkflowContractArgument {
+  name: string;
+  direction: "InArgument" | "OutArgument" | "InOutArgument";
+  type: string;
+}
+
+export interface WorkflowContract {
+  workflowName: string;
+  arguments: WorkflowContractArgument[];
+}
+
+export type WorkflowContractMap = Map<string, WorkflowContract>;
+
+export interface ContractDiagnostic {
+  kind: "unresolved_callee" | "unsupported_binding";
+  callerWorkflow: string;
+  calleeFile: string;
+  bindingName?: string;
+  reason: string;
+}
+
+let _activeWorkflowContractMap: WorkflowContractMap | null = null;
+let _contractDiagnostics: ContractDiagnostic[] = [];
+let _activeCallerWorkflowName: string = "";
+
+export function setActiveWorkflowContractMap(map: WorkflowContractMap): void {
+  _activeWorkflowContractMap = map;
+}
+
+export function clearActiveWorkflowContractMap(): void {
+  _activeWorkflowContractMap = null;
+}
+
+export function setActiveCallerWorkflowName(name: string): void {
+  _activeCallerWorkflowName = name;
+}
+
+export function getAndClearContractDiagnostics(): ContractDiagnostic[] {
+  const diags = _contractDiagnostics;
+  _contractDiagnostics = [];
+  return diags;
+}
+
+export function getContractDiagnostics(): ReadonlyArray<ContractDiagnostic> {
+  return _contractDiagnostics;
+}
+
+export function buildPreEmissionContractMap(
+  specs: Array<{ name: string; spec: { arguments?: Array<{ name: string; direction: string; type: string; required?: boolean }> } }>
+): WorkflowContractMap {
+  const map: WorkflowContractMap = new Map();
+  for (const entry of specs) {
+    const rawName = (entry.name || "").replace(/\s+/g, "_");
+    const wfFileName = rawName.endsWith(".xaml") ? rawName : `${rawName}.xaml`;
+    const args: WorkflowContractArgument[] = [];
+    if (entry.spec.arguments && Array.isArray(entry.spec.arguments)) {
+      for (const arg of entry.spec.arguments) {
+        const dir = arg.direction as "InArgument" | "OutArgument" | "InOutArgument";
+        if (dir === "InArgument" || dir === "OutArgument" || dir === "InOutArgument") {
+          args.push({ name: arg.name, direction: dir, type: arg.type || "" });
+        }
+      }
+    }
+    map.set(wfFileName.toLowerCase(), { workflowName: rawName, arguments: args });
+  }
+  return map;
+}
+
+function stripDirectionPrefix(name: string): string {
+  return name.replace(/^(in_|out_|io_)/i, "");
+}
+
+function resolveBindingAgainstContract(
+  binding: InvokeArgumentBinding,
+  contract: WorkflowContract,
+): { matched: boolean; contractArg?: WorkflowContractArgument; strippedName?: string } {
+  const bindingNameLower = binding.name.toLowerCase();
+  for (const contractArg of contract.arguments) {
+    if (contractArg.name.toLowerCase() === bindingNameLower) {
+      return { matched: true, contractArg };
+    }
+  }
+  const strippedName = stripDirectionPrefix(binding.name);
+  const strippedLower = strippedName.toLowerCase();
+  for (const contractArg of contract.arguments) {
+    if (contractArg.name.toLowerCase() === strippedLower) {
+      return { matched: true, contractArg, strippedName };
+    }
+    if (stripDirectionPrefix(contractArg.name).toLowerCase() === strippedLower) {
+      return { matched: true, contractArg, strippedName };
+    }
+  }
+  return { matched: false };
+}
+
 export function getAndClearResidualJsonDefects(): ResidualJsonDefect[] {
   const defects = _residualJsonDefects;
   _residualJsonDefects = [];
@@ -1856,8 +1951,53 @@ export function resolveActivityTemplate(
     if (!fileName.endsWith(".xaml")) fileName += ".xaml";
 
     const argBindings = parseInvokeArguments(props);
+
+    const calleeContract = _activeWorkflowContractMap
+      ? _activeWorkflowContractMap.get(fileName.toLowerCase()) || null
+      : null;
+
+    let resolvedBindings: InvokeArgumentBinding[];
+    if (calleeContract) {
+      resolvedBindings = [];
+      for (const binding of argBindings) {
+        const resolution = resolveBindingAgainstContract(binding, calleeContract);
+        if (resolution.matched && resolution.contractArg) {
+          const emittedName = resolution.contractArg.name;
+          const emittedDirection = resolution.contractArg.direction;
+          const emittedType = resolution.contractArg.type || binding.type;
+          resolvedBindings.push({
+            name: emittedName,
+            direction: emittedDirection,
+            type: emittedType,
+            value: binding.value,
+            typeInferredFromDefault: binding.typeInferredFromDefault,
+          });
+        } else {
+          _contractDiagnostics.push({
+            kind: "unsupported_binding",
+            callerWorkflow: _activeCallerWorkflowName,
+            calleeFile: fileName,
+            bindingName: binding.name,
+            reason: `Binding "${binding.name}" does not match any argument in callee contract for "${fileName}". Callee declares: [${calleeContract.arguments.map(a => a.name).join(", ")}]. Binding withheld from emission.`,
+          });
+          console.warn(`[Contract Resolution] Unsupported binding "${binding.name}" withheld from InvokeWorkflowFile "${fileName}" — no matching callee argument found`);
+        }
+      }
+    } else {
+      resolvedBindings = argBindings;
+      if (_activeWorkflowContractMap) {
+        _contractDiagnostics.push({
+          kind: "unresolved_callee",
+          callerWorkflow: _activeCallerWorkflowName,
+          calleeFile: fileName,
+          reason: `No pre-emission contract available for callee "${fileName}". Falling through to default emission; post-emission validator/canonicalizer will act as safety net.`,
+        });
+        console.log(`[Contract Resolution] No pre-emission contract for callee "${fileName}" — using default emission path`);
+      }
+    }
+
     let argBlock = "";
-    for (const binding of argBindings) {
+    for (const binding of resolvedBindings) {
       if (binding.type) {
         argBlock += `    <${binding.direction} x:TypeArguments="${binding.type}" x:Key="${escapeXml(binding.name)}">${escapeXmlTextContent(binding.value)}</${binding.direction}>\n`;
       } else {

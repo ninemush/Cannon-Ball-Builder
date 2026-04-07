@@ -36,7 +36,7 @@ import archiver from "archiver";
   } from "./xaml-generator";
   import type { XamlGenerationContext, UiPathPackage } from "./types/uipath-package";
   import { enrichWithAITree, type EnrichmentResult, type TreeEnrichmentResult } from "./ai-xaml-enricher";
-  import { assembleWorkflowFromSpec } from "./workflow-tree-assembler";
+  import { assembleWorkflowFromSpec, buildPreEmissionContractMap, setActiveWorkflowContractMap, clearActiveWorkflowContractMap, setActiveCallerWorkflowName, getAndClearContractDiagnostics } from "./workflow-tree-assembler";
   import { runPreEmissionLoweringGate, runMailFamilyLockAnalysis, buildMailFamilyLockDiagnostics, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics, type MailFamilyLockDiagnostics, type MailFamilyLockResult } from "./critical-activity-lowering";
   import { runPreLoweringSpecNormalization, validateAdoptionTrace, type SpecNormalizationDiagnostics, type ActivePathAdoptionTraceEntry } from "./pre-lowering-spec-normalization";
   import { traceRequiredPropertyThroughSpec, updateTraceAfterPreNormalization, updateTraceAfterLowering, updateTraceAfterEmission, updateTraceAfterCompliance, updateTraceAfterEnforcement, updateTraceAfterFinalXaml, buildDiagnosticsResult, resetInstanceCounter, type RequiredPropertyTraceEntry, type RequiredPropertyDiagnosticsResult } from "./required-property-diagnostics";
@@ -4052,6 +4052,15 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       let totalExcessiveStripping = 0;
       const excessiveStrippingFiles = new Set<string>();
 
+      const preEmissionContractMap = buildPreEmissionContractMap(
+        enrichmentsToProcess.map(e => ({ name: e.name, spec: e.spec }))
+      );
+      if (preEmissionContractMap.size > 0) {
+        console.log(`[UiPath] Built pre-emission workflow contract map with ${preEmissionContractMap.size} workflow(s): [${Array.from(preEmissionContractMap.keys()).join(", ")}]`);
+        setActiveWorkflowContractMap(preEmissionContractMap);
+      }
+
+      try {
       for (const enrichEntry of enrichmentsToProcess) {
         let spec = enrichEntry.spec;
         spec = normalizeWorkflowSpec(spec);
@@ -4239,7 +4248,23 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           console.log(`[UiPath] Pre-emission lowering gate PASSED for "${wfName}" — ${preEmissionGate.diagnostics.summary.totalLoweredSuccessfully} critical step(s) validated`);
         }
         try {
+          setActiveCallerWorkflowName(wfName);
           const { xaml, variables, symbolDiscoveryDiagnostics: wfSymbolDiag } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
+          const wfContractDiags = getAndClearContractDiagnostics();
+          if (wfContractDiags.length > 0) {
+            for (const cd of wfContractDiags) {
+              const diagMsg = cd.kind === "unsupported_binding"
+                ? `Contract: unsupported binding "${cd.bindingName}" withheld from invoke to "${cd.calleeFile}" in "${cd.callerWorkflow}"`
+                : `Contract: no pre-emission contract for callee "${cd.calleeFile}" invoked from "${cd.callerWorkflow}"`;
+              console.log(`[UiPath] ${diagMsg}`);
+              dependencyWarnings.push({
+                code: cd.kind === "unsupported_binding" ? "INVOKE_UNSUPPORTED_BINDING" : "INVOKE_UNRESOLVED_CALLEE",
+                message: cd.reason,
+                stage: "pre-emission-contract-resolution",
+                recoverable: true,
+              });
+            }
+          }
           if (wfSymbolDiag && wfSymbolDiag.length > 0) {
             collectedSymbolDiscoveryDiagnostics.push(...wfSymbolDiag);
           }
@@ -4313,6 +4338,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             treeEnrichment = null;
           }
         }
+      }
+      } finally {
+        clearActiveWorkflowContractMap();
+        setActiveCallerWorkflowName("");
+        getAndClearContractDiagnostics();
       }
 
       if (totalStrippedProperties > 0) {

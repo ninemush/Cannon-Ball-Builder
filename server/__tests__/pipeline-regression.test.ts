@@ -3101,4 +3101,470 @@ describe("Compiler-invariant regression tests", () => {
       expect(parsed.childNames).toContain("SendSmtpMailMessage.Body");
     });
   });
+
+  describe("Pre-emission workflow contract resolution", () => {
+    it("buildPreEmissionContractMap constructs a contract map from workflow specs", async () => {
+      const { buildPreEmissionContractMap } = await import("../../server/workflow-tree-assembler");
+      const specs = [
+        {
+          name: "ProcessTransaction",
+          spec: {
+            arguments: [
+              { name: "in_TransactionItem", direction: "InArgument", type: "QueueItem" },
+              { name: "out_Status", direction: "OutArgument", type: "String" },
+              { name: "io_Config", direction: "InOutArgument", type: "Dictionary(String,Object)" },
+            ],
+          },
+        },
+        {
+          name: "GetData",
+          spec: {
+            arguments: [
+              { name: "in_Input", direction: "InArgument", type: "String" },
+            ],
+          },
+        },
+        {
+          name: "NoArgs",
+          spec: {
+            arguments: [],
+          },
+        },
+      ];
+
+      const map = buildPreEmissionContractMap(specs);
+      expect(map.size).toBe(3);
+      expect(map.has("processtransaction.xaml")).toBe(true);
+      expect(map.has("getdata.xaml")).toBe(true);
+      expect(map.has("noargs.xaml")).toBe(true);
+
+      const ptContract = map.get("processtransaction.xaml")!;
+      expect(ptContract.workflowName).toBe("ProcessTransaction");
+      expect(ptContract.arguments).toHaveLength(3);
+      expect(ptContract.arguments[0]).toEqual({ name: "in_TransactionItem", direction: "InArgument", type: "QueueItem" });
+      expect(ptContract.arguments[1]).toEqual({ name: "out_Status", direction: "OutArgument", type: "String" });
+      expect(ptContract.arguments[2]).toEqual({ name: "io_Config", direction: "InOutArgument", type: "Dictionary(String,Object)" });
+
+      const noArgsContract = map.get("noargs.xaml")!;
+      expect(noArgsContract.arguments).toHaveLength(0);
+    });
+
+    it("contract map keys are case-insensitive (lowercase)", async () => {
+      const { buildPreEmissionContractMap } = await import("../../server/workflow-tree-assembler");
+      const map = buildPreEmissionContractMap([
+        { name: "MyWorkflow", spec: { arguments: [{ name: "in_X", direction: "InArgument", type: "String" }] } },
+      ]);
+      expect(map.has("myworkflow.xaml")).toBe(true);
+      expect(map.has("MyWorkflow.xaml")).toBe(false);
+    });
+
+    it("InvokeWorkflowFile emission uses callee contract for direction and type", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+        buildPreEmissionContractMap,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const map = buildPreEmissionContractMap([
+        {
+          name: "ProcessTransaction",
+          spec: {
+            arguments: [
+              { name: "in_TransactionItem", direction: "InArgument", type: "QueueItem" },
+              { name: "out_Status", direction: "OutArgument", type: "String" },
+            ],
+          },
+        },
+      ]);
+
+      setActiveWorkflowContractMap(map);
+      setActiveCallerWorkflowName("Main");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke ProcessTransaction",
+            properties: {
+              WorkflowFileName: "ProcessTransaction.xaml",
+              in_TransactionItem: "[currentItem]",
+              out_Status: "[statusVar]",
+            },
+          },
+          [],
+        );
+
+        expect(xml).toContain("InvokeWorkflowFile");
+        expect(xml).toContain('WorkflowFileName="ProcessTransaction.xaml"');
+        expect(xml).toContain("OutArgument");
+        expect(xml).toContain('x:Key="out_Status"');
+        expect(xml).toContain("InArgument");
+        expect(xml).toContain('x:Key="in_TransactionItem"');
+        expect(xml).toContain('x:TypeArguments="QueueItem"');
+
+        const diags = getAndClearContractDiagnostics();
+        expect(diags.filter(d => d.kind === "unsupported_binding")).toHaveLength(0);
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+
+    it("unsupported binding is withheld with explicit diagnostic", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+        buildPreEmissionContractMap,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const map = buildPreEmissionContractMap([
+        {
+          name: "ProcessTransaction",
+          spec: {
+            arguments: [
+              { name: "in_TransactionItem", direction: "InArgument", type: "QueueItem" },
+            ],
+          },
+        },
+      ]);
+
+      setActiveWorkflowContractMap(map);
+      setActiveCallerWorkflowName("Main");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke ProcessTransaction",
+            properties: {
+              WorkflowFileName: "ProcessTransaction.xaml",
+              in_TransactionItem: "[currentItem]",
+              in_NonExistent: "[bogusVar]",
+            },
+          },
+          [],
+        );
+
+        expect(xml).toContain('x:Key="in_TransactionItem"');
+        expect(xml).not.toContain("in_NonExistent");
+
+        const diags = getAndClearContractDiagnostics();
+        const unsupported = diags.filter(d => d.kind === "unsupported_binding");
+        expect(unsupported).toHaveLength(1);
+        expect(unsupported[0].bindingName).toBe("in_NonExistent");
+        expect(unsupported[0].calleeFile).toBe("ProcessTransaction.xaml");
+        expect(unsupported[0].reason).toContain("in_NonExistent");
+        expect(unsupported[0].reason).toContain("does not match");
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+
+    it("unresolved callee falls through with diagnostic", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const emptyMap = new Map();
+      setActiveWorkflowContractMap(emptyMap);
+      setActiveCallerWorkflowName("Main");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke UnknownFile",
+            properties: {
+              WorkflowFileName: "UnknownExternal.xaml",
+              in_SomeArg: "[someVar]",
+            },
+          },
+          [],
+        );
+
+        expect(xml).toContain("InvokeWorkflowFile");
+        expect(xml).toContain('x:Key="in_SomeArg"');
+        expect(xml).toContain("InArgument");
+
+        const diags = getAndClearContractDiagnostics();
+        const unresolved = diags.filter(d => d.kind === "unresolved_callee");
+        expect(unresolved).toHaveLength(1);
+        expect(unresolved[0].calleeFile).toBe("UnknownExternal.xaml");
+        expect(unresolved[0].reason).toContain("No pre-emission contract");
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+
+    it("direction is resolved from callee contract truth on first pass", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+        buildPreEmissionContractMap,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const map = buildPreEmissionContractMap([
+        {
+          name: "Worker",
+          spec: {
+            arguments: [
+              { name: "in_Data", direction: "InArgument", type: "String" },
+              { name: "out_Result", direction: "OutArgument", type: "String" },
+            ],
+          },
+        },
+      ]);
+
+      setActiveWorkflowContractMap(map);
+      setActiveCallerWorkflowName("Main");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke Worker",
+            properties: {
+              WorkflowFileName: "Worker.xaml",
+              in_Data: "[inputVal]",
+              out_Result: "[outputVal]",
+            },
+          },
+          [],
+        );
+
+        const inArgMatch = xml.match(/<InArgument[^>]*x:Key="in_Data"/);
+        expect(inArgMatch).toBeTruthy();
+        const outArgMatch = xml.match(/<OutArgument[^>]*x:Key="out_Result"/);
+        expect(outArgMatch).toBeTruthy();
+
+        const diags = getAndClearContractDiagnostics();
+        expect(diags).toHaveLength(0);
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+
+    it("case-insensitive and prefix-stripping matching works correctly", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+        buildPreEmissionContractMap,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const map = buildPreEmissionContractMap([
+        {
+          name: "Worker",
+          spec: {
+            arguments: [
+              { name: "in_TransactionItem", direction: "InArgument", type: "QueueItem" },
+            ],
+          },
+        },
+      ]);
+
+      setActiveWorkflowContractMap(map);
+      setActiveCallerWorkflowName("Main");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke Worker",
+            properties: {
+              WorkflowFileName: "Worker.xaml",
+              in_TransactionItem: "[item]",
+            },
+          },
+          [],
+        );
+
+        expect(xml).toContain('x:Key="in_TransactionItem"');
+        expect(xml).toContain("InArgument");
+
+        const diags = getAndClearContractDiagnostics();
+        expect(diags.filter(d => d.kind === "unsupported_binding")).toHaveLength(0);
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+
+    it("does not silently invent missing contract truth", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+        buildPreEmissionContractMap,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const map = buildPreEmissionContractMap([
+        {
+          name: "Worker",
+          spec: {
+            arguments: [],
+          },
+        },
+      ]);
+
+      setActiveWorkflowContractMap(map);
+      setActiveCallerWorkflowName("Main");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke Worker",
+            properties: {
+              WorkflowFileName: "Worker.xaml",
+              in_Fabricated: "[madeUp]",
+              out_Invented: "[alsoMadeUp]",
+            },
+          },
+          [],
+        );
+
+        expect(xml).not.toContain("in_Fabricated");
+        expect(xml).not.toContain("out_Invented");
+        expect(xml).toContain("InvokeWorkflowFile.Arguments");
+
+        const diags = getAndClearContractDiagnostics();
+        const unsupported = diags.filter(d => d.kind === "unsupported_binding");
+        expect(unsupported).toHaveLength(2);
+        expect(unsupported.map(d => d.bindingName).sort()).toEqual(["in_Fabricated", "out_Invented"]);
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+
+    it("without active contract map, emission uses default behavior", async () => {
+      const {
+        resolveActivityTemplate,
+        clearActiveWorkflowContractMap,
+        getAndClearContractDiagnostics,
+      } = await import("../../server/workflow-tree-assembler");
+
+      clearActiveWorkflowContractMap();
+
+      const xml = resolveActivityTemplate(
+        {
+          kind: "activity" as const,
+          template: "InvokeWorkflowFile",
+          displayName: "Invoke Something",
+          properties: {
+            WorkflowFileName: "Something.xaml",
+            in_Arg1: "[val1]",
+            out_Arg2: "[val2]",
+          },
+        },
+        [],
+      );
+
+      expect(xml).toContain("in_Arg1");
+      expect(xml).toContain("out_Arg2");
+      expect(xml).toContain("InArgument");
+      expect(xml).toContain("OutArgument");
+
+      const diags = getAndClearContractDiagnostics();
+      expect(diags).toHaveLength(0);
+    });
+
+    it("contract map handles workflow names with spaces", async () => {
+      const { buildPreEmissionContractMap } = await import("../../server/workflow-tree-assembler");
+      const map = buildPreEmissionContractMap([
+        { name: "Process Transaction", spec: { arguments: [{ name: "in_Item", direction: "InArgument", type: "String" }] } },
+      ]);
+      expect(map.has("process_transaction.xaml")).toBe(true);
+    });
+
+    it("contract map skips arguments with invalid direction", async () => {
+      const { buildPreEmissionContractMap } = await import("../../server/workflow-tree-assembler");
+      const map = buildPreEmissionContractMap([
+        {
+          name: "Test",
+          spec: {
+            arguments: [
+              { name: "in_Valid", direction: "InArgument", type: "String" },
+              { name: "bad_Dir", direction: "InvalidDirection", type: "String" },
+            ],
+          },
+        },
+      ]);
+      const contract = map.get("test.xaml")!;
+      expect(contract.arguments).toHaveLength(1);
+      expect(contract.arguments[0].name).toBe("in_Valid");
+    });
+
+    it("emits invoke bindings in correct structured child-element form on first pass", async () => {
+      const {
+        resolveActivityTemplate,
+        setActiveWorkflowContractMap,
+        clearActiveWorkflowContractMap,
+        setActiveCallerWorkflowName,
+        getAndClearContractDiagnostics,
+        buildPreEmissionContractMap,
+      } = await import("../../server/workflow-tree-assembler");
+
+      const map = buildPreEmissionContractMap([
+        {
+          name: "Worker",
+          spec: {
+            arguments: [
+              { name: "in_Data", direction: "InArgument", type: "String" },
+              { name: "out_Result", direction: "OutArgument", type: "Int32" },
+            ],
+          },
+        },
+      ]);
+
+      setActiveWorkflowContractMap(map);
+      setActiveCallerWorkflowName("Caller");
+
+      try {
+        const xml = resolveActivityTemplate(
+          {
+            kind: "activity" as const,
+            template: "InvokeWorkflowFile",
+            displayName: "Invoke Worker",
+            properties: {
+              WorkflowFileName: "Worker.xaml",
+              in_Data: "[myInput]",
+              out_Result: "[myOutput]",
+            },
+          },
+          [],
+        );
+
+        expect(xml).toContain("<ui:InvokeWorkflowFile.Arguments>");
+        expect(xml).toContain("</ui:InvokeWorkflowFile.Arguments>");
+        expect(xml).toMatch(/<InArgument\s+x:TypeArguments="String"\s+x:Key="in_Data">/);
+        expect(xml).toMatch(/<OutArgument\s+x:TypeArguments="Int32"\s+x:Key="out_Result">/);
+
+        getAndClearContractDiagnostics();
+      } finally {
+        clearActiveWorkflowContractMap();
+      }
+    });
+  });
 });
