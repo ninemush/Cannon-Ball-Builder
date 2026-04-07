@@ -40,6 +40,7 @@ import archiver from "archiver";
   import { runPreEmissionLoweringGate, runMailFamilyLockAnalysis, buildMailFamilyLockDiagnostics, type PreEmissionLoweringGateResult, type CriticalActivityLoweringDiagnostics, type MailFamilyLockDiagnostics, type MailFamilyLockResult } from "./critical-activity-lowering";
   import { runPreLoweringSpecNormalization, validateAdoptionTrace, type SpecNormalizationDiagnostics, type ActivePathAdoptionTraceEntry } from "./pre-lowering-spec-normalization";
   import { traceRequiredPropertyThroughSpec, updateTraceAfterPreNormalization, updateTraceAfterLowering, updateTraceAfterEmission, updateTraceAfterCompliance, updateTraceAfterEnforcement, updateTraceAfterFinalXaml, buildDiagnosticsResult, resetInstanceCounter, type RequiredPropertyTraceEntry, type RequiredPropertyDiagnosticsResult } from "./required-property-diagnostics";
+  import { deriveSpecInterfaces, type InterfaceDerivationResult } from "./spec-interface-derivation";
 
   function findActivityNodeRecursive(nodes: any[], predicate: (n: any) => boolean): any | null {
     for (const n of nodes) {
@@ -4051,6 +4052,23 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       let totalStrippedProperties = 0;
       let totalExcessiveStripping = 0;
       const excessiveStrippingFiles = new Set<string>();
+
+      const interfaceDerivationResult = deriveSpecInterfaces(
+        enrichmentsToProcess.map(e => ({ name: e.name, spec: e.spec }))
+      );
+      if (interfaceDerivationResult.derivedCount > 0 || interfaceDerivationResult.supplementedCount > 0) {
+        console.log(`[UiPath] Spec interface derivation populated ${interfaceDerivationResult.derivedCount} derived + ${interfaceDerivationResult.supplementedCount} supplemented argument(s) before pre-emission contract map`);
+      }
+      for (const diag of interfaceDerivationResult.diagnostics) {
+        if (diag.kind === "conflict" || diag.kind === "incomplete") {
+          collectedQualityIssues.push({
+            severity: "warning",
+            file: diag.targetWorkflow,
+            check: "spec-interface-derivation",
+            detail: diag.details,
+          });
+        }
+      }
 
       const preEmissionContractMap = buildPreEmissionContractMap(
         enrichmentsToProcess.map(e => ({ name: e.name, spec: e.spec }))
