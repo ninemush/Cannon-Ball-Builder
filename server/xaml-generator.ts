@@ -7,7 +7,7 @@ import {
   enforceDisplayName,
   type AnalysisReport,
 } from "./workflow-analyzer";
-import { escapeXml, escapeXmlExpression, normalizeXmlExpression } from "./lib/xml-utils";
+import { escapeXml, escapeXmlExpression, normalizeXmlExpression, serializeSafeAttributeValue, reportAttributeSerializerBypass } from "./lib/xml-utils";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { AICenterSkill } from "./uipath-integration";
 import { isActivityAllowed } from "./uipath-activity-policy";
@@ -1295,7 +1295,7 @@ function renderVariablesBlock(variables: VariableDecl[], targetFramework?: Targe
       if (isObjectType) {
         console.warn(`[Variable Guard] Omitting Default="${v.defaultValue}" for x:Object variable "${safeName}" — UiPath does not support Literal<Object>`);
       } else {
-        defaultAttr = ` Default="${escapeXmlExpression(v.defaultValue)}"`;
+        defaultAttr = ` Default="${serializeSafeAttributeValue(v.defaultValue)}"`;
       }
     }
     xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}"${defaultAttr} />\n`;
@@ -1528,6 +1528,48 @@ function trySerializeTimeSpan(key: string, value: any): string | null {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+export function isChildElementProperty(activityType: string, propertyName: string): boolean {
+  if (!catalogService.isLoaded()) return false;
+  const cleanActivityType = activityType.replace(/^[a-z]+:/, "");
+  const schema = catalogService.getActivitySchema(cleanActivityType) || catalogService.getActivitySchema(activityType);
+  if (!schema?.activity?.properties) return false;
+  const propDef = schema.activity.properties.find((p: any) => p.name === propertyName);
+  return propDef?.xamlSyntax === "child-element";
+}
+
+export interface ChildElementEmission {
+  propertyName: string;
+  value: string;
+  argumentWrapper: string;
+  typeArguments: string | null;
+}
+
+export function getChildElementInfo(activityType: string, propertyName: string): { argumentWrapper: string; typeArguments: string | null } | null {
+  if (!catalogService.isLoaded()) return null;
+  const cleanActivityType = activityType.replace(/^[a-z]+:/, "");
+  const schema = catalogService.getActivitySchema(cleanActivityType) || catalogService.getActivitySchema(activityType);
+  if (!schema?.activity?.properties) return null;
+  const propDef = schema.activity.properties.find((p: any) => p.name === propertyName);
+  if (!propDef || propDef.xamlSyntax !== "child-element") return null;
+  return {
+    argumentWrapper: propDef.argumentWrapper || "InArgument",
+    typeArguments: propDef.typeArguments || null,
+  };
+}
+
+export function renderChildElements(activityType: string, childElements: ChildElementEmission[]): string {
+  if (childElements.length === 0) return "";
+  let xml = "";
+  for (const ce of childElements) {
+    const typeAttr = ce.typeArguments ? ` x:TypeArguments="${ce.typeArguments}"` : "";
+    const propTag = `${activityType}.${ce.propertyName}`;
+    xml += `\n              <${propTag}>`;
+    xml += `<${ce.argumentWrapper}${typeAttr}>${serializeSafeAttributeValue(ce.value)}</${ce.argumentWrapper}>`;
+    xml += `</${propTag}>`;
+  }
+  return xml;
+}
+
 export function sanitizePropertyValue(key: string, value: any): string {
   if (value === null || value === undefined) {
     return "";
@@ -1553,10 +1595,9 @@ export function sanitizePropertyValue(key: string, value: any): string {
     const isVbExpression = /^\[.*\]$/.test(value.trim());
     if (isVbExpression) {
       const inner = value.trim().slice(1, -1);
-      const escapedInner = escapeXmlExpression(inner);
-      return `[${escapedInner}]`;
+      return `[${inner}]`;
     }
-    return value.replace(/["']/g, "");
+    return value;
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -1567,19 +1608,19 @@ export function sanitizePropertyValue(key: string, value: any): string {
       if (typeof item === "object" && item !== null) return JSON.stringify(item);
       return String(item);
     });
-    return `New String() {${items.map(i => `"${i.replace(/"/g, '""')}"`).join(", ")}}`;
+    const vbItems = items.map(i => `"${i.replace(/"/g, '""')}"`);
+    return `New String() {${vbItems.join(", ")}}`;
   }
   if (typeof value === "object") {
     if (key.toLowerCase().includes("header")) {
       const entries = Object.entries(value as Record<string, any>);
       if (entries.length === 0) return `New Dictionary(Of String, String)()`;
-      const kvPairs = entries.map(([k, v]) => `{"${k}", "${String(v)}"}`).join(", ");
+      const kvPairs = entries.map(([k, v]) => `{"${String(k)}", "${String(v)}"}`).join(", ");
       return `New Dictionary(Of String, String) From {${kvPairs}}`;
     }
     const timeSpanResult = trySerializeTimeSpan(key, value);
     if (timeSpanResult !== null) return timeSpanResult;
-    const jsonStr = JSON.stringify(value);
-    return escapeXml(jsonStr);
+    return `__STRUCTURED_OBJECT__${JSON.stringify(value)}`;
   }
   return `ERROR_UNSERIALIZABLE_${key}`;
 }
@@ -1709,7 +1750,7 @@ function renderControlFlowActivity(
     }
 
     return `${needsConditionReview ? `\n          <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(enforced)}" DisplayName="Review Condition" />` : ""}
-          <If DisplayName="${escapeXml(enforced)}" Condition="[${escapeXmlExpression(String(condition))}]">
+          <If DisplayName="${escapeXml(enforced)}" Condition="${serializeSafeAttributeValue(`[${String(condition)}]`)}">
             <If.Then>
               <Sequence DisplayName="Then: ${escapeXml(enforced)}">${thenContent}
               </Sequence>
@@ -1749,7 +1790,7 @@ function renderControlFlowActivity(
     }
 
     return `${needsExpressionReview ? `\n          <ui:Comment Text="TODO: Replace default Nothing expression with actual value for: ${escapeXml(enforced)}" DisplayName="Review Expression" />` : ""}
-          <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="[${escapeXmlExpression(String(expression))}]">
+          <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="${serializeSafeAttributeValue(`[${String(expression)}]`)}">
             <Switch.Cases>${caseElements}
             </Switch.Cases>
             <Switch.Default>
@@ -1793,7 +1834,7 @@ function renderControlFlowActivity(
     }
 
     return `${needsValuesReview ? `\n          <ui:Comment Text="TODO: Replace default empty collection with actual data source for: ${escapeXml(enforced)}" DisplayName="Review Collection" />` : ""}
-          <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="[${escapeXmlExpression(String(values))}]">
+          <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="${serializeSafeAttributeValue(`[${String(values)}]`)}">
             <ForEach.Body>
               <ActivityAction x:TypeArguments="${escapeXml(String(itemType))}">
                 <ActivityAction.Argument>
@@ -1933,17 +1974,31 @@ export function renderActivity(
   }
 
   let propAttrs = "";
+  const childElementEmissions: ChildElementEmission[] = [];
   for (const [key, value] of Object.entries(properties)) {
     if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
+    const childInfo = getChildElementInfo(activityType, key);
+    if (childInfo) {
+      const sanitized = sanitizePropertyValue(key, value);
+      if (sanitized === "") continue;
+      const effectiveValue = sanitized.startsWith("__STRUCTURED_OBJECT__")
+        ? sanitized.slice("__STRUCTURED_OBJECT__".length)
+        : sanitized;
+      childElementEmissions.push({ propertyName: key, value: effectiveValue, ...childInfo });
+      continue;
+    }
     const sanitized = sanitizePropertyValue(key, value);
     if (sanitized === "") continue;
-    const escaped = escapeXmlExpression(sanitized);
-    propAttrs += ` ${key}="${escaped}"`;
+    if (sanitized.startsWith("__STRUCTURED_OBJECT__")) {
+      reportAttributeSerializerBypass(`structured-object-skip:${activityType}.${key}`);
+      continue;
+    }
+    propAttrs += ` ${key}="${serializeSafeAttributeValue(sanitized)}"`;
 
   }
 
   if (selectorHint && !isCrossPlatform) {
-    propAttrs += ` Selector="${escapeXml(selectorHint)}"`;
+    propAttrs += ` Selector="${serializeSafeAttributeValue(selectorHint)}"`;
   }
 
   if (isUiActivity(activityType)) {
@@ -1978,7 +2033,7 @@ export function renderActivity(
   if (isCrossPlatform && (activityType === "ui:UseBrowser" || activityType === "ui:UseApplication")) {
     const url = properties["Url"] || "TODO: Set application URL";
     return `
-          <${activityType} DisplayName="${escapeXml(enforced)}" Url="${escapeXml(url)}"${selectorHint ? ` Selector="${escapeXml(selectorHint)}"` : ""}>
+          <${activityType} DisplayName="${escapeXml(enforced)}" Url="${serializeSafeAttributeValue(String(url))}"${selectorHint ? ` Selector="${serializeSafeAttributeValue(selectorHint)}"` : ""}>
             <${activityType}.Body>
               <Sequence DisplayName="Actions: ${escapeXml(enforced)}">
               </Sequence>
@@ -2031,9 +2086,23 @@ export function renderActivity(
     for (const [key, value] of Object.entries(properties)) {
       if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
       if (key.startsWith("_converted")) continue;
+      const childInfo = getChildElementInfo(activityType, key);
+      if (childInfo) {
+        const sanitized = sanitizePropertyValue(key, value);
+        if (sanitized === "") continue;
+        const effectiveValue = sanitized.startsWith("__STRUCTURED_OBJECT__")
+          ? sanitized.slice("__STRUCTURED_OBJECT__".length)
+          : sanitized;
+        childElementEmissions.push({ propertyName: key, value: effectiveValue, ...childInfo });
+        continue;
+      }
       const sanitized = sanitizePropertyValue(key, value);
       if (sanitized === "") continue;
-      propAttrs += ` ${key}="${escapeXmlExpression(sanitized)}"`;
+      if (sanitized.startsWith("__STRUCTURED_OBJECT__")) {
+        reportAttributeSerializerBypass(`structured-object-skip:${activityType}.${key}`);
+        continue;
+      }
+      propAttrs += ` ${key}="${serializeSafeAttributeValue(sanitized)}"`;
     }
   }
 
@@ -2085,16 +2154,23 @@ export function renderActivity(
       argsContent += `                <${argType} x:TypeArguments="x:Object" x:Key="${escapeXml(binding.key)}">${safeValue}</${argType}>\n`;
     }
 
-    if (argsContent) {
+    const childElementXml = renderChildElements(activityType, childElementEmissions);
+    if (argsContent || childElementXml) {
       innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs}>
               <${activityType}.Arguments>
-${argsContent}              </${activityType}.Arguments>
+${argsContent}              </${activityType}.Arguments>${childElementXml}
             </${activityType}>`;
     } else {
       innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
     }
   } else {
-    innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+    const childElementXml = renderChildElements(activityType, childElementEmissions);
+    if (childElementXml) {
+      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs}>${childElementXml}
+            </${activityType}>`;
+    } else {
+      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+    }
   }
 
   if (isCrossPlatform && isUiActivity(activityType) && selectorHint) {
@@ -3297,7 +3373,7 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
       <Variable x:TypeArguments="x:Int32" Name="int_RetryNumber" Default="0" />
       <Variable x:TypeArguments="x:Int32" Name="int_MaxRetries" Default="3" />
       <Variable x:TypeArguments="x:String" Name="str_TransactionID" />
-      <Variable x:TypeArguments="x:String" Name="str_QueueName" Default="&quot;${escapeXml(queueName)}&quot;" />
+      <Variable x:TypeArguments="x:String" Name="str_QueueName" Default="${serializeSafeAttributeValue(`"${queueName}"`)}" />
       <Variable x:TypeArguments="ui:QueueItem" Name="qi_TransactionItem" />
       <Variable x:TypeArguments="x:Boolean" Name="bool_SystemReady" Default="False" />
       <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" />

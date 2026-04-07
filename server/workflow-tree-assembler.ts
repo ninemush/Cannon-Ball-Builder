@@ -19,7 +19,7 @@ registerStage("workflow-tree-assembler");
 import type { ActivityValidationResult, ValidationCorrection } from "./catalog/catalog-service";
 import { buildTemplateBlock } from "./catalog/xaml-template-builder";
 import type { ProcessType } from "./catalog/catalog-service";
-import { escapeXml, escapeXmlExpression, normalizeXmlExpression, escapeXmlTextContent } from "./lib/xml-utils";
+import { escapeXml, escapeXmlExpression, normalizeXmlExpression, escapeXmlTextContent, serializeSafeAttributeValue } from "./lib/xml-utils";
 import { XMLValidator } from "fast-xml-parser";
 import { buildExpression, isValueIntent, normalizeStringToExpression, normalizePropertyToValueIntent, tryParseJsonValueIntent, emitJsonResolutionDiagnostic, resolveValueIntentJsonString, containsValueIntentJson, sweepAttributeValueForJsonIntents, type ValueIntent } from "./xaml/expression-builder";
 import { emitPropertySerializationTrace, computeContentHash } from "./pipeline-trace-collector";
@@ -1932,12 +1932,12 @@ export function resolveActivityTemplate(
     } else {
       wrappedMessage = smartBracketWrap(message, _activeDeclarationLookup || undefined);
     }
-    return applyCatalogConformance(`<ui:LogMessage Level="${escapeXml(level)}" Message="${escapeXml(wrappedMessage)}" DisplayName="${displayName}" />`);
+    return applyCatalogConformance(`<ui:LogMessage Level="${serializeSafeAttributeValue(level)}" Message="${serializeSafeAttributeValue(wrappedMessage)}" DisplayName="${displayName}" />`);
   }
 
   if (templateName === "Delay") {
     const duration = getPropString(props, "Duration", "duration") || "00:00:05";
-    return applyCatalogConformance(`<Delay Duration="${escapeXml(duration)}" DisplayName="${displayName}" />`);
+    return applyCatalogConformance(`<Delay Duration="${serializeSafeAttributeValue(duration)}" DisplayName="${displayName}" />`);
   }
 
   if (templateName === "Rethrow") {
@@ -2005,7 +2005,7 @@ export function resolveActivityTemplate(
       }
     }
 
-    return applyCatalogConformance(`<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
+    return applyCatalogConformance(`<ui:InvokeWorkflowFile WorkflowFileName="${serializeSafeAttributeValue(fileName)}" DisplayName="${displayName}">\n` +
       `  <ui:InvokeWorkflowFile.Arguments>\n` +
       argBlock +
       `  </ui:InvokeWorkflowFile.Arguments>\n` +
@@ -2056,7 +2056,7 @@ export function resolveActivityTemplate(
     const input = getPropString(props, "JsonString", "jsonString", "Input") || "";
     const outputVar = node.outputVar || "obj_Result";
     const djTag = getActivityTag("DeserializeJson");
-    return applyCatalogConformance(`<${djTag} DisplayName="${displayName}" JsonString="${escapeXml(input)}">\n` +
+    return applyCatalogConformance(`<${djTag} DisplayName="${displayName}" JsonString="${serializeSafeAttributeValue(input)}">\n` +
       `  <${djTag}.Result>\n` +
       `    <OutArgument x:TypeArguments="x:Object">${escapeXmlTextContent(ensureBracketWrapped(outputVar, _activeDeclarationLookup || undefined))}</OutArgument>\n` +
       `  </${djTag}.Result>\n` +
@@ -2065,7 +2065,7 @@ export function resolveActivityTemplate(
 
   if (templateName === "Comment") {
     const text = getPropString(props, "Text", "text") || "";
-    return applyCatalogConformance(`<ui:Comment Text="${escapeXml(text)}" DisplayName="${displayName}" />`);
+    return applyCatalogConformance(`<ui:Comment Text="${serializeSafeAttributeValue(text)}" DisplayName="${displayName}" />`);
   }
 
   const UNSUPPORTED_ACTIVITIES = new Set([
@@ -2312,7 +2312,7 @@ function resolveGetAssetTemplate(node: ActivityNode): string {
     : outputVar.startsWith("dbl_") ? "x:Double"
     : "x:String";
 
-  return `<ui:GetAsset DisplayName="${displayName}" AssetName="${escapeXml(assetName)}">\n` +
+  return `<ui:GetAsset DisplayName="${displayName}" AssetName="${serializeSafeAttributeValue(assetName)}">\n` +
     `  <ui:GetAsset.AssetValue>\n` +
     `    <OutArgument x:TypeArguments="${outArgType}">${escapeXmlTextContent(ensureBracketWrapped(outputVar, _activeDeclarationLookup || undefined))}</OutArgument>\n` +
     `  </ui:GetAsset.AssetValue>\n` +
@@ -2326,7 +2326,7 @@ function resolveGetCredentialTemplate(node: ActivityNode): string {
   const usernameVar = getPropString(props, "Username", "username") || "str_Username";
   const passwordVar = getPropString(props, "Password", "password") || "sec_Password";
 
-  return `<ui:GetCredential DisplayName="${displayName}" AssetName="${escapeXml(assetName)}">\n` +
+  return `<ui:GetCredential DisplayName="${displayName}" AssetName="${serializeSafeAttributeValue(assetName)}">\n` +
     `  <ui:GetCredential.Username>\n` +
     `    <OutArgument x:TypeArguments="x:String">${escapeXmlTextContent(ensureBracketWrapped(usernameVar, _activeDeclarationLookup || undefined))}</OutArgument>\n` +
     `  </ui:GetCredential.Username>\n` +
@@ -2358,13 +2358,13 @@ function resolveSendSmtpMailMessageTemplate(node: ActivityNode): string {
   const wrappedTo = wrapSmtpPropValue(to);
   const wrappedSubject = wrapSmtpPropValue(subject);
 
-  let attrs = `DisplayName="${displayName}" To="${escapeXml(wrappedTo)}" Subject="${escapeXml(wrappedSubject)}"`;
-  attrs += ` IsBodyHtml="${escapeXml(isBodyHtml)}"`;
-  attrs += ` Server="${escapeXml(server)}" Port="${escapeXml(port)}"`;
-  if (from) attrs += ` From="${escapeXml(wrapSmtpPropValue(from))}"`;
-  if (email) attrs += ` Email="${escapeXml(wrapSmtpPropValue(email))}"`;
-  if (username) attrs += ` Username="${escapeXml(wrapSmtpPropValue(username))}"`;
-  if (password) attrs += ` Password="${escapeXml(wrapSmtpPropValue(password))}"`;
+  let attrs = `DisplayName="${displayName}" To="${serializeSafeAttributeValue(wrappedTo)}" Subject="${serializeSafeAttributeValue(wrappedSubject)}"`;
+  attrs += ` IsBodyHtml="${serializeSafeAttributeValue(isBodyHtml)}"`;
+  attrs += ` Server="${serializeSafeAttributeValue(server)}" Port="${serializeSafeAttributeValue(port)}"`;
+  if (from) attrs += ` From="${serializeSafeAttributeValue(wrapSmtpPropValue(from))}"`;
+  if (email) attrs += ` Email="${serializeSafeAttributeValue(wrapSmtpPropValue(email))}"`;
+  if (username) attrs += ` Username="${serializeSafeAttributeValue(wrapSmtpPropValue(username))}"`;
+  if (password) attrs += ` Password="${serializeSafeAttributeValue(wrapSmtpPropValue(password))}"`;
 
   const bodyBinding = body || "str_EmailBody";
   const safeBody = escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(bodyBinding), _activeDeclarationLookup || undefined));
@@ -2392,7 +2392,7 @@ function resolveGmailSendMessageTemplate(node: ActivityNode): string {
 
   const tag = getActivityTag("GmailSendMessage");
   let attrs = `DisplayName="${displayName}"`;
-  attrs += ` IsBodyHtml="${escapeXml(isBodyHtml)}"`;
+  attrs += ` IsBodyHtml="${serializeSafeAttributeValue(isBodyHtml)}"`;
 
   const safeBody = body
     ? escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(body), _activeDeclarationLookup || undefined))
@@ -2423,9 +2423,9 @@ function resolveSendOutlookMailMessageTemplate(node: ActivityNode): string {
   const account = getPropString(props, "Account", "account");
 
   const tag = getActivityTag("SendOutlookMailMessage");
-  let attrs = `DisplayName="${displayName}" To="${escapeXml(wrapSmtpPropValue(to))}" Subject="${escapeXml(wrapSmtpPropValue(subject))}"`;
-  attrs += ` IsBodyHtml="${escapeXml(isBodyHtml)}"`;
-  if (account) attrs += ` Account="${escapeXml(wrapSmtpPropValue(account))}"`;
+  let attrs = `DisplayName="${displayName}" To="${serializeSafeAttributeValue(wrapSmtpPropValue(to))}" Subject="${serializeSafeAttributeValue(wrapSmtpPropValue(subject))}"`;
+  attrs += ` IsBodyHtml="${serializeSafeAttributeValue(isBodyHtml)}"`;
+  if (account) attrs += ` Account="${serializeSafeAttributeValue(wrapSmtpPropValue(account))}"`;
 
   const safeBody = body
     ? escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(body), _activeDeclarationLookup || undefined))
@@ -2437,10 +2437,10 @@ function resolveSendOutlookMailMessageTemplate(node: ActivityNode): string {
   }
   childParts += `  <${tag}.Body>\n    <InArgument x:TypeArguments="x:String">${safeBody}</InArgument>\n  </${tag}.Body>\n`;
   if (cc) {
-    attrs += ` Cc="${escapeXml(wrapSmtpPropValue(cc))}"`;
+    attrs += ` Cc="${serializeSafeAttributeValue(wrapSmtpPropValue(cc))}"`;
   }
   if (bcc) {
-    attrs += ` Bcc="${escapeXml(wrapSmtpPropValue(bcc))}"`;
+    attrs += ` Bcc="${serializeSafeAttributeValue(wrapSmtpPropValue(bcc))}"`;
   }
 
   return `<${tag} ${attrs}>\n${childParts}</${tag}>`;
@@ -2460,14 +2460,14 @@ function resolveGetImapMailMessageTemplate(node: ActivityNode): string {
   const outputVar = node.outputVar || getPropString(props, "Messages", "messages") || "list_Messages";
 
   let attrs = `DisplayName="${displayName}"`;
-  attrs += ` Server="${escapeXml(wrapSmtpPropValue(server))}"`;
-  attrs += ` Port="${escapeXml(port)}"`;
-  attrs += ` Email="${escapeXml(wrapSmtpPropValue(email))}"`;
-  attrs += ` Password="${escapeXml(wrapSmtpPropValue(password))}"`;
-  attrs += ` SecureConnection="${escapeXml(secureConnection)}"`;
-  attrs += ` Top="${escapeXml(top)}"`;
-  attrs += ` MailFolder="${escapeXml(wrapSmtpPropValue(mailFolder))}"`;
-  attrs += ` OnlyUnreadMessages="${escapeXml(onlyUnread)}"`;
+  attrs += ` Server="${serializeSafeAttributeValue(wrapSmtpPropValue(server))}"`;
+  attrs += ` Port="${serializeSafeAttributeValue(port)}"`;
+  attrs += ` Email="${serializeSafeAttributeValue(wrapSmtpPropValue(email))}"`;
+  attrs += ` Password="${serializeSafeAttributeValue(wrapSmtpPropValue(password))}"`;
+  attrs += ` SecureConnection="${serializeSafeAttributeValue(secureConnection)}"`;
+  attrs += ` Top="${serializeSafeAttributeValue(top)}"`;
+  attrs += ` MailFolder="${serializeSafeAttributeValue(wrapSmtpPropValue(mailFolder))}"`;
+  attrs += ` OnlyUnreadMessages="${serializeSafeAttributeValue(onlyUnread)}"`;
 
   return `<umail:GetImapMailMessage ${attrs}>\n` +
     `  <umail:GetImapMailMessage.Messages>\n` +
@@ -2487,10 +2487,10 @@ function resolveCreateFormTaskTemplate(node: ActivityNode): string {
   const outputVar = node.outputVar || getPropString(props, "TaskObject", "taskObject") || "obj_FormTask";
 
   let attrs = `DisplayName="${displayName}"`;
-  attrs += ` Title="${escapeXml(wrapSmtpPropValue(title))}"`;
-  attrs += ` FormSchemaPath="${escapeXml(wrapSmtpPropValue(formSchemaPath))}"`;
-  if (taskCatalog) attrs += ` TaskCatalog="${escapeXml(wrapSmtpPropValue(taskCatalog))}"`;
-  if (taskFolder) attrs += ` TaskFolder="${escapeXml(wrapSmtpPropValue(taskFolder))}"`;
+  attrs += ` Title="${serializeSafeAttributeValue(wrapSmtpPropValue(title))}"`;
+  attrs += ` FormSchemaPath="${serializeSafeAttributeValue(wrapSmtpPropValue(formSchemaPath))}"`;
+  if (taskCatalog) attrs += ` TaskCatalog="${serializeSafeAttributeValue(wrapSmtpPropValue(taskCatalog))}"`;
+  if (taskFolder) attrs += ` TaskFolder="${serializeSafeAttributeValue(wrapSmtpPropValue(taskFolder))}"`;
 
   let childParts = "";
   if (taskDataJson) {
@@ -2524,12 +2524,12 @@ function resolveHttpClientTemplate(node: ActivityNode): string {
   } else if (/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$/.test(endpointResolved)) {
     wrappedEndpoint = `[${endpointResolved}]`;
   } else if (/^https?:\/\//.test(endpointResolved) || endpointResolved.includes("://")) {
-    wrappedEndpoint = `[&quot;${escapeXml(endpointResolved)}&quot;]`;
+    wrappedEndpoint = `["${endpointResolved}"]`;
   } else {
     wrappedEndpoint = `[${escapeXmlExpression(endpointResolved)}]`;
   }
 
-  let xml = `<${tag} DisplayName="${displayName}" Endpoint="${wrappedEndpoint}" Method="${escapeXml(method)}"`;
+  let xml = `<${tag} DisplayName="${displayName}" Endpoint="${serializeSafeAttributeValue(wrappedEndpoint)}" Method="${serializeSafeAttributeValue(method)}"`;
 
   xml += `>\n`;
 
@@ -2591,7 +2591,7 @@ function resolveExcelApplicationScopeTemplate(
     bodyXml = `<ui:Comment Text="TODO: Add Excel activities here" DisplayName="Placeholder" />`;
   }
 
-  return `<${tag} DisplayName="${displayName}" WorkbookPath="${escapeXml(smartBracketWrap(workbookPath, _activeDeclarationLookup || undefined))}" Visible="${escapeXml(visible)}">\n` +
+  return `<${tag} DisplayName="${displayName}" WorkbookPath="${serializeSafeAttributeValue(smartBracketWrap(workbookPath, _activeDeclarationLookup || undefined))}" Visible="${serializeSafeAttributeValue(visible)}">\n` +
     `  <${tag}.Body>\n` +
     `    <ActivityAction x:TypeArguments="x:Object">\n` +
     `      <ActivityAction.Handler>\n` +
@@ -2626,7 +2626,7 @@ function resolveUseExcelTemplate(
     bodyXml = `<ui:Comment Text="TODO: Add Excel activities here" DisplayName="Placeholder" />`;
   }
 
-  return `<${tag} DisplayName="${displayName}" ExcelFile="${escapeXml(smartBracketWrap(excelFile, _activeDeclarationLookup || undefined))}">\n` +
+  return `<${tag} DisplayName="${displayName}" ExcelFile="${serializeSafeAttributeValue(smartBracketWrap(excelFile, _activeDeclarationLookup || undefined))}">\n` +
     `  <${tag}.Body>\n` +
     `    <ActivityAction x:TypeArguments="x:Object">\n` +
     `      <ActivityAction.Handler>\n` +
@@ -2873,7 +2873,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
 
     if (!isChildElement) {
       const lintedAttrValue = lintAndFixVbExpression(effectiveValue);
-      attrParts.push(`${key}="${escapeXml(lintedAttrValue)}"`);
+      attrParts.push(`${key}="${serializeSafeAttributeValue(lintedAttrValue)}"`);
       if (isExpressionBearing) {
         emitPropertySerializationTrace({
           workflowFile: _activeRemediationContext?.fileName || "unknown",
@@ -3150,7 +3150,7 @@ function assembleSequenceNode(
           console.warn(`[Variable Guard] Omitting Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
         } else {
           const wrappedDefault = wrapVariableDefault(v.default, v.type);
-          defaultAttr = ` Default="${escapeXml(wrappedDefault)}"`;
+          defaultAttr = ` Default="${serializeSafeAttributeValue(wrappedDefault)}"`;
         }
       }
       varsBlock += `    <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}"${defaultAttr} />\n`;
@@ -3657,7 +3657,7 @@ function buildVariablesBlock(variables: VariableDeclaration[]): string {
         console.warn(`[Variable Guard] Omitting Default="${v.default}" for x:Object variable "${v.name}" — UiPath does not support Literal<Object>`);
       } else {
         const wrappedDefault = wrapVariableDefault(v.default, v.type);
-        defaultAttr = ` Default="${escapeXml(wrappedDefault)}"`;
+        defaultAttr = ` Default="${serializeSafeAttributeValue(wrappedDefault)}"`;
       }
     }
     if (v.type && v.type.includes("clr-namespace:")) {

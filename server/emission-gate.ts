@@ -1,6 +1,6 @@
 import { catalogService } from "./catalog/catalog-service";
 import { validateXmlWellFormedness } from "./xaml/xaml-compliance";
-import { escapeXml } from "./lib/xml-utils";
+import { escapeXml, getAttributeSerializerDiagnostics, resetAttributeSerializerDiagnostics } from "./lib/xml-utils";
 import type { WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
 import { formatBusinessContextForHandoff } from "./sdd-business-context-mapper";
 
@@ -45,6 +45,11 @@ export interface EmissionGateResult {
     corrected: number;
     blocked: number;
     degraded: number;
+  };
+  attributeSerializerDiagnostics?: {
+    calls: number;
+    corrections: number;
+    bypassAttempts: string[];
   };
 }
 
@@ -818,6 +823,17 @@ export function runEmissionGate(
     degraded: violations.filter(v => v.resolution === "degraded").length,
   };
 
+  const serializerDiag = getAttributeSerializerDiagnostics();
+  if (serializerDiag.calls > 0 || serializerDiag.bypassAttempts.length > 0) {
+    console.log(`[Emission Gate] Attribute serializer: ${serializerDiag.calls} calls, ${serializerDiag.corrections} corrections, ${serializerDiag.bypassAttempts.length} bypass attempts`);
+    if (serializerDiag.bypassAttempts.length > 0) {
+      for (const bypass of serializerDiag.bypassAttempts) {
+        console.warn(`[Emission Gate]   BYPASS: ${bypass}`);
+      }
+    }
+  }
+  resetAttributeSerializerDiagnostics();
+
   if (violations.length > 0) {
     console.log(`[Emission Gate] Found ${summary.totalViolations} violation(s): ${summary.stubbed} stubbed, ${summary.corrected} corrected, ${summary.blocked} blocked, ${summary.degraded} degraded`);
     for (const v of violations) {
@@ -830,6 +846,7 @@ export function runEmissionGate(
     violations,
     blocked: anyBlocked,
     summary,
+    attributeSerializerDiagnostics: serializerDiag,
   };
 }
 

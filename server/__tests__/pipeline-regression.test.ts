@@ -43,6 +43,7 @@ import { normalizePropertyToValueIntent } from "../xaml/expression-builder";
 import { scanXamlForRequiredPackages, NAMESPACE_PREFIX_TO_PACKAGE } from "../uipath-activity-registry";
 import { checkNormalizationInvariants } from "../emission-gate";
 import { metadataService } from "../catalog/metadata-service";
+import { catalogService as catalogServiceImport } from "../catalog/catalog-service";
 import { ACTIVITY_DEFINITIONS_REGISTRY } from "../catalog/activity-definitions";
 import {
   isSentinelValue,
@@ -73,7 +74,15 @@ import {
   generateSetTransactionStatusXaml,
   generateCloseAllApplicationsXaml,
   generateKillAllProcessesXaml,
+  sanitizePropertyValue,
+  isChildElementProperty,
 } from "../xaml-generator";
+import {
+  serializeSafeAttributeValue,
+  getAttributeSerializerDiagnostics,
+  resetAttributeSerializerDiagnostics,
+  reportAttributeSerializerBypass,
+} from "../lib/xml-utils";
 import {
   simpleLinearNodes,
   simpleLinearEdges,
@@ -3565,6 +3574,213 @@ describe("Compiler-invariant regression tests", () => {
       } finally {
         clearActiveWorkflowContractMap();
       }
+    });
+  });
+
+  describe("Attribute well-formedness serialization (Task #459)", () => {
+    describe("serializeSafeAttributeValue", () => {
+      it("escapes raw quotes in attribute values", () => {
+        const result = serializeSafeAttributeValue('Hello "world"');
+        expect(result).toBe("Hello &quot;world&quot;");
+        expect(result).not.toContain('"');
+      });
+
+      it("is idempotent — second pass does not change already-safe value", () => {
+        const first = serializeSafeAttributeValue('Hello "world"');
+        const second = serializeSafeAttributeValue(first);
+        expect(second).toBe(first);
+      });
+
+      it("preserves valid existing XML entities without double-escaping", () => {
+        const input = "value &amp; more &lt;test&gt;";
+        const result = serializeSafeAttributeValue(input);
+        expect(result).toBe("value &amp; more &lt;test&gt;");
+      });
+
+      it("escapes < > & characters", () => {
+        const result = serializeSafeAttributeValue("a < b & c > d");
+        expect(result).toBe("a &lt; b &amp; c &gt; d");
+      });
+
+      it("handles empty string", () => {
+        expect(serializeSafeAttributeValue("")).toBe("");
+      });
+
+      it("preserves valid VB expressions semantically", () => {
+        const vbExpr = "[str_Variable.ToString()]";
+        const result = serializeSafeAttributeValue(vbExpr);
+        expect(result).toContain("str_Variable");
+        expect(result).toContain("ToString");
+      });
+    });
+
+    describe("sanitizePropertyValue — string preservation", () => {
+      it("preserves raw quotes in string values for downstream escaping", () => {
+        const result = sanitizePropertyValue("Message", 'Log "important" message');
+        expect(result).toBe('Log "important" message');
+      });
+
+      it("preserves VB expressions without stripping content", () => {
+        const result = sanitizePropertyValue("Value", '[str_Name & " - " & str_Id]');
+        expect(result).toContain("str_Name");
+        expect(result).toContain("str_Id");
+      });
+    });
+
+    describe("sanitizePropertyValue — array serialization", () => {
+      it("produces VB array expression with proper quote structure", () => {
+        const result = sanitizePropertyValue("Items", ["hello", 'say "hi"', "test"]);
+        expect(result).toContain("New String()");
+        expect(result).toContain('"hello"');
+      });
+
+      it("array values become XML-safe after serializer", () => {
+        const result = sanitizePropertyValue("Data", ["apple", "banana"]);
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<Test Attr="${safe}" />`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+      });
+    });
+
+    describe("sanitizePropertyValue — dictionary/header serialization", () => {
+      it("produces VB dictionary expression with keys and values", () => {
+        const result = sanitizePropertyValue("Headers", { "Content-Type": "application/json" });
+        expect(result).toContain("New Dictionary");
+        expect(result).toContain("Content-Type");
+        expect(result).toContain("application/json");
+      });
+
+      it("empty dictionary produces well-formed result", () => {
+        const result = sanitizePropertyValue("RequestHeaders", {});
+        expect(result).toBe("New Dictionary(Of String, String)()");
+      });
+
+      it("dictionary values become XML-safe after serializer", () => {
+        const result = sanitizePropertyValue("Headers", { key: "val<ue" });
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<Test Attr="${safe}" />`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+      });
+
+      it("header values with embedded quotes produce XML-safe VB expressions", () => {
+        const result = sanitizePropertyValue("RequestHeaders", { Authorization: 'Bearer "tok123"', "X-Custom": "value's here" });
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<Test Attr="${safe}" />`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+        expect(result).toContain("Authorization");
+        expect(result).toContain("Bearer");
+      });
+    });
+
+    describe("sanitizePropertyValue — JSON/object fallback", () => {
+      it("marks structured objects with sentinel prefix", () => {
+        const result = sanitizePropertyValue("Config", { setting: "value", nested: { a: 1 } });
+        expect(result.startsWith("__STRUCTURED_OBJECT__")).toBe(true);
+        expect(result).toContain("setting");
+        expect(result).toContain("value");
+      });
+
+      it("structured object sentinel is skipped for non-child-element attributes", () => {
+        const result = sanitizePropertyValue("Data", { key: "val" });
+        expect(result.startsWith("__STRUCTURED_OBJECT__")).toBe(true);
+      });
+
+      it("sentinel prefix can be stripped to get underlying JSON for child-element lowering", () => {
+        const result = sanitizePropertyValue("Config", { key: "val" });
+        const jsonPart = result.slice("__STRUCTURED_OBJECT__".length);
+        expect(JSON.parse(jsonPart)).toEqual({ key: "val" });
+      });
+
+      it("structured object JSON is XML-safe after serializer for child-element content", () => {
+        const result = sanitizePropertyValue("Data", { key: "val<ue", other: 'say "hi"' });
+        const jsonPart = result.slice("__STRUCTURED_OBJECT__".length);
+        const safe = serializeSafeAttributeValue(jsonPart);
+        const testXml = `<Test>${safe}</Test>`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+      });
+    });
+
+    describe("diagnostics tracking", () => {
+      it("tracks serialization calls and corrections", () => {
+        resetAttributeSerializerDiagnostics();
+        serializeSafeAttributeValue("safe value");
+        serializeSafeAttributeValue('unsafe "value"');
+        const diag = getAttributeSerializerDiagnostics();
+        expect(diag.calls).toBe(2);
+        expect(diag.corrections).toBeGreaterThanOrEqual(1);
+      });
+
+      it("tracks bypass attempts when reported", () => {
+        resetAttributeSerializerDiagnostics();
+        reportAttributeSerializerBypass("legacy-path:SomeActivity.Message");
+        const diag = getAttributeSerializerDiagnostics();
+        expect(diag.bypassAttempts).toHaveLength(1);
+        expect(diag.bypassAttempts[0]).toBe("legacy-path:SomeActivity.Message");
+      });
+
+      it("reset clears all diagnostics including bypass attempts", () => {
+        reportAttributeSerializerBypass("test-bypass");
+        serializeSafeAttributeValue("test");
+        resetAttributeSerializerDiagnostics();
+        const diag = getAttributeSerializerDiagnostics();
+        expect(diag.calls).toBe(0);
+        expect(diag.corrections).toBe(0);
+        expect(diag.bypassAttempts).toHaveLength(0);
+      });
+    });
+
+    describe("isChildElementProperty — schema-aware filtering", () => {
+      it("returns false for unknown activity types", () => {
+        expect(isChildElementProperty("CompletelyFakeActivity123", "Body")).toBe(false);
+      });
+
+      it("returns true for known child-element property when catalog is loaded", () => {
+        catalogServiceImport.load();
+        if (catalogServiceImport.isLoaded()) {
+          expect(isChildElementProperty("Assign", "To")).toBe(true);
+          expect(isChildElementProperty("Assign", "Value")).toBe(true);
+          expect(isChildElementProperty("Throw", "Exception")).toBe(true);
+        }
+      });
+
+      it("returns false for attribute-syntax properties when catalog is loaded", () => {
+        catalogServiceImport.load();
+        if (catalogServiceImport.isLoaded()) {
+          expect(isChildElementProperty("Assign", "DisplayName")).toBe(false);
+        }
+      });
+    });
+
+    describe("benchmark-style malformed attribute cases", () => {
+      it("Message attribute with raw quotes is emitted safely via sanitizePropertyValue", () => {
+        const result = sanitizePropertyValue("Message", 'Log "important" message');
+        const testXml = `<Test Message="${serializeSafeAttributeValue(result)}" />`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+      });
+
+      it("Value attribute with raw quotes is emitted safely", () => {
+        const result = sanitizePropertyValue("Value", 'Set to "default"');
+        const testXml = `<Test Value="${serializeSafeAttributeValue(result)}" />`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+      });
+
+      it("EndPoint with URL is emitted safely", () => {
+        const result = sanitizePropertyValue("EndPoint", "https://api.example.com/v2?key=val&other=true");
+        const testXml = `<Test EndPoint="${serializeSafeAttributeValue(result)}" />`;
+        const xmlResult = XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`);
+        expect(xmlResult).toBe(true);
+      });
+
+      it("EntityObject with complex value is marked as structured object", () => {
+        const result = sanitizePropertyValue("EntityObject", { type: "Invoice", id: "INV-001" });
+        expect(result.startsWith("__STRUCTURED_OBJECT__")).toBe(true);
+      });
     });
   });
 });

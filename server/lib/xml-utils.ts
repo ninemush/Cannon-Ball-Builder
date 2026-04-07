@@ -59,6 +59,53 @@ export function escapeXmlAttributeValue(raw: string): string {
   return escapeXml(decoded);
 }
 
+let _authoritativeSerializerCallCount = 0;
+let _authoritativeSerializerCorrectionCount = 0;
+let _authoritativeSerializerBypassAttempts: string[] = [];
+
+export interface AttributeSerializerDiagnostics {
+  calls: number;
+  corrections: number;
+  bypassAttempts: string[];
+}
+
+export function getAttributeSerializerDiagnostics(): AttributeSerializerDiagnostics {
+  return {
+    calls: _authoritativeSerializerCallCount,
+    corrections: _authoritativeSerializerCorrectionCount,
+    bypassAttempts: [..._authoritativeSerializerBypassAttempts],
+  };
+}
+
+export function resetAttributeSerializerDiagnostics(): void {
+  _authoritativeSerializerCallCount = 0;
+  _authoritativeSerializerCorrectionCount = 0;
+  _authoritativeSerializerBypassAttempts = [];
+}
+
+export function reportAttributeSerializerBypass(context: string): void {
+  _authoritativeSerializerBypassAttempts.push(context);
+}
+
+export function serializeSafeAttributeValue(raw: string): string {
+  _authoritativeSerializerCallCount++;
+  if (!raw || raw.length === 0) return raw;
+
+  const decoded = decodeXmlEntities(raw);
+  const escaped = decoded
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+
+  if (escaped !== raw) {
+    _authoritativeSerializerCorrectionCount++;
+  }
+
+  return escaped;
+}
+
 export interface QuoteRepairResult {
   repaired: boolean;
   content: string;
