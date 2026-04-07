@@ -57,6 +57,7 @@ import archiver from "archiver";
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
+  import { detectReframeworkStructurally, analyzeStateMachine } from "./xaml/workflow-graph-validator";
   import { runQualityGate, validatePackage, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue, type PackageReadiness } from "./uipath-quality-gate";
   import { escapeXml, repairMalformedQuotesInXaml } from "./lib/xml-utils";
   import {
@@ -535,6 +536,397 @@ export function detectFinalDedupCollisions(
 
 function isCanonicalInfrastructureName(name: string): boolean {
   return CANONICAL_INFRASTRUCTURE_NAMES.has(canonicalizeWorkflowName(name));
+}
+
+import { REFRAMEWORK_INFRASTRUCTURE_FILES, REFRAMEWORK_INVOKE_TARGETS } from "./shared/reframework-constants";
+export { REFRAMEWORK_INFRASTRUCTURE_FILES, REFRAMEWORK_INVOKE_TARGETS };
+
+function ensureInitInvokesInitAllSettings(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  libPath: string,
+): void {
+  const initKey = `${libPath}/Init.xaml`;
+  let initContent = deferredWrites.get(initKey);
+  if (!initContent) {
+    const initEntry = xamlEntries.find(e => {
+      const basename = (e.name.split("/").pop() || e.name).toLowerCase();
+      return basename === "init.xaml";
+    });
+    if (initEntry) {
+      initContent = initEntry.content;
+    }
+  }
+  if (!initContent) return;
+
+  const hasInitAllSettings = /WorkflowFileName="InitAllSettings\.xaml"/i.test(initContent);
+  if (hasInitAllSettings) return;
+
+  const closingSequencePattern = /<\/Sequence>/;
+  if (closingSequencePattern.test(initContent)) {
+    const invokeBlock = `\n    <ui:InvokeWorkflowFile DisplayName="Invoke InitAllSettings" WorkflowFileName="InitAllSettings.xaml" />`;
+    initContent = initContent.replace(closingSequencePattern, `${invokeBlock}\n  </Sequence>`);
+  }
+
+  deferredWrites.set(initKey, initContent);
+  console.log(`[UiPath] Ensured Init.xaml invokes InitAllSettings.xaml for REFramework chain`);
+}
+
+export function isChainOrderCorrect(content: string): boolean {
+  const positions: number[] = [];
+  for (const target of REFRAMEWORK_INVOKE_TARGETS) {
+    const pattern = new RegExp(`WorkflowFileName="${target.replace(".", "\\.")}"`, "i");
+    const match = pattern.exec(content);
+    if (!match) return false;
+    positions.push(match.index);
+  }
+  for (let i = 1; i < positions.length; i++) {
+    if (positions[i] < positions[i - 1]) return false;
+  }
+  return true;
+}
+
+export function canonicalizeChainOrder(content: string): string {
+  const invokeLinePattern = /^[ \t]*<ui:InvokeWorkflowFile[^>]*WorkflowFileName="([^"]+)"[^>]*\/>\s*$/gm;
+
+  const reframeworkInvokes: Array<{ line: string; target: string; index: number }> = [];
+  let match;
+  while ((match = invokeLinePattern.exec(content)) !== null) {
+    const target = match[1];
+    if (REFRAMEWORK_INVOKE_TARGETS.some(t => t.toLowerCase() === target.toLowerCase())) {
+      reframeworkInvokes.push({ line: match[0], target: target.toLowerCase(), index: match.index });
+    }
+  }
+
+  if (reframeworkInvokes.length < 2) return content;
+
+  const canonicalOrder = REFRAMEWORK_INVOKE_TARGETS.map(t => t.toLowerCase());
+  const sorted = [...reframeworkInvokes].sort((a, b) => {
+    return canonicalOrder.indexOf(a.target) - canonicalOrder.indexOf(b.target);
+  });
+
+  const alreadyOrdered = reframeworkInvokes.every((inv, i) => inv.target === sorted[i].target);
+  if (alreadyOrdered) return content;
+
+  const lines = content.split("\n");
+  const lineIndices: number[] = [];
+  let charPos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    for (const inv of reframeworkInvokes) {
+      if (inv.index >= charPos && inv.index < charPos + lines[i].length + 1) {
+        lineIndices.push(i);
+      }
+    }
+    charPos += lines[i].length + 1;
+  }
+
+  if (lineIndices.length !== reframeworkInvokes.length) return content;
+
+  const originalLines = lineIndices.map(i => lines[i]);
+  const sortedLines = [...originalLines];
+  const lineTargetMap = new Map<string, string>();
+  for (const inv of reframeworkInvokes) {
+    lineTargetMap.set(inv.line.trim(), inv.target);
+  }
+  sortedLines.sort((a, b) => {
+    const targetA = lineTargetMap.get(a.trim()) || "";
+    const targetB = lineTargetMap.get(b.trim()) || "";
+    return canonicalOrder.indexOf(targetA) - canonicalOrder.indexOf(targetB);
+  });
+
+  for (let i = 0; i < lineIndices.length; i++) {
+    lines[lineIndices[i]] = sortedLines[i];
+  }
+
+  return lines.join("\n");
+}
+
+export function ensureReframeworkWiringOnMain(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  libPath: string,
+  _tf?: string,
+): void {
+  const mainKey = `${libPath}/Main.xaml`;
+  let mainContent = deferredWrites.get(mainKey);
+  if (!mainContent) {
+    const mainEntry = xamlEntries.find(e => {
+      const basename = (e.name.split("/").pop() || e.name).toLowerCase();
+      return basename === "main.xaml";
+    });
+    if (mainEntry) {
+      mainContent = mainEntry.content;
+    }
+  }
+  if (!mainContent) return;
+
+  const existingInvokes = new Set<string>();
+  const invokePattern = /WorkflowFileName="([^"]+)"/g;
+  let m;
+  while ((m = invokePattern.exec(mainContent)) !== null) {
+    existingInvokes.add(m[1].toLowerCase());
+  }
+
+  const allPresent = REFRAMEWORK_INVOKE_TARGETS.every(t => existingInvokes.has(t.toLowerCase()));
+
+  if (allPresent && isChainOrderCorrect(mainContent)) {
+    console.log(`[UiPath] REFramework wiring already present and correctly ordered in Main.xaml — idempotent pass (no changes)`);
+    ensureInitInvokesInitAllSettings(deferredWrites, xamlEntries, libPath);
+    return;
+  }
+
+  if (allPresent && !isChainOrderCorrect(mainContent)) {
+    console.log(`[UiPath] REFramework wiring present but misordered — canonicalizing chain order`);
+    mainContent = canonicalizeChainOrder(mainContent);
+    deferredWrites.set(mainKey, mainContent);
+    ensureInitInvokesInitAllSettings(deferredWrites, xamlEntries, libPath);
+    return;
+  }
+
+  const missingTargets = REFRAMEWORK_INVOKE_TARGETS.filter(t => !existingInvokes.has(t.toLowerCase()));
+  console.log(`[UiPath] REFramework wiring injection: Main.xaml missing invocations to ${missingTargets.join(", ")}`);
+
+  let injectionLines = "";
+  for (const target of missingTargets) {
+    const displayName = target.replace(/\.xaml$/i, "").replace(/([A-Z])/g, " $1").trim();
+    injectionLines += `\n          <ui:InvokeWorkflowFile DisplayName="Invoke ${displayName}" WorkflowFileName="${target}" />`;
+  }
+
+  const closingSequencePattern = /<\/Sequence>\s*(<\/Activity>)/;
+  const closingStateEntryPattern = /<\/State\.Entry>/;
+
+  if (closingSequencePattern.test(mainContent)) {
+    mainContent = mainContent.replace(closingSequencePattern, `${injectionLines}\n        </Sequence>\n$1`);
+  } else if (closingStateEntryPattern.test(mainContent)) {
+    const firstStateEntry = mainContent.indexOf("</State.Entry>");
+    if (firstStateEntry > -1) {
+      const beforeEntry = mainContent.slice(0, firstStateEntry);
+      const lastSeqClose = beforeEntry.lastIndexOf("</Sequence>");
+      if (lastSeqClose > -1) {
+        mainContent = mainContent.slice(0, lastSeqClose) + injectionLines + "\n        " + mainContent.slice(lastSeqClose);
+      } else {
+        const wrappedBlock = `\n        <Sequence DisplayName="REFramework Chain">${injectionLines}\n        </Sequence>\n      `;
+        mainContent = mainContent.slice(0, firstStateEntry) + wrappedBlock + mainContent.slice(firstStateEntry);
+      }
+    }
+  } else {
+    const closingActivity = mainContent.lastIndexOf("</Activity>");
+    if (closingActivity > -1) {
+      mainContent = mainContent.slice(0, closingActivity) + `  <Sequence DisplayName="REFramework Wiring">${injectionLines}\n  </Sequence>\n` + mainContent.slice(closingActivity);
+    }
+  }
+
+  mainContent = canonicalizeChainOrder(mainContent);
+  deferredWrites.set(mainKey, mainContent);
+
+  ensureInitInvokesInitAllSettings(deferredWrites, xamlEntries, libPath);
+
+  console.log(`[UiPath] Injected REFramework invocations into LLM-generated Main.xaml: ${missingTargets.join(", ")}`);
+}
+
+export interface CrossWorkflowContractDefect {
+  sourceWorkflow: string;
+  targetWorkflow: string;
+  argumentName: string;
+  defectType: "incomplete_evidence" | "caller_conflict";
+  details: string;
+}
+
+interface CollectedArgBinding {
+  name: string;
+  direction: "InArgument" | "OutArgument" | "InOutArgument";
+  type: string;
+  sourceWorkflow: string;
+}
+
+export function buildCrossWorkflowArgContracts(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  libPath: string,
+): { defects: CrossWorkflowContractDefect[]; declarationsEmitted: number } {
+  const defects: CrossWorkflowContractDefect[] = [];
+  let declarationsEmitted = 0;
+
+  const allContent = new Map<string, string>();
+  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+    if (path.endsWith(".xaml")) {
+      const basename = path.split("/").pop() || path;
+      allContent.set(basename, content);
+    }
+  });
+  for (const entry of xamlEntries) {
+    const basename = entry.name.split("/").pop() || entry.name;
+    if (basename.endsWith(".xaml") && !allContent.has(basename)) {
+      allContent.set(basename, entry.content);
+    }
+  }
+
+  const targetArgContracts = new Map<string, Map<string, CollectedArgBinding[]>>();
+
+  Array.from(allContent.entries()).forEach(([sourceFile, content]) => {
+    const sourceName = sourceFile.replace(/\.xaml$/i, "");
+    const invokePattern = /<(?:\w+:)?InvokeWorkflowFile\b[^>]*?WorkflowFileName="([^"]+)"[^>]*?(?:\/>|>([\s\S]*?)<\/(?:\w+:)?InvokeWorkflowFile>)/g;
+    let m;
+    while ((m = invokePattern.exec(content)) !== null) {
+      const targetFile = m[1].replace(/[\[\]"]/g, "").replace(/&quot;/g, "").trim();
+      const body = m[2] || "";
+
+      const argBlockMatch = body.match(/<(?:\w+:)?InvokeWorkflowFile\.Arguments>([\s\S]*?)<\/(?:\w+:)?InvokeWorkflowFile\.Arguments>/);
+      if (!argBlockMatch) continue;
+
+      const argBlock = argBlockMatch[1];
+      const argPattern = /<(In|Out|InOut)Argument\b[^>]*?x:TypeArguments="([^"]+)"[^>]*?x:Key="([^"]+)"|<(In|Out|InOut)Argument\b[^>]*?x:Key="([^"]+)"[^>]*?x:TypeArguments="([^"]+)"/g;
+      let am;
+      const matchedPositions = new Set<number>();
+      while ((am = argPattern.exec(argBlock)) !== null) {
+        matchedPositions.add(am.index);
+        const dirTag = am[1] || am[4];
+        const direction = `${dirTag}Argument` as "InArgument" | "OutArgument" | "InOutArgument";
+        const type = am[2] || am[6];
+        const argName = am[3] || am[5];
+
+        if (!targetArgContracts.has(targetFile)) {
+          targetArgContracts.set(targetFile, new Map());
+        }
+        const argMap = targetArgContracts.get(targetFile)!;
+        if (!argMap.has(argName)) {
+          argMap.set(argName, []);
+        }
+        argMap.get(argName)!.push({ name: argName, direction, type, sourceWorkflow: sourceName });
+      }
+
+      const partialArgPattern = /<(In|Out|InOut)Argument\b/g;
+      let pm;
+      while ((pm = partialArgPattern.exec(argBlock)) !== null) {
+        if (matchedPositions.has(pm.index)) continue;
+        const snippet = argBlock.slice(pm.index, pm.index + 200);
+        const hasKey = /x:Key="([^"]+)"/.test(snippet);
+        const hasType = /x:TypeArguments="([^"]+)"/.test(snippet);
+        if (!hasKey || !hasType) {
+          const keyMatch = snippet.match(/x:Key="([^"]+)"/);
+          defects.push({
+            sourceWorkflow: sourceName,
+            targetWorkflow: targetFile.replace(/\.xaml$/i, ""),
+            argumentName: keyMatch ? keyMatch[1] : `(unknown at offset ${pm.index})`,
+            defectType: "incomplete_evidence",
+            details: `Argument tag missing ${!hasKey ? "x:Key" : ""}${!hasKey && !hasType ? " and " : ""}${!hasType ? "x:TypeArguments" : ""} — cannot emit declaration`,
+          });
+        }
+      }
+    }
+  });
+
+  Array.from(targetArgContracts.entries()).forEach(([targetFile, argMap]) => {
+    const targetBasename = (targetFile.split("/").pop() || targetFile);
+    let targetContent = allContent.get(targetBasename);
+    if (!targetContent) return;
+
+    const existingArgs = new Set<string>();
+    const existingArgPattern = /<x:Property\s+Name="([^"]+)"/g;
+    let eam;
+    while ((eam = existingArgPattern.exec(targetContent)) !== null) {
+      existingArgs.add(eam[1]);
+    }
+
+    const newDeclarations: string[] = [];
+
+    Array.from(argMap.entries()).forEach(([argName, bindings]) => {
+      if (existingArgs.has(argName)) return;
+
+      const directions = new Set(bindings.map((b: CollectedArgBinding) => b.direction));
+      const types = new Set(bindings.map((b: CollectedArgBinding) => b.type));
+
+      if (directions.size > 1) {
+        defects.push({
+          sourceWorkflow: bindings.map((b: CollectedArgBinding) => b.sourceWorkflow).join(", "),
+          targetWorkflow: targetBasename.replace(/\.xaml$/i, ""),
+          argumentName: argName,
+          defectType: "caller_conflict",
+          details: `Conflicting directions from callers: ${bindings.map((b: CollectedArgBinding) => `${b.sourceWorkflow}→${b.direction}`).join(", ")}`,
+        });
+        return;
+      }
+
+      if (types.size > 1) {
+        defects.push({
+          sourceWorkflow: bindings.map((b: CollectedArgBinding) => b.sourceWorkflow).join(", "),
+          targetWorkflow: targetBasename.replace(/\.xaml$/i, ""),
+          argumentName: argName,
+          defectType: "caller_conflict",
+          details: `Conflicting types from callers: ${bindings.map((b: CollectedArgBinding) => `${b.sourceWorkflow}→${b.type}`).join(", ")}`,
+        });
+        return;
+      }
+
+      const direction = bindings[0].direction;
+      const type = bindings[0].type;
+
+      if (!argName || !direction || !type) {
+        defects.push({
+          sourceWorkflow: bindings[0].sourceWorkflow,
+          targetWorkflow: targetBasename.replace(/\.xaml$/i, ""),
+          argumentName: argName,
+          defectType: "incomplete_evidence",
+          details: `Incomplete evidence for argument declaration: name=${argName}, direction=${direction}, type=${type}`,
+        });
+        return;
+      }
+
+      newDeclarations.push(`    <x:Property Name="${argName}" Type="${direction}(${type})" />`);
+      declarationsEmitted++;
+    });
+
+    if (newDeclarations.length > 0) {
+      const membersBlock = newDeclarations.join("\n");
+      const existingMembersMatch = targetContent.match(/<x:Members>([\s\S]*?)<\/x:Members>/);
+      if (existingMembersMatch) {
+        targetContent = targetContent.replace(
+          /<\/x:Members>/,
+          `\n${membersBlock}\n  </x:Members>`
+        );
+      } else {
+        const activityIdx = targetContent.indexOf("<Activity");
+        if (activityIdx > -1) {
+          let closeBracketIdx = activityIdx;
+          let inQuote = false;
+          let quoteChar = "";
+          while (closeBracketIdx < targetContent.length) {
+            const ch = targetContent[closeBracketIdx];
+            if (inQuote) {
+              if (ch === quoteChar) inQuote = false;
+            } else {
+              if (ch === '"' || ch === "'") { inQuote = true; quoteChar = ch; }
+              else if (ch === ">") break;
+            }
+            closeBracketIdx++;
+          }
+          if (closeBracketIdx < targetContent.length) {
+            const afterTag = closeBracketIdx + 1;
+            targetContent = targetContent.slice(0, afterTag) +
+              `\n  <x:Members>\n${membersBlock}\n  </x:Members>` +
+              targetContent.slice(afterTag);
+          }
+        }
+      }
+
+      const fullPath = `${libPath}/${targetBasename}`;
+      if (deferredWrites.has(fullPath)) {
+        deferredWrites.set(fullPath, targetContent);
+      } else {
+        const entryIdx = xamlEntries.findIndex(e => (e.name.split("/").pop() || e.name) === targetBasename);
+        if (entryIdx >= 0) {
+          xamlEntries[entryIdx].content = targetContent;
+        }
+      }
+      console.log(`[UiPath] Cross-workflow contract: declared ${newDeclarations.length} argument(s) on ${targetBasename}`);
+    }
+  });
+
+  if (defects.length > 0) {
+    console.warn(`[UiPath] Cross-workflow contract: ${defects.length} defect(s) — ${defects.filter(d => d.defectType === "caller_conflict").length} caller conflicts, ${defects.filter(d => d.defectType === "incomplete_evidence").length} incomplete evidence`);
+  }
+
+  return { defects, declarationsEmitted };
 }
 
 /**
@@ -1103,16 +1495,18 @@ function buildReachabilityGraph(
     }
   }
 
-  const INFRASTRUCTURE_FILES = new Set([
-    "InitAllSettings.xaml",
-    "CloseAllApplications.xaml",
-    "KillAllProcesses.xaml",
-  ]);
+  const mainContent = allFiles.get(mainKey) || "";
+  const smAnalysis = analyzeStateMachine(mainContent);
+  const reframeworkResult = detectReframeworkStructurally(mainContent, smAnalysis, allFiles);
+  const isReframework = reframeworkResult.isReframework;
 
   const unreachable = new Set<string>();
   Array.from(allFiles.keys()).forEach(file => {
     const basename = file.split("/").pop() || file;
-    if (!reachable.has(file) && !INFRASTRUCTURE_FILES.has(basename)) {
+    const isInfra = isReframework && Array.from(REFRAMEWORK_INFRASTRUCTURE_FILES).some(
+      f => f.toLowerCase() === basename.toLowerCase()
+    );
+    if (!reachable.has(file) && !isInfra) {
       unreachable.add(file);
     }
   });
@@ -4323,6 +4717,27 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         useReFramework = false;
       }
     }
+
+    if (useReFramework && hasMain) {
+      ensureReframeworkWiringOnMain(deferredWrites, xamlEntries, libPath, tf);
+      if (!deferredWrites.has(`${libPath}/Init.xaml`)) {
+        const initWfXaml = generateInitXaml(tf);
+        deferredWrites.set(`${libPath}/Init.xaml`, compliancePass(initWfXaml, "Init.xaml"));
+        console.log(`[UiPath] Generated Init.xaml for REFramework wiring (LLM Main.xaml present)`);
+      }
+      const reframeworkSupportFiles: Array<{ key: string; gen: () => string; label: string }> = [
+        { key: `${libPath}/GetTransactionData.xaml`, gen: () => generateGetTransactionDataXaml(queueName, tf), label: "GetTransactionData.xaml" },
+        { key: `${libPath}/SetTransactionStatus.xaml`, gen: () => generateSetTransactionStatusXaml(tf), label: "SetTransactionStatus.xaml" },
+        { key: `${libPath}/CloseAllApplications.xaml`, gen: () => generateCloseAllApplicationsXaml(tf), label: "CloseAllApplications.xaml" },
+        { key: `${libPath}/KillAllProcesses.xaml`, gen: () => generateKillAllProcessesXaml(tf), label: "KillAllProcesses.xaml" },
+      ];
+      for (const sf of reframeworkSupportFiles) {
+        if (!deferredWrites.has(sf.key)) {
+          deferredWrites.set(sf.key, compliancePass(sf.gen(), sf.label));
+          console.log(`[UiPath] Generated ${sf.label} for REFramework wiring`);
+        }
+      }
+    }
     if (!hasMain) {
       let mainActivities = `
         <ui:InvokeWorkflowFile DisplayName="Initialize Settings" WorkflowFileName="InitAllSettings.xaml" />`;
@@ -5568,7 +5983,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       return actions[check] || `Manually implement ${actLabel} in ${file} — estimated ${estimateEffortForCheck(check)} min`;
     }
 
-    const catalogViolations: Array<{ file: string; detail: string }> = [];
+    const catalogViolations: Array<{ file: string; detail: string; check?: string; severity?: "error" | "warning" }> = [];
     if (catalogService.isLoaded()) {
       try {
         for (let i = 0; i < xamlEntries.length; i++) {
@@ -6033,6 +6448,23 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
     }
 
+    const crossWorkflowContractResult = buildCrossWorkflowArgContracts(deferredWrites, xamlEntries, libPath);
+    if (crossWorkflowContractResult.declarationsEmitted > 0) {
+      console.log(`[Cross-Workflow Contract] Emitted ${crossWorkflowContractResult.declarationsEmitted} argument declaration(s) across target workflows`);
+    }
+    if (crossWorkflowContractResult.defects.length > 0) {
+      console.warn(`[Cross-Workflow Contract] ${crossWorkflowContractResult.defects.length} contract defect(s) detected`);
+      for (const defect of crossWorkflowContractResult.defects) {
+        const severity = defect.defectType === "caller_conflict" ? "error" : "warning";
+        catalogViolations.push({
+          file: `${defect.targetWorkflow}.xaml`,
+          check: "CROSS_WORKFLOW_CONTRACT",
+          severity,
+          detail: `[${defect.defectType}] ${defect.argumentName}: ${defect.details} (from ${defect.sourceWorkflow})`,
+        });
+      }
+    }
+
     const normalizedFields = finalNormalize(xamlEntries, deferredWrites);
     if (normalizedFields.size > 0) {
       console.log(`[Final Normalization] Normalized fields before quality gate: ${Array.from(normalizedFields).join(", ")}`);
@@ -6059,7 +6491,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     if (catalogViolations.length > 0) {
       const existingKeys = new Set(
         qualityGateResult.violations
-          .filter(v => v.check === "CATALOG_VIOLATION" || v.check === "ENUM_VIOLATION" || v.check === "CATALOG_STRUCTURAL_VIOLATION")
+          .filter(v => v.check === "CATALOG_VIOLATION" || v.check === "ENUM_VIOLATION" || v.check === "CATALOG_STRUCTURAL_VIOLATION" || v.check === "CROSS_WORKFLOW_CONTRACT")
           .map(v => `${v.file}::${v.detail}`)
       );
       let addedWarnings = 0;
@@ -6067,16 +6499,19 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       for (const cv of catalogViolations) {
         const key = `${cv.file}::${cv.detail}`;
         if (!existingKeys.has(key)) {
+          const isContractDefect = cv.check === "CROSS_WORKFLOW_CONTRACT";
           const isEnumViolation = cv.detail.includes("ENUM_VIOLATION");
           const isStructuralViolation = cv.detail.includes("must be a child element") ||
             cv.detail.includes("should be an attribute") ||
             cv.detail.includes("move-to-child-element") ||
             cv.detail.includes("move-to-attribute");
-          const severity = (isEnumViolation || isStructuralViolation) ? "error" as const : "warning" as const;
-          const check = isEnumViolation ? "ENUM_VIOLATION" :
-            isStructuralViolation ? "CATALOG_STRUCTURAL_VIOLATION" : "CATALOG_VIOLATION";
+          const severity = isContractDefect ? (cv.severity || "warning")
+            : (isEnumViolation || isStructuralViolation) ? "error" as const : "warning" as const;
+          const check = isContractDefect ? "CROSS_WORKFLOW_CONTRACT"
+            : isEnumViolation ? "ENUM_VIOLATION"
+            : isStructuralViolation ? "CATALOG_STRUCTURAL_VIOLATION" : "CATALOG_VIOLATION";
           qualityGateResult.violations.push({
-            category: "accuracy",
+            category: isContractDefect ? "runtime-safety" : "accuracy",
             severity,
             check,
             file: cv.file,
@@ -6986,7 +7421,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           let argType = callerType || "";
           if (!argType) {
             const prefix = argName.replace(/^(?:in_|out_|io_)/, "").match(/^[a-z]+_/)?.[0] || "";
-            argType = typeMap[prefix] || "x:String";
+            argType = typeMap[prefix] || "";
+          }
+          if (!argType) {
+            console.log(`[Tier 2 Argument Reconciliation] Skipping "${argName}" in ${fileName} — no type evidence (evidence gate)`);
+            continue;
           }
           const openCount = (`${direction}(${argType})`).split("(").length - 1;
           const closeCount = (`${direction}(${argType})`).split(")").length - 1;

@@ -464,10 +464,15 @@ function discoverAndRegisterVarRef(varName: string, registry: DeclarationRegistr
 function discoverAndRegisterArgRef(argName: string, registry: DeclarationRegistry, workflowName: string): void {
   if (registry.hasVariableName(argName)) return;
   if (registry.hasNameInScope(argName) && !registry.hasArgumentName(argName)) return;
-  const direction = argName.startsWith("out_") ? "OutArgument" as const
-    : argName.startsWith("io_") ? "InOutArgument" as const
+  const lower = argName.toLowerCase();
+  const direction = lower.startsWith("out_") ? "OutArgument" as const
+    : lower.startsWith("io_") ? "InOutArgument" as const
     : "InArgument" as const;
-  const inferredType = inferTypeFromPrefix(argName) || "x:String";
+  const inferredType = inferTypeFromPrefix(argName);
+  if (!inferredType) {
+    console.log(`[Argument Declaration] Skipping auto-declaration of "${argName}" in "${workflowName}" — no type evidence from prefix`);
+    return;
+  }
   registry.registerArgument({
     name: argName,
     direction,
@@ -1515,6 +1520,129 @@ function extractValueIntentFromString(s: string): string | null {
   return null;
 }
 
+export interface InvokeArgumentBinding {
+  name: string;
+  direction: "InArgument" | "OutArgument" | "InOutArgument";
+  type: string;
+  value: string;
+  typeInferredFromDefault?: boolean;
+}
+
+export function parseInvokeArguments(props: Record<string, PropertyValue>): InvokeArgumentBinding[] {
+  const bindings: InvokeArgumentBinding[] = [];
+
+  const rawArgs = getPropString(props, "Arguments", "arguments");
+  if (rawArgs) {
+    const dictDecomposed = decomposeDictionaryArgBag(rawArgs);
+    if (dictDecomposed.length > 0) {
+      return dictDecomposed;
+    }
+  }
+
+  for (const [key, val] of Object.entries(props)) {
+    if (key === "WorkflowFileName" || key === "workflowFileName" ||
+        key === "DisplayName" || key === "displayName" ||
+        key === "ContinueOnError" || key === "continueOnError" ||
+        key === "Timeout" || key === "timeout" ||
+        key === "Isolated" || key === "isolated" ||
+        key === "Arguments" || key === "arguments") continue;
+
+    if (isArgumentNamedBinding(key)) {
+      const direction = inferDirectionFromPrefix(key);
+      const strVal = typeof val === "string" ? val : coercePropToString(val);
+      const cleanVal = strVal.replace(/^\[|\]$/g, "").trim();
+      const inferredType = inferTypeFromPrefix(cleanVal);
+      const type = inferredType || "";
+      const wrappedVal = ensureBracketWrapped(strVal, _activeDeclarationLookup || undefined);
+      bindings.push({ name: key, direction, type, value: wrappedVal, typeInferredFromDefault: !inferredType });
+    }
+  }
+
+  return bindings;
+}
+
+function isArgumentNamedBinding(name: string): boolean {
+  return /^(in_|out_|io_)/i.test(name);
+}
+
+function inferDirectionFromPrefix(name: string): "InArgument" | "OutArgument" | "InOutArgument" {
+  const lower = name.toLowerCase();
+  if (lower.startsWith("out_")) return "OutArgument";
+  if (lower.startsWith("io_")) return "InOutArgument";
+  return "InArgument";
+}
+
+function decomposeDictionaryArgBag(rawArgs: string): InvokeArgumentBinding[] {
+  const bindings: InvokeArgumentBinding[] = [];
+
+  const dictPattern = /Dictionary\s*\(\s*Of\s+String\s*,\s*Object\s*\)\s*From\s*\{([\s\S]*)\}/i;
+  const dictMatch = rawArgs.match(dictPattern);
+  if (!dictMatch) return bindings;
+
+  const outerContent = dictMatch[1].trim();
+  const kvPairs = splitDictionaryPairs(outerContent);
+
+  for (const pair of kvPairs) {
+    const pairContent = pair.trim();
+    const pairMatch = pairContent.match(/^\s*"([^"]+)"\s*,\s*([\s\S]+?)\s*$/);
+    if (!pairMatch) continue;
+
+    const argName = pairMatch[1].trim();
+    const argValue = pairMatch[2].trim();
+
+    if (!isArgumentNamedBinding(argName)) continue;
+
+    const direction = inferDirectionFromPrefix(argName);
+    const cleanVal = argValue.replace(/^\[|\]$/g, "").trim();
+    const inferredType = inferTypeFromPrefix(cleanVal);
+    const type = inferredType || "";
+    const wrappedVal = ensureBracketWrapped(argValue, _activeDeclarationLookup || undefined);
+    bindings.push({ name: argName, direction, type, value: wrappedVal, typeInferredFromDefault: !inferredType });
+  }
+
+  return bindings;
+}
+
+function splitDictionaryPairs(content: string): string[] {
+  const pairs: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === "{") {
+      depth++;
+      current += ch;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        current += ch;
+        const trimmed = current.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+          pairs.push(trimmed.slice(1, -1));
+        } else if (trimmed) {
+          pairs.push(trimmed);
+        }
+        current = "";
+      } else {
+        current += ch;
+      }
+    } else if (ch === "," && depth === 0) {
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  const trimmed = current.trim();
+  if (trimmed) {
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      pairs.push(trimmed.slice(1, -1));
+    } else if (trimmed) {
+      pairs.push(trimmed);
+    }
+  }
+  return pairs;
+}
+
 export type EmissionContext = "normal" | "mandatory-catch" | "mandatory-finally" | "inside-trycatch";
 
 export function resolveActivityTemplate(
@@ -1579,8 +1707,19 @@ export function resolveActivityTemplate(
     fileName = fileName.replace(/\{type:[^}]*,value:([^}]*)\}/g, "$1").replace(/\{"type":"[^"]*","value":"([^"]*)"\}/g, "$1").replace(/[{}]/g, "");
     if (!fileName.endsWith(".xaml")) fileName += ".xaml";
 
+    const argBindings = parseInvokeArguments(props);
+    let argBlock = "";
+    for (const binding of argBindings) {
+      if (binding.type) {
+        argBlock += `    <${binding.direction} x:TypeArguments="${binding.type}" x:Key="${escapeXml(binding.name)}">${escapeXmlTextContent(binding.value)}</${binding.direction}>\n`;
+      } else {
+        argBlock += `    <${binding.direction} x:Key="${escapeXml(binding.name)}">${escapeXmlTextContent(binding.value)}</${binding.direction}>\n`;
+      }
+    }
+
     return applyCatalogConformance(`<ui:InvokeWorkflowFile WorkflowFileName="${escapeXml(fileName)}" DisplayName="${displayName}">\n` +
       `  <ui:InvokeWorkflowFile.Arguments>\n` +
+      argBlock +
       `  </ui:InvokeWorkflowFile.Arguments>\n` +
       `</ui:InvokeWorkflowFile>`);
   }

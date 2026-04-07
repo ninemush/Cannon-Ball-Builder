@@ -1,3 +1,5 @@
+import { REFRAMEWORK_INFRASTRUCTURE_FILES } from "../shared/reframework-constants";
+
 export type WorkflowGraphDefectType =
   | "orphan_workflow"
   | "missing_target_workflow"
@@ -197,7 +199,7 @@ function resolveReference(
   return { resolved: null, ambiguous: false, candidates: [], rawRef };
 }
 
-interface StateMachineAnalysis {
+export interface StateMachineAnalysis {
   isStateMachine: boolean;
   hasStateMachineRoot: boolean;
   stateCount: number;
@@ -206,7 +208,7 @@ interface StateMachineAnalysis {
   invokedFromStates: Map<string, string[]>;
 }
 
-function analyzeStateMachine(content: string): StateMachineAnalysis {
+export function analyzeStateMachine(content: string): StateMachineAnalysis {
   const result: StateMachineAnalysis = {
     isStateMachine: false,
     hasStateMachineRoot: false,
@@ -300,7 +302,7 @@ function isCriticalWorkflow(fileName: string): boolean {
   return CRITICAL_WORKFLOW_PATTERNS.some(p => p.test(basename));
 }
 
-function detectReframeworkStructurally(
+export function detectReframeworkStructurally(
   mainContent: string,
   smAnalysis: StateMachineAnalysis,
   allFiles: Map<string, string>,
@@ -317,21 +319,6 @@ function detectReframeworkStructurally(
     unwiredWorkflows: [] as string[],
   };
 
-  if (!smAnalysis.isStateMachine) {
-    return result;
-  }
-
-  const stateNamesLower = smAnalysis.stateNames.map(n => n.toLowerCase());
-  let matchedStateNames = 0;
-  for (const sn of stateNamesLower) {
-    if (REFRAMEWORK_STATE_NAMES.has(sn)) {
-      matchedStateNames++;
-    }
-  }
-
-  const hasFrameworkStates = matchedStateNames >= 2;
-  const hasTransitions = smAnalysis.transitionCount >= 3;
-
   let namingScore = 0;
   const allFileNames = Array.from(allFiles.keys()).map(f => (f.split("/").pop() || f).toLowerCase());
   for (const pat of REFRAMEWORK_NAMING_PATTERNS) {
@@ -340,14 +327,38 @@ function detectReframeworkStructurally(
     }
   }
 
-  if (hasFrameworkStates && hasTransitions) {
-    result.isReframework = true;
-    result.confidence = "high";
-  } else if (smAnalysis.stateCount >= 3 && namingScore >= 3) {
-    result.isReframework = true;
-    result.confidence = "medium";
-  } else {
-    return result;
+  if (smAnalysis.isStateMachine) {
+    const stateNamesLower = smAnalysis.stateNames.map(n => n.toLowerCase());
+    let matchedStateNames = 0;
+    for (const sn of stateNamesLower) {
+      if (REFRAMEWORK_STATE_NAMES.has(sn)) {
+        matchedStateNames++;
+      }
+    }
+
+    const hasFrameworkStates = matchedStateNames >= 2;
+    const hasTransitions = smAnalysis.transitionCount >= 3;
+
+    if (hasFrameworkStates && hasTransitions) {
+      result.isReframework = true;
+      result.confidence = "high";
+    } else if (smAnalysis.stateCount >= 3 && namingScore >= 3) {
+      result.isReframework = true;
+      result.confidence = "medium";
+    }
+  }
+
+  if (!result.isReframework) {
+    const reframeworkInvokeTargets = ["init.xaml", "gettransactiondata.xaml", "process.xaml", "settransactionstatus.xaml"];
+    const invokeRefs = extractWorkflowReferences(mainContent).map(r => normalizeGraphPath(r).toLowerCase());
+    const matchedInvokes = reframeworkInvokeTargets.filter(t => invokeRefs.some(r => r.endsWith(t))).length;
+
+    if (matchedInvokes >= 3 && namingScore >= 3) {
+      result.isReframework = true;
+      result.confidence = "medium";
+    } else {
+      return result;
+    }
   }
 
   const allFileLower = new Map<string, string>();
@@ -560,9 +571,14 @@ export function validateWorkflowGraph(
 
     for (const unwired of reframeworkResult.unwiredWorkflows) {
       if (unreachable.has(unwired)) {
+        const unwiredBasename = (unwired.split("/").pop() || unwired);
+        const isInfraFile = Array.from(REFRAMEWORK_INFRASTRUCTURE_FILES).some(
+          f => f.toLowerCase() === unwiredBasename.toLowerCase()
+        );
+        if (isInfraFile) continue;
         defects.push({
           file: unwired,
-          workflow: stripXamlExtension((unwired.split("/").pop() || unwired)),
+          workflow: stripXamlExtension(unwiredBasename),
           defectType: "reframework_wiring_inconsistency",
           referencedFrom: null,
           referencedTarget: null,
@@ -576,11 +592,19 @@ export function validateWorkflowGraph(
 
   Array.from(unreachable).forEach(file => {
     const basename = (file.split("/").pop() || file).toLowerCase();
+    const basenameOriginal = file.split("/").pop() || file;
 
     const alreadyReportedAsReframework = defects.some(
       d => d.file === file && d.defectType === "reframework_wiring_inconsistency",
     );
     if (alreadyReportedAsReframework) return;
+
+    const infraMatch = Array.from(REFRAMEWORK_INFRASTRUCTURE_FILES).some(
+      f => f.toLowerCase() === basenameOriginal.toLowerCase()
+    );
+    if (reframeworkResult.isReframework && infraMatch) {
+      return;
+    }
 
     const isDecomposedCandidate = REFRAMEWORK_NAMING_PATTERNS.some(p => p.test(basename));
     const critical = isCriticalWorkflow(file);
@@ -610,7 +634,20 @@ export function validateWorkflowGraph(
     }
   });
 
-  const connectedComponents = computeConnectedComponents(executableEntries, graph);
+  let effectiveEntries = executableEntries;
+  if (reframeworkResult.isReframework) {
+    effectiveEntries = new Map<string, string>();
+    Array.from(executableEntries.entries()).forEach(([key, val]) => {
+      const bn = (key.split("/").pop() || key).toLowerCase();
+      const isInfra = Array.from(REFRAMEWORK_INFRASTRUCTURE_FILES).some(
+        f => f.toLowerCase() === bn
+      );
+      if (!isInfra || !unreachable.has(key)) {
+        effectiveEntries.set(key, val);
+      }
+    });
+  }
+  const connectedComponents = computeConnectedComponents(effectiveEntries, graph);
   if (connectedComponents > 1 && unreachable.size > 0) {
     const alreadyHasDiscontinuity = defects.some(d => d.defectType === "graph_discontinuity");
     if (!alreadyHasDiscontinuity) {
