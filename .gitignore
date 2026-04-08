@@ -4,5 +4,5 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
-catalog/oidc-scopes-snapshot.json
 catalog/service-endpoints-runtime.json
+catalog/oidc-scopes-snapshot.json
