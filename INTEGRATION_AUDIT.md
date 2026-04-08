@@ -102,8 +102,8 @@ No background threads/intervals for health checking, action center polling, or p
 
 ## Category 6: Missing Functionality
 
-### M1 — Action Center integration (partially fixed)
-Action Center Task Catalog creation uses OData and REST API endpoints. Misleading GenericTask/OData unbound action fallbacks that reported phantom success have been removed. When API creation fails (e.g., 405 on Cloud tenants), honest failure is reported with actionable manual steps. No polling, routing, or resolution logic exists yet.
+### M1 — No Action Center integration
+Action Center task catalog creation is attempted but uses fallback endpoints that all return 405. No polling, routing, or resolution logic exists.
 
 ### M2 — No Test Manager integration
 Test case creation is attempted via diagnostic endpoint but returns 404. No test execution, evaluation, or blocking gate logic.

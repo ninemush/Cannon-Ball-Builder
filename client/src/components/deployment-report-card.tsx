@@ -22,7 +22,7 @@ import {
   BookOpen,
   MessageSquare,
 } from "lucide-react";
-import type { DeploymentResult, DeployReport, ServiceLimitation } from "@shared/models/deployment";
+import type { DeploymentResult, DeployReport } from "@shared/models/deployment";
 
 const artifactIcon = (artifact: string) => {
   const lower = artifact.toLowerCase();
@@ -45,7 +45,7 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; b
   updated: { icon: RefreshCw, color: "text-cyan-400", bg: "bg-cyan-500/10", label: "Updated" },
   exists: { icon: Info, color: "text-blue-400", bg: "bg-blue-500/10", label: "Exists" },
   in_package: { icon: Package, color: "text-amber-400", bg: "bg-amber-500/10", label: "In Package" },
-  skipped: { icon: Info, color: "text-muted-foreground", bg: "bg-muted/50", label: "Not Available" },
+  skipped: { icon: Info, color: "text-slate-400", bg: "bg-slate-500/10", label: "Not Available" },
   manual: { icon: HandMetal, color: "text-amber-400", bg: "bg-amber-500/10", label: "Manual Setup" },
   failed: { icon: XCircle, color: "text-red-400", bg: "bg-red-500/10", label: "Failed" },
 };
@@ -175,7 +175,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           </span>
         )}
         {counts.skipped > 0 && (
-          <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="text-deploy-skipped-count">
+          <span className="flex items-center gap-1 text-xs text-slate-400" data-testid="text-deploy-skipped-count">
             <Info className="h-3 w-3" />
             {counts.skipped} not available
           </span>
@@ -229,7 +229,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
                         <span className="text-amber-400">{groupManual} manual</span>
                       )}
                       {groupSkipped > 0 && (
-                        <span className="text-muted-foreground">{groupSkipped} n/a</span>
+                        <span className="text-slate-400">{groupSkipped} n/a</span>
                       )}
                     </>
                   )}
@@ -268,24 +268,7 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
                           {msgExpanded && item.manualSteps?.length ? (
                             <ol className="mt-1 ml-1 space-y-0.5 list-decimal list-inside">
                               {item.manualSteps.map((step, si) => (
-                                <li key={si} className="text-[10px] text-muted-foreground leading-tight">
-                                  {step.includes("https://") ? (
-                                    <>
-                                      {step.slice(0, step.indexOf("https://"))}
-                                      <a
-                                        href={step.slice(step.indexOf("https://")).split(/\s/)[0]}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-primary underline hover:text-primary/80"
-                                        onClick={(e) => e.stopPropagation()}
-                                        data-testid={`link-manual-step-${si}`}
-                                      >
-                                        {step.slice(step.indexOf("https://")).split(/\s/)[0]}
-                                      </a>
-                                      {step.slice(step.indexOf("https://") + step.slice(step.indexOf("https://")).split(/\s/)[0].length)}
-                                    </>
-                                  ) : step}
-                                </li>
+                                <li key={si} className="text-[10px] text-muted-foreground leading-tight">{step}</li>
                               ))}
                             </ol>
                           ) : null}
@@ -299,31 +282,6 @@ export function DeploymentReportCard({ report, onDismiss }: { report: DeployRepo
           );
         })}
       </div>
-
-      {report.serviceLimitations && report.serviceLimitations.length > 0 && (
-        <div className="px-4 py-2 border-t border-border/50" data-testid="deploy-service-limitations">
-          <p className="text-[10px] font-medium text-amber-400 mb-1 flex items-center gap-1">
-            <AlertTriangle className="h-3 w-3" />
-            Pre-flight service limitations detected
-          </p>
-          <div className="space-y-0.5">
-            {report.serviceLimitations.map((lim, idx) => (
-              <div key={idx} className="flex items-center gap-1.5 text-[10px]" data-testid={`deploy-limitation-${idx}`}>
-                {lim.status === "unavailable" ? (
-                  <XCircle className="h-2.5 w-2.5 text-red-400/60 shrink-0" />
-                ) : lim.status === "limited" ? (
-                  <AlertTriangle className="h-2.5 w-2.5 text-amber-400 shrink-0" />
-                ) : (
-                  <Info className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
-                )}
-                <span className="text-muted-foreground">
-                  <span className="text-foreground">{lim.service}</span>: {lim.reason}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <div className={`px-4 py-2 text-xs border-t border-border/50 ${allSuccess ? "text-green-400" : partialSuccess ? "text-green-400" : "text-muted-foreground"}`}>
         {allSuccess ? (

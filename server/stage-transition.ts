@@ -56,25 +56,28 @@ async function evaluateNextStage(ideaId: string, currentStage: PipelineStage): P
       const nodeCount = await getNodeCount(ideaId);
       const msgCount = await getMessageCount(ideaId);
       if (nodeCount >= 3 && msgCount >= 4) {
-        return { nextStage: "Design", reason: `${nodeCount} process steps mapped, ${msgCount} chat messages exchanged` };
-      }
-      return null;
-    }
-
-    case "Design": {
-      const asIsApproved = await hasMapApproval(ideaId, "as-is");
-      if (asIsApproved) {
-        return { nextStage: "Feasibility Assessment", reason: "As-Is map approved — running feasibility assessment" };
+        return { nextStage: "Feasibility Assessment", reason: `${nodeCount} process steps mapped, ${msgCount} chat messages exchanged` };
       }
       return null;
     }
 
     case "Feasibility Assessment": {
-      const idea = await storage.getIdea(ideaId);
-      const hasAutoType = !!(idea?.automationType);
-      const toBeApproved = await hasMapApproval(ideaId, "to-be");
-      if (hasAutoType && toBeApproved) {
-        return { nextStage: "Build", reason: "Automation type assessed and To-Be map approved" };
+      const nodeCount = await getNodeCount(ideaId);
+      const msgCount = await getMessageCount(ideaId);
+      if (nodeCount >= 5 && msgCount >= 8) {
+        return { nextStage: "Validated Backlog", reason: "Feasibility assessment criteria met" };
+      }
+      return null;
+    }
+
+    case "Validated Backlog":
+      return { nextStage: "Design", reason: "Idea validated and added to backlog" };
+
+    case "Design": {
+      const asIsApproved = await hasMapApproval(ideaId, "as-is");
+      const hasPdd = await hasDocument(ideaId, "PDD");
+      if (asIsApproved && hasPdd) {
+        return { nextStage: "Build", reason: "As-Is map approved and PDD generated" };
       }
       return null;
     }

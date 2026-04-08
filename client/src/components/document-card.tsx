@@ -1,9 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getApprovalReadiness } from "@/lib/document-readiness";
 import { useToast } from "@/hooks/use-toast";
-import { isAssessedTerminalStatus, STATUS_PRESENTATION, getStatusPresentation, type AssessedTerminalStatus } from "@shared/models/package-status";
 import {
   FileText,
   ChevronDown,
@@ -22,9 +20,6 @@ import {
   RefreshCw,
   History,
   BookOpen,
-  AlertTriangle,
-  RotateCcw,
-  PackageOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -50,15 +45,14 @@ function parseDocumentSections(content: string): DocumentSection[] {
     .replace(/\[STEP:\s*[\d.]+\s+[^\]]*\]/g, "")
     .replace(/\[DOC:(PDD|SDD):\d+\]/g, "")
     .replace(/\[DEPLOY_UIPATH\]/g, "")
-    .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
-    .replace(/^###\s+(\d+\.?\s*(?:Orchestrator|Deployment))/gim, '## $1');
+    .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "");
   const lines = cleaned.split("\n");
   const sections: DocumentSection[] = [];
   let currentTitle = "";
   let currentContent: string[] = [];
 
   for (const line of lines) {
-    const headingMatch = line.match(/^##\s+(.*)/);
+    const headingMatch = line.match(/^##\s+\d*\.?\s*(.*)/);
     if (headingMatch) {
       if (currentTitle) {
         sections.push({ title: currentTitle, content: currentContent.join("\n").trim() });
@@ -92,10 +86,9 @@ interface DocumentCardProps {
   streaming?: boolean;
   streamingElapsed?: number;
   onCancelStreaming?: () => void;
-  artifactsValid?: boolean | null;
 }
 
-export function DocumentCard({ docType, docId, content, ideaId, isApproved, version, onApproved, streaming, streamingElapsed, onCancelStreaming, artifactsValid }: DocumentCardProps) {
+export function DocumentCard({ docType, docId, content, ideaId, isApproved, version, onApproved, streaming, streamingElapsed, onCancelStreaming }: DocumentCardProps) {
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
   const [showReviseInput, setShowReviseInput] = useState(false);
@@ -113,8 +106,6 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
 
   const isDocApprovedFromHistory = !streaming && (versionHistory?.some(v => v.id === docId && v.status === "approved") ?? false);
   const effectivelyApproved = !streaming && (isApproved || isDocApprovedFromHistory);
-  const approvalReadiness = getApprovalReadiness(docType, artifactsValid);
-  const approvalBlocked = approvalReadiness === "blocked";
 
   useEffect(() => {
     if (streaming && sections.length > 0) {
@@ -150,7 +141,6 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         toast({ title: `${docType} Already Approved`, description: "This document has already been approved." });
         queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
         queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "documents", "versions", docType] });
-        onApproved?.();
       } else {
         toast({ title: "Approval failed", description: error.message, variant: "destructive" });
       }
@@ -188,11 +178,11 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
     });
   }
 
-  const docTitle = docType === "PDD" ? "Process Design Document" : docType === "UiPath" ? "UiPath Automation Package" : "Solution Design Document";
+  const docTitle = docType === "PDD" ? "Process Design Document" : "Solution Design Document";
 
   return (
     <div
-      className="rounded-lg border-l-4 border-l-cb-teal bg-card shadow-lg overflow-hidden"
+      className="rounded-lg border-l-4 border-l-cb-teal bg-[#2a2a2a] shadow-lg overflow-hidden"
       data-testid={`card-document-${docType.toLowerCase()}`}
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30">
@@ -325,7 +315,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         {sections.map((section, idx) => (
           <div key={idx}>
             <button
-              className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-muted/50 transition-colors"
+              className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
               onClick={() => toggleSection(idx)}
               data-testid={`button-section-toggle-${idx}`}
             >
@@ -339,23 +329,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
             {expandedSections.has(idx) && (
               <div className="px-4 pb-3 pl-9">
                 <div className="text-[11px] text-muted-foreground/90 leading-relaxed prose-doc">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      img: ({ node, ...props }) => (
-                        <img
-                          {...props}
-                          data-testid={`img-process-map-${idx}`}
-                          style={{
-                            maxWidth: "100%",
-                            borderRadius: "8px",
-                            margin: "8px 0",
-                            border: "1px solid hsl(var(--border))",
-                          }}
-                        />
-                      ),
-                    }}
-                  >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {section.content}
                   </ReactMarkdown>
                   {streaming && idx === sections.length - 1 && (
@@ -368,29 +342,9 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
         ))}
       </div>
 
-      {!effectivelyApproved && !streaming && docId > 0 && (
+      {!effectivelyApproved && !streaming && (
         <div className="px-4 py-3 border-t border-border/30 space-y-2">
-          {approvalBlocked ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-destructive/10 border border-destructive/20" data-testid={`blocked-reason-${docType.toLowerCase()}`}>
-                <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
-                <span className="text-[11px] text-destructive">
-                  Deployment artifacts are missing or invalid. Request a revision to regenerate.
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs flex-1"
-                  onClick={() => setShowReviseInput(true)}
-                  data-testid={`button-request-revision-${docType.toLowerCase()}`}
-                >
-                  Request Revision
-                </Button>
-              </div>
-            </div>
-          ) : showApproveConfirm ? (
+          {showApproveConfirm ? (
             <div className="flex items-center gap-2">
               <p className="text-[11px] text-muted-foreground flex-1">
                 Confirm approval of this {docType}?
@@ -426,7 +380,7 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
                 value={revisionText}
                 onChange={(e) => setRevisionText(e.target.value)}
                 placeholder={`e.g. "Update section 3 to include..." or "Add an exception for..."`}
-                className="min-h-[60px] text-xs bg-muted border-border/30"
+                className="min-h-[60px] text-xs bg-[#1a1a1a] border-border/30"
                 data-testid={`input-revision-${docType.toLowerCase()}`}
               />
               <div className="flex items-center gap-2 justify-end">
@@ -482,126 +436,21 @@ export function DocumentCard({ docType, docId, content, ideaId, isApproved, vers
   );
 }
 
-interface OutcomeSummary {
-  stubbedActivities: number;
-  stubbedSequences: number;
-  stubbedWorkflows: number;
-  autoRepairs: number;
-  fullyGenerated: number;
-  totalEstimatedMinutes: number;
-}
-
 interface UiPathPackageCardProps {
   packageData: any;
   ideaId: string;
   onDeployProgress?: (step: string) => void;
   onDeployComplete?: () => void;
-  status?: "BUILDING" | "studio_stable" | "openable_with_warnings" | "handoff_only" | "structurally_invalid" | "FAILED";
-  warnings?: Array<{ code: string; message: string; stage: string; recoverable: boolean }>;
-  onRetry?: () => void;
-  templateComplianceScore?: number;
-  outcomeSummary?: OutcomeSummary;
-  completenessLevel?: "structural" | "functional" | "incomplete";
-  pipelineDependencyMap?: Record<string, string>;
 }
 
-const MAX_DESC_LENGTH = 300;
-function capDescription(text: string): string {
-  if (text.length <= MAX_DESC_LENGTH) return text;
-  const cut = text.lastIndexOf(" ", MAX_DESC_LENGTH);
-  return text.slice(0, cut > 0 ? cut : MAX_DESC_LENGTH) + "…";
-}
-
-function WorkflowSection({ workflows, expanded, onToggle }: { workflows: any[]; expanded: boolean; onToggle: () => void }) {
-  const [expandedWfs, setExpandedWfs] = useState<Set<number>>(new Set());
-
-  const toggleWf = (index: number) => {
-    setExpandedWfs((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  };
-
-  return (
-    <div>
-      <button
-        className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1"
-        onClick={onToggle}
-        data-testid="button-toggle-workflows"
-      >
-        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        Workflows ({workflows.length})
-      </button>
-      {expanded && (
-        <div className="space-y-1 mt-1">
-          {workflows.map((wf: any, i: number) => {
-            const isOpen = expandedWfs.has(i);
-            const hasDetails = wf.description || (wf.steps && wf.steps.length > 0);
-            return (
-              <div key={i} className="rounded bg-muted border border-border/20" data-testid={`workflow-item-${i}`}>
-                <button
-                  className="flex items-center gap-1.5 w-full px-2 py-1.5 text-left"
-                  onClick={() => hasDetails && toggleWf(i)}
-                  data-testid={`button-toggle-workflow-${i}`}
-                >
-                  {hasDetails ? (
-                    isOpen ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" /> : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                  ) : (
-                    <span className="w-3 shrink-0" />
-                  )}
-                  <span className="text-[11px] font-medium text-foreground">{wf.name}</span>
-                </button>
-                {isOpen && hasDetails && (
-                  <div className="px-2 pb-2 pl-[26px]">
-                    {wf.description && (
-                      <p className="text-[10px] text-muted-foreground">{wf.description}</p>
-                    )}
-                    {wf.steps?.length > 0 && (
-                      <div className="mt-1.5 space-y-0.5">
-                        {wf.steps.map((step: any, j: number) => (
-                          <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
-                            {step.activity}{step.notes ? ` — ${step.notes}` : ""}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete, status, warnings, onRetry, templateComplianceScore, outcomeSummary, completenessLevel, pipelineDependencyMap }: UiPathPackageCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [descExpanded, setDescExpanded] = useState(false);
-  const [descClamped, setDescClamped] = useState(false);
-  const descRef = useRef<HTMLParagraphElement>(null);
-  const checkDescClamped = useCallback(() => {
-    const el = descRef.current;
-    if (el) setDescClamped(el.scrollHeight > el.clientHeight);
-  }, []);
-  useEffect(() => { checkDescClamped(); }, [packageData.description, checkDescClamped]);
+export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDeployComplete }: UiPathPackageCardProps) {
+  const [expanded, setExpanded] = useState(true);
   const [pushResult, setPushResult] = useState<{ success: boolean; details?: any } | null>(null);
   const [jobState, setJobState] = useState<{ id?: number; state?: string; polling?: boolean } | null>(null);
   const [dhgOpen, setDhgOpen] = useState(false);
   const [dhgContent, setDhgContent] = useState<string | null>(null);
   const [dhgLoading, setDhgLoading] = useState(false);
-  const [warningsExpanded, setWarningsExpanded] = useState(false);
   const { toast } = useToast();
-  const isFailed = status === "FAILED";
-  const assessedStatus = (status && isAssessedTerminalStatus(status)) ? status as AssessedTerminalStatus : null;
-  const highestBlockerCategory = warnings?.length
-    ? warnings.find(w => !w.recoverable)?.stage || warnings[0]?.stage
-    : undefined;
-  const statusPres = assessedStatus ? getStatusPresentation(assessedStatus, highestBlockerCategory) : null;
-  const hasWarnings = warnings && warnings.length > 0 && assessedStatus && assessedStatus !== "studio_stable";
 
   const { data: orchestratorStatus } = useQuery<{ configured: boolean }>({
     queryKey: ["/api/settings/uipath/status"],
@@ -745,7 +594,7 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
 
   return (
     <div
-      className="rounded-lg border-l-4 border-l-primary bg-card shadow-lg overflow-hidden"
+      className="rounded-lg border-l-4 border-l-primary bg-[#2a2a2a] shadow-lg overflow-hidden"
       data-testid="card-uipath-package"
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30">
@@ -754,196 +603,66 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
           <h4 className="text-xs font-semibold text-foreground">UiPath Automation Package</h4>
           <span className="text-[10px] text-muted-foreground">{packageData.projectName}</span>
         </div>
-        {isFailed && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 text-[10px] font-medium" data-testid="badge-status-failed">
-            <XCircle className="h-3 w-3" /> Failed
-          </span>
-        )}
-        {statusPres && (
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusPres.badgeClass}`} data-testid={`badge-status-${assessedStatus}`}>
-            {statusPres.iconName === "CheckCircle2" && <CheckCircle2 className="h-3 w-3" />}
-            {statusPres.iconName === "AlertTriangle" && <AlertTriangle className="h-3 w-3" />}
-            {statusPres.iconName === "PackageOpen" && <PackageOpen className="h-3 w-3" />}
-            {statusPres.iconName === "XCircle" && <XCircle className="h-3 w-3" />}
-            {statusPres.shortLabel}
-          </span>
-        )}
-        {templateComplianceScore !== undefined && !isNaN(templateComplianceScore) && (() => {
-          const hasStubs = outcomeSummary && (outcomeSummary.stubbedActivities > 0 || outcomeSummary.stubbedSequences > 0 || outcomeSummary.stubbedWorkflows > 0);
-          const hasStructuralDefects = assessedStatus === "handoff_only" || assessedStatus === "structurally_invalid" || isFailed;
-          if (hasStubs || hasStructuralDefects) {
-            return (
-              <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-500/15 text-red-500"
-                data-testid="badge-template-compliance"
-              >
-                {hasStructuralDefects ? "Not ready" : "Has stubs — not fully compliant"}
-              </span>
-            );
-          }
-          return (
-            <span
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                templateComplianceScore >= 0.9
-                  ? "bg-emerald-500/15 text-emerald-500"
-                  : templateComplianceScore >= 0.7
-                    ? "bg-amber-500/15 text-amber-500"
-                    : "bg-red-500/15 text-red-500"
-              }`}
-              data-testid="badge-template-compliance"
-            >
-              {Math.round(templateComplianceScore * 100)}% compliant
-            </span>
-          );
-        })()}
-        {completenessLevel && (
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-              completenessLevel === "functional"
-                ? "bg-emerald-500/15 text-emerald-500"
-                : completenessLevel === "structural"
-                  ? "bg-amber-500/15 text-amber-500"
-                  : "bg-red-500/15 text-red-500"
-            }`}
-            data-testid="badge-completeness-level"
-          >
-            {completenessLevel === "functional" ? "Functional" : completenessLevel === "structural" ? "Structural" : "Incomplete"}
-          </span>
-        )}
-        {outcomeSummary && (outcomeSummary.stubbedActivities > 0 || outcomeSummary.stubbedSequences > 0 || outcomeSummary.stubbedWorkflows > 0 || outcomeSummary.autoRepairs > 0) && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-500 text-[10px] font-medium" data-testid="badge-outcome-summary">
-            {(() => {
-              const parts: string[] = [];
-              const totalStubbed = outcomeSummary.stubbedActivities + outcomeSummary.stubbedSequences + outcomeSummary.stubbedWorkflows;
-              if (totalStubbed > 0) parts.push(`${totalStubbed} stubbed`);
-              if (outcomeSummary.autoRepairs > 0) parts.push(`${outcomeSummary.autoRepairs} auto-repaired`);
-              return parts.join(", ") + " — see DHG";
-            })()}
-          </span>
-        )}
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        {packageData.description && (
+        <p className="text-[11px] text-muted-foreground/90">{packageData.description}</p>
+
+        {packageData.dependencies?.length > 0 && (
           <div>
-            <p ref={descRef} className={`text-[11px] text-muted-foreground/90 ${!descExpanded ? "line-clamp-2" : ""}`} data-testid="text-package-description">
-              {descExpanded ? capDescription(packageData.description) : packageData.description}
-            </p>
-            {(descClamped || descExpanded) && (
-              <button
-                className="text-[10px] text-primary hover:underline mt-0.5"
-                onClick={() => setDescExpanded(!descExpanded)}
-                data-testid="button-toggle-description"
-              >
-                {descExpanded ? "show less" : "show more"}
-              </button>
+            <h5 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Dependencies</h5>
+            <div className="flex flex-wrap gap-1">
+              {packageData.dependencies.map((dep: string, i: number) => (
+                <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                  {dep}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {packageData.workflows?.length > 0 && (
+          <div>
+            <button
+              className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1"
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Workflows ({packageData.workflows.length})
+            </button>
+            {expanded && (
+              <div className="space-y-2 mt-1">
+                {packageData.workflows.map((wf: any, i: number) => (
+                  <div key={i} className="p-2 rounded bg-[#1a1a1a] border border-border/20">
+                    <p className="text-[11px] font-medium text-foreground">{wf.name}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{wf.description}</p>
+                    {wf.steps?.length > 0 && (
+                      <div className="mt-1.5 space-y-0.5">
+                        {wf.steps.map((step: any, j: number) => (
+                          <p key={j} className="text-[10px] text-muted-foreground/70 pl-2 border-l border-border/30">
+                            {step.activity}{step.notes ? ` — ${step.notes}` : ""}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
-
-        {(() => {
-          const depEntries = pipelineDependencyMap
-            ? Object.entries(pipelineDependencyMap).map(([name, version]) => `${name} ${version}`)
-            : packageData.dependencies;
-          return depEntries?.length > 0 ? (
-            <div>
-              <h5 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Dependencies</h5>
-              <div className="flex flex-wrap gap-1">
-                {depEntries.map((dep: string, i: number) => (
-                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                    {dep}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : null;
-        })()}
-
-        {packageData.workflows?.length > 0 && (
-          <WorkflowSection
-            workflows={packageData.workflows}
-            expanded={expanded}
-            onToggle={() => setExpanded(!expanded)}
-          />
-        )}
       </div>
 
-      {assessedStatus && assessedStatus !== "studio_stable" && statusPres && (
-        <div className={`px-4 py-2 border-t ${assessedStatus === "structurally_invalid" ? "border-red-500/30 bg-red-500/10" : "border-amber-500/30 bg-amber-500/10"}`} data-testid={`banner-${assessedStatus}`}>
-          <div className="flex items-start gap-2">
-            <AlertTriangle className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${assessedStatus === "structurally_invalid" ? "text-red-500" : "text-amber-600"}`} />
-            <p className={`text-[11px] ${assessedStatus === "structurally_invalid" ? "text-red-600 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}>
-              {statusPres.longLabel} — see Developer Handoff Guide for details
-            </p>
-          </div>
-        </div>
-      )}
-
-      {hasWarnings && (
-        <div className="px-4 py-2 border-t border-amber-500/20 bg-amber-500/5">
-          <button
-            onClick={() => setWarningsExpanded(!warningsExpanded)}
-            className="flex items-center gap-1 text-[10px] font-semibold text-amber-500 uppercase tracking-wider w-full"
-            data-testid="button-toggle-warnings"
-          >
-            {warningsExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            {warnings.length} Pipeline Warning{warnings.length !== 1 ? "s" : ""}
-          </button>
-          {warningsExpanded && (
-            <div className="mt-2 space-y-1" data-testid="warnings-detail-panel">
-              {warnings.map((w, i) => (
-                <div key={i} className="p-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-400">
-                  <span className="font-medium">[{w.code}]</span> {w.message}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       <div className="px-4 py-3 border-t border-border/30 space-y-2">
-        {isFailed && onRetry && (
-          <button
-            onClick={onRetry}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium transition-colors w-full justify-center"
-            data-testid="button-retry-build"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Retry Build
-          </button>
-        )}
         <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              try {
-                const res = await fetch(`/api/ideas/${ideaId}/download-uipath`, { credentials: "include" });
-                if (!res.ok) {
-                  const errBody = await res.json().catch(() => null);
-                  if (errBody?.error === "PACKAGE_NOT_BUILT") {
-                    throw new Error("Package has not been generated yet. Please generate the package first.");
-                  }
-                  throw new Error(errBody?.message || "Failed to download UiPath package");
-                }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `${(packageData.projectName || "UiPathPackage").replace(/[^a-zA-Z0-9_-]/g, "_")}.zip`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              } catch (err: any) {
-                toast({ title: "Download failed", description: err.message, variant: "destructive" });
-              }
-            }}
-            disabled={isFailed}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium transition-colors flex-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+          <a
+            href={`/api/ideas/${ideaId}/download-uipath`}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium transition-colors flex-1 justify-center"
             data-testid="button-download-uipath"
           >
             <Download className="h-3.5 w-3.5" />
             Package
-          </button>
+          </a>
           <button
             onClick={async () => {
               setDhgContent(null);
@@ -972,31 +691,24 @@ export function UiPathPackageCard({ packageData, ideaId, onDeployProgress, onDep
           </button>
         </div>
         {orchestratorStatus?.configured && (
-          <div className="relative group" data-testid="deploy-button-wrapper">
-            <button
-              onClick={() => pushMutation.mutate()}
-              disabled={pushMutation.isPending || isFailed || !statusPres?.deployEnabled}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium transition-colors w-full justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-              data-testid="button-push-uipath"
-            >
-              {pushMutation.isPending ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Deploying to Orchestrator...
-                </>
-              ) : (
-                <>
-                  <Cloud className="h-3.5 w-3.5" />
-                  Deploy to UiPath Orchestrator
-                </>
-              )}
-            </button>
-            {!statusPres?.deployEnabled && (
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover text-popover-foreground text-[10px] rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 text-center z-50" data-testid="tooltip-deploy-disabled">
-                {statusPres?.disabledDeployTooltip || "Deployment blocked — package status has not been assessed as studio stable."}
-              </div>
+          <button
+            onClick={() => pushMutation.mutate()}
+            disabled={pushMutation.isPending}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#0067b8] hover:bg-[#005a9e] text-white text-xs font-medium transition-colors w-full justify-center disabled:opacity-50"
+            data-testid="button-push-uipath"
+          >
+            {pushMutation.isPending ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Deploying to Orchestrator...
+              </>
+            ) : (
+              <>
+                <Cloud className="h-3.5 w-3.5" />
+                Deploy to UiPath Orchestrator
+              </>
             )}
-          </div>
+          </button>
         )}
 
         {pushResult?.success && (

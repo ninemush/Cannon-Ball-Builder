@@ -1,18 +1,18 @@
 import type { Express, Request, Response } from "express";
+import Anthropic from "@anthropic-ai/sdk";
 import { chatStorage } from "./storage";
 import { storage } from "../../storage";
 import { documentStorage } from "../../document-storage";
 import { processMapStorage } from "../../process-map-storage";
 import { evaluateTransition } from "../../stage-transition";
-import { cascadeInvalidateAndTransition } from "../../cascade-invalidation";
 import { approveDocument } from "../../document-service";
 import { PIPELINE_STAGES, type PipelineStage, type AutomationType } from "@shared/schema";
-import { probeServiceAvailability, type ServiceAvailabilityMap, type IntegrationServiceConnection, type IntegrationServiceConnector, type ConnectorOperation } from "../../uipath-integration";
-import { generateDhg, findUiPathMessage, parseUiPathPackage } from "../../uipath-pipeline";
-import { getLLM, type LLMMessage, type LLMContentBlock } from "../../lib/llm";
-import { sanitizeChatForLLM, type SanitizedMessage } from "../../lib/sanitize-chat";
-import { buildSddPackageGuidance } from "../../catalog/prompt-guidance-filter";
-import { catalogService } from "../../catalog/catalog-service";
+import { probeServiceAvailability, type ServiceAvailabilityMap } from "../../uipath-integration";
+
+const anthropic = new Anthropic({
+  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+});
 
 function hasMapApprovalIntent(userMessage: string): boolean {
   const msg = userMessage.toLowerCase().trim();
@@ -46,19 +46,16 @@ function hasApprovalIntent(userMessage: string): boolean {
   return approvePatterns.some(p => p.test(msg));
 }
 
-function getExplicitDocType(userMessage: string): "PDD" | "SDD" | "DHG" | null {
+function getExplicitDocType(userMessage: string): "PDD" | "SDD" | null {
   const msg = userMessage.toLowerCase().trim();
   if (/\bsdd\b/.test(msg) || /\bsolution\s+design\b/.test(msg)) return "SDD";
   if (/\bpdd\b/.test(msg) || /\bprocess\s+design\b/.test(msg)) return "PDD";
-  if (/\bdhg\b/.test(msg) || /\b(developer\s+)?handoff\s+guide\b/.test(msg) || /\bdeployment\s+handoff\b/.test(msg)) return "DHG";
   if (/\bpdd\b/i.test(userMessage)) return "PDD";
   if (/\bsdd\b/i.test(userMessage)) return "SDD";
-  if (/\bdhg\b/i.test(userMessage)) return "DHG";
   return null;
 }
 
-async function resolveApprovalTarget(ideaId: string, explicitIntent: "PDD" | "SDD" | "DHG" | null): Promise<"PDD" | "SDD" | null> {
-  if (explicitIntent === "DHG") return null;
+async function resolveApprovalTarget(ideaId: string, explicitIntent: "PDD" | "SDD" | null): Promise<"PDD" | "SDD" | null> {
   if (explicitIntent) return explicitIntent;
   const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
   if (sdd && sdd.status === "draft") return "SDD";
@@ -67,199 +64,39 @@ async function resolveApprovalTarget(ideaId: string, explicitIntent: "PDD" | "SD
   return null;
 }
 
-function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null, automationType?: AutomationType | null, mapMode?: "to-be", asIsStepsContext?: string): string {
+function buildSystemPrompt(ideaTitle: string, currentStage: string, docContext?: string, serviceAvailability?: ServiceAvailabilityMap | null, automationType?: AutomationType | null): string {
   let serviceContext = "";
   if (serviceAvailability && serviceAvailability.configured) {
     const available: string[] = [];
     const unavailable: string[] = [];
     if (serviceAvailability.orchestrator) available.push("Orchestrator (queues, assets, machines, storage buckets)");
-    if (serviceAvailability.actionCenter) available.push("Action Center (task catalogs with form schemas, human-in-the-loop approvals, SLA management, escalation workflows)");
+    if (serviceAvailability.actionCenter) available.push("Action Center (task catalogs, human-in-the-loop)");
     else unavailable.push("Action Center");
     if (serviceAvailability.testManager) available.push("Test Manager (test cases, test projects)");
     else unavailable.push("Test Manager");
-    if (serviceAvailability.documentUnderstanding) available.push("Document Understanding (classic DU — structured forms, OCR, ML classification)");
+    if (serviceAvailability.documentUnderstanding) available.push("Document Understanding");
     else unavailable.push("Document Understanding");
-    if (serviceAvailability.generativeExtraction) available.push("IXP Generative Extraction (LLM-powered extraction for unstructured documents — no pre-trained models needed)");
-    else unavailable.push("Generative Extraction (IXP)");
-    if (serviceAvailability.communicationsMining) available.push("Communications Mining (email/message stream analysis, intent detection, routing)");
-    else unavailable.push("Communications Mining");
-    if (serviceAvailability.dataService) available.push("Data Service / Data Fabric (structured data entities with schema-driven storage, cross-process data persistence, entity read/write via API)");
-    else unavailable.push("Data Service / Data Fabric");
-    if (serviceAvailability.apps) available.push("Apps (citizen-developer UIs, form-based web interfaces, process-connected dashboards)");
-    else unavailable.push("Apps");
+    if (serviceAvailability.dataService) available.push("Data Service (Data Fabric)");
+    else unavailable.push("Data Service");
     if (serviceAvailability.platformManagement) available.push("Platform Management (robot accounts, security)");
     else unavailable.push("Platform Management");
     if (serviceAvailability.environments) available.push("Environments");
     else unavailable.push("Environments (deprecated on modern folders — machine templates used instead)");
     if (serviceAvailability.triggers) available.push("Triggers (queue and time-based)");
     else unavailable.push("Triggers API");
-    if (serviceAvailability.agents) {
-      const caps = serviceAvailability.agentCapabilities;
-      const types: string[] = [];
-      if (caps?.autonomous) types.push("autonomous");
-      if (caps?.conversational) types.push("conversational");
-      if (caps?.coded) types.push("coded");
-      const typesStr = types.length > 0 ? ` — types: ${types.join(", ")}` : "";
-      const agentDetail = serviceAvailability.serviceDetails?.agents;
-      const confNote = agentDetail?.confidence === "inferred" ? " [inferred — confirm in Orchestrator]" : "";
-      available.push(`UiPath Agents (AI agents with tool bindings, context grounding, escalation${typesStr})${confNote}`);
-    } else {
-      unavailable.push("UiPath Agents (AI agent definitions, tool bindings, context grounding)");
-    }
-    if (serviceAvailability.maestro) available.push("Maestro (BPMN process orchestration, process apps, case management)");
-    else unavailable.push("Maestro (BPMN orchestration)");
-    if (serviceAvailability.integrationService) available.push("Integration Service (connectors, API integrations)");
-    else unavailable.push("Integration Service");
-    if (serviceAvailability.ixp) available.push("IXP / Communications Mining");
-    else unavailable.push("IXP / Communications Mining");
-    if (serviceAvailability.automationHub) available.push("Automation Hub (idea management, CoE)");
-    else unavailable.push("Automation Hub");
-    if (serviceAvailability.automationOps) available.push("Automation Ops (governance, deployment rules)");
-    else unavailable.push("Automation Ops");
-    if (serviceAvailability.automationStore) available.push("Automation Store (reusable components)");
-    else unavailable.push("Automation Store");
-    if (serviceAvailability.assistant) available.push("Assistant (attended automation launcher)");
-    else unavailable.push("Assistant");
-    if (serviceAvailability.aiCenter) {
-      const skills = serviceAvailability.aiCenterSkills || [];
-      const deployed = skills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
-      if (deployed.length > 0) {
-        const skillDetail = deployed.map(s => `"${s.name}" (package: ${s.mlPackageName || "N/A"}, input: ${s.inputType || "N/A"}, output: ${s.outputType || "N/A"})`).join("; ");
-        available.push(`AI Center (${deployed.length} deployed ML skill(s): ${skillDetail})`);
-      } else {
-        available.push(`AI Center (available, ${skills.length} skill(s) found but none deployed)`);
-      }
-    } else {
-      unavailable.push("AI Center (ML models, skills)");
-    }
-
-    if (serviceAvailability.automationOps && serviceAvailability.governancePolicies?.length) {
-      available.push(`Automation Ops (${serviceAvailability.governancePolicies.length} governance policies active)`);
-    }
-    if (serviceAvailability.attendedRobots && serviceAvailability.attendedRobotInfo) {
-      available.push(`Attended Robots / Assistant (${serviceAvailability.attendedRobotInfo.attendedRobots.length} attended)`);
-    }
-    if (serviceAvailability.studioProjects && serviceAvailability.studioProjectInfo) {
-      available.push(`Existing Processes (${serviceAvailability.studioProjectInfo.projects.length} deployed)`);
-    }
-
-    let integrationServiceContext = "";
-    if (serviceAvailability.integrationServiceDiscovery?.available) {
-      const is = serviceAvailability.integrationServiceDiscovery;
-      const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
-      if (activeConns.length > 0) {
-        const connectorKeyToMeta = new Map<string, IntegrationServiceConnector>();
-        for (const conn of is.connectors) {
-          connectorKeyToMeta.set(conn.id, conn);
-        }
-        const connLines = activeConns.map((c: IntegrationServiceConnection) => {
-          const meta = c.connectorKey ? connectorKeyToMeta.get(c.connectorKey) : undefined;
-          let line = `- **${c.connectorName}**`;
-          if (meta?.categories && meta.categories.length > 0) {
-            line += ` [${meta.categories.join(", ")}]`;
-          }
-          line += ` — Connection: "${c.name}" (ID: ${c.id}, Status: ${c.status})`;
-          if (c.connectionIdentity || c.accountName) line += ` [Account: ${c.connectionIdentity || c.accountName}]`;
-          if (c.isDefault) line += ` [Default]`;
-          const caps: string[] = [];
-          if (meta?.hasCRUDs) caps.push("CRUD");
-          if (meta?.hasEvents) caps.push("events");
-          if (meta?.hasMethods) caps.push("methods");
-          if (caps.length > 0) line += ` {${caps.join(", ")}}`;
-          return line;
-        }).join("\n");
-
-        let opsCatalog = "";
-        const activeConnectorIds = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorId).filter(Boolean)));
-        const activeConnectorKeys = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorKey).filter(Boolean)));
-        const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) =>
-          (activeConnectorIds.includes(c.id) || activeConnectorKeys.includes(c.id)) && c.operations && c.operations.length > 0
-        );
-        if (connectorsWithOps.length > 0) {
-          opsCatalog = `\n\nAvailable Integration Service operations per connector:\n`;
-          for (const connector of connectorsWithOps) {
-            const actions = connector.operations.filter((o: ConnectorOperation) => o.type === "action");
-            const triggers = connector.operations.filter((o: ConnectorOperation) => o.type === "trigger");
-            opsCatalog += `**${connector.name}**: `;
-            const parts: string[] = [];
-            if (actions.length > 0) parts.push(`Actions: ${actions.map((a: ConnectorOperation) => `"${a.name}"`).join(", ")}`);
-            if (triggers.length > 0) parts.push(`Triggers: ${triggers.map((t: ConnectorOperation) => `"${t.name}"`).join(", ")}`);
-            opsCatalog += parts.join("; ") + "\n";
-          }
-        }
-
-        integrationServiceContext = `\n\nINTEGRATION SERVICE — CONNECTED ENTERPRISE SYSTEMS:\nThe following Integration Service connections are ACTIVE on this tenant:\n${connLines}\n\nCRITICAL: When the process involves any of these connected systems, you MUST recommend using the Integration Service connector instead of custom HTTP activities. Integration Service connectors provide pre-built, maintained API actions with built-in authentication — they are always preferred over custom HTTP calls. Reference the specific connector name and connection in your design.${opsCatalog}`;
-      }
-    }
 
     const allMajorAvailable = serviceAvailability.actionCenter && serviceAvailability.documentUnderstanding && serviceAvailability.testManager;
-    const hasIxpCapabilities = serviceAvailability.documentUnderstanding || serviceAvailability.generativeExtraction || serviceAvailability.communicationsMining;
-    let ixpContext = "";
-    if (hasIxpCapabilities) {
-      ixpContext = `\n\nIXP (Intelligent Xtraction & Processing) GUIDANCE:
-When the process involves documents or communications, you MUST recommend the optimal extraction approach:
-- **Classic Document Understanding (DU)**: Use for structured/semi-structured forms with known layouts — invoices, receipts, purchase orders, tax forms, ID documents. Requires pre-trained models or taxonomy definitions. Best for high-volume, consistent document types.
-- **Generative Extraction**: Use for unstructured documents — contracts, legal agreements, reports, correspondence, medical records, policy documents. LLM-powered extraction that works without pre-trained models. Best when document formats vary widely or rapid deployment is needed.
-- **Communications Mining**: Use for email/message streams — customer support emails, internal communications, chat transcripts, ticket systems. Analyzes intent, sentiment, entities and routes communications intelligently. Best for triage, categorization, and extracting actionable data from conversation flows.
-- **Hybrid approach**: Combine Classic DU for structured portions + Generative Extraction for unstructured portions in the same process.
-Always specify: (1) which extraction approach for each document/communication type, (2) what fields to extract, (3) confidence thresholds for human review.`;
-    }
     serviceContext = `\n\nUIPath SERVICE AVAILABILITY (LIVE PROBE — just now from the connected Orchestrator):
 - AVAILABLE: ${available.join(", ")}
 - NOT AVAILABLE: ${unavailable.length > 0 ? unavailable.join(", ") : "All services available"}
-${integrationServiceContext}
-CRITICAL OVERRIDE: This service availability data was probed LIVE from the connected Orchestrator seconds ago. It is the authoritative, current truth. Previous messages in this conversation may contain older document versions that claimed different service availability — those are OUTDATED and WRONG. You MUST use ONLY the current probe results above. Do NOT copy or reproduce service availability claims from previous SDD versions in the chat history.${allMajorAvailable ? "\nAll major platform services (Action Center, Document Understanding, Test Manager) are AVAILABLE and WORKING. You MUST design the solution to USE them. Do NOT generate a 'Future Enhancements — Additional Services' section for any service listed as AVAILABLE above. Only mention genuinely unavailable services (if any) in Future Enhancements." : ""}${ixpContext}`;
 
-    if (serviceAvailability.governancePolicies?.length) {
-      serviceContext += `\n\nAUTOMATION OPS GOVERNANCE (ACTIVE POLICIES — compliance is mandatory):\nThe following governance policies are enforced on this tenant. All automation designs and artifacts MUST comply:\n`;
-      for (const p of serviceAvailability.governancePolicies) {
-        serviceContext += `- [${p.severity.toUpperCase()}] ${p.name}: ${p.description || "No description"}`;
-        if (p.restrictedActivities?.length) serviceContext += ` — RESTRICTED: ${p.restrictedActivities.join(", ")}`;
-        serviceContext += `\n`;
-      }
-      serviceContext += `When advising on automation design, proactively flag any approach that would violate these governance policies. Suggest compliant alternatives.`;
-    }
-
-    if (serviceAvailability.attendedRobotInfo) {
-      const ari = serviceAvailability.attendedRobotInfo;
-      if (ari.hasAttended && ari.hasUnattended) {
-        serviceContext += `\n\nROBOT LANDSCAPE: Both attended (${ari.attendedRobots.length}) and unattended (${ari.unattendedRobots.length}) robots are available. Recommend attended execution for human-assisted tasks and unattended for background processing. Consider hybrid approaches.`;
-      } else if (ari.hasAttended) {
-        serviceContext += `\n\nROBOT LANDSCAPE: Only attended robots (${ari.attendedRobots.length}) are available via UiPath Assistant. Design for attended execution with user interaction points.`;
-      } else if (ari.hasUnattended) {
-        serviceContext += `\n\nROBOT LANDSCAPE: Only unattended robots (${ari.unattendedRobots.length}) available. Design for fully autonomous background execution.`;
-      }
-    }
-
-    if (serviceAvailability.studioProjectInfo && serviceAvailability.studioProjectInfo.existingNames.length > 0) {
-      serviceContext += `\n\nEXISTING PROCESSES (${serviceAvailability.studioProjectInfo.existingNames.length} deployed — avoid naming conflicts, consider reuse):\n${serviceAvailability.studioProjectInfo.existingNames.slice(0, 20).map(n => `- ${n}`).join("\n")}`;
-    }
-  }
-
-  let catalogGuidance = "";
-  try {
-    const studioProfile = catalogService.getStudioProfile();
-    const { guidance } = buildSddPackageGuidance(studioProfile);
-    if (guidance) {
-      catalogGuidance = `\n${guidance}`;
-    }
-  } catch (err: any) {
-    console.warn(`[buildSystemPrompt] Failed to build catalog guidance: ${err.message}`);
+CRITICAL OVERRIDE: This service availability data was probed LIVE from the connected Orchestrator seconds ago. It is the authoritative, current truth. Previous messages in this conversation may contain older document versions that claimed different service availability — those are OUTDATED and WRONG. You MUST use ONLY the current probe results above. Do NOT copy or reproduce service availability claims from previous SDD versions in the chat history.${allMajorAvailable ? "\nAll major platform services (Action Center, Document Understanding, Test Manager) are AVAILABLE and WORKING. You MUST design the solution to USE them. Do NOT generate a 'Future Enhancements — Additional Services' section for any service listed as AVAILABLE above. Only mention genuinely unavailable services (if any) in Future Enhancements." : ""}`;
   }
 
   return `You are the CannonBall automation design assistant. Your job is to guide Process SMEs through designing business process automations. You are AI-first — you lead, you draft, you build. The SME's job is to give you information, refine your output, and approve it. They should never have to figure out what to do next — you always tell them.
 
-PERSONA — SR AUTOMATION CONSULTANT:
-You think and operate as a Senior Automation Consultant with deep domain experience across finance, HR, supply-chain, and shared-services operations. You challenge process assumptions — SMEs routinely omit batch windows, month-end volume spikes, audit/compliance trails, and upstream data-quality issues. You flag hidden complexity early (system integrations SMEs treat as "simple," manual workarounds embedded in tribal knowledge, exception paths that only surface during peak periods). You apply proportionality: a five-step manual process stays lean — you never inflate it into a 25-step enterprise blueprint. Your feasibility judgment is realistic, not aspirational — you weigh effort, maintainability, and organizational readiness honestly. You understand enterprise system landscapes (ERP, CRM, ITSM, legacy mainframes) at a practical integration level, not just at a buzzword level.
-
 Current idea: ${ideaTitle}. Current stage: ${currentStage}.
-${docContext || ""}${serviceContext}${catalogGuidance}
-
-AUTOMATION HUB INTEGRATION:
-- CannonBall integrates with UiPath Automation Hub. When a user mentions importing from Automation Hub or references a Hub idea, understand that the business requirements and process context have already been captured in the Hub.
-- If the current idea was imported from Automation Hub (look for "Imported from Automation Hub" context in earlier messages), use the Hub's process details, category, department, and submitter info as primary business context. This saves the SME from re-entering information.
-- After successful deployment, completed automations are automatically published to the Automation Store with documentation and deployment metadata.
-- You can suggest the user check Automation Hub for more pipeline ideas when the current idea reaches a natural stopping point (e.g., after deployment or during idle conversation).
+${docContext || ""}${serviceContext}
 
 BEHAVIORAL RULES (non-negotiable):
 1. Never wait passively. After every SME message, either ask a specific targeted question, produce an output, or tell them exactly what you need next and why.
@@ -271,14 +108,6 @@ BEHAVIORAL RULES (non-negotiable):
 7. When asked to regenerate a document, do it immediately. Do not question whether it will help, do not suggest alternatives, do not explain why it might not work. Just regenerate it.
 8. INTEGRITY IS NON-NEGOTIABLE: Never fabricate deployment results, artifact statuses, or service availability. If the system provides verified deployment results (VERIFIED DEPLOYMENT RESULTS messages), you MUST use those exact facts. Never claim something was "created" or "deployed" unless the verified results confirm it. If an artifact was skipped or failed, say so honestly. Discrepancies between your narrative and actual results destroy user trust.
 
-AI CENTER KNOWLEDGE:
-When the process involves classification, prediction, NLP, sentiment analysis, anomaly detection, or any ML-driven decision, recommend using UiPath AI Center ML Skills. AI Center provides:
-- **ML Packages**: Pre-built or custom ML models (e.g., document classification, invoice extraction, sentiment analysis, fraud detection)
-- **ML Skills**: Deployed instances of ML packages that can be invoked directly from UiPath workflows using the ML Skill activity (UiPath.MLActivities package)
-- **Workflow integration**: Use the "ML Skill" activity in UiPath Studio to call a deployed skill by name, pass input data (text, JSON, or file), and receive prediction output
-- **Best practices**: Reference deployed ML Skills by their exact name from AI Center. Map input/output schemas to match the skill's expected format. Always include error handling for ML Skill invocations (timeout, model unavailable).
-When AI Center is available with deployed skills, proactively recommend using those specific skills by name in the solution design. When it's available but no skills are deployed, suggest which ML packages could benefit the automation. When unavailable, note it as a future enhancement.
-
 FILE UPLOAD HANDLING:
 - When you see [UPLOADED_FILE: ...] in a user message, the content has been extracted from a document they uploaded (DOCX, PDF, XLSX, TXT, CSV).
 - Analyze the extracted content to identify process steps, business rules, decision points, inputs/outputs, roles, systems, and exceptions.
@@ -288,8 +117,8 @@ FILE UPLOAD HANDLING:
 
 STAGE BEHAVIOR:
 - Idea: Extract the process with targeted single questions. Identify who does it, what triggers it, what systems are involved, what the pain points are, and what a successful outcome looks like.
-- Design: Reconstruct the process step by step. Output each confirmed step using the [STEP] tag format below so the visual map builds in real time. The As-Is map is built here. Once the As-Is map is approved, the pipeline advances to Feasibility Assessment.
-- Feasibility Assessment: This stage begins AFTER As-Is approval. Assess automation potential directly. Flag complexity honestly. Give an effort range. Do not hedge excessively. Perform the Automation Type Assessment (see below) and output the [AUTOMATION_TYPE:] tag. Then generate the To-Be map. The To-Be map must be approved before moving to Build. Use agent-specific step types when the automation type is "agent" or "hybrid".
+- Feasibility Assessment: Assess automation potential directly. Flag complexity honestly. Give an effort range. Do not hedge excessively. ALSO: perform the Automation Type Assessment (see below) and output the [AUTOMATION_TYPE:] tag.
+- Design: Reconstruct the process step by step. Output each confirmed step using the [STEP] tag format below so the visual map builds in real time. Use agent-specific step types when the automation type is "agent" or "hybrid".
 
 AUTOMATION TYPE ASSESSMENT (MANDATORY during Feasibility Assessment):
 You MUST evaluate whether this process is best served by traditional RPA, a UiPath Agent (AI-driven autonomous agent), or a hybrid approach. Analyze using this framework:
@@ -308,61 +137,20 @@ After your analysis, output EXACTLY ONE of these tags:
 [AUTOMATION_TYPE: agent | <rationale in 1-2 sentences>]
 [AUTOMATION_TYPE: hybrid | <rationale in 1-2 sentences>]
 
-Immediately after the [AUTOMATION_TYPE:] tag, output a feasibility summary block in this exact format:
-[FEASIBILITY_SUMMARY]
-Complexity: <low|medium|high>
-Effort: <effort estimate, e.g. "2-4 weeks", "1-2 sprints", "3-5 days">
-[/FEASIBILITY_SUMMARY]
-
 Examples:
 [AUTOMATION_TYPE: rpa | This process follows strict rules with structured data from SAP — every step is deterministic with known UI selectors and no judgment calls.]
-[FEASIBILITY_SUMMARY]
-Complexity: low
-Effort: 1-2 weeks
-[/FEASIBILITY_SUMMARY]
-
 [AUTOMATION_TYPE: agent | This process involves triaging unstructured customer emails, interpreting intent, and making context-dependent routing decisions — ideal for an AI agent.]
-[FEASIBILITY_SUMMARY]
-Complexity: high
-Effort: 4-6 weeks
-[/FEASIBILITY_SUMMARY]
-
 [AUTOMATION_TYPE: hybrid | The core invoice processing is structured RPA, but exception handling and vendor communication require judgment — a hybrid with agent nodes for exceptions is optimal.]
-[FEASIBILITY_SUMMARY]
-Complexity: medium
-Effort: 3-4 weeks
-[/FEASIBILITY_SUMMARY]
-
-MAESTRO ORCHESTRATION KNOWLEDGE:
-UiPath Maestro is the next-generation orchestration layer for agentic automation, process apps, and case management using BPMN process modeling. When evaluating a solution, consider whether Maestro orchestration is appropriate:
-
-WHEN TO RECOMMEND MAESTRO (vs traditional Orchestrator):
-- The process has multiple steps combining automated tasks AND human tasks that need coordination in a single flow
-- The process benefits from visual BPMN modeling with explicit gateways, conditions, and event handling
-- Case management patterns — where a "case" (e.g., loan application, incident ticket) moves through stages with both automated and human decision points
-- Process apps — where business users need a visual interface to monitor and interact with running process instances
-- Complex orchestration — multiple Orchestrator processes need to run in sequence or parallel, with conditional branching between them
-- Human-in-the-loop at scale — multiple approval/review steps with SLAs, escalations, and routing rules
-
-WHEN TRADITIONAL ORCHESTRATOR IS SUFFICIENT:
-- Simple linear automation with one process and a time/queue trigger
-- Pure unattended automation with no human interaction
-- Single bot task with retry logic — no orchestration needed
-- Processes that only need basic queue-driven or scheduled execution
-
-BPMN TASK TYPES in Maestro:
-- Service Task: Linked to an Orchestrator process by name — executes the RPA workflow
-- User Task: Connected to Action Center — creates a human task with forms/actions
-- Script Task: Inline logic or simple transformations
-- Send/Receive Task: For inter-process messaging and signal handling
-- Gateways: Exclusive (XOR), Parallel (AND), Inclusive (OR), Event-Based — route flow based on conditions
-- Events: Start (timer, message, signal), End, Intermediate (catch/throw), Boundary (error, timer)
-
-When Maestro is available and appropriate, recommend it. When it's not available, mention it as a platform recommendation for enhanced orchestration.
 
 ${automationType && automationType !== "rpa" ? `CURRENT AUTOMATION TYPE: ${automationType.toUpperCase()}
-This idea has been assessed as "${automationType}" automation. All subsequent design, documentation, and deployment must reflect this.
-- AS-IS maps MUST only use: task, decision, start, end. NEVER use agent-task or agent-decision in AS-IS maps.` : ""}
+This idea has been assessed as "${automationType}" automation. All subsequent design, documentation, and deployment must reflect this:
+- AS-IS maps represent the CURRENT manual/human process BEFORE automation. NEVER use agent-task or agent-decision node types in AS-IS maps. AS-IS maps MUST only use: task, decision, start, end.
+- TO-BE maps represent the AUTOMATED future state that REPLACES the manual process. Do NOT copy or duplicate AS-IS manual steps into the TO-BE map. The TO-BE map must show the new automated workflow, not a repeat of the current process with minor changes.
+${automationType === "agent" ? `- Design the TO-BE as an AI Agent workflow. Steps should primarily use agent-task and agent-decision node types.
+- The agent handles unstructured reasoning, natural language interpretation, and context-dependent decisions autonomously.
+- RPA task nodes are only used for structured system interactions the agent delegates to (API calls, database updates, file operations).` : ""}${automationType === "hybrid" ? `- Design the TO-BE as a HYBRID workflow. Use standard task/decision nodes for structured RPA steps and agent-task/agent-decision nodes for judgment-heavy steps.
+- Clearly label which steps are RPA-driven vs. Agent-driven so the process map visually distinguishes them.
+- The agent handles exceptions, natural language, and judgment calls. RPA handles the structured backbone.` : ""}` : ""}
 
 STEP TAG FORMAT — output one per line for every confirmed process step:
 [STEP: <number> <step name> | ROLE: <who does it> | SYSTEM: <system or 'Manual'> | TYPE: <task/decision/start/end/agent-task/agent-decision> | FROM: <parent step number> | LABEL: <edge label>]
@@ -418,39 +206,17 @@ BRANCHING RULES (CRITICAL — real processes are NOT linear):
 - NEVER output all steps in a linear chain when the process has decisions. EVERY process has decisions — insurance claims, invoice processing, onboarding, purchase orders, IT service requests — ALL of them branch.
 - DEAD-END BRANCHES ARE FORBIDDEN. Every branch from every decision MUST terminate — either by reaching an End node, by merging into another branch that reaches an End node, or by looping back to an earlier decision node using a FROM field. If a branch leads to a task node that has no subsequent step and is not an End node, you MUST add the missing connection (either to an End node or back to an earlier step).
 
-${mapMode === "to-be" && asIsStepsContext ? `MAP OUTPUT FORMAT — TO-BE GENERATION (CRITICAL):
-You are generating the TO-BE (automated future state) process map. The AS-IS map has been approved by the user.
-
-Here is the approved AS-IS process, showing how the process works today:
-${asIsStepsContext}
-
-Design a TO-BE process map that shows the automated workflow replacing this manual process.
-${automationType === "agent" ? `- This is an AI Agent automation. Steps should primarily use agent-task and agent-decision node types.
-- The agent handles unstructured reasoning, natural language interpretation, and context-dependent decisions autonomously.
-- RPA task nodes are only used for structured system interactions the agent delegates to (API calls, database updates, file operations).` : automationType === "hybrid" ? `- This is a HYBRID automation. Use standard task/decision nodes for structured RPA steps and agent-task/agent-decision nodes for judgment-heavy steps.
-- Clearly label which steps are RPA-driven vs. Agent-driven so the process map visually distinguishes them.
-- The agent handles exceptions, natural language, and judgment calls. RPA handles the structured backbone.` : `- Use standard task/decision/start/end node types for all steps.`}
-- Use the section header "TO-BE Process Map" followed immediately by [STEP:] tags.
-- The TO-BE must show the NEW automated workflow, not a copy of AS-IS with minor changes.
-- Show which steps are automated, which are human-in-the-loop, and how UiPath services are leveraged.
-- Do NOT output AS-IS steps. Only output TO-BE.
-- If regenerating the TO-BE map, output the COMPLETE set of [STEP:] tags — the system will clear and replace.
-
-PROPORTIONALITY GUARDRAILS (CRITICAL — do NOT over-elaborate):
-- The TO-BE map must be proportionate to the AS-IS complexity. A simple 5-step AS-IS should NOT become a 25-step TO-BE.
-- Do NOT add error-handling sub-flows for every step — only where the AS-IS process already had failure modes or decision points.
-- Do NOT add monitoring, logging, audit trail, or infrastructure steps unless the user explicitly requested them.
-- Do NOT add retry/fallback logic for steps that are straightforward data transfers or simple actions.
-- Do NOT create redundant parallel paths that split and merge without meaningful divergence.
-- Do NOT create more than 2-3 End nodes unless the AS-IS process genuinely had 4+ distinct terminal outcomes.
-- Each step in the TO-BE must correspond to a real automation action — not a conceptual placeholder like "Initialize Process" or "Cleanup Resources" unless the process specifically needs it.` : `MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
+MAP OUTPUT FORMAT (CRITICAL — the visual map only renders from [STEP:] tags):
 - The visual process map panel ONLY renders when you output [STEP:] tags. Text descriptions of steps do NOT build the map. If you say "here are the steps" but don't output [STEP:] tags, nothing appears.
-- When generating a process map from user input (document, image, description), generate ONLY the AS-IS Process Map showing the current manual process.
-- Use the section header "AS-IS Process Map" followed immediately by [STEP:] tags.
 - AS-IS describes HOW THE PROCESS WORKS TODAY — before automation. Every AS-IS step must be a manual human action using only task/decision/start/end types. NEVER use agent-task or agent-decision in AS-IS.
-- Do NOT generate a TO-BE map. The TO-BE will be generated automatically after AS-IS approval as a separate step.
-- When the user asks you to "generate the map", "show the map", "rebuild the process map", or "output the steps", you MUST output [STEP:] tags for AS-IS only. NEVER respond with a text summary instead.
-- If regenerating an existing AS-IS map, output the COMPLETE set of [STEP:] tags for the full process — the system will clear and replace.`}
+- ALWAYS output AS-IS Process Map first, then TO-BE Process Map. Never reverse this order.
+- When outputting both AS-IS and TO-BE maps, use these EXACT section headers:
+  AS-IS Process Map
+  TO-BE Process Map
+- After each header, IMMEDIATELY output the [STEP:] tags for that map. Do not write prose summaries of steps — output the tags.
+- BOTH sections MUST contain their own complete set of [STEP:] tags with a full Start-to-End step sequence. If you output a section header without [STEP:] tags after it, that map will be BLANK. Never write prose descriptions or commentary instead of [STEP:] tags for either section.
+- When the user asks you to "generate the map", "show the map", "rebuild the process map", or "output the steps", you MUST output [STEP:] tags. NEVER respond with a text summary instead.
+- If regenerating an existing map, output the COMPLETE set of [STEP:] tags for the full process — the system will clear and replace.
 
 DUPLICATE PREVENTION (CRITICAL):
 - EXACTLY ONE Start node per process (always step 1.0). Never output multiple Start nodes.
@@ -468,7 +234,8 @@ SELF-CHECK (MANDATORY — run this mentally before finalizing your [STEP:] outpu
 6. Every decision node has 2+ children (steps that FROM it with different LABELs).
 7. Branches that lead to the same outcome MERGE into a shared path before the End node.
 8. Trace EVERY path from EVERY decision outcome forward. Each path must reach an End node or loop back to an earlier step. If any path dead-ends at a non-end node with no outgoing edge, add the missing connection.
-9. AS-IS maps contain ZERO agent-task or agent-decision nodes — only task/decision/start/end. If you find yourself placing an agent-task or agent-decision in AS-IS, STOP and convert it to task or decision.
+9. If outputting both AS-IS and TO-BE maps: EACH section has its own complete [STEP:] tags (not prose). AS-IS contains ZERO agent-task or agent-decision nodes — only task/decision/start/end. agent-task and agent-decision are ONLY permitted in TO-BE. If you find yourself placing an agent-task or agent-decision in AS-IS, STOP and convert it to task or decision.
+10. TO-BE map does NOT duplicate AS-IS manual steps. The TO-BE map shows the new automated workflow that replaces the manual process.
 
 EXAMPLE 1 — Insurance claim with 3-way decision and loop:
 [STEP: 1.0 Customer Submits Claim | ROLE: Customer | SYSTEM: Claims Portal | TYPE: start]
@@ -525,33 +292,16 @@ PDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
 - Include an "Agent Capability Requirements" subsection describing what the agent needs to understand and do (e.g., "interpret email intent", "classify document type", "draft natural language responses").
 - Include a "Knowledge Base Requirements" subsection listing what documents, FAQs, or reference data the agent needs access to for reasoning.
 
-UIPATH AGENTS — WHEN TO USE AND HOW TO DESIGN:
-UiPath Agents are a first-class platform capability. There are three agent types:
-1. **Autonomous agents** — goal-driven agents that operate independently, reasoning through multi-step tasks using tools (Orchestrator processes) without constant user interaction. Best for: back-office processing with judgment, document triage, exception handling, email classification.
-2. **Conversational agents** — interactive chat-based agents that engage users in natural language dialogue. Best for: IT helpdesk, customer service, guided data collection, interactive troubleshooting.
-3. **Coded agents** — developer-written agent logic in Python or JavaScript using frameworks like LlamaIndex. Best for: complex reasoning chains, custom RAG pipelines, multi-model orchestration, domain-specific NLP.
-
-WHEN AGENTS ADD VALUE vs TRADITIONAL RPA:
-- Use agents when the process involves: unstructured data interpretation, natural language understanding, context-dependent decisions, variable scenarios, or multi-step reasoning
-- Use traditional RPA when the process involves: structured data, deterministic rules, fixed UI interactions, high-volume identical transactions
-- Use hybrid when: the core process is structured (RPA backbone) but edges involve judgment, exceptions, or natural language (agent nodes)
-
-AGENT DESIGN PRINCIPLES:
-- Every agent tool should map to a deployed Orchestrator process by name — agents invoke automation as tools
-- Context grounding uses Storage Buckets for reference documents (policies, FAQs, templates) — specify which bucket by name
-- Escalation paths connect to Action Center task catalogs by name — the agent creates human tasks when confidence is low or policy requires review
-- Guardrails prevent hallucination, PII leakage, and off-topic responses — always define explicit safety constraints
-
 SDD AGENT/HYBRID CONTENT (when automation type is "agent" or "hybrid"):
 - Include a "## Agent Architecture" section describing the agent's design:
-  - Agent type (autonomous, conversational, or coded) with rationale
-  - Agent name, purpose, and behavioral system prompt
-  - Tool definitions referencing deployed Orchestrator processes by name, with input/output argument schemas
-  - Context grounding strategy: which storage buckets provide reference documents, refresh cadence, embedding approach
-  - Escalation rules referencing Action Center task catalogs by name, with priority and conditions
+  - Agent name and purpose
+  - System prompt / behavioral instructions for the agent
+  - Tools the agent can invoke (which UiPath activities/APIs)
+  - Knowledge bases the agent accesses
   - Guardrails and safety constraints
+  - Escalation rules (when does the agent hand off to a human?)
 - For hybrid: include a mapping table showing which XAML workflows invoke which agents and at which steps.
-- The orchestrator_artifacts block MUST include agent-specific artifacts with cross-references (see AGENT ARTIFACTS below).
+- The orchestrator_artifacts block MUST include agent-specific artifacts (see AGENT ARTIFACTS below).
 
 CRITICAL — NEVER STALL DOCUMENT GENERATION:
 - When a PDD has been approved and the user asks about the SDD (or the system tells you to generate one), you MUST generate the SDD IMMEDIATELY with the information available. Do NOT ask follow-up questions, do NOT request clarification, do NOT say you need more details. Use reasonable professional assumptions for any gaps — you are a senior consultant, fill in blanks with industry best practices.
@@ -599,12 +349,8 @@ CONDITIONALLY include these — ONLY if the corresponding service is listed as A
 - "testSets" — ONLY if Test Manager is available. Format: [{"name": "Happy Path Tests", "description": "Core scenario validation", "testCaseNames": ["TC001 - Test case name"]}]
 
 AGENT ARTIFACTS (include when automation type is "agent" or "hybrid"):
-- "agents" — Agent definitions with full cross-references to other artifacts. Format: [{"name": "AgentName", "agentType": "autonomous|conversational|coded", "description": "Agent purpose (max 250 chars)", "systemPrompt": "Full behavioral instructions for the agent", "tools": [{"name": "ToolName", "description": "What this tool does", "processReference": "Exact_Orchestrator_Process_Name", "inputArguments": {"argName": "argType"}, "outputArguments": ["resultField"]}], "contextGrounding": {"storageBucket": "BucketName_from_storageBuckets", "documentSources": ["Source description"], "refreshStrategy": "daily|weekly|on-change"}, "guardrails": ["Safety constraint 1"], "escalationRules": [{"condition": "When to escalate", "target": "Human role", "actionCenterCatalog": "CatalogName_from_actionCenter", "priority": "High"}], "maxIterations": 10, "temperature": 0.3}]
-  - agentType is REQUIRED: "autonomous" (goal-driven, operates independently), "conversational" (interactive chat-based), or "coded" (developer-written Python/JS agent logic)
-  - tools.processReference MUST match an Orchestrator process name — the deployment engine resolves this to the deployed process ID
-  - contextGrounding.storageBucket MUST match a bucket name from the storageBuckets array — resolved to bucket ID during deployment
-  - escalationRules.actionCenterCatalog MUST match a taskCatalog name from the actionCenter array — resolved to catalog ID during deployment
-- "knowledgeBases" — Knowledge base definitions for agent context grounding. Format: [{"name": "KBName", "description": "Purpose (max 250 chars)", "documentSources": ["Source description 1"], "refreshFrequency": "daily|weekly|monthly"}]
+- "agents" — Agent definitions. Format: [{"name": "AgentName", "description": "Agent purpose (max 250 chars)", "systemPrompt": "Full behavioral instructions for the agent", "tools": [{"name": "ToolName", "description": "What this tool does", "activityType": "UiPath activity or API the agent can invoke"}], "knowledgeBases": ["KBName1"], "guardrails": ["Safety constraint 1", "Safety constraint 2"], "escalationRules": [{"condition": "When to escalate", "target": "Human role or queue"}], "maxIterations": 10, "temperature": 0.3}]
+- "knowledgeBases" — Knowledge base definitions for agent context. Format: [{"name": "KBName", "description": "Purpose (max 250 chars)", "documentSources": ["Source description 1"], "refreshFrequency": "daily|weekly|monthly"}]
 - "promptTemplates" — Reusable prompt templates stored as assets. Format: [{"name": "TemplateName", "description": "Purpose (max 250 chars)", "template": "Prompt template text with {{variable}} placeholders", "variables": ["variable1", "variable2"]}]
 
 CRITICAL RULES FOR ARTIFACTS:
@@ -620,17 +366,8 @@ If any services are NOT AVAILABLE, the SDD MUST include a final section titled "
 3. Frames this as an opportunity, not a limitation — "When X is enabled, the solution can be extended to include Y"
 If ALL services are available, omit this section entirely.
 
-- CONVERSATIONAL DEPLOYMENT: When the SDD is approved and the user EXPLICITLY asks to deploy (using words like "deploy", "push to orchestrator"), respond with exactly: [DEPLOY_UIPATH] — the system intercepts this tag and executes deployment with live status. Do NOT tell the user to click a button — deployment happens in the conversation.
+- CONVERSATIONAL DEPLOYMENT: When the SDD is approved and the user wants to deploy, respond with exactly: [DEPLOY_UIPATH] — the system intercepts this tag and executes deployment with live status. Do NOT tell the user to click a button — deployment happens in the conversation.
 - If the SDD is already approved (see document context above), you can deploy immediately when the user asks. Do not re-ask for approval.
-- CRITICAL: Do NOT emit [DEPLOY_UIPATH] when the user asks to generate, regenerate, rebuild, or build a package. "Regenerate uipath package", "rebuild the package", "redo the uipath package" are PACKAGE GENERATION requests, NOT deployment requests. Only emit [DEPLOY_UIPATH] for explicit deployment requests.
-
-DEVELOPER HANDOFF GUIDE (DHG):
-- The DHG is a comprehensive developer handoff document generated after the UiPath automation package has been built.
-- It includes project setup instructions, workflow descriptions, dependency information, gap analysis, deployment details, and developer notes.
-- Users can request the DHG by saying "show me the DHG", "generate the handoff guide", "developer handoff guide", or similar phrases.
-- The DHG is generated programmatically from the automation package data — you do NOT need to write it yourself. When users ask for the DHG, the system handles generation automatically.
-- After deployment, proactively mention that the DHG is available: "The Developer Handoff Guide (DHG) is now available — you can ask me to show it, or view it from the document panel in the workspace."
-- The DHG is NOT an approvable document like the PDD or SDD. It is a generated output for developer reference.
 
 DOCUMENT ITERATION AND STAGE AWARENESS:
 - If the user requests changes to an already-approved document (PDD or SDD), acknowledge that requirements have changed and that you will revise the document. The system supports version control — old versions are preserved and the new version replaces the current one.
@@ -716,7 +453,6 @@ export function registerChatRoutes(app: Express): void {
     }
 
     let heartbeat: ReturnType<typeof setInterval> | null = null;
-    let deployKeepAliveOuter: ReturnType<typeof setInterval> | null = null;
     try {
       const idea = await storage.getIdea(ideaId);
       if (!idea) {
@@ -815,72 +551,35 @@ export function registerChatRoutes(app: Express): void {
       }
 
       let mapApprovalDone = false;
-      let asIsApprovalDone = false;
       let mapApprovalViews: string[] = [];
-      let mapApprovalNextAction: string | undefined;
       if (!chatApprovalDone && hasMapApprovalIntent(content)) {
         try {
           const user = await storage.getUser(req.session.userId!);
           if (user) {
-            const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-            const asIsEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "as-is");
-            const existingAsIsApproval = await processMapStorage.getApproval(ideaId, "as-is");
-            const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-            const toBeEdges = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
-            const existingToBeApproval = await processMapStorage.getApproval(ideaId, "to-be");
-
-            let viewToApprove: "as-is" | "to-be" | null = null;
-
-            if (asIsNodes.length >= 3) {
-              let asIsNeedsApproval = !existingAsIsApproval;
-              if (existingAsIsApproval) {
-                const snapshot = existingAsIsApproval.snapshotJson;
-                const oldData = typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot;
-                const oldNodes = oldData?.nodes || [];
-                const oldEdges = oldData?.edges || [];
-                const nodesChanged = oldNodes.length !== asIsNodes.length || asIsNodes.some((n: any, i: number) => oldNodes[i]?.name !== n.name || oldNodes[i]?.nodeType !== n.nodeType);
-                const edgesChanged = oldEdges.length !== asIsEdges.length;
-                if (nodesChanged || edgesChanged) {
-                  asIsNeedsApproval = true;
-                }
-              }
-              if (asIsNeedsApproval) {
-                viewToApprove = "as-is";
-              }
-            }
-
-            if (!viewToApprove && toBeNodes.length >= 3) {
-              let toBeNeedsApproval = !existingToBeApproval;
-              if (existingToBeApproval) {
-                const snapshot = existingToBeApproval.snapshotJson;
-                const oldData = typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot;
-                const oldNodes = oldData?.nodes || [];
-                const oldEdges = oldData?.edges || [];
-                const nodesChanged = oldNodes.length !== toBeNodes.length || toBeNodes.some((n: any, i: number) => oldNodes[i]?.name !== n.name || oldNodes[i]?.nodeType !== n.nodeType);
-                const edgesChanged = oldEdges.length !== toBeEdges.length;
-                if (nodesChanged || edgesChanged) {
-                  toBeNeedsApproval = true;
-                }
-              }
-              if (toBeNeedsApproval) {
-                viewToApprove = "to-be";
-              }
-            }
-
-            if (viewToApprove) {
-              const nodes = viewToApprove === "as-is" ? asIsNodes : toBeNodes;
-              const edges = viewToApprove === "as-is" ? asIsEdges : toBeEdges;
-              const existingApproval = viewToApprove === "as-is" ? existingAsIsApproval : existingToBeApproval;
-
+            const viewsToApprove: Array<"as-is" | "to-be"> = ["as-is", "to-be"];
+            for (const vt of viewsToApprove) {
+              const nodes = await processMapStorage.getNodesByIdeaId(ideaId, vt);
+              if (nodes.length < 3) continue;
+              const edges = await processMapStorage.getEdgesByIdeaId(ideaId, vt);
+              const existingApproval = await processMapStorage.getApproval(ideaId, vt);
               if (existingApproval) {
-                await processMapStorage.invalidateApprovals(ideaId, viewToApprove, `Superseded by chat approval`);
+                const snapshot = existingApproval.snapshotJson;
+                const oldData = typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot;
+                const oldNodes = oldData?.nodes || [];
+                const oldEdges = oldData?.edges || [];
+                const nodesChanged = oldNodes.length !== nodes.length || nodes.some((n: any, i: number) => oldNodes[i]?.name !== n.name || oldNodes[i]?.nodeType !== n.nodeType);
+                const edgesChanged = oldEdges.length !== edges.length;
+                if (!nodesChanged && !edgesChanged) {
+                  mapApprovalViews.push(vt);
+                  continue;
+                }
+                await processMapStorage.invalidateApprovals(ideaId, vt, `Superseded by chat approval`);
               }
-
-              const nextVersion = await processMapStorage.getNextVersion(ideaId, viewToApprove);
+              const nextVersion = await processMapStorage.getNextVersion(ideaId, vt);
               const snapshot = JSON.stringify({ nodes, edges });
               await processMapStorage.createApproval({
                 ideaId,
-                viewType: viewToApprove,
+                viewType: vt,
                 version: nextVersion,
                 userId: user.id,
                 userRole: (req.session.activeRole || user.role) as string,
@@ -888,36 +587,55 @@ export function registerChatRoutes(app: Express): void {
                 snapshotJson: snapshot,
                 invalidated: false,
               });
-              await cascadeInvalidateAndTransition(
-                ideaId,
-                viewToApprove,
-                existingApproval,
-                nextVersion,
-                req.session.userId!,
-                user.displayName,
-                (req.session.activeRole || user.role) as string
-              );
+              mapApprovalViews.push(vt);
+              console.log(`[Chat] ${vt} map approved via chat by ${user.displayName} (v${nextVersion})`);
 
-              mapApprovalViews.push(viewToApprove);
-              console.log(`[Chat] ${viewToApprove} map approved via chat by ${user.displayName} (v${nextVersion})`);
-
-              if (viewToApprove === "as-is") {
-                asIsApprovalDone = true;
-                mapApprovalNextAction = "generate-feasibility-and-to-be";
-              } else {
-                mapApprovalDone = true;
-                mapApprovalNextAction = "generate-pdd";
+              if (vt === "as-is") {
+                const existingToBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+                if (existingToBeNodes.length === 0) {
+                  const idMap: Record<number, number> = {};
+                  for (const node of nodes) {
+                    const toBeNode = await processMapStorage.createNode({
+                      ideaId,
+                      name: node.name,
+                      role: node.role,
+                      system: node.system,
+                      nodeType: node.nodeType,
+                      description: node.isPainPoint ? `[AUTOMATED] ${node.description || node.name}` : node.description,
+                      isGhost: node.isGhost,
+                      isPainPoint: false,
+                      viewType: "to-be",
+                      orderIndex: node.orderIndex,
+                      positionX: node.positionX,
+                      positionY: node.positionY,
+                    });
+                    idMap[node.id] = toBeNode.id;
+                  }
+                  for (const edge of edges) {
+                    if (idMap[edge.sourceNodeId] && idMap[edge.targetNodeId]) {
+                      await processMapStorage.createEdge({
+                        ideaId,
+                        sourceNodeId: idMap[edge.sourceNodeId],
+                        targetNodeId: idMap[edge.targetNodeId],
+                        label: edge.label,
+                        viewType: "to-be",
+                      });
+                    }
+                  }
+                  console.log(`[Chat] Cloned ${nodes.length} as-is nodes to to-be for idea=${ideaId}`);
+                }
               }
-
-              const viewLabel = viewToApprove === "as-is" ? "As-Is" : "To-Be";
+            }
+            if (mapApprovalViews.length > 0) {
+              mapApprovalDone = true;
               await chatStorage.createMessage(ideaId, "system",
-                `[MAP_APPROVAL] ${viewLabel} process map approved by ${user.displayName} via chat.`
+                `[MAP_APPROVAL] ${mapApprovalViews.map(v => v === "as-is" ? "As-Is" : "To-Be").join(" and ")} process map(s) approved by ${user.displayName} via chat.`
               );
               res.setHeader("Content-Type", "text/event-stream");
               res.setHeader("Cache-Control", "no-cache");
               res.setHeader("Connection", "keep-alive");
               res.flushHeaders();
-              res.write(`data: ${JSON.stringify({ mapApproval: { views: mapApprovalViews, nextAction: mapApprovalNextAction, isReapproval: !!existingApproval } })}\n\n`);
+              res.write(`data: ${JSON.stringify({ mapApproval: { views: mapApprovalViews } })}\n\n`);
             }
           }
         } catch (mapApprovalErr: any) {
@@ -926,6 +644,10 @@ export function registerChatRoutes(app: Express): void {
       }
 
       const history = await chatStorage.getRecentMessagesByIdeaId(ideaId, 80);
+      const filteredHistory = history.filter((m) => m.role === "user" || m.role === "assistant");
+
+      const lastSddIdx = filteredHistory.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:SDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
+      const lastPddIdx = filteredHistory.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:PDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
 
       const stripStaleServiceAvailability = (content: string): string => {
         return content
@@ -934,30 +656,31 @@ export function registerChatRoutes(app: Express): void {
           .replace(/Service\s+\|?\s*Status\s*\|?\s*Role[\s\S]*?(?=\n\n|\n##|\n\*\*[A-Z])/gi, "[Service availability table removed — see current probe data]\n\n");
       };
 
-      const merged = sanitizeChatForLLM(history, {
-        stripDocTags: false,
-        stripUiPathTags: true,
-        maxMessageLength: 0,
-        maxMessages: 0,
-        mergeSeparator: "\n\n",
-        preProcess: (msgs) => {
-          const lastSddIdx = msgs.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:SDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
-          const lastPddIdx = msgs.map((m, i) => m.role === "assistant" && m.content.startsWith("[DOC:PDD:") ? i : -1).filter(i => i >= 0).pop() ?? -1;
-
-          return msgs.map((m, i) => {
-            if (m.role === "assistant" && m.content.startsWith("[DOC:SDD:") && i !== lastSddIdx) {
-              return { ...m, content: "[Previous SDD version — superseded. See current document status in system context.]" };
-            }
-            if (m.role === "assistant" && m.content.startsWith("[DOC:PDD:") && i !== lastPddIdx) {
-              return { ...m, content: "[Previous PDD version — superseded. See current document status in system context.]" };
-            }
-            if (m.role === "assistant" && (m.content.startsWith("[DOC:SDD:") || m.content.startsWith("[DOC:PDD:"))) {
-              return { ...m, content: stripStaleServiceAvailability(m.content) };
-            }
-            return m;
-          });
-        },
+      const cleanedHistory = filteredHistory.map((m, i) => {
+        if (m.role === "assistant" && m.content.startsWith("[DOC:SDD:") && i !== lastSddIdx) {
+          return { ...m, content: "[Previous SDD version — superseded. See current document status in system context.]" };
+        }
+        if (m.role === "assistant" && m.content.startsWith("[DOC:PDD:") && i !== lastPddIdx) {
+          return { ...m, content: "[Previous PDD version — superseded. See current document status in system context.]" };
+        }
+        if (m.role === "assistant" && (m.content.startsWith("[DOC:SDD:") || m.content.startsWith("[DOC:PDD:"))) {
+          return { ...m, content: stripStaleServiceAvailability(m.content) };
+        }
+        return m;
       });
+
+      const merged: { role: "user" | "assistant"; content: string }[] = [];
+      for (const m of cleanedHistory) {
+        const role = m.role as "user" | "assistant";
+        if (merged.length > 0 && merged[merged.length - 1].role === role) {
+          merged[merged.length - 1].content += "\n\n" + m.content;
+        } else {
+          merged.push({ role, content: m.content });
+        }
+      }
+      if (merged.length > 0 && merged[0].role !== "user") {
+        merged.shift();
+      }
 
       const MAX_RECENT = 30;
       let chatMessages = merged;
@@ -969,7 +692,7 @@ export function registerChatRoutes(app: Express): void {
           const truncated = m.content.length > 300 ? m.content.slice(0, 300) + "..." : m.content;
           summaryParts.push(`[${m.role}]: ${truncated}`);
         }
-        const summaryMsg: SanitizedMessage = {
+        const summaryMsg: { role: "user" | "assistant"; content: string } = {
           role: "user",
           content: `[Earlier conversation summary — ${older.length} messages condensed]\n${summaryParts.join("\n")}`,
         };
@@ -1002,45 +725,60 @@ export function registerChatRoutes(app: Express): void {
         if (!clientDisconnected) {
           try { res.write(`: heartbeat\n\n`); } catch {}
         }
-      }, 2000);
+      }, 5000);
 
-      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "UIPATH_GEN" | "DHG" | "CHAT" = "CHAT";
+      let classifiedIntent: "PDD" | "SDD" | "PDD_SDD" | "DEPLOY" | "CHAT" = "CHAT";
+      const lowerContent = content.toLowerCase();
+      const hasPddKeyword = /\b(pdd|process\s+design\s+document)\b/.test(lowerContent);
+      const hasSddKeyword = /\b(sdd|solution\s+design\s+document)\b/.test(lowerContent);
+      const hasGenVerb = /\b(generate|write|create|regenerate|redo|produce|build|draft)\b/.test(lowerContent);
+      const hasDeployVerb = /\b(deploy|push)\b/.test(lowerContent) && /\b(uipath|orchestrator)\b/.test(lowerContent);
 
-      try { res.write(`data: ${JSON.stringify({ liveStatus: "Classifying your request..." })}\n\n`); } catch {}
-
-      try {
-        let recentMessages = chatMessages.slice(-4);
-        if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
-          recentMessages = recentMessages.slice(1);
-        }
-        if (recentMessages.length === 0) {
-          recentMessages = chatMessages.slice(-1);
-        }
-        const classifyRes = await getLLM().create({
-          maxTokens: 20,
-          system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator → DHG (Developer Handoff Guide). The user is currently in the "${idea.stage}" stage. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, UIPATH_GEN, DEPLOY, DHG, or CHAT.
+      if (hasDeployVerb) {
+        classifiedIntent = "DEPLOY";
+        console.log(`[Chat] Keyword intent classification: DEPLOY`);
+      } else if (hasGenVerb && hasPddKeyword && hasSddKeyword) {
+        classifiedIntent = "PDD_SDD";
+        console.log(`[Chat] Keyword intent classification: PDD_SDD`);
+      } else if (hasGenVerb && hasSddKeyword) {
+        classifiedIntent = "SDD";
+        console.log(`[Chat] Keyword intent classification: SDD`);
+      } else if (hasGenVerb && hasPddKeyword) {
+        classifiedIntent = "PDD";
+        console.log(`[Chat] Keyword intent classification: PDD`);
+      } else {
+        try {
+          let recentMessages = chatMessages.slice(-4);
+          if (recentMessages.length > 0 && recentMessages[0].role === "assistant") {
+            recentMessages = recentMessages.slice(1);
+          }
+          if (recentMessages.length === 0) {
+            recentMessages = chatMessages.slice(-1);
+          }
+          const classifyRes = await anthropic.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 20,
+            system: `You classify user intent in a UiPath automation pipeline chat. The pipeline sequence is: as-is process map → to-be process map → PDD (Process Design Document) → SDD (Solution Design Document) → UiPath package generation → deployment to Orchestrator. Given the recent conversation, determine what the user is requesting. Reply with EXACTLY one of: PDD, SDD, PDD_SDD, DEPLOY, or CHAT.
 
 CRITICAL RULES:
 - Classify as PDD, SDD, or PDD_SDD ONLY when the user's LATEST message contains an EXPLICIT request to generate, write, create, produce, or regenerate a document. Look for action verbs like "generate", "write", "create", "produce", "draft", "regenerate", "build", "make" paired with "PDD", "SDD", "document", "design document".
-- Classify as DHG when the user asks to see, generate, show, or view the Developer Handoff Guide, DHG, or handoff guide. This includes phrases like "show me the DHG", "generate the handoff guide", "developer handoff guide", "the DHG", etc.
-- Classify as UIPATH_GEN when the user asks to generate, regenerate, rebuild, build, or create the UiPath package, automation package, or nupkg. This is for BUILDING the package, not deploying it.
-- DEPLOY should only be used when the user explicitly requests deployment to Orchestrator (e.g. "deploy", "push to orchestrator"). This is DIFFERENT from generating/building a package.
 - Short responses, feedback, confirmations, opinions, or general discussion about the process should ALWAYS be classified as CHAT. Examples of CHAT: "no i think they make sense in this scenario", "yes that looks right", "I agree", "sounds good", "let's go with that", "what about edge cases?", "can you explain more?", "that's correct".
 - If the user is APPROVING a document (e.g. "I approve", "looks good, approved"), classify as CHAT — approvals are not generation requests.
+- DEPLOY should only be used when the user explicitly requests deployment (e.g. "deploy", "push to orchestrator").
 - When in doubt, ALWAYS classify as CHAT. It is much better to incorrectly classify as CHAT than to incorrectly trigger document generation.
-- If both documents are being requested for generation, reply PDD_SDD.
-- STAGE AWARENESS: The user is in the "${idea.stage}" stage. If the user is in "Idea" stage (gathering as-is process details), almost all messages should be CHAT. PDD/SDD require at least "Design" stage. UIPATH_GEN/DHG require at least "Build" stage. DEPLOY requires "Deploy" stage. Do NOT classify early-stage process discussion as a generation or deployment intent.`,
-          messages: recentMessages,
-        });
-        const rawClassify = classifyRes.text.trim();
-        const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
-        if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "UIPATH_GEN", "UIPATHGEN", "DEPLOY", "DHG"].includes(classifyText)) {
-          const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText === "UIPATHGEN" ? "UIPATH_GEN" : classifyText;
-          classifiedIntent = normalized as typeof classifiedIntent;
+- If both documents are being requested for generation, reply PDD_SDD.`,
+            messages: recentMessages,
+          });
+          const rawClassify = (classifyRes.content[0]?.type === "text" ? classifyRes.content[0].text : "").trim();
+          const classifyText = rawClassify.toUpperCase().replace(/[^A-Z_]/g, "");
+          if (["PDD", "SDD", "PDD_SDD", "PDDSDD", "DEPLOY"].includes(classifyText)) {
+            const normalized = classifyText === "PDDSDD" ? "PDD_SDD" : classifyText;
+            classifiedIntent = normalized as typeof classifiedIntent;
+          }
+          console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
+        } catch (classifyErr: any) {
+          console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
         }
-        console.log(`[Chat] LLM intent classification: "${rawClassify}" → ${classifiedIntent}`);
-      } catch (classifyErr: any) {
-        console.warn(`[Chat] Intent classification failed (falling back to CHAT):`, classifyErr?.message);
       }
 
       if (chatApprovalDone && (classifiedIntent === "PDD" || classifiedIntent === "SDD" || classifiedIntent === "PDD_SDD")) {
@@ -1048,82 +786,18 @@ CRITICAL RULES:
         classifiedIntent = "CHAT";
       }
 
-      const stageIdx = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-      const STAGE_REQUIREMENTS: Record<string, number> = {
-        "PDD": PIPELINE_STAGES.indexOf("Design"),
-        "SDD": PIPELINE_STAGES.indexOf("Design"),
-        "PDD_SDD": PIPELINE_STAGES.indexOf("Design"),
-        "UIPATH_GEN": PIPELINE_STAGES.indexOf("Build"),
-        "DEPLOY": PIPELINE_STAGES.indexOf("Deploy"),
-        "DHG": PIPELINE_STAGES.indexOf("Build"),
-      };
-      if (classifiedIntent !== "CHAT" && STAGE_REQUIREMENTS[classifiedIntent] !== undefined) {
-        const requiredIdx = STAGE_REQUIREMENTS[classifiedIntent];
-        if (stageIdx < requiredIdx) {
-          console.log(`[Chat] Downgrading intent ${classifiedIntent} → CHAT (current stage "${idea.stage}" is earlier than required stage "${PIPELINE_STAGES[requiredIdx]}")`);
-          classifiedIntent = "CHAT";
-        }
-      }
-
-      try { res.write(`data: ${JSON.stringify({ intentClassified: classifiedIntent })}\n\n`); } catch {}
-
+      let earlyDocType: "PDD" | "SDD" | null = null;
       if (chatApprovalDone) {
         console.log(`[Chat] ${approvalIntent} approved via chat — skipping inline doc generation (client auto-chain will handle next step)`);
       } else if (classifiedIntent === "PDD" || classifiedIntent === "PDD_SDD") {
-        const toBeApproval = await processMapStorage.getApproval(ideaId, "to-be");
-        if (!toBeApproval) {
-          const gateMsg = "The PDD (Process Design Document) can only be generated after the To-Be process map has been approved. Please review and approve the To-Be map first, then the PDD will be generated automatically.";
-          await chatStorage.createMessage(ideaId, "assistant", gateMsg);
-          try {
-            res.write(`data: ${JSON.stringify({ token: gateMsg })}\n\n`);
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-          } catch {}
-          if (heartbeat) clearInterval(heartbeat);
-          res.end();
-          return;
-        }
-        console.log(`[Chat] PDD generation requested — delegating to dedicated endpoint via docTrigger`);
-        const confirmMsg = "Starting PDD generation...";
-        await chatStorage.createMessage(ideaId, "assistant", confirmMsg);
-        try {
-          res.write(`data: ${JSON.stringify({ token: confirmMsg })}\n\n`);
-          res.write(`data: ${JSON.stringify({ docTrigger: { type: "PDD" } })}\n\n`);
-          res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        } catch {}
-        if (heartbeat) clearInterval(heartbeat);
-        res.end();
-        return;
+        earlyDocType = "PDD";
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch {}
       } else if (classifiedIntent === "SDD") {
-        const pddApprovalGate = await documentStorage.getApproval(ideaId, "PDD");
-        if (!pddApprovalGate) {
-          const gateMsg = "The SDD (Solution Design Document) can only be generated after the PDD has been approved. Please review and approve the PDD first, then the SDD will be generated automatically.";
-          await chatStorage.createMessage(ideaId, "assistant", gateMsg);
-          try {
-            res.write(`data: ${JSON.stringify({ token: gateMsg })}\n\n`);
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-          } catch {}
-          if (heartbeat) clearInterval(heartbeat);
-          res.end();
-          return;
-        }
-        console.log(`[Chat] SDD generation requested — delegating to dedicated endpoint via docTrigger`);
-        const confirmMsg = "Starting SDD generation...";
-        await chatStorage.createMessage(ideaId, "assistant", confirmMsg);
-        try {
-          res.write(`data: ${JSON.stringify({ token: confirmMsg })}\n\n`);
-          res.write(`data: ${JSON.stringify({ docTrigger: { type: "SDD" } })}\n\n`);
-          res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        } catch {}
-        if (heartbeat) clearInterval(heartbeat);
-        res.end();
-        return;
-      } else if (classifiedIntent === "UIPATH_GEN") {
-        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "UiPath" } })}\n\n`); } catch {}
+        earlyDocType = "SDD";
+        try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch {}
       } else if (classifiedIntent === "DEPLOY") {
-        try { res.write(`data: ${JSON.stringify({ deployStatus: "Analyzing your request..." })}\n\n`); } catch {}
+        try { res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`); } catch {}
       }
-
-      try { res.write(`data: ${JSON.stringify({ liveStatus: "Loading document context..." })}\n\n`); } catch {}
 
       let docContext = "";
       try {
@@ -1149,22 +823,6 @@ CRITICAL RULES:
         }
       } catch (e) { /* non-critical */ }
 
-      try { res.write(`data: ${JSON.stringify({ liveStatus: "Probing UiPath services..." })}\n\n`); } catch {}
-
-      const probeMessages = [
-        "Checking UiPath service availability...",
-        "Connecting to Orchestrator...",
-        "Verifying AI Center status...",
-        "Almost ready to start generation...",
-      ];
-      let probeMessageIdx = 0;
-      const probeKeepAlive = setInterval(() => {
-        try {
-          res.write(`data: ${JSON.stringify({ liveStatus: probeMessages[probeMessageIdx % probeMessages.length] })}\n\n`);
-          probeMessageIdx++;
-        } catch {}
-      }, 8000);
-
       let serviceAvailability: ServiceAvailabilityMap | null = null;
       try {
         console.log(`[Chat] Running service probe for stage: ${idea.stage}`);
@@ -1175,254 +833,56 @@ CRITICAL RULES:
       } catch (e) {
         console.warn("[Chat] Service probe failed:", (e as any)?.message);
       }
-      clearInterval(probeKeepAlive);
-
-      const isToBeGeneration = content.toLowerCase().includes("generate the to-be process map");
-      const isToBeModification = (() => {
-        if (isToBeGeneration) return false;
-        const lower = content.toLowerCase();
-        const toBeRef = /\bto[\s-]?be\b/.test(lower);
-        const modifyKeywords = /\b(simplif|modif|change|update|regenerat|redo|revise|improv|refin|reduc|optimiz|streamlin|consolidat|merg|rework|redesign|adjust|alter|rearrang)/i.test(lower);
-        if (toBeRef && modifyKeywords) return true;
-        const stageIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-        const feasibilityIndex = PIPELINE_STAGES.indexOf("Feasibility Assessment");
-        if (stageIndex >= feasibilityIndex && modifyKeywords) {
-          const mapRef = /\b(map|process|steps?|workflow|flow)\b/.test(lower);
-          if (mapRef && !(/\bas[\s-]?is\b/.test(lower))) return true;
-        }
-        return false;
-      })();
-      let toBeMapMode: "to-be" | undefined;
-      let asIsContextForToBe = "";
-      let complexityGuidance = "";
-
-      if (isToBeGeneration || isToBeModification) {
-        const asIsNodesForContext = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-        const asIsEdgesForContext = await processMapStorage.getEdgesByIdeaId(ideaId, "as-is");
-        if (asIsNodesForContext.length > 0) {
-          const edgeMap = new Map<number, Array<{ targetId: number; label: string }>>();
-          for (const e of asIsEdgesForContext) {
-            if (!edgeMap.has(e.sourceNodeId)) edgeMap.set(e.sourceNodeId, []);
-            edgeMap.get(e.sourceNodeId)!.push({ targetId: e.targetNodeId, label: e.label || "" });
-          }
-          const nodeById = new Map(asIsNodesForContext.map(n => [n.id, n]));
-          asIsContextForToBe = asIsNodesForContext
-            .sort((a, b) => a.orderIndex - b.orderIndex)
-            .map(n => {
-              const outgoing = edgeMap.get(n.id) || [];
-              const targets = outgoing.map(e => {
-                const tgt = nodeById.get(e.targetId);
-                return tgt ? `${e.label ? e.label + " → " : ""}${tgt.name}` : "";
-              }).filter(Boolean);
-              return `- ${n.name} | Role: ${n.role || "N/A"} | System: ${n.system || "N/A"} | Type: ${n.nodeType}${targets.length > 0 ? ` | Leads to: ${targets.join(", ")}` : ""}`;
-            })
-            .join("\n");
-          toBeMapMode = "to-be";
-
-          const stepCount = asIsNodesForContext.filter(n => n.nodeType !== "start" && n.nodeType !== "end").length;
-          const decisionCount = asIsNodesForContext.filter(n => n.nodeType === "decision" || n.nodeType === "agent-decision").length;
-          const distinctSystems = new Set(asIsNodesForContext.map(n => n.system).filter(s => s && s !== "N/A")).size;
-          const branchCount = Array.from(edgeMap.values()).filter(edges => edges.length >= 2).length;
-
-          let complexityScore = stepCount + (decisionCount * 2) + (distinctSystems * 1.5) + (branchCount * 1.5);
-          let tier: "simple" | "moderate" | "complex";
-          if (complexityScore <= 12) {
-            tier = "simple";
-          } else if (complexityScore <= 25) {
-            tier = "moderate";
-          } else {
-            tier = "complex";
-          }
-
-          const totalAsIsNodes = asIsNodesForContext.length;
-          let targetMin: number, targetMax: number;
-          if (tier === "simple") {
-            targetMin = totalAsIsNodes;
-            targetMax = Math.max(totalAsIsNodes + 4, Math.round(totalAsIsNodes * 1.5));
-          } else if (tier === "moderate") {
-            targetMin = totalAsIsNodes;
-            targetMax = Math.round(totalAsIsNodes * 2);
-          } else {
-            targetMin = totalAsIsNodes;
-            targetMax = Math.round(totalAsIsNodes * 2.5);
-          }
-          if (distinctSystems >= 4) {
-            targetMax += Math.round((distinctSystems - 3) * 2);
-          }
-
-          const tierGuidelines: Record<string, string> = {
-            simple: `This is a SIMPLE process (${totalAsIsNodes} total As-Is nodes including Start/End). The To-Be MUST be proportionate — aim for ${targetMin}-${targetMax} total nodes (including Start and End).${decisionCount === 0 ? " The As-Is had no decision points, so the To-Be does NOT need to add decisions — a linear automated flow is acceptable." : ""} Do NOT add error-handling sub-flows, monitoring steps, retry logic, logging steps, or infrastructure steps unless the user explicitly mentioned them. Do NOT add parallel paths that did not exist in the As-Is. Keep the automation streamlined.${distinctSystems >= 4 ? ` Note: this process touches ${distinctSystems} systems, so integration setup steps are acceptable within the target range.` : ""}`,
-            moderate: `This is a MODERATE process (${totalAsIsNodes} total As-Is nodes including Start/End). The To-Be should have roughly ${targetMin}-${targetMax} total nodes. You may add a few automation-specific steps (e.g., exception queues, validation checks) but do NOT over-elaborate. Avoid adding error-handling sub-flows for every step — only add them where the As-Is process already had decision points or failure modes.${distinctSystems >= 4 ? ` Note: this process touches ${distinctSystems} systems, so integration steps are acceptable within the target range.` : ""}`,
-            complex: `This is a COMPLEX process (${totalAsIsNodes} total As-Is nodes including Start/End). The To-Be may have ${targetMin}-${targetMax} total nodes. You have room for automation detail including exception handling, parallel processing, and integration steps — but each added step must correspond to a real automation need visible in the As-Is map. Do not invent sub-flows that the user never described.`,
-          };
-
-          complexityGuidance = `\nAS-IS COMPLEXITY PROFILE: ${stepCount} process steps, ${decisionCount} decisions, ${distinctSystems} distinct systems, ${branchCount} branch points → Tier: ${tier.toUpperCase()}\nPROPORTIONALITY RULE (CRITICAL): ${tierGuidelines[tier]}`;
-
-          console.log(`[Chat] As-Is complexity for idea=${ideaId}: totalNodes=${totalAsIsNodes}, steps=${stepCount}, decisions=${decisionCount}, systems=${distinctSystems}, branches=${branchCount}, score=${complexityScore}, tier=${tier}, target=${targetMin}-${targetMax}`);
-        }
-      }
 
       let intentOverride = "";
-      if (asIsApprovalDone) {
-        intentOverride = `\n\nAS-IS MAP APPROVAL CONFIRMATION DIRECTIVE — CRITICAL, FOLLOW EXACTLY:\nThe user approved the As-Is process map via chat.\n\nYou MUST respond with EXACTLY this format (2-3 sentences MAXIMUM):\n"As-Is process map approved. Running feasibility assessment (automation type evaluation) now, then generating the To-Be automated process map — you'll see it appear shortly."\n\nABSOLUTE RESTRICTIONS — VIOLATION OF ANY WILL CAUSE SYSTEM FAILURE:\n- Do NOT generate ANY document content (no PDD, no SDD, no sections, no headings)\n- Do NOT use [DOC:], [STEP:], [AUTOMATION_TYPE], or any other tags\n- Do NOT write process steps or any structured content\n- Do NOT exceed 3 sentences\n- The feasibility assessment and To-Be map will be auto-generated by a separate process — your ONLY job is to confirm the As-Is approval`;
-      } else if (mapApprovalDone && mapApprovalViews.length > 0) {
-        intentOverride = `\n\nTO-BE MAP APPROVAL CONFIRMATION DIRECTIVE — CRITICAL, FOLLOW EXACTLY:\nThe user approved the To-Be process map via chat.\n\nYou MUST respond with EXACTLY this format (2-3 sentences MAXIMUM):\n"To-Be process map approved. The PDD is being generated now — you'll see it appear in the chat shortly."\n\nABSOLUTE RESTRICTIONS — VIOLATION OF ANY WILL CAUSE SYSTEM FAILURE:\n- Do NOT generate ANY document content (no PDD, no SDD, no sections, no headings)\n- Do NOT use [DOC:], [STEP:], [AUTOMATION_TYPE], or any other tags\n- Do NOT write process steps, executive summaries, or any structured content\n- Do NOT exceed 3 sentences\n- The PDD will be auto-generated by a separate system process — your ONLY job is to confirm the approval in 2-3 sentences`;
-      } else if (isToBeModification) {
-        const toBeNodesForContext = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-        const toBeEdgesForContext = await processMapStorage.getEdgesByIdeaId(ideaId, "to-be");
-        let existingToBeContext = "";
-        if (toBeNodesForContext.length > 0) {
-          const edgeMap = new Map<number, Array<{ targetId: number; label: string }>>();
-          for (const e of toBeEdgesForContext) {
-            if (!edgeMap.has(e.sourceNodeId)) edgeMap.set(e.sourceNodeId, []);
-            edgeMap.get(e.sourceNodeId)!.push({ targetId: e.targetNodeId, label: e.label || "" });
-          }
-          const nodeById = new Map(toBeNodesForContext.map(n => [n.id, n]));
-          existingToBeContext = toBeNodesForContext
-            .sort((a, b) => a.orderIndex - b.orderIndex)
-            .map(n => {
-              const outgoing = edgeMap.get(n.id) || [];
-              const targets = outgoing.map(e => {
-                const tgt = nodeById.get(e.targetId);
-                return tgt ? `${e.label ? e.label + " → " : ""}${tgt.name}` : "";
-              }).filter(Boolean);
-              return `- ${n.name} | Role: ${n.role || "N/A"} | System: ${n.system || "N/A"} | Type: ${n.nodeType}${targets.length > 0 ? ` | Leads to: ${targets.join(", ")}` : ""}`;
-            })
-            .join("\n");
-        }
-        toBeMapMode = "to-be";
-        console.log(`[Chat] Detected TO-BE modification request for idea=${ideaId}`);
-        intentOverride = `\n\nTO-BE MODIFICATION DIRECTIVE: The user wants to modify/simplify the existing TO-BE process map. Here is the current TO-BE map:\n${existingToBeContext}\n\nApply the user's requested changes and output the COMPLETE modified TO-BE process map. Use the header 'TO-BE Process Map' followed by [STEP:] tags. Output ALL steps (not just the changed ones) — the system will clear and replace. Do NOT regenerate or modify the AS-IS map. Do NOT output any AS-IS steps. Do NOT generate documents. Do NOT output [AUTOMATION_TYPE:] tags.`;
-      } else if (isToBeGeneration) {
-        const detectedServices: string[] = [];
-        if (serviceAvailability?.configured) {
-          if (serviceAvailability.orchestrator) detectedServices.push("Orchestrator (queues, assets, machines, storage buckets)");
-          if (serviceAvailability.actionCenter) detectedServices.push("Action Center (human-in-the-loop approvals, task catalogs)");
-          if (serviceAvailability.documentUnderstanding) detectedServices.push("Document Understanding (OCR, ML classification)");
-          if (serviceAvailability.generativeExtraction) detectedServices.push("IXP Generative Extraction (LLM-powered extraction)");
-          if (serviceAvailability.communicationsMining) detectedServices.push("Communications Mining (email/message analysis)");
-          if (serviceAvailability.agents) detectedServices.push("UiPath Agents (AI agents with tool bindings)");
-          if (serviceAvailability.maestro) detectedServices.push("Maestro (BPMN process orchestration)");
-          if (serviceAvailability.integrationService) detectedServices.push("Integration Service (connectors, API integrations)");
-          if (serviceAvailability.dataService) detectedServices.push("Data Service / Data Fabric");
-          if (serviceAvailability.apps) detectedServices.push("Apps (low-code UI builder)");
-          if (serviceAvailability.testManager) detectedServices.push("Test Manager");
-          if (serviceAvailability.triggers) detectedServices.push("Triggers (queue and time-based)");
-          if (serviceAvailability.environments) detectedServices.push("Environments");
-          if (serviceAvailability.aiCenter) detectedServices.push("AI Center (ML skills)");
-        }
-        const serviceListText = detectedServices.length > 0
-          ? `The following UiPath services are AVAILABLE on the connected tenant: ${detectedServices.join("; ")}. Design the TO-BE process to leverage these specific capabilities.`
-          : "No specific UiPath service availability was detected. Design the TO-BE process using standard UiPath platform capabilities.";
-        intentOverride = `\n\nFEASIBILITY ASSESSMENT + TO-BE GENERATION DIRECTIVE: First, perform the automation type assessment — evaluate whether this process is best served by RPA, Agent, or Hybrid. Output the [AUTOMATION_TYPE:] tag with your assessment. Then generate the TO-BE process map. Use the header 'TO-BE Process Map' followed by [STEP:] tags. Show the automated future state based on the approved AS-IS map. ${serviceListText} Use agent-specific step types if the automation type is 'agent' or 'hybrid'. Do NOT regenerate the AS-IS map. Do NOT output any AS-IS steps. Do NOT generate documents.${complexityGuidance}`;
+      if (mapApprovalDone && mapApprovalViews.length > 0) {
+        const approvedLabels = mapApprovalViews.map(v => v === "as-is" ? "As-Is" : "To-Be");
+        const phrases = approvedLabels.map(l => `${l} process map approved`).join(" and ");
+        intentOverride = `\n\nMAP APPROVAL CONFIRMATION DIRECTIVE — CRITICAL, FOLLOW EXACTLY:\nThe user approved process maps via chat. The following maps were approved: ${approvedLabels.join(", ")}.\n\nYou MUST respond with EXACTLY this format (2-3 sentences MAXIMUM):\n"${phrases}. The PDD is being generated now — you'll see it appear in the chat shortly."\n\nABSOLUTE RESTRICTIONS — VIOLATION OF ANY WILL CAUSE SYSTEM FAILURE:\n- Do NOT generate ANY document content (no PDD, no SDD, no sections, no headings)\n- Do NOT use [DOC:], [STEP:], [AUTOMATION_TYPE], or any other tags\n- Do NOT write process steps, executive summaries, or any structured content\n- Do NOT exceed 3 sentences\n- The PDD will be auto-generated by a separate system process — your ONLY job is to confirm the approval in 2-3 sentences`;
       } else if (chatApprovalDone && approvalIntent) {
         const nextStep = approvalIntent === "PDD" ? "I'll now generate the SDD." : approvalIntent === "SDD" ? "I'll now generate the UiPath automation package." : "";
         intentOverride = `\n\nAPPROVAL CONFIRMATION DIRECTIVE: The ${approvalIntent} has just been approved via the user's chat message. Respond with a brief confirmation (1-3 sentences). You MUST include the exact phrase "${approvalIntent} approved" in your response. ${nextStep} Do NOT generate any documents or use [DOC:] tags in this response — the next step will be triggered automatically. IMPORTANT: You MUST NOT generate an SDD or PDD or any document in this response. Only confirm the approval. The client will handle the next step.`;
+      } else if (classifiedIntent === "PDD") {
+        intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting a PDD (Process Design Document). You MUST generate a PDD using the [DOC:PDD:0] tag. Do NOT generate an SDD. Start your response with [DOC:PDD:0] followed by the full PDD content.";
+      } else if (classifiedIntent === "SDD") {
+        intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting an SDD (Solution Design Document). You MUST generate an SDD using the [DOC:SDD:0] tag. Do NOT generate a PDD. Start your response with [DOC:SDD:0] followed by the full SDD content.";
+      } else if (classifiedIntent === "PDD_SDD") {
+        intentOverride = "\n\nDOCUMENT GENERATION DIRECTIVE: The user is requesting both PDD and SDD. Per the pipeline sequence, the PDD must be generated and approved first. Generate the PDD NOW using [DOC:PDD:0]. The SDD will be generated separately after PDD approval. Start your response with [DOC:PDD:0] followed by the full PDD content. Do NOT generate an SDD in this response.";
       } else if (classifiedIntent === "DEPLOY") {
         intentOverride = "\n\nDEPLOYMENT DIRECTIVE: The user is requesting deployment to UiPath Orchestrator. Proceed with the deployment flow.";
-        try { res.write(`data: ${JSON.stringify({ deployStatus: "Planning deployment..." })}\n\n`); } catch {}
-      } else if (classifiedIntent === "DHG") {
-        try {
-          const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-          const uipathMsg = findUiPathMessage(messages);
-          if (!uipathMsg) {
-            const noPackageMsg = "The Developer Handoff Guide (DHG) can only be generated after the UiPath automation package has been built. Please complete the automation pipeline first — design the process, approve the PDD and SDD, and generate the automation package. Once the package is ready, you can request the DHG.";
-            await chatStorage.createMessage(ideaId, "assistant", noPackageMsg);
-            try {
-              res.write(`data: ${JSON.stringify({ token: noPackageMsg })}\n\n`);
-              res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            } catch {}
-            if (heartbeat) clearInterval(heartbeat);
-            res.end();
-            return;
-          }
-
-          let pkg: any;
-          try { pkg = parseUiPathPackage(uipathMsg); } catch {
-            const errMsg = "Unable to read the automation package data. Please try regenerating the package first.";
-            await chatStorage.createMessage(ideaId, "assistant", errMsg);
-            try {
-              res.write(`data: ${JSON.stringify({ token: errMsg })}\n\n`);
-              res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            } catch {}
-            if (heartbeat) clearInterval(heartbeat);
-            res.end();
-            return;
-          }
-
-          try { res.write(`data: ${JSON.stringify({ dhgProgress: { started: true } })}\n\n`); } catch {}
-
-          const dhgResult = await generateDhg(ideaId, pkg);
-          const dhgContent = dhgResult.dhgContent;
-
-          const dhgResponse = `Here is the **Developer Handoff Guide (DHG)** for this automation:\n\n${dhgContent}`;
-          await chatStorage.createMessage(ideaId, "assistant", dhgResponse);
-
-          const chunkSize = 100;
-          for (let i = 0; i < dhgResponse.length; i += chunkSize) {
-            const chunk = dhgResponse.slice(i, i + chunkSize);
-            try { res.write(`data: ${JSON.stringify({ token: chunk })}\n\n`); } catch {}
-          }
-          try { res.write(`data: ${JSON.stringify({ done: true })}\n\n`); } catch {}
-          if (heartbeat) clearInterval(heartbeat);
-          res.end();
-          return;
-        } catch (dhgErr: any) {
-          console.error("[Chat] DHG generation failed:", dhgErr?.message);
-          intentOverride = "\n\nDHG GENERATION DIRECTIVE: The user requested the Developer Handoff Guide but generation encountered an error. Inform the user that the DHG could not be generated and suggest they try again or ensure the automation package has been built first.";
-        }
       }
 
-      if (classifiedIntent === "UIPATH_GEN") {
-        const ackMsg = "Starting UiPath package generation...";
-        await chatStorage.createMessage(ideaId, "assistant", ackMsg);
-        try {
-          res.write(`data: ${JSON.stringify({ token: ackMsg, triggerUiPathGen: true })}\n\n`);
-          res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        } catch {}
-        if (heartbeat) clearInterval(heartbeat);
-        res.end();
-        return;
-      }
+      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null) + intentOverride;
 
-      try { res.write(`data: ${JSON.stringify({ liveStatus: "Building AI context..." })}\n\n`); } catch {}
-
-      const systemPrompt = buildSystemPrompt(idea.title, idea.stage, docContext, serviceAvailability, (idea.automationType as AutomationType) || null, toBeMapMode, asIsContextForToBe || undefined) + intentOverride;
-
-      let finalMessages: LLMMessage[] = chatMessages;
+      let finalMessages: Array<{ role: "user" | "assistant"; content: string | Array<{ type: string; [key: string]: any }> }> = chatMessages;
       if (imageData?.base64 && imageData?.mediaType) {
-        finalMessages = chatMessages.map((m, i): LLMMessage => {
+        finalMessages = chatMessages.map((m, i) => {
           if (i === chatMessages.length - 1 && m.role === "user") {
-            const content: LLMContentBlock[] = [
-              { type: "image", source: { type: "base64", media_type: imageData.mediaType, data: imageData.base64 } },
-              { type: "text", text: m.content as string },
-            ];
-            return { ...m, content };
+            return {
+              ...m,
+              content: [
+                { type: "image", source: { type: "base64", media_type: imageData.mediaType, data: imageData.base64 } },
+                { type: "text", text: m.content },
+              ],
+            };
           }
           return m;
         });
       }
 
-      try { res.write(`data: ${JSON.stringify({ liveStatus: "Generating response..." })}\n\n`); } catch {}
-
-      const stream = getLLM().stream({
-        maxTokens: (mapApprovalDone || asIsApprovalDone) ? 300 : 8192,
+      const stream = anthropic.messages.stream({
+        model: "claude-sonnet-4-6",
+        max_tokens: mapApprovalDone ? 300 : 8192,
         system: systemPrompt,
-        messages: finalMessages,
+        messages: finalMessages as any,
       });
-
-      let deployKeepAlive: ReturnType<typeof setInterval> | null = null;
-      if (classifiedIntent === "DEPLOY") {
-        deployKeepAlive = setInterval(() => {
-          try { res.write(`data: ${JSON.stringify({ deployStatus: "Processing deployment request..." })}\n\n`); } catch {}
-        }, 10000);
-        deployKeepAliveOuter = deployKeepAlive;
-      }
 
       let fullResponse = "";
       let stopReason = "";
-      let docProgressDocType: "PDD" | "SDD" | null = null;
-      let docProgressStarted = false;
+      let docProgressDocType: "PDD" | "SDD" | null = earlyDocType;
+      let docProgressStarted = earlyDocType !== null;
+      let expectSddAfterPdd = classifiedIntent === "PDD_SDD";
+      let lastEmittedSectionNumber = -1;
 
       for await (const event of stream) {
         if (clientDisconnected) {
@@ -1430,58 +890,141 @@ CRITICAL RULES:
           stream.abort();
           break;
         }
-        if (event.type === "text_delta" && event.text) {
-          const text = event.text;
-          fullResponse += text;
-          try { res.write(`data: ${JSON.stringify({ token: text })}\n\n`); } catch { break; }
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          const text = event.delta.text;
+          if (text) {
+            fullResponse += text;
+            try { res.write(`data: ${JSON.stringify({ token: text })}\n\n`); } catch { break; }
 
-          if (!docProgressStarted && !mapApprovalDone && !chatApprovalDone) {
-            const docTagMatch = fullResponse.match(/\[DOC:(PDD|SDD):/);
-            if (docTagMatch) {
-              docProgressDocType = docTagMatch[1] as "PDD" | "SDD";
-              docProgressStarted = true;
-              try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: docProgressDocType } })}\n\n`); } catch { /* ignore */ }
-            } else if (fullResponse.length > 800 && /## \d+[\.\)]\s/.test(fullResponse)) {
-              const looksLikeSdd = /orchestrator_artifacts|Automation Architecture|Solution Design/i.test(fullResponse);
-              const looksLikePdd = /Executive Summary|Process Scope|Automation Opportunity/i.test(fullResponse);
-              if (looksLikeSdd) {
-                docProgressDocType = "SDD";
+            if (!docProgressStarted && !mapApprovalDone && !chatApprovalDone) {
+              const docTagMatch = fullResponse.match(/\[DOC:(PDD|SDD):/);
+              if (docTagMatch) {
+                docProgressDocType = docTagMatch[1] as "PDD" | "SDD";
                 docProgressStarted = true;
-                try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch { /* ignore */ }
-                console.log(`[Chat] Detected inline SDD generation (no [DOC:] tag) — enabling doc progress`);
-              } else if (looksLikePdd) {
-                docProgressDocType = "PDD";
-                docProgressStarted = true;
-                try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch { /* ignore */ }
-                console.log(`[Chat] Detected inline PDD generation (no [DOC:] tag) — enabling doc progress`);
+                try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: docProgressDocType } })}\n\n`); } catch { /* ignore */ }
+              } else if (fullResponse.length > 800 && /## \d+[\.\)]\s/.test(fullResponse)) {
+                const looksLikeSdd = /orchestrator_artifacts|Automation Architecture|Solution Design/i.test(fullResponse);
+                const looksLikePdd = /Executive Summary|Process Scope|Automation Opportunity/i.test(fullResponse);
+                if (looksLikeSdd) {
+                  docProgressDocType = "SDD";
+                  docProgressStarted = true;
+                  try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch { /* ignore */ }
+                  console.log(`[Chat] Detected inline SDD generation (no [DOC:] tag) — enabling doc progress`);
+                } else if (looksLikePdd) {
+                  docProgressDocType = "PDD";
+                  docProgressStarted = true;
+                  try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "PDD" } })}\n\n`); } catch { /* ignore */ }
+                  console.log(`[Chat] Detected inline PDD generation (no [DOC:] tag) — enabling doc progress`);
+                }
+              }
+            } else if (expectSddAfterPdd && docProgressDocType === "PDD" && /\[DOC:SDD:/.test(fullResponse)) {
+              docProgressDocType = "SDD";
+              lastEmittedSectionNumber = -1;
+              expectSddAfterPdd = false;
+              try { res.write(`data: ${JSON.stringify({ docProgress: { started: true, docType: "SDD" } })}\n\n`); } catch { /* ignore */ }
+              console.log(`[Chat] Switched doc progress indicator from PDD to SDD (PDD_SDD flow)`);
+            }
+
+            if (docProgressStarted && docProgressDocType) {
+              const sectionRe = /## (?:(\d+)[\.\)]\s+)?([^\n]+)/g;
+              let sMatch: RegExpExecArray | null;
+              let highestFound = lastEmittedSectionNumber;
+              while ((sMatch = sectionRe.exec(fullResponse)) !== null) {
+                const sectionNumber = sMatch[1] ? parseInt(sMatch[1], 10) : (highestFound + 1);
+                highestFound = Math.max(highestFound, sectionNumber);
+                if (sectionNumber > lastEmittedSectionNumber) {
+                  lastEmittedSectionNumber = sectionNumber;
+                  const sectionName = sMatch[2].trim();
+                  try { res.write(`data: ${JSON.stringify({ docProgress: { section: sectionName, sectionNumber, docType: docProgressDocType } })}\n\n`); } catch { /* ignore */ }
+                }
               }
             }
           }
         }
-        if (event.type === "stop") {
-          stopReason = event.stopReason || "";
+        if (event.type === "message_delta" && (event as any).delta?.stop_reason) {
+          stopReason = (event as any).delta.stop_reason;
         }
       }
 
       clearInterval(heartbeat);
-      if (deployKeepAlive) clearInterval(deployKeepAlive);
 
       if (clientDisconnected) {
         if (fullResponse.length > 0) {
-          let disconnectResponse = fullResponse
-            .replace(/\[DEPLOY_UIPATH\]/g, "")
-            .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
-            .replace(/\[AUTOMATION_TYPE:\s*[^\]]+\]/gi, "")
-            .trim();
-          if (disconnectResponse.length > 0) {
-            await chatStorage.createMessage(ideaId, "assistant", disconnectResponse);
-          }
+          await chatStorage.createMessage(ideaId, "assistant", fullResponse.trim());
         }
         return;
       }
 
+      const isDocResponse = /^\[DOC:(PDD|SDD):\d+\]/.test(fullResponse.trim()) ||
+        (fullResponse.length > 2000 && /## \d+\.\s/.test(fullResponse) &&
+          (/Executive Summary/.test(fullResponse) || /orchestrator_artifacts/.test(fullResponse)));
+
+      if (isDocResponse && (stopReason === "max_tokens" || fullResponse.length > 7500)) {
+        const trimmed = fullResponse.trimEnd();
+        const looksIncomplete = stopReason === "max_tokens" || (
+          !trimmed.endsWith("---") &&
+          !trimmed.endsWith("```") &&
+          !trimmed.endsWith("---\n")
+        );
+
+        if (looksIncomplete) {
+          console.log(`[Chat] Document appears truncated (stopReason=${stopReason}, len=${fullResponse.length}). Auto-continuing...`);
+          res.write(`data: ${JSON.stringify({ token: "\n\n*[Continuing document generation...]*\n\n" })}\n\n`);
+
+          const continueMessages = [
+            ...chatMessages,
+            { role: "assistant" as const, content: fullResponse },
+            { role: "user" as const, content: "Continue exactly where you left off. Do NOT repeat any content already generated. Do NOT add a new document tag. Just continue the remaining sections seamlessly." },
+          ];
+
+          try {
+            const contStream = anthropic.messages.stream({
+              model: "claude-sonnet-4-6",
+              max_tokens: 8192,
+              system: systemPrompt,
+              messages: continueMessages,
+            });
+            let continuation = "";
+            for await (const evt of contStream) {
+              if (clientDisconnected) {
+                console.log(`[Chat] Client disconnected during continuation — aborting`);
+                contStream.abort();
+                break;
+              }
+              if (evt.type === "content_block_delta" && evt.delta.type === "text_delta") {
+                const text = evt.delta.text;
+                if (text) {
+                  continuation += text;
+                  try { res.write(`data: ${JSON.stringify({ token: text })}\n\n`); } catch { break; }
+
+                  if (docProgressStarted && docProgressDocType) {
+                    const combinedText = fullResponse + "\n" + continuation;
+                    const contSectionRe = /## (?:(\d+)[\.\)]\s+)?([^\n]+)/g;
+                    let csMatch: RegExpExecArray | null;
+                    let contHighest = lastEmittedSectionNumber;
+                    while ((csMatch = contSectionRe.exec(combinedText)) !== null) {
+                      const sectionNumber = csMatch[1] ? parseInt(csMatch[1], 10) : (contHighest + 1);
+                      contHighest = Math.max(contHighest, sectionNumber);
+                      if (sectionNumber > lastEmittedSectionNumber) {
+                        lastEmittedSectionNumber = sectionNumber;
+                        const sectionName = csMatch[2].trim();
+                        try { res.write(`data: ${JSON.stringify({ docProgress: { section: sectionName, sectionNumber, docType: docProgressDocType } })}\n\n`); } catch { /* ignore */ }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            fullResponse += "\n" + continuation;
+            console.log(`[Chat] Continuation added ${continuation.length} chars. Total doc: ${fullResponse.length} chars.`);
+          } catch (contErr: any) {
+            console.error(`[Chat] Continuation failed:`, contErr?.message);
+          }
+        }
+      }
+
       const isMapResponse = /\[STEP:\s*\d/.test(fullResponse);
-      if (isMapResponse && stopReason === "max_tokens") {
+      if (!isDocResponse && isMapResponse && stopReason === "max_tokens") {
         const MAX_MAP_CONTINUATIONS = 3;
         let mapContRound = 0;
         let contStopReason = stopReason;
@@ -1498,8 +1041,9 @@ CRITICAL RULES:
           ];
 
           try {
-            const mapContStream = getLLM().stream({
-              maxTokens: 8192,
+            const mapContStream = anthropic.messages.stream({
+              model: "claude-sonnet-4-6",
+              max_tokens: 8192,
               system: systemPrompt,
               messages: continueMapMessages,
             });
@@ -1511,12 +1055,15 @@ CRITICAL RULES:
                 mapContStream.abort();
                 break;
               }
-              if (evt.type === "text_delta" && evt.text) {
-                mapContinuation += evt.text;
-                try { res.write(`data: ${JSON.stringify({ token: evt.text })}\n\n`); } catch { break; }
+              if (evt.type === "content_block_delta" && evt.delta.type === "text_delta") {
+                const text = evt.delta.text;
+                if (text) {
+                  mapContinuation += text;
+                  try { res.write(`data: ${JSON.stringify({ token: text })}\n\n`); } catch { break; }
+                }
               }
-              if (evt.type === "stop") {
-                contStopReason = evt.stopReason || "end_turn";
+              if (evt.type === "message_delta" && (evt as any).delta?.stop_reason) {
+                contStopReason = (evt as any).delta.stop_reason;
               }
             }
             fullResponse += "\n" + mapContinuation;
@@ -1533,6 +1080,93 @@ CRITICAL RULES:
         .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
         .replace(/\[AUTOMATION_TYPE:\s*[^\]]+\]/gi, "")
         .trim();
+
+      const docTagMatch = cleanedResponse.match(/^\[DOC:(PDD|SDD):\d+\]/);
+      let detectedDocType: "PDD" | "SDD" | null = null;
+      let docContent = "";
+
+      if (mapApprovalDone || chatApprovalDone) {
+        console.log(`[Chat] Skipping inline doc detection — approval confirmation response (mapApproval=${mapApprovalDone}, chatApproval=${chatApprovalDone})`);
+      } else if (docTagMatch) {
+        detectedDocType = docTagMatch[1] as "PDD" | "SDD";
+        docContent = cleanedResponse.slice(docTagMatch[0].length).trim();
+      } else if (cleanedResponse.length > 2000) {
+        const hasSddSections = /## \d+\.\s/.test(cleanedResponse) && 
+          (/orchestrator_artifacts/.test(cleanedResponse) || /Orchestrator Deployment/.test(cleanedResponse));
+        const hasPddSections = /## \d+\.\s/.test(cleanedResponse) && 
+          /Executive Summary/.test(cleanedResponse) && /Automation Opportunity/.test(cleanedResponse);
+        if (hasSddSections) {
+          detectedDocType = "SDD";
+          docContent = cleanedResponse;
+        } else if (hasPddSections) {
+          detectedDocType = "PDD";
+          docContent = cleanedResponse;
+        }
+      }
+
+      if (detectedDocType && docContent.length > 100) {
+        try {
+          docContent = docContent
+            .replace(/\[STEP:\s*[\d.]+\s+[^\]]*\]/g, "")
+            .replace(/\[AUTOMATION_TYPE:\s*[^\]]+\]/gi, "")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+
+          try {
+            const mapViewType = detectedDocType === "SDD" ? "to-be" : "as-is";
+            const mapNodes = await processMapStorage.getNodesByIdeaId(ideaId, mapViewType);
+            const fallbackNodes = mapNodes.length === 0 && mapViewType === "to-be"
+              ? await processMapStorage.getNodesByIdeaId(ideaId, "as-is")
+              : mapNodes;
+            
+            if (fallbackNodes.length > 0) {
+              const mapEdges = await processMapStorage.getEdgesByIdeaId(ideaId, mapNodes.length > 0 ? mapViewType : "as-is");
+              const nodeMap = new Map(fallbackNodes.map(n => [n.id, n]));
+              
+              let processMapSection = `\n\n### Process Map (${mapNodes.length > 0 ? mapViewType : "as-is"})\n\n`;
+              processMapSection += `| # | Step | Role | System | Type |\n`;
+              processMapSection += `|---|------|------|--------|------|\n`;
+              fallbackNodes.forEach((node, idx) => {
+                processMapSection += `| ${idx + 1} | ${node.name} | ${node.role || "-"} | ${node.system || "-"} | ${node.nodeType || "task"} |\n`;
+              });
+
+              if (mapEdges.length > 0) {
+                processMapSection += `\n**Process Flow:**\n`;
+                mapEdges.forEach(edge => {
+                  const src = nodeMap.get(edge.sourceNodeId);
+                  const tgt = nodeMap.get(edge.targetNodeId);
+                  if (src && tgt) {
+                    processMapSection += `- ${src.name} → ${tgt.name}${edge.label ? ` (${edge.label})` : ""}\n`;
+                  }
+                });
+              }
+
+              docContent += processMapSection;
+              console.log(`[Chat] Injected ${fallbackNodes.length}-node process map into ${detectedDocType}`);
+            }
+          } catch (mapErr: any) {
+            console.warn(`[Chat] Could not inject process map into ${detectedDocType}:`, mapErr?.message);
+          }
+
+          const existing = await documentStorage.getLatestDocument(ideaId, detectedDocType);
+          const version = existing ? existing.version + 1 : 1;
+          if (existing && existing.status !== "approved") {
+            await documentStorage.updateDocument(existing.id, { status: "superseded" });
+          }
+          const doc = await documentStorage.createDocument({
+            ideaId,
+            type: detectedDocType,
+            version,
+            status: "draft",
+            content: docContent,
+            snapshotJson: JSON.stringify({ generatedFrom: "chat-regeneration" }),
+          });
+          cleanedResponse = `[DOC:${detectedDocType}:${doc.id}]${docContent}`;
+          console.log(`[Chat] Saved ${detectedDocType} v${version} (doc id ${doc.id}) from chat regeneration`);
+        } catch (docErr: any) {
+          console.error(`[Chat] Failed to save ${detectedDocType} from chat:`, docErr?.message);
+        }
+      }
 
       let savedStreamMsgId: number | null = null;
       const isDeployOnly = fullResponse.includes("[DEPLOY_UIPATH]") && cleanedResponse.replace(/\s+/g, "").length < 10;
@@ -1572,48 +1206,28 @@ CRITICAL RULES:
       if (autoTypeMatch) {
         const detectedType = autoTypeMatch[1].toLowerCase() as AutomationType;
         const rationale = autoTypeMatch[2].trim();
-
-        let complexity: string | null = null;
-        let effortEstimate: string | null = null;
-        const feasibilityMatch = fullResponse.match(/\[FEASIBILITY_SUMMARY\]\s*\n?\s*Complexity:\s*(low|medium|high)\s*\n?\s*Effort:\s*([^\n\[]+)\s*\n?\s*\[\/FEASIBILITY_SUMMARY\]/i);
-        if (feasibilityMatch) {
-          complexity = feasibilityMatch[1].toLowerCase();
-          effortEstimate = feasibilityMatch[2].trim();
-        }
-
         try {
-          const updatePayload: Record<string, any> = {
+          await storage.updateIdea(ideaId, {
             automationType: detectedType,
             automationTypeRationale: rationale,
-            feasibilityComplexity: complexity,
-            feasibilityEffortEstimate: effortEstimate,
-          };
-
-          await storage.updateIdea(ideaId, updatePayload);
-          console.log(`[Chat] Automation type set to "${detectedType}" for idea ${ideaId}: ${rationale}${complexity ? ` | complexity=${complexity}` : ""}${effortEstimate ? ` | effort=${effortEstimate}` : ""}`);
+          });
+          console.log(`[Chat] Automation type set to "${detectedType}" for idea ${ideaId}: ${rationale}`);
           res.write(`data: ${JSON.stringify({ automationType: { type: detectedType, rationale } })}\n\n`);
-          res.write(`data: ${JSON.stringify({ feasibilityAssessment: { type: detectedType, rationale, complexity: complexity || null, effortEstimate: effortEstimate || null } })}\n\n`);
         } catch (atErr: any) {
           console.error(`[Chat] Failed to save automation type:`, atErr?.message);
         }
       }
 
-      const userMessageIsPackageRegen = /\b(regenerate|rebuild|redo|build)\b/i.test(content) && /\b(package|nupkg|uipath)\b/i.test(content) && !/\b(deploy|push)\b/i.test(content);
-
-      if (fullResponse.includes("[DEPLOY_UIPATH]") && ((classifiedIntent as string) === "UIPATH_GEN" || userMessageIsPackageRegen)) {
-        console.warn(`[Chat] Prevented false-positive deployment — classifiedIntent=${classifiedIntent}, userMessage="${content.substring(0, 100)}". LLM emitted [DEPLOY_UIPATH] but user requested package generation, not deployment.`);
-      }
-
-      if (fullResponse.includes("[DEPLOY_UIPATH]") && (classifiedIntent as string) !== "UIPATH_GEN" && !userMessageIsPackageRegen) {
+      if (fullResponse.includes("[DEPLOY_UIPATH]")) {
         try {
-          res.write(`data: ${JSON.stringify({ deployStatus: "Initiating deployment pipeline..." })}\n\n`);
+          res.write(`data: ${JSON.stringify({ deployStatus: "Preparing deployment to UiPath Orchestrator..." })}\n\n`);
 
           const existingMsgs = await chatStorage.getMessagesByIdeaId(ideaId);
           const hasPackage = existingMsgs.some(m => m.content.startsWith("[UIPATH:"));
           if (!hasPackage) {
             res.write(`data: ${JSON.stringify({ deployStatus: "Generating UiPath package first..." })}\n\n`);
             try {
-              const genRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ideas/${ideaId}/generate-uipath?trigger=chat`, {
+              const genRes = await fetch(`http://localhost:${process.env.PORT || 5000}/api/ideas/${ideaId}/generate-uipath`, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
@@ -1631,13 +1245,6 @@ CRITICAL RULES:
                 let sseBuffer = "";
                 let genDone = false;
                 let genError: string | null = null;
-                const sendForwardedEvent = (data: Record<string, any>) => {
-                  try {
-                    if (res.writableEnded) return;
-                    res.write(`data: ${JSON.stringify(data)}\n\n`);
-                    if (typeof (res as any).flush === "function") (res as any).flush();
-                  } catch {}
-                };
                 while (true) {
                   const { done: readDone, value } = await reader.read();
                   if (readDone) break;
@@ -1651,10 +1258,7 @@ CRITICAL RULES:
                       if (evt.done) genDone = true;
                       if (evt.error) genError = evt.error;
                       if (evt.progress) {
-                        sendForwardedEvent({ deployStatus: evt.progress });
-                      }
-                      if (evt.pipelineEvent) {
-                        sendForwardedEvent({ pipelineEvent: evt.pipelineEvent });
+                        try { res.write(`data: ${JSON.stringify({ deployStatus: evt.progress })}\n\n`); } catch {}
                       }
                     } catch {}
                   }
@@ -1698,9 +1302,7 @@ CRITICAL RULES:
                 try {
                   const event = JSON.parse(line.slice(6));
                   if (event.deployStatus && !event.deployComplete) {
-                    const fwd: Record<string, any> = { deployStatus: event.deployStatus };
-                    if (event.pipelineEvent) fwd.pipelineEvent = event.pipelineEvent;
-                    res.write(`data: ${JSON.stringify(fwd)}\n\n`);
+                    res.write(`data: ${JSON.stringify({ deployStatus: event.deployStatus })}\n\n`);
                   }
                   if (event.deployComplete) {
                     finalEvent = event;
@@ -1793,7 +1395,6 @@ CRITICAL RULES:
       res.end();
     } catch (error: any) {
       if (heartbeat) clearInterval(heartbeat);
-      if (deployKeepAliveOuter) clearInterval(deployKeepAliveOuter);
       console.error("Error in chat:", error?.message || error);
       if (res.headersSent) {
         res.write(`data: ${JSON.stringify({ error: "Stream interrupted" })}\n\n`);

@@ -1,5 +1,3 @@
-import type { GovernancePolicy } from "./uipath-integration";
-
 export type AnalysisViolation = {
   ruleId: string;
   ruleName: string;
@@ -38,9 +36,6 @@ const VARIABLE_TYPE_PREFIXES: Record<string, string> = {
   "x:Object": "obj",
   "s:DateTime": "dt",
   "s:TimeSpan": "ts",
-  "s:Security.SecureString": "sec",
-  "scg:Dictionary(x:String, x:Object)": "dict",
-  "scg:Dictionary(x:String, x:String)": "dict",
   "scg2:DataTable": "dt",
   "scg2:DataRow": "drow",
   "ui:QueueItem": "qi",
@@ -81,7 +76,7 @@ export function enforceVariableName(name: string, type: string): string {
     return pascal || name;
   }
   const stripped = name
-    .replace(/^(str|int|bool|dbl|dec|obj|dt|ts|sec|drow|qi|qid|arr|dict|list|jobj)_/i, "");
+    .replace(/^(str|int|bool|dbl|dec|obj|dt|ts|drow|qi|qid|arr|dict|list|jobj)_/i, "");
   const pascal = toPascalCase(stripped);
   return `${prefix}_${pascal || stripped}`;
 }
@@ -391,25 +386,6 @@ function checkSecurity(xaml: string): AnalysisViolation[] {
   return violations;
 }
 
-function replaceVarInBracketExpressions(xaml: string, oldName: string, newName: string): string {
-  const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const wordBoundaryPattern = new RegExp(
-    `(\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*)\\b${escaped}\\b((?:[^\\[\\]]|\\[[^\\]]*\\])*\\])`,
-    "g"
-  );
-  let result = xaml;
-  let prevResult = "";
-  let iterations = 0;
-  while (result !== prevResult && iterations < 20) {
-    prevResult = result;
-    result = result.replace(wordBoundaryPattern, (match, before, after) => {
-      return `${before}${newName}${after}`;
-    });
-    iterations++;
-  }
-  return result;
-}
-
 function autoFixNaming(xaml: string): { fixed: string; fixes: AnalysisViolation[] } {
   const fixes: AnalysisViolation[] = [];
   let fixed = xaml;
@@ -424,7 +400,6 @@ function autoFixNaming(xaml: string): { fixed: string; fixes: AnalysisViolation[
       fixed = fixed.replace(new RegExp(`\\[${nameEscaped}\\]`, "g"), `[${expected}]`);
       fixed = fixed.replace(new RegExp(`'\\+\\s*${nameEscaped}`, "g"), `'+ ${expected}`);
       fixed = fixed.replace(new RegExp(`${nameEscaped}\\.ToString`, "g"), `${expected}.ToString`);
-      fixed = replaceVarInBracketExpressions(fixed, v.name, expected);
       fixes.push({
         ruleId: "ST-NMG-001",
         ruleName: "Variable naming convention",
@@ -445,7 +420,6 @@ function autoFixNaming(xaml: string): { fixed: string; fixes: AnalysisViolation[
       const nameEscaped = a.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       fixed = fixed.replace(new RegExp(`Name="${nameEscaped}"`, "g"), `Name="${expected}"`);
       fixed = fixed.replace(new RegExp(`\\[${nameEscaped}\\]`, "g"), `[${expected}]`);
-      fixed = replaceVarInBracketExpressions(fixed, a.name, expected);
       fixes.push({
         ruleId: "ST-NMG-004",
         ruleName: "Argument naming convention",
@@ -509,7 +483,7 @@ function autoFixMissingLogs(xaml: string): { fixed: string; fixes: AnalysisViola
     if (seqStart) {
       fixed = fixed.replace(
         seqStart[0],
-        `${seqStart[0]}\n        <ui:LogMessage Level="Info" Message="[&quot;=== Starting: ${wfName} ===&quot;]" DisplayName="Log Start" />`
+        `${seqStart[0]}\n        <ui:LogMessage Level="Info" Message="'=== Starting: ${wfName} ==='" DisplayName="Log Start" />`
       );
       fixes.push({
         ruleId: "ST-DBP-025",
@@ -525,7 +499,7 @@ function autoFixMissingLogs(xaml: string): { fixed: string; fixes: AnalysisViola
   if (!hasEndLog) {
     const lastSeqClose = fixed.lastIndexOf("</Sequence>");
     if (lastSeqClose > 0) {
-      const endLog = `\n        <ui:LogMessage Level="Info" Message="[&quot;=== Completed: ${wfName} ===&quot;]" DisplayName="Log Completion" />`;
+      const endLog = `\n        <ui:LogMessage Level="Info" Message="'=== Completed: ${wfName} ==='" DisplayName="Log Completion" />`;
       fixed = fixed.substring(0, lastSeqClose) + endLog + "\n      " + fixed.substring(lastSeqClose);
       fixes.push({
         ruleId: "ST-DBP-025",
@@ -535,137 +509,6 @@ function autoFixMissingLogs(xaml: string): { fixed: string; fixes: AnalysisViola
         message: `Auto-added final LogMessage to workflow "${wfName}"`,
         autoFixed: true,
       });
-    }
-  }
-
-  return { fixed, fixes };
-}
-
-function checkArgumentCompleteness(xaml: string): AnalysisViolation[] {
-  const violations: AnalysisViolation[] = [];
-
-  const bareArgPatterns2 = [
-    /<Argument\s+x:TypeArguments="([^"]+)"\s+x:Name="([^"]+)"\s*\/>/g,
-    /<Argument\s+x:Name="([^"]+)"\s+x:TypeArguments="([^"]+)"\s*\/>/g,
-  ];
-  let match;
-  for (const bareArgPattern of bareArgPatterns2) {
-    while ((match = bareArgPattern.exec(xaml)) !== null) {
-      const argName = bareArgPattern === bareArgPatterns2[1] ? match[1] : match[2];
-      const lineNum = xaml.substring(0, match.index).split("\n").length;
-      violations.push({
-        ruleId: "ST-ARG-001",
-        ruleName: "Invalid bare Argument tag in Catch",
-        category: "usage",
-        severity: "error",
-        message: `Bare <Argument> tag "${argName}" should be <ActivityAction.Argument><DelegateInArgument /></ActivityAction.Argument>`,
-        location: `line ${lineNum}`,
-        autoFixed: false,
-      });
-    }
-  }
-
-  const invokeBlockPattern = /<ui:InvokeWorkflowFile[^>]*WorkflowFileName="([^"]+)"[^>]*>[\s\S]*?<ui:InvokeWorkflowFile\.Arguments>([\s\S]*?)<\/ui:InvokeWorkflowFile\.Arguments>/g;
-  let invokeMatch;
-  while ((invokeMatch = invokeBlockPattern.exec(xaml)) !== null) {
-    const fileName = invokeMatch[1];
-    const argsContent = invokeMatch[2];
-    const argKeyPattern = /x:Key="([^"]+)"/g;
-    let keyMatch;
-    const invokedArgs: string[] = [];
-    while ((keyMatch = argKeyPattern.exec(argsContent)) !== null) {
-      invokedArgs.push(keyMatch[1]);
-    }
-    for (const argName of invokedArgs) {
-      const varDeclared = new RegExp(`<Variable[^>]*Name="${argName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "").test(xaml);
-      const propDeclared = new RegExp(`<x:Property\\s+Name="${argName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "").test(xaml);
-      if (!varDeclared && !propDeclared) {
-        const lineNum = xaml.substring(0, invokeMatch.index).split("\n").length;
-        violations.push({
-          ruleId: "ST-ARG-002",
-          ruleName: "Missing declaration for invoked argument",
-          category: "usage",
-          severity: "warning",
-          message: `Argument "${argName}" is passed to "${fileName}" but is not declared as a Variable or x:Property in the calling workflow`,
-          location: `line ${lineNum}`,
-          autoFixed: false,
-        });
-      }
-    }
-  }
-
-  const exprPattern = /\[([^\]]+)\]/g;
-  const declaredVars = new Set<string>();
-  const varPattern = /<Variable[^>]*Name="([^"]+)"/g;
-  while ((match = varPattern.exec(xaml)) !== null) {
-    declaredVars.add(match[1]);
-  }
-  const propPattern = /<x:Property\s+Name="([^"]+)"/g;
-  while ((match = propPattern.exec(xaml)) !== null) {
-    declaredVars.add(match[1]);
-  }
-  const delegatePattern = /<DelegateInArgument[^>]*Name="([^"]+)"/g;
-  while ((match = delegatePattern.exec(xaml)) !== null) {
-    declaredVars.add(match[1]);
-  }
-  const keywords = new Set(["True", "False", "Nothing", "null", "New", "Not", "And", "Or", "If", "String", "Integer", "Boolean", "DateTime", "Math", "Convert", "CType", "CStr", "CInt", "CDbl"]);
-  const identPattern = /\b([a-zA-Z_]\w*)\b/g;
-  while ((match = exprPattern.exec(xaml)) !== null) {
-    const expr = match[1];
-    if (expr.startsWith("&quot;") || expr.startsWith("\"")) continue;
-    let idMatch;
-    while ((idMatch = identPattern.exec(expr)) !== null) {
-      const ident = idMatch[1];
-      if (keywords.has(ident)) continue;
-      if (/^[A-Z][a-z]/.test(ident) && expr.includes(`${ident}.`) && !declaredVars.has(ident)) continue;
-      if (ident.startsWith("str_") || ident.startsWith("int_") || ident.startsWith("bool_") || ident.startsWith("dt_") || ident.startsWith("qi_") || ident.startsWith("obj_") || ident.startsWith("dbl_") || ident.startsWith("sec_") || ident.startsWith("io_") || ident.startsWith("in_") || ident.startsWith("out_")) {
-        if (!declaredVars.has(ident)) {
-          const lineNum = xaml.substring(0, match.index).split("\n").length;
-          violations.push({
-            ruleId: "ST-ARG-003",
-            ruleName: "Undeclared variable in expression",
-            category: "usage",
-            severity: "warning",
-            message: `Variable "${ident}" is used in an expression but not declared as a Variable or x:Property`,
-            location: `line ${lineNum}`,
-            autoFixed: false,
-          });
-        }
-      }
-    }
-  }
-
-  return violations;
-}
-
-function autoFixBareArguments(xaml: string): { fixed: string; fixes: AnalysisViolation[] } {
-  const fixes: AnalysisViolation[] = [];
-  let fixed = xaml;
-
-  const bareArgPatterns = [
-    /<Argument\s+x:TypeArguments="([^"]+)"\s+x:Name="([^"]+)"\s*\/>/g,
-    /<Argument\s+x:Name="([^"]+)"\s+x:TypeArguments="([^"]+)"\s*\/>/g,
-  ];
-
-  for (const pattern of bareArgPatterns) {
-    let match;
-    while ((match = pattern.exec(fixed)) !== null) {
-      const isReversed = pattern === bareArgPatterns[1];
-      const typeArg = isReversed ? match[2] : match[1];
-      const argName = isReversed ? match[1] : match[2];
-      const lineNum = fixed.substring(0, match.index).split("\n").length;
-      const replacement = `<ActivityAction.Argument>\n                  <DelegateInArgument x:TypeArguments="${typeArg}" Name="${argName}" />\n                </ActivityAction.Argument>`;
-      fixed = fixed.replace(match[0], replacement);
-      fixes.push({
-        ruleId: "ST-ARG-001",
-        ruleName: "Invalid bare Argument tag in Catch",
-        category: "usage",
-        severity: "error",
-        message: `Auto-fixed bare <Argument> tag "${argName}" → <DelegateInArgument>`,
-        location: `line ${lineNum}`,
-        autoFixed: true,
-      });
-      pattern.lastIndex = 0;
     }
   }
 
@@ -684,110 +527,10 @@ const ALL_RULES: Array<{ ruleId: string; ruleName: string; category: string }> =
   { ruleId: "ST-USG-017", ruleName: "Deeply nested If activities", category: "usage" },
   { ruleId: "ST-SEC-004", ruleName: "Sensitive data in log message", category: "security" },
   { ruleId: "ST-SEC-005", ruleName: "Plaintext credential in property", category: "security" },
-  { ruleId: "ST-ARG-001", ruleName: "Invalid bare Argument tag in Catch", category: "usage" },
-  { ruleId: "ST-ARG-002", ruleName: "Missing declaration for invoked argument", category: "usage" },
-  { ruleId: "ST-ARG-003", ruleName: "Undeclared variable in expression", category: "usage" },
 ];
 
-let _governancePolicies: GovernancePolicy[] = [];
-
-export function setGovernancePolicies(policies: GovernancePolicy[]): void {
-  _governancePolicies = policies;
-}
-
-export function getGovernancePolicies(): GovernancePolicy[] {
-  return _governancePolicies;
-}
-
-function checkGovernancePolicies(xaml: string): AnalysisViolation[] {
-  const violations: AnalysisViolation[] = [];
-
-  for (const policy of _governancePolicies) {
-    if (policy.type === "activity-restriction" && policy.restrictedActivities?.length) {
-      for (const activity of policy.restrictedActivities) {
-        const escaped = activity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const pattern = new RegExp(`<${escaped}[\\s/>]`, "gi");
-        let match;
-        while ((match = pattern.exec(xaml)) !== null) {
-          const lineNum = xaml.substring(0, match.index).split("\n").length;
-          violations.push({
-            ruleId: `GOV-${policy.id}`,
-            ruleName: `Governance: ${policy.name}`,
-            category: "best-practice",
-            severity: policy.severity,
-            message: `Activity "${activity}" is restricted by governance policy "${policy.name}"${policy.description ? `: ${policy.description}` : ""}`,
-            location: `line ${lineNum}`,
-            autoFixed: false,
-          });
-        }
-      }
-    }
-
-    if (policy.type === "naming" && policy.pattern) {
-      try {
-        const regex = new RegExp(policy.pattern);
-        const variables = extractVariables(xaml);
-        for (const v of variables) {
-          if (!regex.test(v.name)) {
-            violations.push({
-              ruleId: `GOV-${policy.id}`,
-              ruleName: `Governance: ${policy.name}`,
-              category: "naming",
-              severity: policy.severity,
-              message: `Variable "${v.name}" does not match governance naming pattern "${policy.pattern}" (policy: ${policy.name})`,
-              location: `line ${v.line}`,
-              autoFixed: false,
-            });
-          }
-        }
-      } catch {}
-    }
-
-    if (policy.type === "error-handling" && policy.requiredPatterns?.length) {
-      for (const requiredPattern of policy.requiredPatterns) {
-        try {
-          const regex = new RegExp(requiredPattern, "i");
-          if (!regex.test(xaml)) {
-            violations.push({
-              ruleId: `GOV-${policy.id}`,
-              ruleName: `Governance: ${policy.name}`,
-              category: "best-practice",
-              severity: policy.severity,
-              message: `Required pattern "${requiredPattern}" not found (governance policy: ${policy.name})`,
-              autoFixed: false,
-            });
-          }
-        } catch {}
-      }
-    }
-
-    if (policy.type === "security") {
-      if (policy.pattern) {
-        try {
-          const regex = new RegExp(policy.pattern, "gi");
-          let match;
-          while ((match = regex.exec(xaml)) !== null) {
-            const lineNum = xaml.substring(0, match.index).split("\n").length;
-            violations.push({
-              ruleId: `GOV-${policy.id}`,
-              ruleName: `Governance: ${policy.name}`,
-              category: "security",
-              severity: policy.severity,
-              message: `Security governance violation: ${policy.description || policy.name}`,
-              location: `line ${lineNum}`,
-              autoFixed: false,
-            });
-          }
-        } catch {}
-      }
-    }
-  }
-
-  return violations;
-}
-
 function buildRuleSummaries(violations: AnalysisViolation[]): AnalysisRuleSummary[] {
-  const summaries = ALL_RULES.map((rule) => {
+  return ALL_RULES.map((rule) => {
     const ruleViolations = violations.filter((v) => v.ruleId === rule.ruleId);
     const autoFixed = ruleViolations.filter((v) => v.autoFixed).length;
     const remaining = ruleViolations.filter((v) => !v.autoFixed).length;
@@ -804,42 +547,6 @@ function buildRuleSummaries(violations: AnalysisViolation[]): AnalysisRuleSummar
       autoFixedCount: autoFixed,
     };
   });
-
-  const govRuleIds = new Set<string>();
-  for (const v of violations) {
-    if (v.ruleId.startsWith("GOV-") && !govRuleIds.has(v.ruleId)) {
-      govRuleIds.add(v.ruleId);
-      const ruleViolations = violations.filter((vv) => vv.ruleId === v.ruleId);
-      const autoFixed = ruleViolations.filter((vv) => vv.autoFixed).length;
-      const remaining = ruleViolations.filter((vv) => !vv.autoFixed).length;
-      summaries.push({
-        ruleId: v.ruleId,
-        ruleName: v.ruleName,
-        category: v.category,
-        status: remaining > 0 ? "violation" : autoFixed > 0 ? "auto-fixed" : "passed",
-        violationCount: remaining,
-        autoFixedCount: autoFixed,
-      });
-    }
-  }
-
-  if (_governancePolicies.length > 0) {
-    for (const policy of _governancePolicies) {
-      const govId = `GOV-${policy.id}`;
-      if (!govRuleIds.has(govId)) {
-        summaries.push({
-          ruleId: govId,
-          ruleName: `Governance: ${policy.name}`,
-          category: policy.type === "naming" ? "naming" : policy.type === "security" ? "security" : "best-practice",
-          status: "passed",
-          violationCount: 0,
-          autoFixedCount: 0,
-        });
-      }
-    }
-  }
-
-  return summaries;
 }
 
 export function analyzeXaml(xamlContent: string): AnalysisReport {
@@ -848,8 +555,6 @@ export function analyzeXaml(xamlContent: string): AnalysisReport {
     ...checkBestPractices(xamlContent),
     ...checkUsage(xamlContent),
     ...checkSecurity(xamlContent),
-    ...checkGovernancePolicies(xamlContent),
-    ...checkArgumentCompleteness(xamlContent),
   ];
 
   const ruleSummaries = buildRuleSummaries(violations);
@@ -857,56 +562,19 @@ export function analyzeXaml(xamlContent: string): AnalysisReport {
   return {
     violations,
     rulesChecked: ruleSummaries,
-    totalChecked: ruleSummaries.length,
+    totalChecked: ALL_RULES.length,
     totalPassed: ruleSummaries.filter((r) => r.status === "passed").length,
     totalAutoFixed: 0,
     totalRemaining: violations.length,
   };
 }
 
-function deduplicateVariableDeclarations(xaml: string): string {
-  const varsBlockPattern = /(<(?:Sequence|StateMachine)\.Variables>)([\s\S]*?)(<\/(?:Sequence|StateMachine)\.Variables>)/g;
-  return xaml.replace(varsBlockPattern, (match, openTag, content, closeTag) => {
-    const varPattern = /<Variable\s+[^>]*\bName="([^"]+)"[^>]*\/>/g;
-    const seen = new Set<string>();
-    const deduped = content.replace(varPattern, (varMatch: string, name: string) => {
-      if (seen.has(name)) {
-        return "";
-      }
-      seen.add(name);
-      return varMatch;
-    });
-    return `${openTag}${deduped}${closeTag}`;
-  });
-}
-
-/**
- * STAGE-OWNERSHIP CONTRACT: Analyzer Pass
- * 
- * This stage MAY mutate:
- * - Bare arguments (adding missing InArgument/OutArgument wrappers)
- * - Expression syntax fixes (bracket wrapping, escaping)
- * - Invalid selector repair
- * - Continue-on-error boolean normalization
- * 
- * This stage MUST NOT mutate:
- * - String literals that have been normalized to quoted form (no re-wrapping in brackets)
- * - Enum literal values that have been finalized
- * - Boolean InArgument values that have been normalized
- * - Any field marked as normalized:true by the final normalization stage
- */
 export function analyzeAndFix(xamlContent: string): { fixed: string; report: AnalysisReport } {
   const allViolations: AnalysisViolation[] = [];
 
-  const bareArgResult = autoFixBareArguments(xamlContent);
-  let fixed = bareArgResult.fixed;
-  allViolations.push(...bareArgResult.fixes);
-
-  const namingResult = autoFixNaming(fixed);
-  fixed = namingResult.fixed;
+  const namingResult = autoFixNaming(xamlContent);
+  let fixed = namingResult.fixed;
   allViolations.push(...namingResult.fixes);
-
-  fixed = deduplicateVariableDeclarations(fixed);
 
   const catchResult = autoFixEmptyCatches(fixed);
   fixed = catchResult.fixed;
@@ -921,8 +589,6 @@ export function analyzeAndFix(xamlContent: string): { fixed: string; report: Ana
     ...checkBestPractices(fixed),
     ...checkUsage(fixed),
     ...checkSecurity(fixed),
-    ...checkGovernancePolicies(fixed),
-    ...checkArgumentCompleteness(fixed),
   ];
   allViolations.push(...postFixViolations);
 
@@ -935,7 +601,7 @@ export function analyzeAndFix(xamlContent: string): { fixed: string; report: Ana
     report: {
       violations: allViolations,
       rulesChecked: ruleSummaries,
-      totalChecked: ruleSummaries.length,
+      totalChecked: ALL_RULES.length,
       totalPassed: ruleSummaries.filter((r) => r.status === "passed").length,
       totalAutoFixed: autoFixedCount,
       totalRemaining: remainingCount,

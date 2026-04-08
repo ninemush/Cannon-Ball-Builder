@@ -16,6 +16,8 @@ import {
   Position,
   BaseEdge,
   EdgeLabelRenderer,
+  getSmoothStepPath,
+  getBezierPath,
   useReactFlow,
   useStore,
   ReactFlowProvider,
@@ -26,9 +28,6 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
-import { computeProcessAwareLayout, LAYOUT_VERSION, type LayoutInput, type LayoutEdgeInput } from "@shared/process-layout";
-import { computeElkLayout, logElkComparisonSummary } from "@shared/elk-layout";
-import { computeYFilesLayout } from "@shared/yfiles-layout";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import type { ProcessNode, ProcessApproval } from "@shared/schema";
@@ -104,11 +103,11 @@ class ReactFlowErrorBoundary extends Component<{ children: ReactNode; onRetry?: 
         );
       }
       return (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-zinc-500">
           <AlertCircle className="h-8 w-8 text-amber-500/60" />
-          <p className="text-xs text-muted-foreground">Process map encountered an error</p>
+          <p className="text-xs text-zinc-400">Process map encountered an error</p>
           <button
-            className="text-xs px-3 py-1.5 rounded-md bg-muted hover:bg-accent text-foreground transition-colors"
+            className="text-xs px-3 py-1.5 rounded-md bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 text-gray-700 dark:text-zinc-300 transition-colors"
             onClick={() => this.setState({ hasError: false, retryCount: 0 })}
             data-testid="button-retry-map"
           >
@@ -553,282 +552,28 @@ function filterNodesForLevel(
 interface ProcessMapPanelProps {
   ideaId: string;
   onStepsChange?: (count: number) => void;
-  onApproved?: (approvedView?: string, isReapproval?: boolean) => void;
+  onApproved?: () => void;
   onCompletenessChange?: (pct: number) => void;
   onViewChange?: (view: ProcessView) => void;
   onSwitchViewReady?: (fn: (view: ProcessView) => void) => void;
 }
 
-const NODE_HEIGHTS = {
-  start: 56,
-  end: 56,
-  decision: 100,
-  "agent-decision": 100,
-  "agent-loop": 100,
-  "agent-task": 100,
-  task: 96,
-} as const;
-
 function getNodeDimensions(nodeType: string): { width: number; height: number } {
-  if (nodeType === "start") return { width: 56, height: NODE_HEIGHTS.start };
-  if (nodeType === "end") return { width: 56, height: NODE_HEIGHTS.end };
-  if (nodeType === "decision") return { width: 100, height: NODE_HEIGHTS.decision };
-  if (nodeType === "agent-decision") return { width: 100, height: NODE_HEIGHTS["agent-decision"] };
-  if (nodeType === "agent-loop") return { width: 280, height: NODE_HEIGHTS["agent-loop"] };
-  if (nodeType === "agent-task") return { width: 280, height: NODE_HEIGHTS["agent-task"] };
-  return { width: 280, height: NODE_HEIGHTS.task };
-}
-
-function getEdgeSourceHandle(
-  isDecision: boolean,
-  label: string | null | undefined,
-  siblings: { indexOf: (e: any) => number; length: number },
-  edge: any
-): string {
-  if (!isDecision) return "bottom";
-  const lbl = (label || "").trim();
-  const isNoEdge = /^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl);
-  if (isNoEdge) return "right";
-  const isYesEdge = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl);
-  if (isYesEdge) return "left";
-  if (siblings.length > 1) {
-    const idx = siblings.indexOf(edge);
-    if (idx === 0) return "left";
-    if (idx === 1) return "right";
-    return "bottom";
-  }
-  return "left";
-}
-
-function getLabelSemanticSide(label: string | null | undefined): "left" | "right" | null {
-  const lbl = (label || "").trim();
-  if (/^(no|rejected|fail|invalid|incomplete|false|exceed|above|poor|flag)/i.test(lbl)) return "right";
-  if (/^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(lbl)) return "left";
-  return null;
-}
-
-function computeTargetHandle(
-  sourceHandle: string,
-  srcPos: { x: number; y: number },
-  tgtPos: { x: number; y: number },
-  allEdgesForTarget?: { sourceHandle: string; srcPos: { x: number; y: number } }[]
-): string {
-  const dy = tgtPos.y - srcPos.y;
-  const dx = tgtPos.x - srcPos.x;
-  const absDx = Math.abs(dx);
-
-  if (dy > 0) {
-    if (dy < absDx * 0.25) {
-      return dx > 0 ? "left" : "right";
-    }
-    if (allEdgesForTarget && allEdgesForTarget.length > 1) {
-      const topCount = allEdgesForTarget.filter(e => {
-        const edy = tgtPos.y - e.srcPos.y;
-        const edx = Math.abs(tgtPos.x - e.srcPos.x);
-        return edy > 0 && !(edy < edx * 0.25);
-      }).length;
-      if (topCount > 1 && dx > 30) return "left";
-      if (topCount > 1 && dx < -30) return "right";
-    }
-    return "top";
-  }
-
-  if (absDx > 30) {
-    return dx > 0 ? "left" : "right";
-  }
-  return "top";
-}
-
-function fixDecisionHandlesPostLayout(
-  layoutNodes: Node[],
-  edges: Edge[],
-  nodeTypeMap: Record<string, string>
-): Edge[] {
-  const nodePositions: Record<string, { x: number; y: number; width: number; height: number }> = {};
-  layoutNodes.forEach((n) => {
-    const nodeType = (n.data as any)?.nodeType || "task";
-    const dims = getNodeDimensions(nodeType);
-    nodePositions[n.id] = {
-      x: n.position.x + dims.width / 2,
-      y: n.position.y + dims.height / 2,
-      width: dims.width,
-      height: dims.height,
-    };
-  });
-
-  const edgesBySource: Record<string, Edge[]> = {};
-  const edgesByTarget: Record<string, Edge[]> = {};
-  edges.forEach((e) => {
-    if (!edgesBySource[e.source]) edgesBySource[e.source] = [];
-    edgesBySource[e.source].push(e);
-    if (!edgesByTarget[e.target]) edgesByTarget[e.target] = [];
-    edgesByTarget[e.target].push(e);
-  });
-
-  const updatedEdges = [...edges];
-
-  const resolvedHandles: Record<string, string> = {};
-
-  for (const sourceId of Object.keys(edgesBySource)) {
-    const srcType = nodeTypeMap[sourceId] || "task";
-    const isDecision = srcType === "decision" || srcType === "agent-decision";
-    if (!isDecision) continue;
-
-    const siblings = edgesBySource[sourceId];
-    const srcPos = nodePositions[sourceId];
-    if (!srcPos) continue;
-
-    if (siblings.length === 1) {
-      const edge = siblings[0];
-      const currentHandle = edge.sourceHandle || "left";
-      const handle = (currentHandle === "left" || currentHandle === "right") ? currentHandle : "left";
-      resolvedHandles[edge.id] = handle;
-      const idx = updatedEdges.findIndex((e) => e.id === edge.id);
-      if (idx >= 0) {
-        updatedEdges[idx] = { ...updatedEdges[idx], sourceHandle: handle };
-      }
-      continue;
-    }
-
-    if (siblings.length === 2) {
-      const edge0 = siblings[0];
-      const edge1 = siblings[1];
-      const tgt0 = nodePositions[edge0.target];
-      const tgt1 = nodePositions[edge1.target];
-      if (!tgt0 || !tgt1) continue;
-
-      let handle0: string;
-      let handle1: string;
-
-      const sem0 = getLabelSemanticSide((edge0.data as any)?.label);
-      const sem1 = getLabelSemanticSide((edge1.data as any)?.label);
-
-      if (sem0 && sem1 && sem0 !== sem1) {
-        handle0 = sem0;
-        handle1 = sem1;
-      } else if (sem0 && !sem1) {
-        handle0 = sem0;
-        handle1 = sem0 === "left" ? "right" : "left";
-      } else if (!sem0 && sem1) {
-        handle1 = sem1;
-        handle0 = sem1 === "left" ? "right" : "left";
-      } else {
-        if (tgt0.x < tgt1.x) {
-          handle0 = "left";
-          handle1 = "right";
-        } else if (tgt0.x > tgt1.x) {
-          handle0 = "right";
-          handle1 = "left";
-        } else {
-          handle0 = "left";
-          handle1 = "right";
-        }
-      }
-
-      const dx0 = Math.abs(tgt0.x - srcPos.x);
-      const dy0 = tgt0.y - srcPos.y;
-      const dx1 = Math.abs(tgt1.x - srcPos.x);
-      const dy1 = tgt1.y - srcPos.y;
-      const directlyBelow0 = dx0 < 30 && dy0 > 0;
-      const directlyBelow1 = dx1 < 30 && dy1 > 0;
-
-      if (directlyBelow0 && !directlyBelow1 && !sem0) {
-        handle0 = "bottom";
-      } else if (directlyBelow1 && !directlyBelow0 && !sem1) {
-        handle1 = "bottom";
-      }
-
-      resolvedHandles[edge0.id] = handle0;
-      resolvedHandles[edge1.id] = handle1;
-      const idx0 = updatedEdges.findIndex((e) => e.id === edge0.id);
-      const idx1 = updatedEdges.findIndex((e) => e.id === edge1.id);
-      if (idx0 >= 0) {
-        updatedEdges[idx0] = { ...updatedEdges[idx0], sourceHandle: handle0 };
-      }
-      if (idx1 >= 0) {
-        updatedEdges[idx1] = { ...updatedEdges[idx1], sourceHandle: handle1 };
-      }
-      continue;
-    }
-
-    for (let i = 0; i < siblings.length; i++) {
-      const edge = siblings[i];
-      const sem = getLabelSemanticSide((edge.data as any)?.label);
-      let handle: string;
-      if (sem) {
-        handle = sem;
-      } else if (i === 0) {
-        handle = "left";
-      } else if (i === 1) {
-        handle = "right";
-      } else {
-        handle = "bottom";
-      }
-      resolvedHandles[edge.id] = handle;
-      const idx = updatedEdges.findIndex((e) => e.id === edge.id);
-      if (idx >= 0) {
-        updatedEdges[idx] = { ...updatedEdges[idx], sourceHandle: handle };
-      }
-    }
-  }
-
-  for (const targetId of Object.keys(edgesByTarget)) {
-    const tgtPos = nodePositions[targetId];
-    if (!tgtPos) continue;
-    const convergent = edgesByTarget[targetId];
-    const convergentInfo = convergent.map(e => {
-      const sp = nodePositions[e.source];
-      return {
-        sourceHandle: resolvedHandles[e.id] || e.sourceHandle || "bottom",
-        srcPos: sp || { x: 0, y: 0 },
-        edgeId: e.id,
-      };
-    });
-
-    for (const info of convergentInfo) {
-      const idx = updatedEdges.findIndex(e => e.id === info.edgeId);
-      if (idx >= 0) {
-        const targetHandle = computeTargetHandle(info.sourceHandle, info.srcPos, tgtPos, convergentInfo);
-        updatedEdges[idx] = { ...updatedEdges[idx], targetHandle };
-      }
-    }
-  }
-
-  return updatedEdges;
+  if (nodeType === "start") return { width: 72, height: 72 };
+  if (nodeType === "end") return { width: 72, height: 72 };
+  if (nodeType === "decision") return { width: 100, height: 100 };
+  if (nodeType === "agent-decision") return { width: 100, height: 120 };
+  if (nodeType === "agent-loop") return { width: 280, height: 110 };
+  if (nodeType === "agent-task") return { width: 280, height: 120 };
+  return { width: 280, height: 100 };
 }
 
 function applyDagreLayout(
   nodes: Node[],
   edges: Edge[],
   direction: "LR" | "TB" = "TB",
-  simplified: boolean = false,
-  dbNodes?: { id: number; orderIndex: number; nodeType: string }[]
+  simplified: boolean = false
 ): Node[] {
-  const hasOrderIndex = dbNodes && dbNodes.some((n) => n.orderIndex > 0);
-  if (direction === "TB" && hasOrderIndex) {
-    const layoutInputs: LayoutInput[] = dbNodes.map((n) => ({
-      id: String(n.id),
-      nodeType: n.nodeType || "task",
-      orderIndex: n.orderIndex,
-    }));
-    const layoutEdges: LayoutEdgeInput[] = edges.map((e) => {
-      const edgeData = e.data as Record<string, unknown> | undefined;
-      const dataLabel = typeof edgeData?.label === "string" ? edgeData.label : null;
-      const topLabel = typeof e.label === "string" ? e.label : null;
-      return { source: e.source, target: e.target, label: dataLabel || topLabel };
-    });
-    const positions = computeProcessAwareLayout(layoutInputs, layoutEdges, (nodeType) => getNodeDimensions(nodeType));
-    if (positions.size === nodes.length) {
-      return nodes.map((node) => {
-        const pos = positions.get(node.id);
-        return {
-          ...node,
-          position: pos ? { x: pos.x, y: pos.y } : { x: 0, y: 0 },
-        };
-      });
-    }
-  }
-
   const nodeCount = nodes.length;
   const edgeCount = edges.length;
 
@@ -841,21 +586,21 @@ function applyDagreLayout(
   let edgesep: number;
 
   if (simplified) {
-    nodesep = 140;
-    ranksep = 80;
-    edgesep = 50;
-  } else if (isVeryLarge) {
-    nodesep = Math.round(60 + density * 15);
-    ranksep = Math.round(80 + density * 10);
-    edgesep = Math.round(25 + density * 8);
-  } else if (isLarge) {
-    nodesep = Math.round(80 + density * 20);
-    ranksep = Math.round(100 + density * 15);
-    edgesep = Math.round(30 + density * 10);
-  } else {
-    nodesep = 100;
+    nodesep = 180;
     ranksep = 120;
-    edgesep = 40;
+    edgesep = 80;
+  } else if (isVeryLarge) {
+    nodesep = Math.round(80 + density * 20);
+    ranksep = Math.round(120 + density * 15);
+    edgesep = Math.round(30 + density * 10);
+  } else if (isLarge) {
+    nodesep = Math.round(100 + density * 25);
+    ranksep = Math.round(140 + density * 20);
+    edgesep = Math.round(40 + density * 15);
+  } else {
+    nodesep = 140;
+    ranksep = 200;
+    edgesep = 60;
   }
 
   const g = new dagre.graphlib.Graph();
@@ -921,60 +666,6 @@ function applyDagreLayout(
   });
 }
 
-async function applyElkLayout(
-  rawNodes: Node[],
-  edges: Edge[],
-  dbNodes: { id: number; orderIndex: number; nodeType: string }[]
-): Promise<Node[]> {
-  const layoutInputs: LayoutInput[] = dbNodes.map((n) => ({
-    id: String(n.id),
-    nodeType: n.nodeType || "task",
-    orderIndex: n.orderIndex,
-  }));
-  const layoutEdges: LayoutEdgeInput[] = edges.map((e) => {
-    const edgeData = e.data as Record<string, unknown> | undefined;
-    const dataLabel = typeof edgeData?.label === "string" ? edgeData.label : null;
-    const topLabel = typeof e.label === "string" ? e.label : null;
-    return { source: e.source, target: e.target, label: dataLabel || topLabel };
-  });
-  const result = await computeElkLayout(layoutInputs, layoutEdges, (nodeType) => getNodeDimensions(nodeType));
-  logElkComparisonSummary(result, rawNodes.length, edges.length);
-  return rawNodes.map((node) => {
-    const pos = result.positions.get(node.id);
-    return {
-      ...node,
-      position: pos ? { x: pos.x, y: pos.y } : { x: 0, y: 0 },
-    };
-  });
-}
-
-async function applyYFilesLayout(
-  rawNodes: Node[],
-  edges: Edge[],
-  dbNodes: { id: number; orderIndex: number; nodeType: string }[]
-): Promise<Node[]> {
-  const layoutInputs: LayoutInput[] = dbNodes.map((n) => ({
-    id: String(n.id),
-    nodeType: n.nodeType || "task",
-    orderIndex: n.orderIndex,
-  }));
-  const layoutEdges: LayoutEdgeInput[] = edges.map((e) => {
-    const edgeData = e.data as Record<string, unknown> | undefined;
-    const dataLabel = typeof edgeData?.label === "string" ? edgeData.label : null;
-    const topLabel = typeof e.label === "string" ? e.label : null;
-    return { source: e.source, target: e.target, label: dataLabel || topLabel };
-  });
-  const result = await computeYFilesLayout(layoutInputs, layoutEdges, (nodeType) => getNodeDimensions(nodeType));
-  console.log(`[yFiles] Layout completed in ${result.elapsed.toFixed(1)}ms for ${rawNodes.length} nodes`);
-  return rawNodes.map((node) => {
-    const pos = result.positions.get(node.id);
-    return {
-      ...node,
-      position: pos ? { x: pos.x, y: pos.y } : { x: 0, y: 0 },
-    };
-  });
-}
-
 function getNodePosition(index: number, total: number) {
   const cols = Math.min(total, 3);
   const col = index % cols;
@@ -1030,30 +721,30 @@ function NodeHoverTooltip({ data, visible }: { data: any; visible: boolean }) {
       data-testid={`tooltip-node-${data.nodeId || ""}`}
     >
       <div
-        className="rounded-lg px-3 py-2.5 text-left shadow-xl min-w-[200px] max-w-[300px] bg-popover/95 backdrop-blur-xl border border-border"
+        className="rounded-lg px-3 py-2.5 text-left shadow-xl min-w-[200px] max-w-[300px] bg-white/95 dark:bg-[rgba(15,15,20,0.85)] backdrop-blur-xl border border-gray-200 dark:border-white/10"
       >
-        <div className="text-[12px] font-semibold text-foreground leading-snug break-words">
+        <div className="text-[12px] font-semibold text-gray-900 dark:text-white/90 leading-snug break-words">
           {data.label}
         </div>
         {data.role && (
           <div className="flex items-center gap-1.5 mt-1.5">
-            <PerformerIcon className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-            <span className="text-[10px] text-muted-foreground">{data.role}</span>
+            <PerformerIcon className="h-3 w-3 text-gray-400 dark:text-white/40 flex-shrink-0" />
+            <span className="text-[10px] text-gray-500 dark:text-white/50">{data.role}</span>
           </div>
         )}
         {data.system && data.system !== "Manual" && data.system !== "manual" && (
           <div className="flex items-center gap-1.5 mt-1">
-            <Monitor className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-            <span className="text-[10px] text-muted-foreground">{data.system}</span>
+            <Monitor className="h-3 w-3 text-gray-400 dark:text-white/40 flex-shrink-0" />
+            <span className="text-[10px] text-gray-500 dark:text-white/50">{data.system}</span>
           </div>
         )}
         {cleanDescription && (
-          <div className="mt-1.5 text-[10px] text-muted-foreground leading-relaxed break-words line-clamp-3">
+          <div className="mt-1.5 text-[10px] text-gray-400 dark:text-white/40 leading-relaxed break-words line-clamp-3">
             {cleanDescription}
           </div>
         )}
-        <div className="flex items-center gap-2 mt-2 pt-1.5 border-t border-border">
-          <span className="text-[9px] text-muted-foreground/70">{performerLabel}</span>
+        <div className="flex items-center gap-2 mt-2 pt-1.5 border-t border-gray-200 dark:border-white/10">
+          <span className="text-[9px] text-gray-400 dark:text-white/30">{performerLabel}</span>
           {isAutomated && (
             <span className="flex items-center gap-1">
               <Zap className="h-2.5 w-2.5 text-green-400" />
@@ -1152,7 +843,7 @@ function StartNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className={`flex items-center justify-center ${connectModeSourceId === id ? "connect-mode-source rounded-full" : ""}`}
-      style={{ width: 56, height: 56 }}
+      style={{ width: 72, height: 72 }}
       data-testid={`node-${id}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -1161,13 +852,9 @@ function StartNode({ data, id }: { data: any; id: string }) {
         nodeId={id}
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
-        targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
-        ]}
+        targetHandles={[{ position: Position.Top }]}
         sourceHandles={[
-          { position: Position.Bottom, id: "bottom" },
+          { position: Position.Bottom },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
@@ -1191,7 +878,7 @@ function EndNode({ data, id }: { data: any; id: string }) {
   return (
     <div
       className={`flex items-center justify-center ${connectModeSourceId === id ? "connect-mode-source rounded-full" : ""}`}
-      style={{ width: 56, height: 56 }}
+      style={{ width: 72, height: 72 }}
       data-testid={`node-${id}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -1201,11 +888,11 @@ function EndNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
+          { position: Position.Right, id: "right-target" },
         ]}
-        sourceHandles={[{ position: Position.Bottom, id: "bottom" }]}
+        sourceHandles={[{ position: Position.Bottom }]}
       />
       <div
         className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg shadow-red-500/20 transition-all hover:shadow-xl hover:shadow-red-500/30"
@@ -1244,9 +931,8 @@ function DecisionNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -1305,7 +991,6 @@ function TaskNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
-        height: NODE_HEIGHTS.task,
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1319,18 +1004,17 @@ function TaskNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom, id: "bottom" },
+          { position: Position.Bottom },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
       />
       <div
-        className="h-full rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
           background: bgColor,
           border: `1.5px solid ${borderColor}`,
@@ -1400,7 +1084,6 @@ function AgentTaskNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
-        height: NODE_HEIGHTS["agent-task"],
         opacity: isGhost || isLowConf ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1414,18 +1097,17 @@ function AgentTaskNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom, id: "bottom" },
+          { position: Position.Bottom },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
       />
       <div
-        className="h-full rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
           background: bgColor,
           border: `1.5px solid ${borderColor}`,
@@ -1486,9 +1168,8 @@ function AgentDecisionNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
         ]}
         sourceHandles={[
           { position: Position.Bottom, id: "bottom" },
@@ -1538,7 +1219,6 @@ function AgentLoopNode({ data, id }: { data: any; id: string }) {
       className={`relative cursor-pointer group ${connectModeSourceId === id ? "connect-mode-source rounded-xl" : ""}`}
       style={{
         width: 280,
-        height: NODE_HEIGHTS["agent-loop"],
         opacity: isGhost ? 0.5 : 1,
         borderStyle: isGhost ? "dashed" : "solid",
       }}
@@ -1552,18 +1232,17 @@ function AgentLoopNode({ data, id }: { data: any; id: string }) {
         isHovered={isHovered}
         connectModeSourceId={connectModeSourceId}
         targetHandles={[
-          { position: Position.Top, id: "top" },
-          { position: Position.Left, id: "left" },
-          { position: Position.Right, id: "right" },
+          { position: Position.Top },
+          { position: Position.Left, id: "left-target" },
         ]}
         sourceHandles={[
-          { position: Position.Bottom, id: "bottom" },
+          { position: Position.Bottom },
           { position: Position.Right, id: "right" },
           { position: Position.Left, id: "left" },
         ]}
       />
       <div
-        className="h-full rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
+        className="rounded-xl overflow-hidden transition-all duration-200 group-hover:shadow-lg"
         style={{
           background: bgColor,
           border: `2px dashed ${borderColor}`,
@@ -1612,167 +1291,6 @@ function ProcessNodeComponent({ data, id }: { data: any; id: string }) {
   return <TaskNode data={data} id={id} />;
 }
 
-function edgePathIntersectsNode(
-  sx: number, sy: number, tx: number, ty: number,
-  nx: number, ny: number, nw: number, nh: number,
-  margin: number = 8
-): boolean {
-  const left = nx - margin;
-  const right = nx + nw + margin;
-  const top = ny - margin;
-  const bottom = ny + nh + margin;
-  const minX = Math.min(sx, tx);
-  const maxX = Math.max(sx, tx);
-  const minY = Math.min(sy, ty);
-  const maxY = Math.max(sy, ty);
-  if (maxX < left || minX > right || maxY < top || minY > bottom) return false;
-  if (sx === tx) return sx >= left && sx <= right && !(minY >= bottom || maxY <= top);
-  if (sy === ty) return sy >= top && sy <= bottom && !(minX >= right || maxX <= left);
-  const slope = (ty - sy) / (tx - sx);
-  const yAtLeft = sy + slope * (left - sx);
-  const yAtRight = sy + slope * (right - sx);
-  return (yAtLeft >= top && yAtLeft <= bottom) || (yAtRight >= top && yAtRight <= bottom);
-}
-
-function buildOrthogonalPath(
-  points: { x: number; y: number }[],
-  cornerRadius: number = 12
-): string {
-  if (points.length < 2) return "";
-  if (points.length === 2) {
-    return `M ${points[0].x},${points[0].y} L ${points[1].x},${points[1].y}`;
-  }
-  const r = cornerRadius;
-  let d = `M ${points[0].x},${points[0].y}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const next = points[i + 1];
-    const dx1 = curr.x - prev.x;
-    const dy1 = curr.y - prev.y;
-    const dx2 = next.x - curr.x;
-    const dy2 = next.y - curr.y;
-    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-    if (len1 < 1 || len2 < 1) {
-      d += ` L ${curr.x},${curr.y}`;
-      continue;
-    }
-    const isStraight = Math.abs(dx1 * dy2 - dy1 * dx2) < 0.01 * len1 * len2;
-    if (isStraight) continue;
-    const clampR = Math.min(r, len1 / 2, len2 / 2);
-    const ax = curr.x - (dx1 / len1) * clampR;
-    const ay = curr.y - (dy1 / len1) * clampR;
-    const bx = curr.x + (dx2 / len2) * clampR;
-    const by = curr.y + (dy2 / len2) * clampR;
-    d += ` L ${ax},${ay} Q ${curr.x},${curr.y} ${bx},${by}`;
-  }
-  const last = points[points.length - 1];
-  d += ` L ${last.x},${last.y}`;
-  return d;
-}
-
-function findMinClearanceX(
-  obstacleNodes: { id: string; x: number; y: number; w: number; h: number }[],
-  sx: number, sy: number, tx: number, ty: number,
-  side: "left" | "right"
-): number {
-  const yMin = Math.min(sy, ty);
-  const yMax = Math.max(sy, ty);
-  const margin = 20;
-  const relevant = obstacleNodes.filter(n =>
-    n.y + n.h > yMin - margin && n.y < yMax + margin
-  );
-  if (relevant.length === 0) {
-    return side === "left" ? Math.min(sx, tx) - margin : Math.max(sx, tx) + margin;
-  }
-  if (side === "left") {
-    const minX = Math.min(...relevant.map(n => n.x));
-    return minX - margin;
-  }
-  const maxX = Math.max(...relevant.map(n => n.x + n.w));
-  return maxX + margin;
-}
-
-function computeOrthogonalPoints(
-  sx: number, sy: number, tx: number, ty: number,
-  obstacleNodes: { id: string; x: number; y: number; w: number; h: number }[],
-  exitDirection?: "left" | "right" | "bottom"
-): { x: number; y: number }[] {
-  const dx = Math.abs(tx - sx);
-  const isAligned = dx < 5;
-
-  function segBlocked(x1: number, y1: number, x2: number, y2: number): boolean {
-    return obstacleNodes.some((n) =>
-      edgePathIntersectsNode(x1, y1, x2, y2, n.x, n.y, n.w, n.h)
-    );
-  }
-
-  if (exitDirection === "left" || exitDirection === "right") {
-    const lPath: { x: number; y: number }[] = [
-      { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
-    ];
-    if (!segBlocked(sx, sy, tx, sy) && !segBlocked(tx, sy, tx, ty)) return lPath;
-
-    const midY = (sy + ty) / 2;
-    const zPath: { x: number; y: number }[] = [
-      { x: sx, y: sy }, { x: sx, y: midY },
-      { x: tx, y: midY }, { x: tx, y: ty }
-    ];
-    if (!segBlocked(sx, sy, sx, midY) && !segBlocked(sx, midY, tx, midY) && !segBlocked(tx, midY, tx, ty)) return zPath;
-
-    const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, exitDirection);
-    return [
-      { x: sx, y: sy }, { x: detourX, y: sy },
-      { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
-    ];
-  }
-
-  if (isAligned) {
-    if (!segBlocked(sx, sy, sx, ty)) {
-      return [{ x: sx, y: sy }, { x: sx, y: ty }];
-    }
-    let bestDetourX = sx;
-    let bestClearance = 0;
-    for (const obs of obstacleNodes) {
-      if (!edgePathIntersectsNode(sx, sy, sx, ty, obs.x, obs.y, obs.w, obs.h)) continue;
-      const leftX = obs.x - 20;
-      const rightX = obs.x + obs.w + 20;
-      const leftDist = Math.abs(sx - leftX);
-      const rightDist = Math.abs(sx - rightX);
-      const chosenX = leftDist <= rightDist ? leftX : rightX;
-      if (Math.abs(chosenX - sx) > bestClearance) {
-        bestDetourX = chosenX;
-        bestClearance = Math.abs(chosenX - sx);
-      }
-    }
-    const midY = (sy + ty) / 2;
-    return [
-      { x: sx, y: sy }, { x: bestDetourX, y: sy },
-      { x: bestDetourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
-    ];
-  }
-
-  const lPath: { x: number; y: number }[] = [
-    { x: sx, y: sy }, { x: tx, y: sy }, { x: tx, y: ty }
-  ];
-  if (!segBlocked(sx, sy, tx, sy) && !segBlocked(tx, sy, tx, ty)) return lPath;
-
-  const midY = (sy + ty) / 2;
-  const zPath: { x: number; y: number }[] = [
-    { x: sx, y: sy }, { x: sx, y: midY },
-    { x: tx, y: midY }, { x: tx, y: ty }
-  ];
-  if (!segBlocked(sx, sy, sx, midY) && !segBlocked(sx, midY, tx, midY) && !segBlocked(tx, midY, tx, ty)) return zPath;
-
-  const preferRight = tx > sx;
-  const detourX = findMinClearanceX(obstacleNodes, sx, sy, tx, ty, preferRight ? "right" : "left");
-  return [
-    { x: sx, y: sy }, { x: detourX, y: sy },
-    { x: detourX, y: midY }, { x: tx, y: midY }, { x: tx, y: ty }
-  ];
-}
-
 function CustomEdge({
   id,
   sourceX,
@@ -1783,43 +1301,40 @@ function CustomEdge({
   targetPosition,
   data,
   style,
-  source,
-  target,
 }: any) {
   const sourceIndex = data?.sourceIndex || 0;
   const sourceSiblings = data?.sourceSiblings || 1;
   const targetIndex = data?.targetIndex || 0;
   const targetSiblings = data?.targetSiblings || 1;
+  const totalNodes = data?.totalNodes || 0;
   const simplified = data?.simplified || false;
-  const targetNodeType = data?.targetNodeType || "task";
-  const nodeBounds: { id: string; x: number; y: number; w: number; h: number }[] = data?.nodeBounds || [];
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
-  const isEndTarget = targetNodeType === "end";
+  const useBezier = simplified || totalNodes > 25;
 
-  const sourceOffset = simplified ? 0 : (sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * 20 : 0);
-  const targetOffset = (simplified || isEndTarget) ? 0 : (targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * 20 : 0);
+  const sourceOffset = simplified ? 0 : (sourceSiblings > 1 ? (sourceIndex - (sourceSiblings - 1) / 2) * (useBezier ? 12 : 20) : 0);
+  const targetOffset = simplified ? 0 : (targetSiblings > 1 ? (targetIndex - (targetSiblings - 1) / 2) * (useBezier ? 12 : 20) : 0);
 
-  let edgePath: string;
-  let labelX: number;
-  let labelY: number;
-
-  const adjSourceX = sourceX + sourceOffset;
-  const adjTargetX = targetX + targetOffset;
-  const obstacleNodes = nodeBounds.filter((n) => n.id !== source && n.id !== target);
-
-  let exitDir: "left" | "right" | "bottom" | undefined;
-  if (sourcePosition === Position.Left) exitDir = "left";
-  else if (sourcePosition === Position.Right) exitDir = "right";
-  else exitDir = "bottom";
-
-  const points = computeOrthogonalPoints(adjSourceX, sourceY, adjTargetX, targetY, obstacleNodes, exitDir);
-  edgePath = buildOrthogonalPath(points, 12);
-
-  const midIdx = Math.floor(points.length / 2);
-  labelX = (points[midIdx - 1]?.x + points[midIdx]?.x) / 2 || (adjSourceX + adjTargetX) / 2;
-  labelY = (points[midIdx - 1]?.y + points[midIdx]?.y) / 2 || (sourceY + targetY) / 2;
+  const [edgePath, labelX, labelY] = useBezier
+    ? getBezierPath({
+        sourceX: sourceX + sourceOffset,
+        sourceY,
+        sourcePosition,
+        targetX: targetX + targetOffset,
+        targetY,
+        targetPosition,
+      })
+    : getSmoothStepPath({
+        sourceX: sourceX + sourceOffset,
+        sourceY,
+        sourcePosition,
+        targetX: targetX + targetOffset,
+        targetY,
+        targetPosition,
+        borderRadius: 16,
+        offset: (Math.abs(sourceOffset) > 0 || Math.abs(targetOffset) > 0) ? 25 + Math.max(Math.abs(sourceOffset), Math.abs(targetOffset)) : 20,
+      });
 
   const label = data?.label || "";
   const isYes = /^(yes|approved|pass|valid|complete|true|within|below|stp|auto)/i.test(label);
@@ -1836,8 +1351,8 @@ function CustomEdge({
   else if (isPartial) edgeColor = "rgba(245,158,11,0.7)";
   else if (label) edgeColor = isDark ? "rgba(148,163,184,0.5)" : "rgba(100,116,139,0.6)";
 
-  const strokeWidth = simplified ? 2 : (label ? 1.5 : 1.2);
-  const edgeOpacity = simplified ? 0.85 : 1;
+  const strokeWidth = simplified ? 2 : useBezier ? (label ? 1.2 : 0.8) : (label ? 1.5 : 1);
+  const edgeOpacity = simplified ? 0.85 : useBezier ? 0.7 : 1;
 
   return (
     <>
@@ -1876,8 +1391,8 @@ function CustomEdge({
                     ? "bg-amber-950/95 border border-amber-500/30 text-amber-300 shadow-sm shadow-amber-900/30"
                     : "bg-amber-50 border border-amber-300 text-amber-700 shadow-sm")
                 : (isDark
-                    ? "bg-popover/95 border border-border text-muted-foreground shadow-sm"
-                    : "bg-popover border border-border text-muted-foreground shadow-sm")
+                    ? "bg-zinc-900/95 border border-zinc-600/30 text-zinc-400 shadow-sm shadow-zinc-900/30"
+                    : "bg-white border border-gray-200 text-gray-600 shadow-sm")
             }`}
             data-testid={`edge-label-${id}`}
           >
@@ -1941,50 +1456,50 @@ function InlineEditPanel({
   isNew?: boolean;
 }) {
   return (
-    <div className="absolute right-0 top-0 bottom-0 w-72 bg-card/95 backdrop-blur-md border-l border-border z-50 flex flex-col overflow-y-auto" data-testid="panel-node-edit">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+    <div className="absolute right-0 top-0 bottom-0 w-72 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border-l border-gray-200 dark:border-zinc-800 z-50 flex flex-col overflow-y-auto" data-testid="panel-node-edit">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-zinc-800">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center">
             <Pencil className="h-3 w-3 text-primary" />
           </div>
-          <span className="text-xs font-semibold text-foreground">{isNew ? "Add Step" : "Edit Step"}</span>
+          <span className="text-xs font-semibold text-gray-900 dark:text-white">{isNew ? "Add Step" : "Edit Step"}</span>
         </div>
-        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground transition-colors" data-testid="button-close-edit">
+        <button onClick={onCancel} className="text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors" data-testid="button-close-edit">
           <X className="h-4 w-4" />
         </button>
       </div>
       <div className="flex-1 p-4 space-y-4">
         <div>
-          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Step Name</label>
+          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Step Name</label>
           <input
-            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.name}
             onChange={(e) => onChange({ ...editData, name: e.target.value })}
             data-testid="input-node-name"
           />
         </div>
         <div>
-          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Role</label>
+          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Role</label>
           <input
-            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.role}
             onChange={(e) => onChange({ ...editData, role: e.target.value })}
             data-testid="input-node-role"
           />
         </div>
         <div>
-          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">System</label>
+          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">System</label>
           <input
-            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.system}
             onChange={(e) => onChange({ ...editData, system: e.target.value })}
             data-testid="input-node-system"
           />
         </div>
         <div>
-          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Type</label>
+          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Type</label>
           <select
-            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
+            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none transition-all"
             value={editData.nodeType}
             onChange={(e) => onChange({ ...editData, nodeType: e.target.value as any })}
             data-testid="select-node-type"
@@ -1999,9 +1514,9 @@ function InlineEditPanel({
           </select>
         </div>
         <div>
-          <label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium block mb-1.5">Description</label>
+          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block mb-1.5">Description</label>
           <textarea
-            className="w-full bg-muted border border-input rounded-lg px-3 py-2 text-xs text-foreground focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none resize-none transition-all"
+            className="w-full bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary/30 focus:outline-none resize-none transition-all"
             rows={3}
             value={editData.description}
             onChange={(e) => onChange({ ...editData, description: e.target.value })}
@@ -2013,13 +1528,13 @@ function InlineEditPanel({
             type="checkbox"
             checked={editData.isPainPoint}
             onChange={(e) => onChange({ ...editData, isPainPoint: e.target.checked })}
-            className="rounded border-input bg-muted text-red-500 focus:ring-red-500/30"
+            className="rounded border-gray-300 dark:border-zinc-600 bg-gray-50 dark:bg-zinc-900 text-red-500 focus:ring-red-500/30"
           />
           <Flag className="h-3 w-3 text-red-400 group-hover:text-red-300" />
-          <span className="text-xs text-muted-foreground group-hover:text-foreground">Pain point</span>
+          <span className="text-xs text-zinc-400 group-hover:text-zinc-300">Pain point</span>
         </label>
       </div>
-      <div className="p-4 border-t border-border flex items-center gap-2">
+      <div className="p-4 border-t border-gray-200 dark:border-zinc-800 flex items-center gap-2">
         <Button size="sm" className="flex-1 text-xs h-8 rounded-lg" onClick={onSave} data-testid="button-save-node">
           <Save className="h-3 w-3 mr-1.5" /> Save
         </Button>
@@ -2028,7 +1543,7 @@ function InlineEditPanel({
             <Trash2 className="h-3 w-3" />
           </Button>
         )}
-        <Button size="sm" variant="ghost" className="text-xs h-8 text-muted-foreground" onClick={onCancel} data-testid="button-cancel-edit">
+        <Button size="sm" variant="ghost" className="text-xs h-8 text-zinc-400" onClick={onCancel} data-testid="button-cancel-edit">
           Cancel
         </Button>
       </div>
@@ -2051,14 +1566,14 @@ function EdgeLabelEditPopup({
 }) {
   return (
     <div
-      className="absolute z-50 bg-card/95 backdrop-blur-md border border-border rounded-xl p-3 shadow-2xl"
+      className="absolute z-50 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl p-3 shadow-2xl"
       style={{ left: position.x, top: position.y }}
       data-testid="popup-edge-label"
     >
-      <div className="text-[10px] text-muted-foreground font-medium mb-1.5">Edge Label</div>
+      <div className="text-[10px] text-zinc-500 font-medium mb-1.5">Edge Label</div>
       <div className="flex items-center gap-2">
         <input
-          className="bg-muted border border-input rounded-lg px-3 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none w-36"
+          className="bg-gray-50 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-900 dark:text-white focus:border-primary focus:outline-none w-36"
           placeholder="e.g. Yes / No"
           value={editData.label}
           onChange={(e) => onChange({ ...editData, label: e.target.value })}
@@ -2069,7 +1584,7 @@ function EdgeLabelEditPopup({
         <button onClick={onSave} className="text-emerald-400 hover:text-emerald-300 transition-colors" data-testid="button-save-edge-label">
           <Check className="h-4 w-4" />
         </button>
-        <button onClick={onCancel} className="text-muted-foreground hover:text-foreground transition-colors" data-testid="button-cancel-edge-label">
+        <button onClick={onCancel} className="text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors" data-testid="button-cancel-edge-label">
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -2088,12 +1603,12 @@ function ContextMenu({
 }) {
   return (
     <div
-      className="absolute z-50 bg-card/95 backdrop-blur-md border border-border rounded-xl py-1.5 shadow-2xl min-w-[160px]"
+      className="absolute z-50 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl py-1.5 shadow-2xl min-w-[160px]"
       style={{ left: position.x, top: position.y }}
       data-testid="context-menu"
     >
       <button
-        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
+        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
         onClick={onAddStep}
         data-testid="button-add-step-context"
       >
@@ -2122,19 +1637,19 @@ function NodeContextMenu({
 }) {
   return (
     <div
-      className="absolute z-50 bg-card/95 backdrop-blur-md border border-border rounded-xl py-1.5 shadow-2xl min-w-[180px]"
+      className="absolute z-50 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl py-1.5 shadow-2xl min-w-[180px]"
       style={{ left: position.x, top: position.y }}
       data-testid="node-context-menu"
     >
       <button
-        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
+        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
         onClick={onEdit}
         data-testid="button-edit-node-context"
       >
         <Pencil className="h-3.5 w-3.5 text-primary" /> Edit Step
       </button>
       <button
-        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
+        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
         onClick={onAddChild}
         data-testid="button-add-child-context"
       >
@@ -2142,13 +1657,13 @@ function NodeContextMenu({
         {(nodeData.nodeType === "decision" || nodeData.nodeType === "agent-decision") ? "Add Branch" : "Add Child Step"}
       </button>
       <button
-        className="w-full text-left px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors flex items-center gap-2.5"
+        className="w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-900 dark:hover:text-white flex items-center gap-2.5 transition-colors"
         onClick={onConnectTo}
         data-testid="button-connect-to-context"
       >
         <Cable className="h-3.5 w-3.5 text-emerald-400" /> Connect to...
       </button>
-      <div className="h-px bg-border my-1" />
+      <div className="h-px bg-gray-200 dark:bg-zinc-800 my-1" />
       <button
         className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 hover:text-red-300 flex items-center gap-2.5 transition-colors"
         onClick={onDelete}
@@ -2188,9 +1703,6 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
   const isDark = theme === "dark";
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
-  type LayoutEngine = "elk" | "yfiles";
-  const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>("yfiles");
-  const elkLayoutRunIdRef = useRef(0);
 
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
@@ -2291,8 +1803,6 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       },
     }));
     const nodeIdSet = new Set(dbNodes.map(n => n.id));
-    const nodeTypeMap: Record<string, string> = {};
-    dbNodes.forEach(n => { nodeTypeMap[String(n.id)] = n.nodeType || "task"; });
     const validEdges = dbEdges.filter(e => nodeIdSet.has(e.sourceNodeId) && nodeIdSet.has(e.targetNodeId));
     const relSrcGrp: Record<string, typeof validEdges> = {};
     const relTgtGrp: Record<string, typeof validEdges> = {};
@@ -2309,108 +1819,46 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     const rawEdges: Edge[] = validEdges.map((e) => {
       const srcS = relSrcGrp[String(e.sourceNodeId)] || [e];
       const tgtS = relTgtGrp[String(e.targetNodeId)] || [e];
-      const srcNodeType = nodeTypeMap[String(e.sourceNodeId)] || "task";
-      const isDecision = srcNodeType === "decision" || srcNodeType === "agent-decision";
-      const sourceHandle = getEdgeSourceHandle(isDecision, e.label, srcS, e);
-
-      const tgtNodeType = nodeTypeMap[String(e.targetNodeId)] || "task";
       return {
         id: String(e.id), source: String(e.sourceNodeId), target: String(e.targetNodeId),
         type: "custom",
-        ...(isDecision && e.label ? { label: e.label } : {}),
-        sourceHandle,
-        targetHandle: "top",
         data: {
           label: e.label, dbId: e.id, viewType: activeView,
           sourceIndex: srcS.indexOf(e), sourceSiblings: srcS.length,
           targetIndex: tgtS.indexOf(e), targetSiblings: tgtS.length,
           totalNodes: relNodeCount,
           simplified: relSimplified,
-          isDecisionSource: isDecision,
-          targetNodeType: tgtNodeType,
         },
       };
     });
-
-    const finishLayout = (layoutNodes: Node[], isElk: boolean) => {
-      const finalEdges = isElk ? rawEdges : fixDecisionHandlesPostLayout(layoutNodes, rawEdges, nodeTypeMap);
-      const relNodeBounds = layoutNodes.map((n) => {
-        const nt = (n.data as any)?.nodeType || "task";
-        const dims = getNodeDimensions(nt);
-        return { id: n.id, x: n.position.x, y: n.position.y, w: dims.width, h: dims.height };
-      });
-      const relEdgesWithBounds = finalEdges.map((e) => ({
-        ...e,
-        data: { ...(e.data as any), nodeBounds: relNodeBounds },
-      }));
-      setNodes(layoutNodes);
-      setEdges(relEdgesWithBounds);
-      if (!isElk) {
-        layoutNodes.forEach((n) => {
-          const d = n.data as any;
-          if (d.dbId && d.dbId > 0) {
-            updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
-          }
-        });
-      }
-      setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
-    };
-
-    if (rawEdges.length === 0) {
-      finishLayout(rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) })), false);
-      return;
-    }
-
-    const dbNodeInfo = dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" }));
-    if (layoutEngine === "elk") {
-      const runId = ++elkLayoutRunIdRef.current;
-      applyElkLayout(rawNodes, rawEdges, dbNodeInfo).then((layoutNodes) => {
-        if (elkLayoutRunIdRef.current === runId) finishLayout(layoutNodes, true);
-      }).catch((err) => {
-        console.warn("[ELK] Layout failed in doRelayout, falling back to dagre:", err);
-        if (elkLayoutRunIdRef.current === runId) {
-          finishLayout(applyDagreLayout(rawNodes, rawEdges, "TB", relSimplified, dbNodeInfo), false);
-        }
-      });
-    } else if (layoutEngine === "yfiles") {
-      const runId = ++elkLayoutRunIdRef.current;
-      applyYFilesLayout(rawNodes, rawEdges, dbNodeInfo).then((layoutNodes) => {
-        if (elkLayoutRunIdRef.current === runId) finishLayout(layoutNodes, true);
-      }).catch((err) => {
-        console.warn("[yFiles] Layout failed in doRelayout, falling back to dagre:", err);
-        if (elkLayoutRunIdRef.current === runId) {
-          finishLayout(applyDagreLayout(rawNodes, rawEdges, "TB", relSimplified, dbNodeInfo), false);
-        }
-      });
+    let layoutNodes: Node[];
+    if (rawEdges.length > 0) {
+      layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", relSimplified);
     } else {
-      finishLayout(applyDagreLayout(rawNodes, rawEdges, "TB", relSimplified, dbNodeInfo), false);
+      layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
     }
-  }, [mapData, activeView, detailLevel, setNodes, setEdges, fitView, layoutEngine]);
+    setNodes(layoutNodes);
+    layoutNodes.forEach((n) => {
+      const d = n.data as any;
+      if (d.dbId && d.dbId > 0) {
+        updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
+      }
+    });
+    setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
+  }, [mapData, activeView, detailLevel, setNodes, fitView]);
 
-  const elkToggleCountRef = useRef(0);
   useEffect(() => {
     if (onRelayout) onRelayout(doRelayout);
   }, [onRelayout, doRelayout]);
 
   useEffect(() => {
-    if (elkToggleCountRef.current > 0 && mapData) {
-      doRelayout();
-    }
-    elkToggleCountRef.current += 1;
-  }, [layoutEngine]);
-
-  useEffect(() => {
     if (!mapData) return;
     const { nodes: dbNodes, edges: dbEdges } = filterNodesForLevel(mapData.nodes, mapData.edges, detailLevel);
-
-    const layoutKey = `processMapLayoutVersion_${ideaId}_${activeView}`;
-    const storedVersion = parseInt(localStorage.getItem(layoutKey) || "0", 10);
-    const needsVersionUpgrade = storedVersion < LAYOUT_VERSION;
 
     const rawNodes: Node[] = dbNodes.map((n) => ({
       id: String(n.id),
       type: "processNode",
-      position: { x: 0, y: 0 },
+      position: { x: n.positionX, y: n.positionY },
       data: {
         label: n.name,
         role: n.role,
@@ -2425,8 +1873,6 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
     }));
 
     const nodeIdSet2 = new Set(dbNodes.map(n => n.id));
-    const nodeTypeMap2: Record<string, string> = {};
-    dbNodes.forEach(n => { nodeTypeMap2[String(n.id)] = n.nodeType || "task"; });
     const safeEdges = dbEdges.filter(e => nodeIdSet2.has(e.sourceNodeId) && nodeIdSet2.has(e.targetNodeId));
     const sourceGroups: Record<string, typeof safeEdges> = {};
     const targetGroups: Record<string, typeof safeEdges> = {};
@@ -2445,27 +1891,19 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       const srcSiblings = sourceGroups[String(e.sourceNodeId)] || [e];
       const tgtSiblings = targetGroups[String(e.targetNodeId)] || [e];
       const markerColor = activeView === "sdd" ? "rgba(249,115,22,0.5)" : activeView === "to-be" ? "rgba(34,197,94,0.5)" : "rgba(120,120,145,0.4)";
-      const markerSize = isSimplified ? 16 : 14;
-      const srcType = nodeTypeMap2[String(e.sourceNodeId)] || "task";
-      const tgtType = nodeTypeMap2[String(e.targetNodeId)] || "task";
-      const isDecision = srcType === "decision" || srcType === "agent-decision";
-      const sourceHandle = getEdgeSourceHandle(isDecision, e.label, srcSiblings, e);
+      const markerSize = isSimplified ? 16 : nodeCount > 25 ? 10 : 14;
+
       return {
         id: String(e.id),
         source: String(e.sourceNodeId),
         target: String(e.targetNodeId),
         type: "custom",
-        ...(isDecision && e.label ? { label: e.label } : {}),
-        sourceHandle,
-        targetHandle: "top",
         data: {
           label: e.label, dbId: e.id, viewType: activeView,
           sourceIndex: srcSiblings.indexOf(e), sourceSiblings: srcSiblings.length,
           targetIndex: tgtSiblings.indexOf(e), targetSiblings: tgtSiblings.length,
           totalNodes: nodeCount,
           simplified: isSimplified,
-          isDecisionSource: isDecision,
-          targetNodeType: tgtType,
         },
         animated: activeView === "to-be" || activeView === "sdd",
         markerEnd: {
@@ -2477,59 +1915,15 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       };
     });
 
+    let layoutNodes: Node[];
     const levelChanged = prevDetailLevelRef.current !== detailLevel;
     prevDetailLevelRef.current = detailLevel;
 
-    const finishInitialLayout = (layoutNodes: Node[], isElk: boolean) => {
-      const finalEdges = isElk ? rawEdges : fixDecisionHandlesPostLayout(layoutNodes, rawEdges, nodeTypeMap2);
-      const nodeBounds = layoutNodes.map((n) => {
-        const nt = (n.data as any)?.nodeType || "task";
-        const dims = getNodeDimensions(nt);
-        return { id: n.id, x: n.position.x, y: n.position.y, w: dims.width, h: dims.height };
-      });
-      const edgesWithBounds = finalEdges.map((e) => ({
-        ...e,
-        data: { ...(e.data as any), nodeBounds },
-      }));
-      setNodes(layoutNodes);
-      setEdges(edgesWithBounds);
-      dataVersionRef.current += 1;
-      if (!isElk && (needsVersionUpgrade || detailLevel === "L2")) {
-        try { localStorage.setItem(layoutKey, String(LAYOUT_VERSION)); } catch {}
-      }
-      if (levelChanged || (!hasInitialFitRef.current && layoutNodes.length > 0)) {
-        hasInitialFitRef.current = true;
-        setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
-      }
-    };
+    const forceLayout = levelChanged;
 
-    const dbNodeInfo = dbNodes.map(n => ({ id: n.id, orderIndex: n.orderIndex, nodeType: n.nodeType || "task" }));
-
-    if (rawEdges.length > 0) {
-      if (layoutEngine === "elk") {
-        const runId = ++elkLayoutRunIdRef.current;
-        applyElkLayout(rawNodes, rawEdges, dbNodeInfo).then((layoutNodes) => {
-          if (elkLayoutRunIdRef.current !== runId) return;
-          finishInitialLayout(layoutNodes, true);
-        }).catch((err) => {
-          console.warn("[ELK] Initial layout failed, falling back to dagre:", err);
-          if (elkLayoutRunIdRef.current !== runId) return;
-          const fallback = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified, dbNodeInfo);
-          finishInitialLayout(fallback, false);
-        });
-      } else if (layoutEngine === "yfiles") {
-        const runId = ++elkLayoutRunIdRef.current;
-        applyYFilesLayout(rawNodes, rawEdges, dbNodeInfo).then((layoutNodes) => {
-          if (elkLayoutRunIdRef.current !== runId) return;
-          finishInitialLayout(layoutNodes, true);
-        }).catch((err) => {
-          console.warn("[yFiles] Initial layout failed, falling back to dagre:", err);
-          if (elkLayoutRunIdRef.current !== runId) return;
-          const fallback = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified, dbNodeInfo);
-          finishInitialLayout(fallback, false);
-        });
-      } else {
-        const layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified, dbNodeInfo);
+    if (detailLevel !== "L2" || forceLayout) {
+      if (rawEdges.length > 0) {
+        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", isSimplified);
         if (detailLevel === "L2") {
           layoutNodes.forEach((n) => {
             const d = n.data as any;
@@ -2538,14 +1932,41 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             }
           });
         }
-        finishInitialLayout(layoutNodes, false);
+      } else if (rawNodes.length > 0) {
+        layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
+      } else {
+        layoutNodes = rawNodes;
       }
-    } else if (rawNodes.length > 0) {
-      finishInitialLayout(rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) })), false);
     } else {
-      finishInitialLayout(rawNodes, false);
+      const savedCount = dbNodes.filter((n) => n.positionX !== 0 || n.positionY !== 0).length;
+      const allHaveSavedPositions = savedCount === dbNodes.length;
+
+      if (allHaveSavedPositions) {
+        layoutNodes = rawNodes;
+      } else if (rawEdges.length > 0) {
+        layoutNodes = applyDagreLayout(rawNodes, rawEdges, "TB", false);
+        layoutNodes.forEach((n) => {
+          const d = n.data as any;
+          if (d.dbId && d.dbId > 0) {
+            updateNodeMutation.mutate({ id: d.dbId, data: { positionX: n.position.x, positionY: n.position.y } });
+          }
+        });
+      } else if (rawNodes.length > 0) {
+        layoutNodes = rawNodes.map((node, i) => ({ ...node, position: getNodePosition(i, rawNodes.length) }));
+      } else {
+        layoutNodes = rawNodes;
+      }
     }
-  }, [mapData, detailLevel, setNodes, setEdges, layoutEngine]);
+
+    setNodes(layoutNodes);
+    setEdges(rawEdges);
+    dataVersionRef.current += 1;
+
+    if (levelChanged || (!hasInitialFitRef.current && layoutNodes.length > 0)) {
+      hasInitialFitRef.current = true;
+      setTimeout(() => fitView({ padding: 0.3, duration: 400, maxZoom: 1.2 }), 150);
+    }
+  }, [mapData, detailLevel, setNodes, setEdges]);
 
   const updateNodeMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: any }) => {
@@ -3010,22 +2431,22 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="flex flex-col items-center gap-4 max-w-sm text-center">
           <div className="relative">
-            <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-muted border border-border">
-              <GitBranch className="h-7 w-7 text-muted-foreground" />
+            <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800">
+              <GitBranch className="h-7 w-7 text-zinc-600" />
             </div>
             <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center">
               <Sparkles className="h-3 w-3 text-primary" />
             </div>
           </div>
           <div className="space-y-2">
-            <h3 className="text-sm font-medium text-foreground">
+            <h3 className="text-sm font-medium text-gray-700 dark:text-zinc-300">
               {activeView === "as-is"
                 ? "Process map will appear here"
                 : activeView === "to-be"
                 ? "To-Be map will appear here"
                 : "SDD map will appear here"}
             </h3>
-            <p className="text-xs text-muted-foreground leading-relaxed">
+            <p className="text-xs text-zinc-500 leading-relaxed">
               {activeView === "as-is"
                 ? "Describe your process in the chat and the AI will build a visual flowchart with tasks, decisions, and handoffs."
                 : activeView === "to-be"
@@ -3082,7 +2503,10 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
         />
         <Controls
           showInteractive={false}
-          className="!bg-card !border-border !rounded-xl !shadow-lg [&_button]:!bg-muted [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button:hover]:!text-foreground [&_button]:!rounded-lg"
+          className={isDark
+            ? "!bg-zinc-900/90 !border-zinc-700 !rounded-xl !shadow-lg [&_button]:!bg-zinc-800 [&_button]:!border-zinc-700 [&_button]:!text-zinc-400 [&_button:hover]:!bg-zinc-700 [&_button:hover]:!text-white [&_button]:!rounded-lg"
+            : "!bg-white !border-gray-200 !rounded-xl !shadow-lg [&_button]:!bg-gray-50 [&_button]:!border-gray-200 [&_button]:!text-gray-600 [&_button:hover]:!bg-gray-100 [&_button:hover]:!text-gray-900 [&_button]:!rounded-lg"
+          }
         />
         <MiniMap
           nodeStrokeWidth={3}
@@ -3094,29 +2518,19 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             return "#3b82f6";
           }}
           maskColor={isDark ? "rgba(0,0,0,0.7)" : "rgba(240,240,245,0.7)"}
-          className="!bg-card/80 !border-border !rounded-xl"
+          className={isDark
+            ? "!bg-zinc-900/80 !border-zinc-700 !rounded-xl"
+            : "!bg-white/90 !border-gray-200 !rounded-xl"
+          }
           pannable
           zoomable
         />
-        <div className="absolute top-3 right-3 z-40 flex items-center gap-0.5 bg-card/90 backdrop-blur-sm border border-border rounded-lg p-0.5" data-testid="layout-engine-selector">
-          {(["elk", "yfiles"] as const).map((engine) => (
-            <button
-              key={engine}
-              onClick={() => setLayoutEngine(engine)}
-              className={`px-2 py-1 rounded-md text-[10px] font-mono font-medium transition-all ${layoutEngine === engine ? "bg-primary/20 text-primary border border-primary/40" : "text-muted-foreground hover:text-foreground"}`}
-              title={`Switch to ${engine === "elk" ? "ELK" : "yFiles"} layout`}
-              data-testid={`button-layout-${engine}`}
-            >
-              {engine === "elk" ? "ELK" : "yFiles"}
-            </button>
-          ))}
-        </div>
       </ReactFlow>
 
       {selectedEdgeIds.size > 0 && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-popover/95 backdrop-blur-md border border-border rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg z-40" data-testid="edge-selection-hint">
-          <span className="text-[10px] text-muted-foreground">Edge selected</span>
-          <span className="text-[10px] text-border">|</span>
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-zinc-900/95 backdrop-blur-md border border-zinc-700 rounded-lg px-3 py-1.5 flex items-center gap-2 shadow-lg z-40" data-testid="edge-selection-hint">
+          <span className="text-[10px] text-zinc-400">Edge selected</span>
+          <span className="text-[10px] text-zinc-600">|</span>
           <button
             className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1"
             onClick={() => {
@@ -3133,7 +2547,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           >
             <Trash2 className="h-3 w-3" /> Delete
           </button>
-          <span className="text-[10px] text-border">|</span>
+          <span className="text-[10px] text-zinc-600">|</span>
           <button
             className="text-[10px] text-primary hover:text-primary/80 flex items-center gap-1"
             onClick={() => {
@@ -3150,19 +2564,19 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           >
             <Pencil className="h-3 w-3" /> Label
           </button>
-          <span className="text-[10px] text-muted-foreground ml-1">(or press Delete)</span>
+          <span className="text-[10px] text-zinc-500 ml-1">(or press Delete)</span>
         </div>
       )}
 
       {connectModeSourceId && (
         <div
-          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-card/95 backdrop-blur-md border border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 shadow-lg"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 shadow-lg"
           data-testid="connect-mode-banner"
         >
           <Cable className="h-4 w-4 text-blue-400" />
-          <span className="text-xs text-foreground">Click a target node to connect, or press <kbd className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono text-muted-foreground border border-input">Esc</kbd> to cancel</span>
+          <span className="text-xs text-gray-600 dark:text-zinc-300">Click a target node to connect, or press <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-zinc-800 rounded text-[10px] font-mono text-gray-500 dark:text-zinc-400 border border-gray-300 dark:border-zinc-700">Esc</kbd> to cancel</span>
           <button
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+            className="text-xs text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors ml-1"
             onClick={() => setConnectModeSourceId(null)}
             data-testid="button-cancel-connect-mode"
           >
@@ -3215,7 +2629,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
           }}
         >
           <div
-            className="pointer-events-auto absolute bg-card/95 backdrop-blur-md border border-border rounded-xl shadow-2xl w-72"
+            className="pointer-events-auto absolute bg-white/95 dark:bg-zinc-950/95 backdrop-blur-md border border-gray-200 dark:border-zinc-700 rounded-xl shadow-2xl w-72"
             style={{
               left: `50%`,
               top: `40px`,
@@ -3223,7 +2637,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             }}
             data-testid="popover-node-detail"
           >
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center"
                   style={{
@@ -3243,11 +2657,11 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
                    (detailPopover.node.nodeType === "agent-task" || detailPopover.node.nodeType === "agent-loop") ? <Brain className="h-3 w-3 text-purple-400" /> :
                    <CircleDot className="h-3 w-3 text-blue-400" />}
                 </div>
-                <span className="text-xs font-semibold text-foreground truncate">{detailPopover.node.label || "(unnamed)"}</span>
+                <span className="text-xs font-semibold text-gray-900 dark:text-white truncate">{detailPopover.node.label || "(unnamed)"}</span>
               </div>
               <button
                 onClick={() => setDetailPopover(null)}
-                className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                className="text-zinc-500 hover:text-gray-900 dark:hover:text-white transition-colors flex-shrink-0"
                 data-testid="button-close-detail-popover"
               >
                 <X className="h-3.5 w-3.5" />
@@ -3255,7 +2669,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
             </div>
             <div className="px-4 py-3 space-y-2.5">
               <div className="flex items-start gap-2">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Type</span>
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Type</span>
                 <Badge variant="outline" className="text-[10px] capitalize">
                   {detailPopover.node.nodeType === "decision" ? "Decision" :
                    detailPopover.node.nodeType === "start" ? "Start" :
@@ -3267,20 +2681,20 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
               </div>
               {detailPopover.node.role && (
                 <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Role</span>
-                  <span className="text-xs text-foreground" data-testid="text-detail-role">{detailPopover.node.role}</span>
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Role</span>
+                  <span className="text-xs text-gray-600 dark:text-zinc-300" data-testid="text-detail-role">{detailPopover.node.role}</span>
                 </div>
               )}
               {detailPopover.node.system && detailPopover.node.system !== "Manual" && (
                 <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">System</span>
-                  <span className="text-xs text-foreground" data-testid="text-detail-system">{detailPopover.node.system}</span>
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">System</span>
+                  <span className="text-xs text-gray-600 dark:text-zinc-300" data-testid="text-detail-system">{detailPopover.node.system}</span>
                 </div>
               )}
               {detailPopover.node.description && (
                 <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Desc</span>
-                  <span className="text-xs text-foreground leading-relaxed" data-testid="text-detail-description">{detailPopover.node.description}</span>
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium w-16 flex-shrink-0 pt-0.5">Desc</span>
+                  <span className="text-xs text-gray-600 dark:text-zinc-300 leading-relaxed" data-testid="text-detail-description">{detailPopover.node.description}</span>
                 </div>
               )}
               {detailPopover.node.isPainPoint && (
@@ -3291,7 +2705,7 @@ function ProcessMapFlow({ ideaId, activeView, detailLevel, onRelayout, onUndoRed
               )}
             </div>
             {detailLevel === "L2" && (
-              <div className="px-4 py-2.5 border-t border-border">
+              <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800">
                 <Button
                   size="sm"
                   variant="ghost"
@@ -3340,8 +2754,7 @@ interface SDDSection {
 }
 
 function parseSddSections(content: string): SDDSection[] {
-  const normalized = content.replace(/^###\s+(\d+\.?\s*(?:Orchestrator|Deployment))/gim, '## $1');
-  const lines = normalized.split("\n");
+  const lines = content.split("\n");
   const sections: SDDSection[] = [];
   let currentTitle = "";
   let currentContent: string[] = [];
@@ -3396,6 +2809,9 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
       return res.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "documents", "versions", "SDD"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "approval-summary"] });
       onApproved?.();
     },
   });
@@ -3405,7 +2821,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center" data-testid="sdd-view-loading">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <div className="flex flex-col items-center gap-3 text-zinc-500">
           <Loader2 className="h-5 w-5 animate-spin" />
           <span className="text-xs">Loading SDD...</span>
         </div>
@@ -3420,15 +2836,15 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
           <div className="w-12 h-12 rounded-xl bg-cb-orange/10 flex items-center justify-center mx-auto">
             <FileText className="h-6 w-6 text-cb-orange" />
           </div>
-          <h4 className="text-sm font-semibold text-foreground">No SDD Generated Yet</h4>
-          <p className="text-xs text-muted-foreground leading-relaxed">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-zinc-300">No SDD Generated Yet</h4>
+          <p className="text-xs text-zinc-500 leading-relaxed">
             The Solution Design Document will appear here once it's generated. First, complete and approve your To-Be process map, then approve the PDD. The SDD is automatically created after PDD approval.
           </p>
-          <div className="flex items-center justify-center gap-2 text-[10px] text-muted-foreground">
+          <div className="flex items-center justify-center gap-2 text-[10px] text-zinc-600">
             <span className="flex items-center gap-1"><Check className="h-3 w-3" /> Approve To-Be Map</span>
-            <span className="text-muted-foreground/50">&rarr;</span>
+            <span className="text-zinc-700">&rarr;</span>
             <span className="flex items-center gap-1"><Check className="h-3 w-3" /> Approve PDD</span>
-            <span className="text-muted-foreground/50">&rarr;</span>
+            <span className="text-zinc-700">&rarr;</span>
             <span className="flex items-center gap-1 text-cb-orange"><FileText className="h-3 w-3" /> SDD Generated</span>
           </div>
         </div>
@@ -3449,11 +2865,11 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
 
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar" data-testid="sdd-view-content">
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/60 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-cb-orange" />
-          <span className="text-xs font-semibold text-foreground">Solution Design Document</span>
-          <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
+          <span className="text-xs font-semibold text-gray-700 dark:text-zinc-300">Solution Design Document</span>
+          <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500">
             v{currentSdd.version}
           </Badge>
           {currentSdd.status === "approved" && (
@@ -3464,11 +2880,11 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
           {sddVersions && sddVersions.length > 1 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="p-1 rounded hover:bg-muted transition-colors" data-testid="sdd-version-dropdown">
-                  <History className="h-3.5 w-3.5 text-muted-foreground" />
+                <button className="p-1 rounded hover:bg-zinc-800/50 transition-colors" data-testid="sdd-version-dropdown">
+                  <History className="h-3.5 w-3.5 text-zinc-500" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="min-w-[200px]">
+              <DropdownMenuContent align="start" className="bg-zinc-900 border-zinc-700 min-w-[200px]">
                 {sddVersions.map((v, idx) => (
                   <DropdownMenuItem
                     key={v.id}
@@ -3476,7 +2892,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
                       setSelectedVersionIdx(idx);
                       setExpandedSections(new Set([0]));
                     }}
-                    className={`text-xs cursor-pointer ${idx === selectedVersionIdx ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+                    className={`text-xs cursor-pointer ${idx === selectedVersionIdx ? "bg-zinc-800 text-zinc-200" : "text-zinc-400"}`}
                     data-testid={`sdd-version-option-${v.version}`}
                   >
                     <div className="flex items-center justify-between w-full gap-3">
@@ -3489,7 +2905,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
                           <span className="text-[9px] text-cb-orange font-medium">Latest</span>
                         )}
                       </div>
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-[10px] text-zinc-600">
                         {new Date(v.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
                     </div>
@@ -3499,29 +2915,29 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
             </DropdownMenu>
           )}
         </div>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[10px] text-zinc-600">
           {new Date(currentSdd.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
         </span>
       </div>
 
-      <div className="divide-y divide-border/40">
+      <div className="divide-y divide-zinc-800/40">
         {sections.map((section, idx) => {
           const isExpanded = expandedSections.has(idx);
           return (
             <div key={idx} data-testid={`sdd-section-${idx}`}>
               <button
                 onClick={() => toggleSection(idx)}
-                className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-muted/50 transition-colors text-left"
+                className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-zinc-800/30 transition-colors text-left"
               >
                 {isExpanded ? (
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <ChevronDown className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
                 ) : (
-                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <ChevronRight className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
                 )}
-                <span className="text-xs font-medium text-foreground">{section.title}</span>
+                <span className="text-xs font-medium text-gray-700 dark:text-zinc-300">{section.title}</span>
               </button>
               {isExpanded && (
-                <div className="px-6 pb-4 text-xs text-muted-foreground leading-relaxed prose dark:prose-invert prose-xs max-w-none">
+                <div className="px-6 pb-4 text-xs text-gray-500 dark:text-zinc-400 leading-relaxed prose dark:prose-invert prose-xs max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{section.content}</ReactMarkdown>
                 </div>
               )}
@@ -3531,7 +2947,7 @@ function SDDInlineViewer({ ideaId, onApproved }: { ideaId: string; onApproved?: 
       </div>
 
       {showSddApproveButton && (
-        <div className="px-4 py-2.5 border-t border-border flex items-center justify-between bg-muted/30">
+        <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800/80 flex items-center justify-between bg-gray-50/80 dark:bg-zinc-950/50">
           <Button
             size="sm"
             className="text-xs rounded-lg shadow-sm bg-cb-teal shadow-cb-teal/20"
@@ -3630,12 +3046,12 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       }
       return res.json();
     },
-    onSuccess: (data: any) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "process-map"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "process-approval-history"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ideas", ideaId, "approval-summary"] });
-      onApproved?.(activeView, !!data?.isReapproval);
+      onApproved?.();
     },
   });
 
@@ -3672,17 +3088,17 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
   }, [isFullscreen]);
 
   return (
-    <div className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-50 bg-background" : "h-full"}`} data-testid="panel-process-map">
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 bg-muted/30">
+    <div className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-50 bg-white dark:bg-zinc-950" : "h-full"}`} data-testid="panel-process-map">
+      <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 flex items-center justify-between gap-2 bg-gray-50/80 dark:bg-zinc-950/50">
         <div className="flex items-center gap-2.5">
           <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${activeView === "sdd" ? "bg-cb-orange/10" : "bg-cb-teal/10"}`}>
             {activeView === "sdd" ? <FileText className="h-3.5 w-3.5 text-cb-orange" /> : <GitBranch className="h-3.5 w-3.5 text-cb-teal" />}
           </div>
-          <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider">
+          <h3 className="text-xs font-semibold text-gray-600 dark:text-zinc-300 uppercase tracking-wider">
             {activeView === "as-is" ? "As-Is Process Map" : activeView === "to-be" ? "To-Be Process Map" : "Solution Design Document"}
           </h3>
           {activeView !== "sdd" && nodeCount > 0 && (
-            <Badge variant="outline" className="text-[10px] border-border text-muted-foreground font-medium">
+            <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 font-medium">
               {nodeCount} steps
             </Badge>
           )}
@@ -3693,7 +3109,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className="text-[10px] h-7 w-7 p-0 text-muted-foreground hover:text-foreground border border-border rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={undoRedoControls.undo}
                 disabled={!undoRedoControls.canUndo}
                 title="Undo (Ctrl+Z)"
@@ -3704,7 +3120,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className="text-[10px] h-7 w-7 p-0 text-muted-foreground hover:text-foreground border border-border rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed"
                 onClick={undoRedoControls.redo}
                 disabled={!undoRedoControls.canRedo}
                 title="Redo (Ctrl+Shift+Z)"
@@ -3715,10 +3131,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             </>
           )}
           {activeView !== "sdd" && nodeCount > 3 && (
-            <div className="flex items-center rounded-lg bg-muted border border-border p-0.5" data-testid="level-selector">
+            <div className="flex items-center rounded-lg bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-0.5" data-testid="level-selector">
               <button
                 onClick={() => setDetailLevel("L0")}
-                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L0" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L0" ? "bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
                 data-testid="button-level-l0"
                 title="Overview - Phase groups only"
               >
@@ -3726,7 +3142,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               </button>
               <button
                 onClick={() => setDetailLevel("L1")}
-                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L1" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L1" ? "bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
                 data-testid="button-level-l1"
                 title="Key Steps - Decisions & milestones"
               >
@@ -3734,7 +3150,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               </button>
               <button
                 onClick={() => setDetailLevel("L2")}
-                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L2" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${detailLevel === "L2" ? "bg-white dark:bg-zinc-700 text-gray-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
                 data-testid="button-level-l2"
                 title="Full Detail - All steps"
               >
@@ -3746,7 +3162,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             <Button
               size="sm"
               variant="ghost"
-              className="text-[10px] h-7 px-2 text-muted-foreground hover:text-foreground border border-border rounded-lg"
+              className="text-[10px] h-7 px-2 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg"
               onClick={() => relayoutRef.current?.()}
               data-testid="button-relayout"
             >
@@ -3758,7 +3174,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className={`text-[10px] h-7 px-2 border border-border rounded-lg ${showPerformers ? "text-purple-400 bg-purple-500/10 !border-purple-500/30" : "text-muted-foreground hover:text-foreground"}`}
+                className={`text-[10px] h-7 px-2 border border-gray-200 dark:border-zinc-800 rounded-lg ${showPerformers ? "text-purple-400 bg-purple-500/10 !border-purple-500/30" : "text-zinc-400 hover:text-gray-900 dark:hover:text-white"}`}
                 onClick={() => { setShowPerformers(!showPerformers); setShowGuidance(false); setShowPhases(false); }}
                 title="Human vs Machine breakdown"
                 data-testid="button-toggle-performers"
@@ -3768,7 +3184,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
               <Button
                 size="sm"
                 variant="ghost"
-                className={`text-[10px] h-7 px-2 border border-border rounded-lg ${showGuidance ? "text-amber-400 bg-amber-500/10 !border-amber-500/30" : "text-muted-foreground hover:text-foreground"}`}
+                className={`text-[10px] h-7 px-2 border border-gray-200 dark:border-zinc-800 rounded-lg ${showGuidance ? "text-amber-400 bg-amber-500/10 !border-amber-500/30" : "text-zinc-400 hover:text-gray-900 dark:hover:text-white"}`}
                 onClick={() => { setShowGuidance(!showGuidance); setShowPerformers(false); setShowPhases(false); }}
                 title="Completeness guidance"
                 data-testid="button-toggle-guidance"
@@ -3782,7 +3198,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 <Button
                   size="sm"
                   variant="ghost"
-                  className={`text-[10px] h-7 px-2 border border-border rounded-lg ${showPhases ? "text-blue-400 bg-blue-500/10 !border-blue-500/30" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`text-[10px] h-7 px-2 border border-gray-200 dark:border-zinc-800 rounded-lg ${showPhases ? "text-blue-400 bg-blue-500/10 !border-blue-500/30" : "text-zinc-400 hover:text-gray-900 dark:hover:text-white"}`}
                   onClick={() => { setShowPhases(!showPhases); setShowPerformers(false); setShowGuidance(false); }}
                   title="Phase groups"
                   data-testid="button-toggle-phases"
@@ -3795,7 +3211,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
           <Button
             size="sm"
             variant="ghost"
-            className="text-[10px] h-7 w-7 p-0 text-muted-foreground hover:text-foreground border border-border rounded-lg"
+            className="text-[10px] h-7 w-7 p-0 text-zinc-400 hover:text-gray-900 dark:hover:text-white border border-gray-200 dark:border-zinc-800 rounded-lg"
             onClick={() => setIsFullscreen(!isFullscreen)}
             title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
             data-testid="button-fullscreen-map"
@@ -3803,26 +3219,26 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             {isFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </Button>
           <div
-            className="flex items-center rounded-full bg-muted border border-border p-0.5"
+            className="flex items-center rounded-full bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-0.5"
             data-testid="button-toggle-view"
           >
             <button
               onClick={() => handleViewChange("as-is")}
-              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "as-is" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-muted-foreground hover:text-foreground"}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "as-is" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
               data-testid="button-view-as-is"
             >
               As-Is
             </button>
             <button
               onClick={() => handleViewChange("to-be")}
-              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "to-be" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-muted-foreground hover:text-foreground"}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "to-be" ? "bg-cb-teal text-white shadow-sm shadow-cb-teal/20" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
               data-testid="button-view-to-be"
             >
               To-Be
             </button>
             <button
               onClick={() => handleViewChange("sdd")}
-              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "sdd" ? "bg-cb-orange text-white shadow-sm shadow-cb-orange/20" : "text-muted-foreground hover:text-foreground"}`}
+              className={`px-3 py-1 rounded-full text-[11px] font-medium transition-all ${activeView === "sdd" ? "bg-cb-orange text-white shadow-sm shadow-cb-orange/20" : "text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300"}`}
               data-testid="button-view-sdd"
             >
               SDD
@@ -3832,7 +3248,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       </div>
 
       {activeView === "to-be" && nodeCount > 0 && (
-        <div className="px-4 py-2 border-b border-border bg-muted/30" data-testid="automation-impact-bar">
+        <div className="px-4 py-2 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/50 dark:bg-zinc-950/30" data-testid="automation-impact-bar">
           {(() => {
             const nodes = mapData?.nodes || [];
             const startEndCount = nodes.filter((n) => n.nodeType === "start" || n.nodeType === "end").length;
@@ -3862,7 +3278,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                     <p className="text-xs">Percentage of steps handled by automation or system (not human)</p>
                   </TooltipContent>
                 </Tooltip>
-                <div className="flex items-center gap-2 text-[9px] text-muted-foreground">
+                <div className="flex items-center gap-2 text-[9px] text-zinc-500">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span className="flex items-center gap-0.5 cursor-default" data-testid="stat-resolved"><Zap className="h-2.5 w-2.5 text-green-400" /> {automatedCount} resolved</span>
@@ -3895,17 +3311,17 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {activeView !== "sdd" && (
-        <div className="px-4 py-2 border-b border-border bg-muted/30" data-testid="map-completeness-bar">
+        <div className="px-4 py-2 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/50 dark:bg-zinc-950/30" data-testid="map-completeness-bar">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-muted-foreground font-medium">Completeness</span>
-            <span className={`text-[10px] font-semibold ${mapCompleteness >= 85 ? "text-green-400" : mapCompleteness >= 50 ? "text-amber-400" : "text-muted-foreground"}`}>
+            <span className="text-[10px] text-zinc-500 font-medium">Completeness</span>
+            <span className={`text-[10px] font-semibold ${mapCompleteness >= 85 ? "text-green-400" : mapCompleteness >= 50 ? "text-amber-400" : "text-zinc-500"}`}>
               {mapCompleteness}%
             </span>
           </div>
-          <div className="h-1 rounded-full bg-muted overflow-hidden">
+          <div className="h-1 rounded-full bg-gray-200 dark:bg-zinc-800 overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
-                mapCompleteness >= 85 ? "bg-green-500" : mapCompleteness >= 50 ? "bg-amber-500" : "bg-muted-foreground/50"
+                mapCompleteness >= 85 ? "bg-green-500" : mapCompleteness >= 50 ? "bg-amber-500" : "bg-zinc-600"
               }`}
               style={{ width: `${mapCompleteness}%` }}
             />
@@ -3914,10 +3330,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showPerformers && performerSummary && activeView !== "sdd" && (
-        <div className="px-4 py-3 border-b border-border bg-muted/30 space-y-3" data-testid="panel-performers">
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40 space-y-3" data-testid="panel-performers">
           <div className="flex items-center gap-2 mb-2">
             <User className="h-3.5 w-3.5 text-purple-400" />
-            <span className="text-[11px] font-semibold text-foreground">Human vs Machine Breakdown</span>
+            <span className="text-[11px] font-semibold text-gray-700 dark:text-zinc-300">Human vs Machine Breakdown</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20" data-testid="summary-human">
@@ -3979,7 +3395,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             const sysPct = Math.round((performerSummary.system.count / total) * 100);
             const hybridPct = 100 - humanPct - sysPct;
             return (
-              <div className="h-2 rounded-full overflow-hidden flex bg-muted">
+              <div className="h-2 rounded-full overflow-hidden flex bg-zinc-800">
                 {humanPct > 0 && <div className="h-full bg-blue-500" style={{ width: `${humanPct}%` }} />}
                 {sysPct > 0 && <div className="h-full bg-purple-500" style={{ width: `${sysPct}%` }} />}
                 {hybridPct > 0 && <div className="h-full bg-amber-500" style={{ width: `${hybridPct}%` }} />}
@@ -3990,10 +3406,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showGuidance && completenessIssues.length > 0 && activeView !== "sdd" && (
-        <div className="px-4 py-3 border-b border-border bg-muted/30 space-y-2" data-testid="panel-guidance">
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40 space-y-2" data-testid="panel-guidance">
           <div className="flex items-center gap-2 mb-1">
             <AlertCircle className="h-3.5 w-3.5 text-amber-400" />
-            <span className="text-[11px] font-semibold text-foreground">Completeness Suggestions</span>
+            <span className="text-[11px] font-semibold text-gray-700 dark:text-zinc-300">Completeness Suggestions</span>
           </div>
           {completenessIssues.map((issue, i) => {
             const isClickable = !!issue.nodeId;
@@ -4006,14 +3422,14 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 className={`flex items-start gap-2 p-2 rounded-lg text-[10px] w-full text-left transition-colors ${
                   issue.severity === "warning"
                     ? "bg-amber-500/10 border border-amber-500/15 text-amber-400"
-                    : "bg-muted/50 border border-border text-muted-foreground"
+                    : "bg-zinc-800/50 border border-zinc-700/30 text-zinc-400"
                 } ${isClickable ? "cursor-pointer hover:bg-amber-500/20 hover:border-amber-500/30" : "cursor-default"}`}
                 data-testid={`guidance-issue-${i}`}
               >
                 {issue.severity === "warning" ? (
                   <AlertCircle className="h-3 w-3 mt-0.5 shrink-0 text-amber-500" />
                 ) : (
-                  <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-muted-foreground" />
+                  <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-zinc-500" />
                 )}
                 <span className="leading-relaxed flex-1">{issue.message}</span>
                 {isClickable && (
@@ -4026,7 +3442,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showGuidance && completenessIssues.length === 0 && activeView !== "sdd" && nodeCount > 0 && (
-        <div className="px-4 py-3 border-b border-border bg-muted/30" data-testid="panel-guidance-complete">
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40" data-testid="panel-guidance-complete">
           <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/15 text-emerald-400 text-[10px]">
             <Check className="h-3 w-3" />
             <span>Process map looks complete — no issues detected</span>
@@ -4035,17 +3451,17 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showPhases && phaseGroups.length > 0 && activeView !== "sdd" && (
-        <div className="px-4 py-3 border-b border-border bg-muted/30 space-y-2" data-testid="panel-phases">
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-zinc-800/80 bg-gray-50/60 dark:bg-zinc-950/40 space-y-2" data-testid="panel-phases">
           <div className="flex items-center gap-2 mb-1">
             <CircleDot className="h-3.5 w-3.5 text-blue-400" />
-            <span className="text-[11px] font-semibold text-foreground">Phase Groups ({phaseGroups.length})</span>
+            <span className="text-[11px] font-semibold text-gray-700 dark:text-zinc-300">Phase Groups ({phaseGroups.length})</span>
           </div>
           {phaseGroups.map((group, gi) => (
             <details key={gi} className="group" data-testid={`phase-group-${gi}`}>
-              <summary className="flex items-center gap-2 p-2 rounded-lg bg-muted/40 border border-border/50 cursor-pointer hover:bg-muted/60 transition-colors text-[10px] text-foreground font-medium">
-                <ChevronRight className="h-3 w-3 text-muted-foreground group-open:rotate-90 transition-transform" />
+              <summary className="flex items-center gap-2 p-2 rounded-lg bg-gray-100/60 dark:bg-zinc-800/40 border border-gray-200/50 dark:border-zinc-700/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-zinc-800/60 transition-colors text-[10px] text-gray-700 dark:text-zinc-300 font-medium">
+                <ChevronRight className="h-3 w-3 text-zinc-500 group-open:rotate-90 transition-transform" />
                 <span>{group.name}</span>
-                <Badge variant="outline" className="ml-auto text-[8px] border-border text-muted-foreground">{group.nodes.length} steps</Badge>
+                <Badge variant="outline" className="ml-auto text-[8px] border-zinc-700 text-zinc-500">{group.nodes.length} steps</Badge>
               </summary>
               <div className="pl-6 pt-1 space-y-0.5">
                 {group.nodes.map((node, ni) => {
@@ -4057,7 +3473,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                       key={ni}
                       type="button"
                       onClick={() => focusNodeRef.current?.(String(node.id))}
-                      className="flex items-center gap-2 text-[9px] text-muted-foreground py-0.5 w-full text-left hover:text-foreground transition-colors cursor-pointer"
+                      className="flex items-center gap-2 text-[9px] text-zinc-400 py-0.5 w-full text-left hover:text-zinc-200 transition-colors cursor-pointer"
                       data-testid={`phase-node-${node.id}`}
                     >
                       <PerfIcon className={`h-2.5 w-2.5 ${perfColor}`} />
@@ -4075,7 +3491,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {activeView === "sdd" ? (
-        <SDDInlineViewer ideaId={ideaId} onApproved={() => onApproved?.("sdd")} />
+        <SDDInlineViewer ideaId={ideaId} onApproved={onApproved} />
       ) : (
         <ReactFlowErrorBoundary>
           <ReactFlowProvider>
@@ -4087,7 +3503,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {showApproveButton && (
-        <div className="px-4 py-2.5 border-t border-border flex items-center justify-between bg-muted/30">
+        <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800/80 flex items-center justify-between bg-gray-50/80 dark:bg-zinc-950/50">
           {!showApprovalConfirm ? (
             <div className="flex items-center gap-2 flex-1">
               <Button
@@ -4108,7 +3524,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
             </div>
           ) : (
             <div className="flex-1 space-y-2">
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
+              <p className="text-[11px] text-zinc-400 leading-relaxed">
                 {mapChanged
                   ? `Changes detected since last approval. Re-approving will create a new version and ${activeView === "as-is" ? "invalidate all downstream artifacts (To-Be, PDD, SDD, UiPath package)" : "invalidate downstream documents (PDD, SDD)"}.`
                   : `By approving, you formally sign off on this ${activeView === "as-is" ? "As-Is" : activeView === "to-be" ? "To-Be" : "SDD"} process map. This is recorded with your name, role, and timestamp.`
@@ -4128,7 +3544,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-xs h-7 text-muted-foreground"
+                  className="text-xs h-7 text-zinc-400"
                   onClick={() => setShowApprovalConfirm(false)}
                   data-testid="button-cancel-approve"
                 >
@@ -4141,13 +3557,13 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
       )}
 
       {activeView !== "sdd" && approval && !mapChanged && (
-        <div className="px-4 py-2.5 border-t border-border flex items-center justify-between bg-muted/30" data-testid="approval-badge">
+        <div className="px-4 py-2.5 border-t border-gray-200 dark:border-zinc-800/80 flex items-center justify-between bg-gray-50/80 dark:bg-zinc-950/50" data-testid="approval-badge">
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
               <Check className="h-3 w-3 text-emerald-500" />
               <span className="text-[11px] text-emerald-400 font-medium">{activeView === "as-is" ? "As-Is" : "To-Be"} Approved v{(approval as any).version || 1}</span>
             </div>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[10px] text-zinc-500">
               {new Date(approval.approvedAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
               {" by "}
               {approval.userName}
@@ -4157,7 +3573,7 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
           {approvalHistory && approvalHistory.length > 1 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="ghost" className="text-xs h-7 text-muted-foreground hover:text-foreground gap-1" data-testid="button-version-history">
+                <Button size="sm" variant="ghost" className="text-xs h-7 text-zinc-400 hover:text-zinc-200 gap-1" data-testid="button-version-history">
                   <History className="h-3 w-3" />
                   <span>v{(approval as any).version || 1}</span>
                   <ChevronDown className="h-2.5 w-2.5" />
@@ -4177,10 +3593,10 @@ export default function ProcessMapPanel({ ideaId, onStepsChange, onApproved, onC
                         {(h as any).version === (approval as any).version && " (current)"}
                       </span>
                       {(h as any).invalidated && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">superseded</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">superseded</span>
                       )}
                     </div>
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-[10px] text-zinc-500">
                       {new Date(h.approvedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       {" by "}{h.userName}
                     </span>

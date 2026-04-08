@@ -29,8 +29,9 @@ export const ROLES: UserRole[] = ["Process SME", "CoE", "Admin"];
 
 export const PIPELINE_STAGES = [
   "Idea",
-  "Design",
   "Feasibility Assessment",
+  "Validated Backlog",
+  "Design",
   "Build",
   "Test",
   "Governance / Security Scan",
@@ -52,10 +53,8 @@ export const ideas = pgTable("ideas", {
   ownerEmail: text("owner_email").notNull(),
   stage: text("stage").notNull().default("Idea"),
   tag: text("tag"),
-  automationType: text("automation_type"),
+  automationType: text("automation_type").notNull().default("rpa"),
   automationTypeRationale: text("automation_type_rationale"),
-  feasibilityComplexity: text("feasibility_complexity"),
-  feasibilityEffortEstimate: text("feasibility_effort_estimate"),
   agentConfig: text("agent_config"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

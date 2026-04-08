@@ -54,7 +54,7 @@ export function formatEST(date: Date): { short: string; full: string } {
 
 export function getStageBadgeClass(stage: string): string {
   const approvalStages = ["CoE Approval", "Governance / Security Scan"];
-  const actionStages = ["Idea", "Design"];
+  const actionStages = ["Idea", "Feasibility Assessment"];
   if (approvalStages.includes(stage))
     return "bg-cb-gold/15 text-cb-gold border-cb-gold/25";
   if (actionStages.includes(stage))

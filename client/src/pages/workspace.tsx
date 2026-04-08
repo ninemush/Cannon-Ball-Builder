@@ -1,13 +1,11 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type MutableRefObject } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getApprovalReadiness } from "@/lib/document-readiness";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useRoute, Link, useLocation } from "wouter";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuth } from "@/hooks/use-auth";
-import { mapLegacyStatus, isAssessedTerminalStatus, STATUS_PRESENTATION, type AssessedTerminalStatus } from "@shared/models/package-status";
 import {
   ArrowLeft,
   Send,
@@ -28,11 +26,6 @@ import {
   Download,
   Trash2,
   Brain,
-  Archive,
-  AlertTriangle,
-  CheckCircle2,
-  PackageOpen,
-  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DeploymentReportCard } from "@/components/deployment-report-card";
-import { PrimarySpinner } from "@/components/cannonball-spinner";
+import { CannonballSpinner } from "@/components/cannonball-spinner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -51,73 +44,33 @@ import { PIPELINE_STAGES, type Idea, type PipelineStage, type ChatMessage as DBC
 import ProcessMapPanel from "@/components/process-map-panel";
 import { parseStepsFromText, parseStepsByView } from "@/lib/step-parser";
 import { DocumentCard, UiPathPackageCard } from "@/components/document-card";
-import { FeasibilityCard } from "@/components/feasibility-card";
-import { useUiPathRun, type PipelineLogEntry, type CancelState } from "@/hooks/use-uipath-run";
-import { ArtifactHub } from "@/components/artifact-hub";
-import { MetaValidationBar } from "@/components/meta-validation-bar";
 import { formatEST, getStageBadgeClass } from "@/lib/utils";
 
 let currentProcessView: "as-is" | "to-be" | "sdd" = "as-is";
 
-function guessIntentFromMessage(text: string): string {
-  const lower = text.toLowerCase().trim();
-  const hasDeployKeyword = /\bdeploy(ing|ment|ed)?\b/.test(lower);
-  const hasUipathKeyword = /\buipath\b/.test(lower);
-  const hasPackageVerb = /\b(generate|create|build|regenerate|gen|regen)\b/.test(lower);
-  if (hasDeployKeyword && !hasUipathKeyword) return "DEPLOY";
-  if (hasUipathKeyword || (/\bpackage\b/.test(lower) && hasPackageVerb)) return "UIPATH_GEN";
-  if (/\b(generate|create|regenerate|write)\b.*\bpdd\b/.test(lower) || /\bpdd\b.*\b(generate|create|regenerate|write)\b/.test(lower) || /\bprocess design doc/.test(lower)) return "PDD";
-  if (/\b(generate|create|regenerate|write)\b.*\bsdd\b/.test(lower) || /\bsdd\b.*\b(generate|create|regenerate|write)\b/.test(lower) || /\bsolution design doc/.test(lower)) return "SDD";
-  if (/\b(generate|create|regenerate|write)\b.*\bdhg\b/.test(lower) || /\bdhg\b.*\b(generate|create|regenerate|write)\b/.test(lower) || /\bdeveloper handoff/.test(lower)) return "DHG";
-  if (hasDeployKeyword) return "DEPLOY";
-  return "";
-}
-
 const STAGE_THINKING_MESSAGES: Record<string, string> = {
   "Idea": "Analyzing your process...",
-  "Design": "Designing automation...",
   "Feasibility Assessment": "Assessing feasibility...",
+  "Validated Backlog": "Validating requirements...",
+  "Design": "Designing automation...",
   "Build": "Building solution...",
   "Test": "Preparing tests...",
   "Governance / Security Scan": "Running compliance checks...",
   "CoE Approval": "Processing approval...",
   "Deploy": "Preparing deployment...",
-  "Maintenance": "Getting things ready...",
-};
-
-const INTENT_THINKING_MESSAGES: Record<string, string> = {
-  "DEPLOY": "Preparing deployment...",
-  "UIPATH_GEN": "Generating UiPath package...",
-  "PDD": "Generating Process Design Document...",
-  "SDD": "Generating Solution Design Document...",
-  "PDD_SDD": "Generating documents...",
-  "DHG": "Generating Developer Handoff Guide...",
-  "FEASIBILITY": "Running feasibility assessment...",
-  "TO_BE_MAP": "Generating To-Be process map...",
-};
-
-const STAGE_DISPLAY_LABELS: Record<string, string> = {
-  "platform_capabilities": "Fetching platform capabilities...",
-  "llm_parallel_generation": "Generating prose and artifacts...",
-  "llm_generation": "Generating document content...",
-  "artifacts_retry": "Retrying artifact generation...",
-  "artifacts_retry_retry": "Retrying artifact generation...",
-  "artifacts_retry_fallback": "Retrying artifact generation (fallback)...",
-  "artifact_validation": "Validating artifacts...",
+  "Maintenance": "Checking status...",
 };
 
 interface StreamingProgressProps {
   mode: "thinking" | "doc" | "deploy";
-  liveStatus?: string;
   docType?: string;
   currentSection?: string;
   deployStep?: string;
   onCancel?: () => void;
   stage?: string;
-  classifiedIntent?: string;
 }
 
-function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection, deployStep, onCancel, stage, classifiedIntent }: StreamingProgressProps) {
+function StreamingProgressIndicator({ mode, docType, currentSection, deployStep, onCancel, stage }: StreamingProgressProps) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -125,21 +78,14 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
     return () => clearInterval(interval);
   }, []);
 
-  const isUiPathOrDHG = docType === "UiPath" || docType === "DHG";
-  const uiPathSteps = DOC_PROGRESS_STEPS[docType || ""] || [];
+  const steps = DOC_PROGRESS_STEPS[docType || "PDD"] || DOC_PROGRESS_STEPS.PDD;
   const stepDuration = docType === "UiPath" ? 10 : 6;
-  const fallbackStep = isUiPathOrDHG && uiPathSteps.length > 0
-    ? uiPathSteps[Math.min(Math.floor(elapsed / stepDuration), uiPathSteps.length - 1)]
-    : null;
+  const fallbackStep = steps[Math.min(Math.floor(elapsed / stepDuration), steps.length - 1)];
 
   const getThinkingMessage = () => {
-    if (liveStatus) {
-      return liveStatus;
-    }
-    if (classifiedIntent && INTENT_THINKING_MESSAGES[classifiedIntent]) {
-      return INTENT_THINKING_MESSAGES[classifiedIntent];
-    }
-    return stage ? (STAGE_THINKING_MESSAGES[stage] || "Classifying your request...") : "Classifying your request...";
+    if (elapsed >= 45) return "This is taking longer than usual, hang tight...";
+    if (elapsed >= 35) return "Still working on this...";
+    return stage ? (STAGE_THINKING_MESSAGES[stage] || "Thinking...") : "Thinking...";
   };
 
   if (mode === "thinking") {
@@ -159,18 +105,16 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
     );
   }
 
-  const getDocStatusText = () => {
-    if (isUiPathOrDHG) return currentSection || fallbackStep || "Starting generation...";
-    return currentSection || "Starting generation...";
-  };
-
+  const isUiPath = docType === "UiPath";
   const statusText = mode === "deploy"
     ? (deployStep || "Preparing deployment...")
-    : getDocStatusText();
+    : isUiPath
+      ? (currentSection || fallbackStep)
+      : (currentSection ? `Now writing: ${currentSection}` : fallbackStep);
 
   const title = mode === "deploy"
     ? "Deploying to UiPath..."
-    : docType === "UiPath"
+    : isUiPath
       ? "Generating UiPath..."
       : `Generating ${docType || "document"}...`;
 
@@ -178,7 +122,7 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
     <div className="flex justify-start" data-testid={mode === "deploy" ? "deploy-progress-indicator" : "doc-generation-loading"}>
       <div className="max-w-[85%] rounded-lg px-3 py-2.5 bg-card border border-card-border rounded-bl-sm">
         <div className="flex items-center gap-2">
-          <PrimarySpinner />
+          <CannonballSpinner />
           <div className="flex flex-col gap-0.5">
             <p className="text-xs text-foreground/80 font-medium">{title}</p>
             <p className="text-[10px] text-muted-foreground">
@@ -200,542 +144,31 @@ function StreamingProgressIndicator({ mode, liveStatus, docType, currentSection,
   );
 }
 
-
-function PipelineLogPanel({
-  entries,
-  isComplete,
-  onCancel,
-}: {
-  entries: PipelineLogEntry[];
-  isComplete: boolean;
-  onCancel?: () => void;
-}) {
-  const logEndRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, [entries.length]);
-
-  const activeStage = entries.length > 0
-    ? entries.filter(e => e.type === "started").pop()?.stage
-    : null;
-  const completedStages = new Set(entries.filter(e => e.type === "completed").map(e => e.stage));
-  const currentActive = activeStage && !completedStages.has(activeStage) ? activeStage : null;
-
-  const deduped = entries.reduce<PipelineLogEntry[]>((acc, entry) => {
-    if (entry.type === "heartbeat") {
-      const lastIdx = acc.findIndex(e => e.stage === entry.stage && e.type === "heartbeat");
-      if (lastIdx >= 0) {
-        acc[lastIdx] = entry;
-        return acc;
-      }
-    }
-    acc.push(entry);
-    return acc;
-  }, []);
-
-  const renderIcon = (entry: PipelineLogEntry) => {
-    const isActive = entry.stage === currentActive;
-    switch (entry.type) {
-      case "started":
-        return isActive
-          ? <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" data-testid={`pipeline-dot-active-${entry.stage}`} />
-          : <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />;
-      case "heartbeat":
-        return <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />;
-      case "completed":
-        return <Check className="h-3 w-3 text-emerald-400 shrink-0" />;
-      case "warning":
-        return <span className="text-amber-400 text-[10px] shrink-0">&#9888;</span>;
-      case "failed":
-        return <X className="h-3 w-3 text-red-400 shrink-0" />;
-      default:
-        return null;
-    }
-  };
-
-  const renderMessage = (entry: PipelineLogEntry) => {
-    switch (entry.type) {
-      case "started":
-        return <span className="text-muted-foreground/70 text-[11px]">{entry.message}</span>;
-      case "heartbeat":
-        return <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">{entry.message}</span>;
-      case "completed":
-        return <span className="text-foreground/90 text-[11px]">{entry.message}</span>;
-      case "warning":
-        return <span className="text-amber-400 text-[11px]">{entry.message}</span>;
-      case "failed":
-        return <span className="text-red-400 text-[11px]">{entry.message}</span>;
-      default:
-        return <span className="text-muted-foreground text-[11px]">{entry.message}</span>;
-    }
-  };
-
-  const totalElapsed = entries.length > 0
-    ? Math.round((Date.now() - entries[0].timestamp) / 1000)
-    : 0;
-
-  return (
-    <div className="flex justify-start" data-testid="pipeline-log-panel">
-      <div className="max-w-[90%] w-full rounded-lg bg-card border border-card-border rounded-bl-sm overflow-hidden" ref={containerRef}>
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border/30">
-          <div className="flex items-center gap-2">
-            <Package className="h-3.5 w-3.5 text-primary" />
-            <span className="text-[11px] font-semibold text-foreground/80">
-              {isComplete ? (finalStatus && isAssessedTerminalStatus(finalStatus) ? STATUS_PRESENTATION[finalStatus as AssessedTerminalStatus].longLabel : "Pipeline Complete") : "Building UiPath Package"}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {!isComplete && (
-              <span className="text-[10px] text-muted-foreground/50">{totalElapsed}s</span>
-            )}
-            {onCancel && !isComplete && (
-              <button
-                onClick={onCancel}
-                className="text-[10px] text-muted-foreground hover:text-foreground underline shrink-0"
-                data-testid="button-cancel-pipeline"
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="max-h-[240px] overflow-y-auto px-3 py-1.5 space-y-0.5 scrollbar-thin">
-          {deduped.map((entry) => (
-            <div
-              key={entry.id}
-              className="flex items-center gap-2 py-0.5 pipeline-log-entry"
-              data-testid={`pipeline-entry-${entry.type}-${entry.stage}`}
-            >
-              <div className="w-4 flex items-center justify-center shrink-0">
-                {renderIcon(entry)}
-              </div>
-              <div className="flex-1 min-w-0 truncate">
-                {renderMessage(entry)}
-              </div>
-              {entry.type === "completed" && entry.elapsed !== undefined && (
-                <span className="text-[9px] text-muted-foreground/50 shrink-0 tabular-nums ml-auto">{entry.elapsed.toFixed(1)}s</span>
-              )}
-            </div>
-          ))}
-          <div ref={logEndRef} />
-        </div>
-        {isComplete && (
-          <div className="px-3 py-2 border-t border-border/30 pipeline-fade-in">
-            <div className="flex items-center gap-1.5">
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-[11px] text-emerald-400 font-medium">Ready to deploy</span>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function WorkflowElapsedTimer({ startTimestamp }: { startTimestamp: number }) {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const update = () => setElapsed(Math.round((Date.now() - startTimestamp) / 1000));
-    update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [startTimestamp]);
-  return <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{elapsed}s</span>;
-}
-
-function UiPathProgressPanel({
-  entries,
-  isComplete,
-  onCancel,
-  cancelState,
-  startTime,
-  isRunning = true,
-  onDismiss,
-  finalStatus,
-}: {
-  entries: PipelineLogEntry[];
-  isComplete: boolean;
-  onCancel?: () => void;
-  cancelState: CancelState;
-  startTime: number | null;
-  isRunning?: boolean;
-  onDismiss?: () => void;
-  finalStatus?: string | null;
-}) {
-  const logEndRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    if (!startTime) return;
-    const update = () => setElapsed(Math.round((Date.now() - startTime) / 1000));
-    update();
-    if (!isRunning) return;
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [startTime, isRunning]);
-
-  useEffect(() => {
-    if (logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, [entries.length]);
-
-  const specStages = new Set(["sdd_validation", "spec_context_loading", "spec_prompt_assembly", "spec_scaffold", "spec_workflow_detail", "spec_merge", "spec_handoff", "llm_generation", "llm_context_loading", "llm_prompt_assembly", "llm_parsing", "decomposition", "complexity_classification", "spec_generating", "confidence_assessment", "spec_ready"]);
-  const terminalStages = new Set(["complete"]);
-  const isBuildEntry = (e: PipelineLogEntry) => !specStages.has(e.stage) && !terminalStages.has(e.stage);
-  const hasBuildEntries = entries.some(isBuildEntry);
-  const llmEntries = entries.filter(e => specStages.has(e.stage));
-  const buildEntries = entries.filter(isBuildEntry);
-  const llmPhaseComplete = hasBuildEntries || isComplete;
-
-  const failedEntry = entries.find(e => e.type === "failed");
-
-  const stageLabelMap: Record<string, string> = {
-    sdd_validation: "Validating SDD",
-    cache_hit: "Loading cached result",
-    build_pipeline: "Build pipeline",
-    spec_context_loading: "Loading context",
-    spec_prompt_assembly: "Preparing prompt",
-    spec_scaffold: "AI generation",
-    spec_workflow_detail: "Workflow detail",
-    spec_merge: "Validating specification",
-    spec_handoff: "Handing off to build",
-    llm_context_loading: "Loading context",
-    llm_prompt_assembly: "Preparing prompt",
-    llm_generation: "AI generation",
-    llm_parsing: "Parsing response",
-    decomposition: "Decomposing workflows",
-    complexity_classification: "Classifying complexity",
-    spec_generating: "Generating specifications",
-    confidence_assessment: "Assessing AI capabilities",
-    spec_ready: "Specifications ready",
-    ai_enrichment_tree: "Tree-based AI enrichment",
-    ai_enrichment_legacy: "Legacy AI enrichment",
-    deterministic_scaffold: "Deterministic scaffold",
-    compiling: "Compiling XAML workflows",
-    validating: "Validating archive",
-    ai_enrichment: "AI enrichment",
-    complete: "Pipeline complete",
-  };
-  const friendlyLabel = (stage: string, fallback: string) => stageLabelMap[stage] || fallback;
-
-  const activeStage = buildEntries.length > 0
-    ? buildEntries.filter(e => e.type === "started").pop()?.stage
-    : null;
-  const completedStages = new Set(buildEntries.filter(e => e.type === "completed").map(e => e.stage));
-  const currentActive = activeStage && !completedStages.has(activeStage) ? activeStage : null;
-
-  const dedupedBuild = buildEntries.reduce<PipelineLogEntry[]>((acc, entry) => {
-    if (entry.type === "heartbeat") {
-      const lastIdx = acc.findIndex(e => e.stage === entry.stage && e.type === "heartbeat");
-      if (lastIdx >= 0) {
-        acc[lastIdx] = entry;
-        return acc;
-      }
-    }
-    acc.push(entry);
-    return acc;
-  }, []);
-
-  const renderIcon = (entry: PipelineLogEntry) => {
-    const isActive = entry.stage === currentActive;
-    switch (entry.type) {
-      case "started":
-        return isActive
-          ? <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" data-testid={`pipeline-dot-active-${entry.stage}`} />
-          : <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />;
-      case "heartbeat":
-        return <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />;
-      case "completed":
-        return <Check className="h-3 w-3 text-emerald-400 shrink-0" />;
-      case "warning":
-        return <span className="text-amber-400 text-[10px] shrink-0">&#9888;</span>;
-      case "failed":
-        return <X className="h-3 w-3 text-red-400 shrink-0" />;
-      default:
-        return null;
-    }
-  };
-
-  const renderMessage = (entry: PipelineLogEntry) => {
-    const label = friendlyLabel(entry.stage, entry.message);
-    switch (entry.type) {
-      case "started":
-        return <span className="text-muted-foreground/70 text-[11px]">{label}</span>;
-      case "heartbeat":
-        return <span className="text-muted-foreground/50 text-[11px] italic pipeline-ellipsis">{entry.message}</span>;
-      case "completed":
-        return <span className="text-foreground/90 text-[11px]">{entry.message}</span>;
-      case "warning":
-        return <span className="text-amber-400 text-[11px]">{entry.message}</span>;
-      case "failed":
-        return <span className="text-red-400 text-[11px] font-medium">{entry.message}</span>;
-      default:
-        return <span className="text-muted-foreground text-[11px]">{entry.message}</span>;
-    }
-  };
-
-  const cancelLabel = cancelState === "cancelling" ? "Cancelling..." : cancelState === "cancelled" ? "Cancelled" : cancelState === "cancel_failed" ? "Retry Cancel" : "Cancel";
-  const cancelDisabled = cancelState === "cancelling" || cancelState === "cancelled";
-
-  return (
-    <div className="flex justify-start" data-testid="uipath-progress-panel">
-      <div className="max-w-[90%] w-full rounded-lg bg-card border border-card-border rounded-bl-sm overflow-hidden" ref={containerRef}>
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border/30">
-          <div className="flex items-center gap-2">
-            <Package className="h-3.5 w-3.5 text-primary" />
-            <span className="text-[11px] font-semibold text-foreground/80">
-              {cancelState === "cancelled" ? "Cancelled" : failedEntry ? "Pipeline Failed" : isComplete ? (finalStatus && isAssessedTerminalStatus(finalStatus) ? STATUS_PRESENTATION[finalStatus as AssessedTerminalStatus].longLabel : "Pipeline Complete") : "Generating UiPath Package"}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground/50 tabular-nums" data-testid="uipath-elapsed-timer">{elapsed}s</span>
-            {onCancel && !isComplete && isRunning && (
-              <button
-                onClick={onCancel}
-                disabled={cancelDisabled}
-                className={`text-[10px] shrink-0 ${cancelDisabled ? "text-muted-foreground/40 cursor-not-allowed" : "text-muted-foreground hover:text-foreground underline"}`}
-                data-testid="button-cancel-uipath"
-              >
-                {cancelLabel}
-              </button>
-            )}
-            {!isRunning && onDismiss && (
-              <button
-                onClick={onDismiss}
-                className="text-[10px] shrink-0 text-muted-foreground hover:text-foreground underline"
-                data-testid="button-dismiss-uipath"
-              >
-                Dismiss
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="max-h-[280px] overflow-y-auto px-3 py-1.5 space-y-1 scrollbar-thin">
-          <div className="flex items-center gap-2 py-1" data-testid="phase-ai-generation">
-            <div className="w-4 flex items-center justify-center shrink-0">
-              {llmPhaseComplete ? (
-                <Check className="h-3 w-3 text-emerald-400" />
-              ) : (
-                <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />
-              )}
-            </div>
-            <span className={`text-[11px] font-medium ${llmPhaseComplete ? "text-foreground/90" : "text-foreground/80"}`}>
-              AI Generation
-            </span>
-          </div>
-          {llmEntries.length > 0 && (
-            <div className="pl-6 space-y-0.5">
-              {(() => {
-                const isPerWorkflowEntry = (e: PipelineLogEntry) => e.stage === "spec_workflow_detail" && !!e.context?.workflowName;
-                const nonWorkflowEntries = llmEntries.filter(e => !isPerWorkflowEntry(e));
-                const workflowEntries = llmEntries.filter(e => isPerWorkflowEntry(e));
-
-                const completedStagesSet = new Set(nonWorkflowEntries.filter(e => e.type === "completed").map(e => e.stage));
-                const completedElapsed = new Map(nonWorkflowEntries.filter(e => e.type === "completed" && e.elapsed !== undefined).map(e => [e.stage, e.elapsed!]));
-                const startedStages = new Set(nonWorkflowEntries.filter(e => e.type === "started").map(e => e.stage));
-                const realEntries = nonWorkflowEntries.filter(e => e.type !== "heartbeat");
-                const filtered = realEntries.filter(e => {
-                  if (e.type === "completed" && startedStages.has(e.stage)) return false;
-                  return true;
-                });
-                const lastHeartbeat = [...nonWorkflowEntries].reverse().find(e => e.type === "heartbeat" && (e.stage === "spec_scaffold" || e.stage === "llm_generation" || e.stage === "spec_workflow_detail" || e.stage === "spec_generating" || e.stage === "confidence_assessment"));
-                const showHeartbeat = lastHeartbeat && !llmPhaseComplete && !completedStagesSet.has(lastHeartbeat.stage);
-
-                const workflowMap = new Map<string, { started?: PipelineLogEntry; completed?: PipelineLogEntry; warnings: PipelineLogEntry[] }>();
-                const workflowOrder: string[] = [];
-                for (const entry of workflowEntries) {
-                  const wfName = entry.context?.workflowName as string | undefined;
-                  if (!wfName) continue;
-                  if (!workflowMap.has(wfName)) {
-                    workflowMap.set(wfName, { warnings: [] });
-                    workflowOrder.push(wfName);
-                  }
-                  const wf = workflowMap.get(wfName)!;
-                  if (entry.type === "started") wf.started = entry;
-                  else if (entry.type === "completed") wf.completed = entry;
-                  else if (entry.type === "warning") wf.warnings.push(entry);
-                }
-
-                const hasWorkflowEntries = workflowOrder.length > 0;
-
-                return (
-                  <>
-                    {filtered.map((entry, idx) => {
-                      const isLast = idx === filtered.length - 1 && !showHeartbeat && !hasWorkflowEntries;
-                      const stageCompleted = completedStagesSet.has(entry.stage);
-                      const isDone = stageCompleted || llmPhaseComplete;
-                      const stageElapsed = completedElapsed.get(entry.stage);
-                      return (
-                        <div key={entry.id} className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid={`progress-entry-${entry.stage}`}>
-                          <div className="w-4 flex items-center justify-center shrink-0">
-                            {isDone ? (
-                              <Check className="h-2.5 w-2.5 text-emerald-400" />
-                            ) : isLast ? (
-                              <PrimarySpinner size={12} />
-                            ) : (
-                              <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />
-                            )}
-                          </div>
-                          <span className={`text-[11px] ${isDone ? "text-foreground/70" : "text-muted-foreground/70"}`}>
-                            {friendlyLabel(entry.stage, entry.message)}
-                            {isDone && stageElapsed !== undefined && (
-                              <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{stageElapsed.toFixed(1)}s</span>
-                            )}
-                          </span>
-                        </div>
-                      );
-                    })}
-                    {showHeartbeat && (
-                      <div className="flex items-center gap-2 py-0.5 pipeline-log-entry" data-testid="progress-llm-keepalive">
-                        <div className="w-4 flex items-center justify-center shrink-0">
-                          <PrimarySpinner size={12} />
-                        </div>
-                        <span className="text-[11px] text-muted-foreground/50 italic pipeline-ellipsis">{lastHeartbeat.message}</span>
-                      </div>
-                    )}
-                    {hasWorkflowEntries && (
-                      <div className="space-y-0.5 mt-0.5">
-                        {workflowOrder.map((wfName) => {
-                          const wf = workflowMap.get(wfName)!;
-                          const index = wf.started?.context?.index ?? "?";
-                          const total = wf.started?.context?.total ?? "?";
-                          const isActive = wf.started && !wf.completed;
-                          const isDone = !!wf.completed;
-                          const isStubbed = wf.warnings.some(w => w.context?.outcome === "stubbed") || wf.completed?.context?.outcome === "stubbed";
-                          const isTimedOut = wf.warnings.some(w => w.context?.outcome === "timed_out") || wf.completed?.context?.outcome === "timed_out";
-                          return (
-                            <div key={wfName}>
-                              <div className={`flex items-center gap-2 py-0.5 pipeline-log-entry ${isActive ? "bg-orange-400/5 rounded px-1 -mx-1" : ""}`} data-testid={`progress-workflow-${wfName}`}>
-                                <div className="w-4 flex items-center justify-center shrink-0">
-                                  {isDone && (isStubbed || isTimedOut) ? (
-                                    <span className="text-amber-400 text-[11px] shrink-0">&#9888;</span>
-                                  ) : isDone ? (
-                                    <Check className="h-2.5 w-2.5 text-emerald-400" />
-                                  ) : isActive ? (
-                                    <PrimarySpinner size={12} />
-                                  ) : (
-                                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/20 shrink-0" />
-                                  )}
-                                </div>
-                                <span className={`text-[11px] ${isDone && (isStubbed || isTimedOut) ? "text-amber-400/80" : isDone ? "text-foreground/70" : isActive ? "text-foreground/80 font-medium" : "text-muted-foreground/40"}`}>
-                                  {index}/{total}: {wfName}
-                                  {isDone && (isStubbed || isTimedOut) && (
-                                    <span className="text-amber-400/70 text-[9px] ml-1">{isTimedOut ? "(timed out)" : "(stubbed)"}</span>
-                                  )}
-                                  {isDone && wf.completed!.elapsed !== undefined && (
-                                    <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{wf.completed!.elapsed.toFixed(1)}s</span>
-                                  )}
-                                  {isActive && wf.started && (
-                                    <WorkflowElapsedTimer startTimestamp={wf.started.timestamp} />
-                                  )}
-                                </span>
-                              </div>
-                              {wf.warnings.map((warn) => (
-                                <div key={warn.id} className="flex items-center gap-2 py-0.5 pl-6 pipeline-log-entry" data-testid={`progress-workflow-warning-${wfName}`}>
-                                  <span className="text-amber-400 text-[9px]">&#9888;</span>
-                                  <span className="text-amber-400/80 text-[9px]">{warn.message}</span>
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          )}
-          {!llmPhaseComplete && llmEntries.length === 0 && (
-            <div className="pl-6 space-y-0.5">
-              <div className="flex items-center gap-2 py-0.5">
-                <div className="w-4 flex items-center justify-center shrink-0">
-                  <PrimarySpinner />
-                </div>
-                <span className="text-muted-foreground/60 text-[11px] italic pipeline-ellipsis">Generating UiPath package...</span>
-              </div>
-            </div>
-          )}
-
-          {(hasBuildEntries || (isComplete && !hasBuildEntries)) && (
-            <>
-              <div className="flex items-center gap-2 py-1 mt-1 border-t border-border/20 pt-2" data-testid="phase-package-build">
-                <div className="w-4 flex items-center justify-center shrink-0">
-                  {isComplete ? (
-                    <Check className="h-3 w-3 text-emerald-400" />
-                  ) : (
-                    <span className="w-2 h-2 rounded-full bg-orange-400 pipeline-active-dot shrink-0" />
-                  )}
-                </div>
-                <span className={`text-[11px] font-medium ${isComplete ? "text-foreground/90" : "text-foreground/80"}`}>
-                  Package Build
-                </span>
-              </div>
-              <div className="pl-6 space-y-0.5">
-                {dedupedBuild.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="flex items-center gap-2 py-0.5 pipeline-log-entry"
-                    data-testid={`pipeline-entry-${entry.type}-${entry.stage}`}
-                  >
-                    <div className="w-4 flex items-center justify-center shrink-0">
-                      {renderIcon(entry)}
-                    </div>
-                    <div className="flex-1 min-w-0 truncate">
-                      {renderMessage(entry)}
-                    </div>
-                    {entry.type === "completed" && entry.elapsed !== undefined && (
-                      <span className="text-[9px] text-muted-foreground/50 shrink-0 tabular-nums ml-auto">{entry.elapsed.toFixed(1)}s</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-          <div ref={logEndRef} />
-        </div>
-        {failedEntry && (
-          <div className="px-3 py-2 border-t border-red-500/30 bg-red-500/5 pipeline-fade-in" data-testid="uipath-failure-banner">
-            <div className="flex items-center gap-1.5">
-              <X className="h-3 w-3 text-red-400 shrink-0" />
-              <div className="min-w-0">
-                <span className="text-[11px] text-red-400 font-medium block">
-                  Failed at: {friendlyLabel(failedEntry.stage, failedEntry.stage)}
-                </span>
-                <span className="text-[10px] text-red-400/70 block truncate">{failedEntry.message}</span>
-              </div>
-            </div>
-          </div>
-        )}
-        {isComplete && !failedEntry && (() => {
-          const assessed = finalStatus && isAssessedTerminalStatus(finalStatus) ? finalStatus as AssessedTerminalStatus : null;
-          const pres = assessed ? STATUS_PRESENTATION[assessed] : null;
-          const colorClass = pres?.textColorClass || "text-emerald-400";
-          const iconMap: Record<string, typeof Check> = { CheckCircle2, AlertTriangle, PackageOpen, XCircle };
-          const StatusIcon = pres ? (iconMap[pres.iconName] || Check) : Check;
-          return (
-            <div className="px-3 py-2 border-t border-border/30 pipeline-fade-in">
-              <div className="flex items-center gap-1.5">
-                <StatusIcon className={`h-3 w-3 ${colorClass}`} />
-                <span className={`text-[11px] ${colorClass} font-medium`} data-testid={`pipeline-status-${assessed || "complete"}`}>
-                  {pres ? pres.longLabel : "Pipeline Complete"}
-                </span>
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-    </div>
-  );
-}
-
 const DOC_PROGRESS_STEPS: Record<string, string[]> = {
+  PDD: [
+    "Analyzing process steps...",
+    "Writing Executive Summary...",
+    "Writing Process Scope...",
+    "Describing As-Is Process...",
+    "Describing To-Be Process...",
+    "Documenting Pain Points...",
+    "Writing Automation Assessment...",
+    "Documenting Assumptions & Exceptions...",
+    "Writing Data & System Requirements...",
+    "Finalizing document...",
+  ],
+  SDD: [
+    "Analyzing process architecture...",
+    "Writing Technical Overview...",
+    "Defining Solution Components...",
+    "Documenting Application Interactions...",
+    "Writing Error Handling Strategy...",
+    "Defining Orchestrator Artifacts...",
+    "Writing Security & Compliance...",
+    "Documenting Testing Strategy...",
+    "Generating Artifact Definitions...",
+    "Finalizing specification...",
+  ],
   UiPath: [
     "Reading SDD content...",
     "Generating package specification...",
@@ -746,14 +179,6 @@ const DOC_PROGRESS_STEPS: Record<string, string[]> = {
     "Creating deployment artifacts...",
     "Packaging .nupkg file...",
   ],
-  DHG: [
-    "Analysing generated workflows...",
-    "Documenting activity dependencies...",
-    "Building go-live checklist...",
-    "Writing deployment instructions...",
-    "Generating test scenarios...",
-    "Finalising handoff guide...",
-  ],
 };
 
 const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
@@ -761,13 +186,17 @@ const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
     action: "Describe Your Process",
     hint: "Tell the assistant about the manual process you want to automate. Include who does it, how often, and what systems are involved.",
   },
-  Design: {
-    action: "Map Your Process",
-    hint: "Work with the assistant to build the As-Is process map step by step. Once complete, approve it to advance to feasibility assessment.",
-  },
   "Feasibility Assessment": {
-    action: "Review Feasibility & To-Be",
-    hint: "The automation type is being evaluated and the To-Be automated process map is being generated. Review and approve the To-Be map to proceed to Build.",
+    action: "Review Feasibility",
+    hint: "Your process is being assessed for automation potential. Review the complexity score, estimated effort, and ROI projection.",
+  },
+  "Validated Backlog": {
+    action: "Prioritize & Plan",
+    hint: "This idea has been validated. It's queued for design. Review priority ranking and target timeline.",
+  },
+  Design: {
+    action: "Refine the Design",
+    hint: "The As-Is process map is ready. Work with the assistant to design the To-Be automated workflow and identify exception paths.",
   },
   Build: {
     action: "Build in Progress",
@@ -797,7 +226,6 @@ const STAGE_GUIDANCE: Record<string, { action: string; hint: string }> = {
 
 const STAGE_ARTIFACTS: Record<string, string[]> = {
   "Design": ["as-is-map"],
-  "Feasibility Assessment": ["as-is-map", "to-be-map"],
   "Build": ["as-is-map", "to-be-map", "pdd"],
   "Test": ["as-is-map", "to-be-map", "pdd", "sdd"],
   "Governance / Security Scan": ["as-is-map", "to-be-map", "pdd", "sdd"],
@@ -876,21 +304,21 @@ function StageTracker({
 
     return (
       <div className="space-y-1.5 text-left min-w-[180px]">
-        <div className="text-[11px] font-semibold text-foreground border-b border-border pb-1 mb-1">{stage}</div>
+        <div className="text-[11px] font-semibold text-zinc-200 border-b border-zinc-700 pb-1 mb-1">{stage}</div>
         {items.map(item => (
           <div key={item.key} className="flex items-center justify-between gap-3">
-            <span className="text-[10px] text-muted-foreground">{item.label}</span>
+            <span className="text-[10px] text-zinc-400">{item.label}</span>
             {item.status === "approved" ? (
               <div className="flex items-center gap-1">
                 <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
                   v{item.version || 1}
                 </span>
-                <span className="text-[9px] text-muted-foreground">{item.userName}</span>
+                <span className="text-[9px] text-zinc-500">{item.userName}</span>
               </div>
             ) : item.status === "invalidated" ? (
               <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400">needs redo</span>
             ) : (
-              <span className="text-[9px] text-muted-foreground/60">pending</span>
+              <span className="text-[9px] text-zinc-600">pending</span>
             )}
           </div>
         ))}
@@ -915,43 +343,42 @@ function StageTracker({
               const tooltip = getStageTooltip(stage);
 
               const stageContent = (
-                <div key={stage} className="relative flex group" data-testid={`stage-step-${index}`}>
-                  <div className="flex flex-col items-center shrink-0 w-6 z-10">
-                    <div className="flex items-center justify-center w-6 h-6 shrink-0">
-                      {isCompleted && (
-                        <button
-                          onClick={() => onStageClick(stage)}
-                          className="flex items-center justify-center w-5 h-5 rounded-full bg-cb-teal/20 border border-cb-teal/30 cursor-pointer hover:bg-cb-teal/30 transition-colors"
-                          data-testid={`button-stage-${index}`}
-                        >
-                          <Check className="h-2.5 w-2.5 text-cb-teal" />
-                        </button>
-                      )}
-                      {isCurrent && (
-                        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 border-2 border-primary">
-                          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                        </div>
-                      )}
-                      {isFuture && (
-                        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-muted/30 border border-border/50">
-                          <Lock className="h-2 w-2 text-muted-foreground/40" />
-                        </div>
-                      )}
-                    </div>
-                    {index < PIPELINE_STAGES.length - 1 && (
-                      <div
-                        className={`w-[2px] flex-1 ${
-                          isCompleted
-                            ? "bg-cb-teal/40"
-                            : isCurrent
-                              ? "bg-gradient-to-b from-primary/60 to-border/30"
-                              : "bg-border/30"
-                        }`}
-                      />
+                <div key={stage} className="relative flex items-start group" data-testid={`stage-step-${index}`}>
+                  {index < PIPELINE_STAGES.length - 1 && (
+                    <div
+                      className={`absolute left-[11px] top-[24px] w-[2px] h-[calc(100%-8px)] ${
+                        isCompleted
+                          ? "bg-cb-teal/40"
+                          : isCurrent
+                            ? "bg-gradient-to-b from-primary/60 to-border/30"
+                            : "bg-border/30"
+                      }`}
+                    />
+                  )}
+
+                  <div className="relative z-10 flex items-center justify-center w-6 h-6 shrink-0 mt-0.5">
+                    {isCompleted && (
+                      <button
+                        onClick={() => onStageClick(stage)}
+                        className="flex items-center justify-center w-5 h-5 rounded-full bg-cb-teal/20 border border-cb-teal/30 cursor-pointer hover:bg-cb-teal/30 transition-colors"
+                        data-testid={`button-stage-${index}`}
+                      >
+                        <Check className="h-2.5 w-2.5 text-cb-teal" />
+                      </button>
+                    )}
+                    {isCurrent && (
+                      <div className="flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 border-2 border-primary">
+                        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                      </div>
+                    )}
+                    {isFuture && (
+                      <div className="flex items-center justify-center w-5 h-5 rounded-full bg-muted/30 border border-border/50">
+                        <Lock className="h-2 w-2 text-muted-foreground/40" />
+                      </div>
                     )}
                   </div>
 
-                  <div className="ml-2.5 pb-5 min-w-0 flex-1 pt-[3px]">
+                  <div className="ml-2.5 pb-5 min-w-0 flex-1">
                     <span
                       className={`text-xs leading-tight block ${
                         isCurrent
@@ -984,7 +411,7 @@ function StageTracker({
                 return (
                   <Tooltip key={stage}>
                     <TooltipTrigger asChild>{stageContent}</TooltipTrigger>
-                    <TooltipContent side="right" className="p-2.5 bg-popover border-border max-w-[260px]">
+                    <TooltipContent side="right" className="p-2.5 bg-zinc-900 border-zinc-700 max-w-[260px]">
                       {tooltip}
                     </TooltipContent>
                   </Tooltip>
@@ -1020,8 +447,6 @@ function stripStepTags(text: string): string {
     .replace(/\[DEPLOY_UIPATH\]/g, "")
     .replace(/\[DEPLOY_REPORT:[\s\S]*?\]/g, "")
     .replace(/\[STAGE_BACK:\s*[^\]]+\]/g, "")
-    .replace(/\[AUTOMATION_TYPE:\s*[^\]]*\]/gi, "")
-    .replace(/\[FEASIBILITY_SUMMARY\][\s\S]*?\[\/FEASIBILITY_SUMMARY\]/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -1062,7 +487,7 @@ function parseMessageMeta(content: string): { docType?: "PDD" | "SDD"; docId?: n
   return { displayContent: stripStepTags(content) };
 }
 
-function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea: Idea; switchProcessMapViewRef: MutableRefObject<((view: "as-is" | "to-be" | "sdd") => void) | null>; onMapApprovalReady?: (fn: (approvedView: string, isReapproval?: boolean) => void) => void }) {
+function ChatPanel({ idea, switchProcessMapViewRef }: { idea: Idea; switchProcessMapViewRef: MutableRefObject<((view: "as-is" | "to-be" | "sdd") => void) | null> }) {
   const { toast } = useToast();
   const [streamingMsg, setStreamingMsg] = useState<ChatMsg | null>(null);
   const [pendingUserMsg, setPendingUserMsg] = useState<ChatMsg | null>(null);
@@ -1074,46 +499,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const [generatingDocType, setGeneratingDocType] = useState<string>("");
   const [docProgressSection, setDocProgressSection] = useState<string>("");
   const [deployStep, setDeployStep] = useState<string>("");
-  const [classifiedIntent, setClassifiedIntent] = useState<string>("");
-  const [liveStatusLocal, setLiveStatus] = useState<string>("");
-  const {
-    currentRun: currentUiPathRun,
-    completedRuns: completedUiPathRuns,
-    pipelineLogEntries,
-    pipelineComplete,
-    pipelineFinalStatus: uipathFinalStatus,
-    isRunning: uipathIsRunning,
-    showProgressPanel: uipathShowProgressPanel,
-    dismissProgressPanel: uipathDismissProgressPanel,
-    startRun: startUiPathRun,
-    cancelRun: cancelUiPathRun,
-    metaValidationChipStatus,
-    metaValidationFixCount,
-    liveStatus: uipathLiveStatus,
-    cancelState: uipathCancelState,
-    generationStartTime: uipathStartTime,
-  } = useUiPathRun(idea.id);
-  const liveStatus = uipathIsRunning ? uipathLiveStatus : liveStatusLocal;
-  const [docMetaValidationChipStatus, setDocMetaValidationChipStatus] = useState<string>("ready");
-  const [docMetaValidationFixCount, setDocMetaValidationFixCount] = useState(0);
-  const effectiveMetaValidationChipStatus = (uipathIsRunning ? metaValidationChipStatus : docMetaValidationChipStatus) as "ready" | "assessing" | "will-validate" | "not-needed" | "active" | "validating" | "fixed" | "clean" | "warning";
-  const effectiveMetaValidationFixCount = uipathIsRunning ? metaValidationFixCount : docMetaValidationFixCount;
-  const [messageToRunId, setMessageToRunId] = useState<Map<string, string>>(new Map());
-  const [deployPipelineLogEntries, setDeployPipelineLogEntries] = useState<PipelineLogEntry[]>([]);
-  const [deployPipelineComplete, setDeployPipelineComplete] = useState(false);
-
   const [streamingDocContent, setStreamingDocContent] = useState<string>("");
   const [streamingDocElapsed, setStreamingDocElapsed] = useState(0);
   const streamingDocElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [feasibilityData, setFeasibilityData] = useState<{ type: string; rationale: string; complexity?: string | null; effortEstimate?: string | null } | null>(null);
   const [messageQueue, setMessageQueue] = useState<Array<{ id: string; text: string; imageData?: { base64: string; mediaType: string } }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialScrollDoneRef = useRef(false);
 
   useEffect(() => {
     initialScrollDoneRef.current = false;
-    setMessageToRunId(new Map());
-    uipathTriggeredRef.current = false;
   }, [idea.id]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1161,42 +555,20 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     setStreamingDocElapsed(0);
     if (streamingDocElapsedRef.current) clearInterval(streamingDocElapsedRef.current);
     streamingDocElapsedRef.current = setInterval(() => setStreamingDocElapsed(p => p + 1), 1000);
-    if (docGenSafetyTimerRef.current) clearTimeout(docGenSafetyTimerRef.current);
-    const safetyMs = type === "SDD" ? 360_000 : 240_000;
-    docGenSafetyTimerRef.current = setTimeout(() => {
-      if (isGeneratingDocRef.current) {
-        console.warn(`[DocGen] Safety timeout: isGeneratingDoc stuck for ${safetyMs / 1000}s, forcing reset`);
-        isGeneratingDocRef.current = false;
-        generatingDocTypeRef.current = "";
-        setIsGeneratingDoc(false);
-        setGeneratingDocType("");
-        setDocProgressSection("");
-        setStreamingDocContent("");
-        setStreamingDocElapsed(0);
-        if (streamingDocElapsedRef.current) {
-          clearInterval(streamingDocElapsedRef.current);
-          streamingDocElapsedRef.current = null;
-        }
-      }
-    }, safetyMs);
   }, []);
 
   const stopDocStreaming = useCallback((opts?: { force?: boolean }) => {
     if (!opts?.force && !isGeneratingDocRef.current) return;
-    isGeneratingDocRef.current = false;
-    generatingDocTypeRef.current = "";
     setIsGeneratingDoc(false);
     setGeneratingDocType("");
+    isGeneratingDocRef.current = false;
+    generatingDocTypeRef.current = "";
     setDocProgressSection("");
     setStreamingDocContent("");
     setStreamingDocElapsed(0);
     if (streamingDocElapsedRef.current) {
       clearInterval(streamingDocElapsedRef.current);
       streamingDocElapsedRef.current = null;
-    }
-    if (docGenSafetyTimerRef.current) {
-      clearTimeout(docGenSafetyTimerRef.current);
-      docGenSafetyTimerRef.current = null;
     }
   }, []);
 
@@ -1210,47 +582,11 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     setStreamingMsg(null);
     setPendingUserMsg(null);
   }, [stopDocStreaming]);
-  const toBeTriggeredRef = useRef(false);
-  const toBeGeneratingRef = useRef(false);
-  const pendingToBeGenerationRef = useRef(false);
   const pddTriggeredRef = useRef(false);
   const sddTriggeredRef = useRef(false);
   const uipathTriggeredRef = useRef(false);
-  const pendingDocTriggerRef = useRef<"PDD" | "SDD" | null>(null);
-  const toBeMapApprovedRef = useRef(false);
-  const docGenSafetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generateDocRef = useRef<((type: "PDD" | "SDD") => void) | null>(null);
-  const generateUiPathRef = useRef<((force?: boolean, source?: "chat" | "retry" | "approval" | "auto") => void) | null>(null);
-  const generateToBeRef = useRef<(() => void) | null>(null);
-
-  const dispatchGenerationForApproval = useCallback((viewType: "as-is" | "to-be", isReapproval: boolean) => {
-    if (isReapproval) {
-      if (viewType === "as-is") {
-        toBeTriggeredRef.current = false;
-        toBeMapApprovedRef.current = false;
-        pddTriggeredRef.current = false;
-        sddTriggeredRef.current = false;
-        uipathTriggeredRef.current = false;
-      } else {
-        toBeMapApprovedRef.current = false;
-        pddTriggeredRef.current = false;
-        sddTriggeredRef.current = false;
-        uipathTriggeredRef.current = false;
-      }
-    }
-
-    if (viewType === "as-is") {
-      toBeMapApprovedRef.current = false;
-      if (toBeTriggeredRef.current) return;
-      toBeTriggeredRef.current = true;
-      setTimeout(() => generateToBeRef.current?.(), 500);
-    } else {
-      toBeMapApprovedRef.current = true;
-      if (pddTriggeredRef.current) return;
-      pddTriggeredRef.current = true;
-      setTimeout(() => generateDocRef.current?.("PDD"), 500);
-    }
-  }, []);
+  const generateUiPathRef = useRef<(() => void) | null>(null);
 
   const guidance = STAGE_GUIDANCE[idea.stage];
 
@@ -1266,13 +602,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     refetchOnMount: "always",
   });
 
-  const savedMessagesRef = useRef(savedMessages);
-  savedMessagesRef.current = savedMessages;
-
   const isSystemTriggerMsg = (content: string) =>
-    /^Generate the (Process Design Document|Solution Design Document).*\[DOC:(PDD|SDD):/.test(content) ||
-    /^Generate the To-Be process map based on the approved As-Is map/.test(content) ||
-    /^First, perform the feasibility assessment/.test(content);
+    /^Generate the (Process Design Document|Solution Design Document).*\[DOC:(PDD|SDD):/.test(content);
 
   const displayMessages: ChatMsg[] = (() => {
     if (savedMessages && savedMessages.length > 0) {
@@ -1319,37 +650,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   useEffect(() => {
     if (!savedMessages || savedMessages.length === 0) return;
     if (isGeneratingDocRef.current) return;
-
-    const asIsApprovalPatterns = ["As-Is process map approved", "As-Is process map re-approved"];
-    const hasAsIsApproval = savedMessages.some(
-      (m) => (m.role === "assistant" || m.role === "system") && asIsApprovalPatterns.some(p => m.content.includes(p))
-    );
-    const isAsIsReapproval = savedMessages.some(
-      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("As-Is process map re-approved")
-    );
-    const hasToBeSteps = savedMessages.some(
-      (m) => m.role === "assistant" && m.content.includes("TO-BE Process Map")
-    );
-    if (hasAsIsApproval && !hasToBeSteps && !toBeTriggeredRef.current && !toBeGeneratingRef.current && !isStreaming && !isGeneratingDoc) {
-      dispatchGenerationForApproval("as-is", isAsIsReapproval);
-      return;
-    }
-
-    const toBeApprovalPatterns = ["To-Be process map approved", "To-Be process map re-approved"];
-    const hasToBeApproval = savedMessages.some(
-      (m) => (m.role === "assistant" || m.role === "system") && toBeApprovalPatterns.some(p => m.content.includes(p))
-    );
-    const isToBeReapproval = savedMessages.some(
-      (m) => (m.role === "assistant" || m.role === "system") && m.content.includes("To-Be process map re-approved")
+    const hasMapApproval = savedMessages.some(
+      (m) => m.role === "assistant" && (m.content.includes("As-Is process map approved") || m.content.includes("To-Be process map approved"))
     );
     const hasPdd = savedMessages.some(
       (m) => m.content.startsWith("[DOC:PDD:") || (m as any).docType === "PDD"
     );
-    if (hasToBeApproval) {
-      toBeMapApprovedRef.current = true;
-    }
-    if (hasToBeApproval && !hasPdd && !pddTriggeredRef.current && !isGeneratingDoc) {
-      dispatchGenerationForApproval("to-be", isToBeReapproval);
+    if (hasMapApproval && !hasPdd && !pddTriggeredRef.current && !isGeneratingDoc) {
+      pddTriggeredRef.current = true;
+      generateDocRef.current?.("PDD");
       return;
     }
 
@@ -1375,40 +684,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     );
     if (hasSddApproval && !hasUiPath && !uipathTriggeredRef.current && !isGeneratingDoc && !isStreaming) {
       uipathTriggeredRef.current = true;
-      setTimeout(() => generateUiPathRef.current?.(false, "auto"), 500);
+      setTimeout(() => generateUiPathRef.current?.(), 500);
     }
-
-    if (savedMessages && completedUiPathRuns.size > 0) {
-      const uipathMessages = savedMessages.filter(m => m.content.startsWith("[UIPATH:"));
-      let needsUpdate = false;
-      const newMap = new Map(messageToRunId);
-      const assignedRunIds = new Set(newMap.values());
-      const unassignedRuns = Array.from(completedUiPathRuns.entries())
-        .filter(([runId, run]) => !assignedRunIds.has(runId) && run.status !== "FAILED");
-      const unassignedMsgs = uipathMessages.filter(m => !newMap.has(String(m.id)));
-      const pairs = Math.min(unassignedRuns.length, unassignedMsgs.length);
-      for (let i = 0; i < pairs; i++) {
-        const msgIdx = unassignedMsgs.length - pairs + i;
-        const runIdx = unassignedRuns.length - pairs + i;
-        const msgId = String(unassignedMsgs[msgIdx].id);
-        const [runId] = unassignedRuns[runIdx];
-        newMap.set(msgId, runId);
-        assignedRunIds.add(runId);
-        needsUpdate = true;
-      }
-      if (needsUpdate) {
-        setMessageToRunId(newMap);
-      }
-    }
-  }, [savedMessages, isGeneratingDoc, isStreaming, completedUiPathRuns]);
-
-  useEffect(() => {
-    if (!isStreaming && !isGeneratingDoc && pendingToBeGenerationRef.current) {
-      console.log(`[ProcessMap] Streaming ended — retrying deferred To-Be generation`);
-      pendingToBeGenerationRef.current = false;
-      dispatchGenerationForApproval("as-is", false);
-    }
-  }, [isStreaming, isGeneratingDoc, dispatchGenerationForApproval]);
+  }, [savedMessages, isGeneratingDoc, isStreaming]);
 
   useEffect(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -1432,38 +710,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     };
   }, [savedMessages, isStreaming, isGeneratingDoc, idea.id]);
 
-  const lastUserMessageRef = useRef<string>("");
-
-  const isToBeRelatedMessage = useCallback((msg: string): boolean => {
-    const lower = msg.toLowerCase();
-    const toBeRef = /\bto[\s-]?be\b/.test(lower);
-    const modifyKeywords = /\b(simplif|modif|change|update|regenerat|redo|revise|improv|refin|reduc|optimiz|streamlin|consolidat|merg|rework|redesign|adjust|alter|rearrang)/i.test(lower);
-    if (toBeRef && modifyKeywords) return true;
-    const stageIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-    const feasibilityIndex = PIPELINE_STAGES.indexOf("Feasibility Assessment");
-    if (stageIndex >= feasibilityIndex && modifyKeywords) {
-      const mapRef = /\b(map|process|steps?|workflow|flow)\b/.test(lower);
-      if (mapRef && !(/\bas[\s-]?is\b/.test(lower))) return true;
-    }
-    return false;
-  }, [idea.stage]);
-
-  const sendMessageDirect = useCallback(async (text: string, imageData?: { base64: string; mediaType: string }, intentOverride?: string) => {
-    lastUserMessageRef.current = text;
-    setClassifiedIntent(intentOverride || guessIntentFromMessage(text));
-    setDeployStep("");
-    if (isToBeRelatedMessage(text)) {
-      toBeGeneratingRef.current = true;
-      console.log(`[ProcessMap] Detected TO-BE modification from user message, setting toBeGeneratingRef=true`);
-    }
-
-    if (isGeneratingDocRef.current && !abortControllerRef.current) {
-      isGeneratingDocRef.current = false;
-      generatingDocTypeRef.current = "";
-    }
-
-    let localClassifiedIntent = "";
-    let localDeployStarted = false;
+  const sendMessageDirect = useCallback(async (text: string, imageData?: { base64: string; mediaType: string }) => {
     let docGenIdAtStart = docGenIdRef.current;
     const userMsg: ChatMsg = {
       id: `user-${Date.now()}`,
@@ -1483,179 +730,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     };
     setStreamingMsg(streamMsg);
     streamingMsgRef.current = "";
-    setLiveStatus("");
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    let didRetry = false;
-
-    const handleSSEEvent = (data: any) => {
-        if (data.token) {
-          if (!streamingMsgRef.current) {
-            setLiveStatus("");
-          }
-          streamingMsgRef.current += data.token;
-          const docTagMatch = streamingMsgRef.current.match(/^\[DOC:(PDD|SDD):/);
-          if (docTagMatch && !isGeneratingDocRef.current) {
-            startDocStreaming(docTagMatch[1]);
-            docGenIdAtStart = docGenIdRef.current;
-          }
-          if (isGeneratingDocRef.current && generatingDocTypeRef.current !== "DHG") {
-            const raw = streamingMsgRef.current;
-            const tagEnd = raw.match(/^\[DOC:(PDD|SDD):\d+\]/);
-            const docText = tagEnd ? raw.slice(tagEnd[0].length) : raw;
-            setStreamingDocContent(docText);
-          }
-          setStreamingMsg((prev) =>
-            prev ? { ...prev, content: prev.content + data.token } : prev
-          );
-        }
-        if (data.liveStatus) {
-          setLiveStatus(data.liveStatus);
-        }
-        if (data.metaValidation) {
-          const mv = data.metaValidation;
-          if (mv.status === "started") {
-            setDocMetaValidationChipStatus("validating");
-          } else if (mv.status === "assessing") {
-            setDocMetaValidationChipStatus("assessing");
-          } else if (mv.status === "will-validate") {
-            setDocMetaValidationChipStatus("will-validate");
-          } else if (mv.status === "not-needed") {
-            setDocMetaValidationChipStatus("not-needed");
-          } else if (mv.status === "completed") {
-            if (mv.correctionsApplied > 0) {
-              setDocMetaValidationChipStatus("fixed");
-              setDocMetaValidationFixCount(mv.correctionsApplied);
-            } else {
-              setDocMetaValidationChipStatus("clean");
-            }
-          } else if (mv.status === "warning") {
-            setDocMetaValidationChipStatus("warning");
-            setDocMetaValidationFixCount(mv.correctionsApplied || 0);
-          }
-        }
-        if (data.triggerUiPathGen) {
-          if (uipathIsRunning) {
-            console.log("[UiPath Trigger] triggerUiPathGen received but generation already in flight — ignoring");
-          } else {
-            console.log("[UiPath Trigger] triggerUiPathGen received — calling new run endpoint");
-            setTimeout(() => generateUiPathRef.current?.(true, "chat"), 500);
-          }
-        }
-        if (data.intentClassified) {
-          localClassifiedIntent = data.intentClassified;
-          setClassifiedIntent(data.intentClassified);
-          setLiveStatus("");
-        }
-        if (data.done) {
-          setStreamingMsg((prev) =>
-            prev ? { ...prev, isStreaming: false } : prev
-          );
-          setDocProgressSection("");
-          setClassifiedIntent("");
-          setLiveStatus("");
-        }
-        if (data.pipelineEvent) {
-          const evt = data.pipelineEvent;
-          setDeployPipelineLogEntries(prev => [...prev, {
-            id: `pe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            type: evt.type,
-            stage: evt.stage,
-            message: evt.message,
-            elapsed: evt.elapsed,
-            context: evt.context,
-            timestamp: Date.now(),
-          }]);
-          if (evt.stage === "complete" && evt.type === "completed") {
-            setDeployPipelineComplete(true);
-          }
-          if (evt.stage === "complexity_classification" && evt.type === "completed" && evt.context?.complexityTier) {
-            const pathLabel = evt.context.streamlined ? "streamlined" : "full pipeline";
-            setLiveStatus(`Generating package (${pathLabel})...`);
-          }
-        }
-        if (data.docProgress) {
-          const docType = data.docProgress.docType || "PDD";
-          if (data.docProgress.started && !isGeneratingDocRef.current) {
-            if (docType === "UiPath") {
-              console.log("[UiPath Trigger] docProgress started with docType=UiPath — treated as non-blocking (no startDocStreaming, no isGeneratingDoc)");
-            } else {
-              startDocStreaming(docType);
-              docGenIdAtStart = docGenIdRef.current;
-            }
-          }
-        }
-        if (data.deployStatus) {
-          if (data.deployComplete) {
-            setDeployStep("");
-            setClassifiedIntent("");
-            setStreamingMsg(null);
-            queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-          } else {
-            if (!localDeployStarted) {
-              localDeployStarted = true;
-              setDeployPipelineLogEntries([]);
-              setDeployPipelineComplete(false);
-
-            }
-            setDeployStep(data.deployStatus);
-            setStreamingMsg((prev) => prev ? { ...prev } : prev);
-          }
-        }
-        if (data.mapApproval) {
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-approval-history"] });
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "approval-summary"] });
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map"] });
-          const isReapproval = !!data.mapApproval.isReapproval;
-          if (data.mapApproval.nextAction === "generate-to-be" || data.mapApproval.nextAction === "generate-feasibility-and-to-be") {
-            dispatchGenerationForApproval("as-is", isReapproval);
-          }
-          if (data.mapApproval.nextAction === "generate-pdd") {
-            dispatchGenerationForApproval("to-be", isReapproval);
-          }
-        }
-        if (data.docTrigger) {
-          const triggerType = data.docTrigger.type as "PDD" | "SDD";
-          console.log(`[DocTrigger] Server requested ${triggerType} generation via dedicated endpoint`);
-          pendingDocTriggerRef.current = triggerType;
-        }
-        if (data.transition) {
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
-          const { fromStage, toStage, reason } = data.transition;
-          toast({
-            title: fromStage && toStage && PIPELINE_STAGES.indexOf(fromStage) > PIPELINE_STAGES.indexOf(toStage)
-              ? `Stage Moved Back: ${toStage}`
-              : `Stage Advanced: ${toStage}`,
-            description: reason || `Moved from ${fromStage}`,
-          });
-        }
-        if (data.automationType) {
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
-        }
-        if (data.feasibilityAssessment) {
-          setFeasibilityData(data.feasibilityAssessment);
-          setClassifiedIntent("TO_BE_MAP");
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
-        }
-        if (data.dhgProgress) {
-          if (data.dhgProgress.started) {
-            startDocStreaming("DHG");
-            docGenIdAtStart = docGenIdRef.current;
-          }
-        }
-        if (data.error) {
-          streamingMsgRef.current = "";
-          setStreamingMsg(null);
-          stopDocStreaming({ force: true });
-          toast({
-            title: "Message failed",
-            description: "Something went wrong. Please try sending your message again.",
-            variant: "destructive",
-          });
-        }
-    };
 
     try {
       const res = await fetch("/api/chat", {
@@ -1688,7 +765,78 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              handleSSEEvent(data);
+              if (data.token) {
+                streamingMsgRef.current += data.token;
+                const docTagMatch = streamingMsgRef.current.match(/^\[DOC:(PDD|SDD):/);
+                if (docTagMatch && !isGeneratingDocRef.current) {
+                  startDocStreaming(docTagMatch[1]);
+                  docGenIdAtStart = docGenIdRef.current;
+                }
+                if (isGeneratingDocRef.current) {
+                  const raw = streamingMsgRef.current;
+                  const tagEnd = raw.match(/^\[DOC:(PDD|SDD):\d+\]/);
+                  const docText = tagEnd ? raw.slice(tagEnd[0].length) : raw;
+                  setStreamingDocContent(docText);
+                }
+                setStreamingMsg((prev) =>
+                  prev ? { ...prev, content: prev.content + data.token } : prev
+                );
+              }
+              if (data.done) {
+                setStreamingMsg((prev) =>
+                  prev ? { ...prev, isStreaming: false } : prev
+                );
+                setDocProgressSection("");
+                setDeployStep("");
+              }
+              if (data.docProgress) {
+                if (data.docProgress.started && !isGeneratingDocRef.current) {
+                  startDocStreaming(data.docProgress.docType || "PDD");
+                  docGenIdAtStart = docGenIdRef.current;
+                }
+                if (data.docProgress.section) {
+                  setDocProgressSection(data.docProgress.section);
+                }
+              }
+              if (data.deployStatus) {
+                if (data.deployComplete) {
+                  setDeployStep("");
+                  setStreamingMsg(null);
+                  queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
+                } else {
+                  setDeployStep(data.deployStatus);
+                  setStreamingMsg((prev) => prev ? { ...prev } : prev);
+                }
+              }
+              if (data.mapApproval) {
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-approval-history"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "approval-summary"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "process-map"] });
+              }
+              if (data.transition) {
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
+                const { fromStage, toStage, reason } = data.transition;
+                toast({
+                  title: fromStage && toStage && PIPELINE_STAGES.indexOf(fromStage) > PIPELINE_STAGES.indexOf(toStage)
+                    ? `Stage Moved Back: ${toStage}`
+                    : `Stage Advanced: ${toStage}`,
+                  description: reason || `Moved from ${fromStage}`,
+                });
+              }
+              if (data.automationType) {
+                queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
+              }
+              if (data.error) {
+                streamingMsgRef.current = "";
+                setStreamingMsg(null);
+                stopDocStreaming({ force: true });
+                toast({
+                  title: "Message failed",
+                  description: "Something went wrong. Please try sending your message again.",
+                  variant: "destructive",
+                });
+              }
             } catch {}
           }
         }
@@ -1700,54 +848,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
         return;
       }
-      if (!didRetry) {
-        didRetry = true;
-        console.log("[Chat] Connection error, attempting automatic retry in 2s...");
-        setLiveStatus("Reconnecting...");
-        await new Promise((r) => setTimeout(r, 2000));
-        try {
-          const retryController = new AbortController();
-          abortControllerRef.current = retryController;
-          setStreamingMsg({
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            content: "",
-            timestamp: new Date(),
-            isStreaming: true,
-          });
-          streamingMsgRef.current = "";
-          const retryRes = await fetch("/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: retryController.signal,
-            credentials: "include",
-            body: JSON.stringify({ ideaId: idea.id, content: text, ...(imageData ? { imageData } : {}) }),
-          });
-          if (!retryRes.ok) throw new Error("Retry request failed");
-          const retryReader = retryRes.body?.getReader();
-          if (!retryReader) throw new Error("No retry stream reader");
-          const retryDecoder = new TextDecoder();
-          let retryBuffer = "";
-          while (true) {
-            const { done: retryDone, value: retryValue } = await retryReader.read();
-            if (retryDone) break;
-            retryBuffer += retryDecoder.decode(retryValue, { stream: true });
-            const retryLines = retryBuffer.split("\n");
-            retryBuffer = retryLines.pop() || "";
-            for (const retryLine of retryLines) {
-              if (retryLine.startsWith("data: ")) {
-                try {
-                  const data = JSON.parse(retryLine.slice(6));
-                  handleSSEEvent(data);
-                } catch {}
-              }
-            }
-          }
-          return;
-        } catch {
-          setLiveStatus("");
-        }
-      }
       toast({
         title: "Connection error",
         description: "Couldn't reach the server. Please try again.",
@@ -1755,55 +855,17 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       });
     } finally {
       setIsStreaming(false);
-      abortControllerRef.current = null;
+      if (docGenIdRef.current === docGenIdAtStart) {
+        stopDocStreaming();
+      }
       setDeployStep("");
       setPendingUserMsg(null);
       const finalContent = streamingMsgRef.current;
       setStreamingMsg(null);
-
-      try {
-        await queryClient.refetchQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-      } catch {
-        try {
-          await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-        } catch { /* best-effort */ }
-      }
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "artifacts"] });
-
-      stopDocStreaming({ force: true });
-
-      if (pendingDocTriggerRef.current) {
-        const pendingType = pendingDocTriggerRef.current;
-        pendingDocTriggerRef.current = null;
-        const triggerRef = pendingType === "PDD" ? pddTriggeredRef : sddTriggeredRef;
-        if (!triggerRef.current) {
-          triggerRef.current = true;
-          setTimeout(() => generateDocRef.current?.(pendingType), 300);
-        }
-      }
-
-      const isToBeRun = toBeGeneratingRef.current;
-      const lastMsg = lastUserMessageRef.current;
-      const isToBeFromMessage = isToBeRelatedMessage(lastMsg);
-      const stageIndex = PIPELINE_STAGES.indexOf(idea.stage as PipelineStage);
-      const designIndex = PIPELINE_STAGES.indexOf("Design");
-      const isPastDesign = stageIndex > designIndex;
-      const hasStepTags = finalContent ? /\[STEP:\s*[^|]+?\s*\|/.test(finalContent) : false;
-      const isToBeContext = isToBeRun || isToBeFromMessage || (isPastDesign && hasStepTags);
-      toBeGeneratingRef.current = false;
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
 
       if (finalContent) {
-        const defaultView: "as-is" | "to-be" = (isToBeContext || isPastDesign) ? "to-be" : "as-is";
-        const viewStepSets = parseStepsByView(finalContent, defaultView);
-
-        if (isToBeContext || isPastDesign) {
-          for (const entry of viewStepSets) {
-            if (entry.viewType === "as-is") {
-              console.log(`[ProcessMap] View pinning: forcing viewType from as-is to to-be (stage=${idea.stage}, isToBeContext=${isToBeContext}, isPastDesign=${isPastDesign})`);
-              entry.viewType = "to-be";
-            }
-          }
-        }
+        const viewStepSets = parseStepsByView(finalContent);
 
         let firstCreatedView: string | null = null;
 
@@ -1843,7 +905,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
 
           const hasStartNode = dedupedSteps.some(s => s.nodeType === "start");
           const hasEndNode = dedupedSteps.some(s => s.nodeType === "end");
-          const clearExisting = hasStartNode && hasEndNode && dedupedSteps.length >= 3;
+          const clearExisting = viewType === "to-be"
+            ? true
+            : (hasStartNode && hasEndNode && dedupedSteps.length >= 3);
 
           const stepNumberToIndex: Record<string, number> = {};
           dedupedSteps.forEach((step, i) => {
@@ -1937,15 +1001,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           if (endDupTargetRemap.size > 0) {
             console.log(`[ProcessMap] Merged ${endDupTargetRemap.size} duplicate end nodes for view=${viewType}`);
           }
-          if (viewType === "as-is" && isPastDesign) {
-            console.log(`[ProcessMap] Blocked bulk write to as-is view — stage is past Design (${idea.stage}), skipping to protect approved AS-IS map`);
-            continue;
-          }
-          if (viewType === "to-be" && isPastDesign && toBeMapApprovedRef.current) {
-            console.log(`[ProcessMap] Blocked bulk write to to-be view — stage is past Design (${idea.stage}) and To-Be map already approved, skipping to protect approved TO-BE map`);
-            continue;
-          }
-
           console.log(`[ProcessMap] Bulk creating ${bulkNodes.length} nodes, ${remappedEdges.length} edges for view=${viewType} (clear=${clearExisting})`);
 
           const bulkRes = await fetch(`/api/ideas/${idea.id}/process-map/bulk`, {
@@ -1969,147 +1024,118 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         }
       }
     }
-  }, [idea.id, idea.stage, isToBeRelatedMessage]);
+  }, [idea.id]);
 
-  const generateDocument = useCallback(async (type: "PDD" | "SDD") => {
-    if (isGeneratingDoc || isGeneratingDocRef.current || isStreaming) {
-      console.log(`[DocGen] Skipping ${type} generation — already generating (isGeneratingDoc=${isGeneratingDoc}, ref=${isGeneratingDocRef.current}, isStreaming=${isStreaming})`);
-      const triggerRef = type === "PDD" ? pddTriggeredRef : sddTriggeredRef;
-      triggerRef.current = false;
-      return;
-    }
+  const generateDocument = useCallback((type: "PDD" | "SDD") => {
+    if (isGeneratingDoc || isStreaming) return;
     startDocStreaming(type);
-    setClassifiedIntent(type);
-    const abortController = new AbortController();
-    const abortTimeoutMs = type === "SDD" ? 300_000 : 180_000;
-    const timeoutId = setTimeout(() => abortController.abort(), abortTimeoutMs);
-    try {
-      const res = await fetch(`/api/ideas/${idea.id}/documents/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ type }),
-        signal: abortController.signal,
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ message: "Generation failed" }));
-        throw new Error(data.message || "Generation failed");
-      }
-
-      const contentType = res.headers.get("content-type") || "";
-      if (contentType.includes("text/event-stream") && res.body) {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let sseError: string | null = null;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.stageEvent) {
-                const evt = data.stageEvent;
-                const label = STAGE_DISPLAY_LABELS[evt.stage] || `Processing ${evt.stage.replace(/_/g, " ")}...`;
-                if (evt.type === "stage_start") {
-                  setDocProgressSection(label);
-                } else if (evt.type === "stage_end" && evt.outcome === "failed" && evt.error) {
-                  setDocProgressSection(`Failed: ${evt.error.slice(0, 100)}`);
-                }
-              }
-
-              if (data.error) {
-                sseError = data.message || "Generation failed";
-              }
-
-              if (data.done) {
-                break;
-              }
-            } catch {}
-          }
-        }
-
-        if (sseError) {
-          throw new Error(sseError);
-        }
-      }
-
-      await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id] });
-    } catch (err: any) {
-      const timeoutMinutes = Math.round(abortTimeoutMs / 60_000);
-      const message = err?.name === "AbortError"
-        ? `Document generation timed out after ${timeoutMinutes} minutes. Please try again.`
-        : (err?.message || "Something went wrong. Please try again.");
-      toast({
-        title: `${type} generation failed`,
-        description: message,
-        variant: "destructive",
-      });
-    } finally {
-      clearTimeout(timeoutId);
-      setClassifiedIntent("");
-      stopDocStreaming({ force: true });
-      if (pendingDocTriggerRef.current) {
-        const pendingType = pendingDocTriggerRef.current;
-        pendingDocTriggerRef.current = null;
-        const triggerRef = pendingType === "PDD" ? pddTriggeredRef : sddTriggeredRef;
-        if (!triggerRef.current) {
-          console.log(`[DocGen] Consuming pending doc trigger after generation completed: ${pendingType}`);
-          triggerRef.current = true;
-          setTimeout(() => generateDocRef.current?.(pendingType), 300);
-        }
-      }
-    }
-  }, [isGeneratingDoc, isStreaming, startDocStreaming, stopDocStreaming, idea.id, toast]);
+    const prompt = type === "PDD"
+      ? "Generate the Process Design Document (PDD) now. Start your response with [DOC:PDD:0] followed by the full document. Include all sections: 1) Executive Summary, 2) Process Scope, 3) As-Is Process Description, 4) To-Be Process Description, 5) Pain Points and Inefficiencies, 6) Automation Opportunity Assessment, 7) Assumptions and Exceptions, 8) Data and System Requirements. Write as a professional document using ## headings."
+      : "Generate the Solution Design Document (SDD) now. Start your response with [DOC:SDD:0] followed by the full document. Include the orchestrator_artifacts JSON block in Section 9 with all artifact definitions (queues, assets, machines, triggers, storageBuckets, environments, actionCenter, testCases). Write as a professional technical specification using ## headings.";
+    sendMessageDirect(prompt);
+  }, [isGeneratingDoc, isStreaming, startDocStreaming, sendMessageDirect]);
 
   generateDocRef.current = generateDocument;
 
-  const generateToBeMap = useCallback(() => {
-    if (isStreaming || isGeneratingDoc) {
-      console.log(`[ProcessMap] To-Be generation deferred — isStreaming=${isStreaming}, isGeneratingDoc=${isGeneratingDoc}`);
-      pendingToBeGenerationRef.current = true;
-      toBeTriggeredRef.current = false;
+  const generateUiPath = useCallback(async () => {
+    if (isGeneratingDoc || isStreaming) {
+      uipathTriggeredRef.current = false;
       return;
     }
-    pendingToBeGenerationRef.current = false;
-    toBeGeneratingRef.current = true;
-    sendMessageDirect(
-      "First, perform the feasibility assessment: evaluate the automation type (RPA vs Agent vs Hybrid) for this process and output the [AUTOMATION_TYPE:] tag. " +
-      "Then generate the To-Be process map based on the approved As-Is map and the available UiPath services. " +
-      "Show the automated future state. Use the section header 'TO-BE Process Map' followed by [STEP:] tags.",
-      undefined,
-      "FEASIBILITY"
-    );
-  }, [isStreaming, isGeneratingDoc, sendMessageDirect]);
-  generateToBeRef.current = generateToBeMap;
-
-  const handleMapApprovalFromPanel = useCallback((approvedView: string, isReapproval?: boolean) => {
-    if (approvedView === "as-is" || approvedView === "to-be") {
-      dispatchGenerationForApproval(approvedView, !!isReapproval);
+    setIsGeneratingDoc(true);
+    setGeneratingDocType("UiPath");
+    setDocProgressSection("");
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 300000);
+      const res = await fetch(`/api/ideas/${idea.id}/generate-uipath`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("Failed to generate UiPath package:", err);
+        toast({
+          title: "Package generation failed",
+          description: err.message || "Could not generate UiPath package. Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("text/event-stream")) {
+          const reader = res.body?.getReader();
+          const decoder = new TextDecoder();
+          if (reader) {
+            let buffer = "";
+            let success = false;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.progress) {
+                      setDocProgressSection(data.progress);
+                    }
+                    if (data.done) {
+                      success = true;
+                    }
+                    if (data.error) {
+                      toast({
+                        title: "Package generation failed",
+                        description: data.error,
+                        variant: "destructive",
+                      });
+                    }
+                  } catch {}
+                }
+              }
+            }
+            if (success) {
+              toast({
+                title: "UiPath Package Ready",
+                description: "Package generated successfully. You can now deploy to UiPath.",
+              });
+            }
+          }
+        } else {
+          toast({
+            title: "UiPath Package Ready",
+            description: "Package generated successfully. You can now deploy to UiPath.",
+          });
+        }
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        toast({
+          title: "Timed out",
+          description: "Package generation took too long. Please try again.",
+          variant: "destructive",
+        });
+      } else {
+        console.error("Error generating UiPath package:", err);
+        toast({
+          title: "Error",
+          description: "Could not generate UiPath package. Please try again.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsGeneratingDoc(false);
+      setGeneratingDocType("");
+      setDocProgressSection("");
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
     }
-  }, [dispatchGenerationForApproval]);
+  }, [idea.id, isGeneratingDoc, isStreaming]);
 
-  useEffect(() => {
-    onMapApprovalReady?.(handleMapApprovalFromPanel);
-  }, [onMapApprovalReady, handleMapApprovalFromPanel]);
-
-  // NOTE: force=true bypasses the chat-message cache check in document-routes.ts but does NOT bypass
-  // the fingerprint-based pipeline cache in uipath-pipeline.ts. If the user regenerates with identical
-  // inputs (same SDD, same map, same spec), the pipeline returns the cached build artifact. This is a
-  // known follow-up — if users expect force=true to produce a fresh build, pipeline cache eviction
-  // logic will need a separate change.
-  generateUiPathRef.current = (force?: boolean, source?: "chat" | "retry" | "approval" | "auto") => startUiPathRun(source || "auto", force);
+  generateUiPathRef.current = generateUiPath;
 
   const [approvedDocIds, setApprovedDocIds] = useState<Set<number>>(new Set());
 
@@ -2119,16 +1145,13 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
     }
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
     queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "versions", docType] });
-    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "SDD"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "approval-summary"] });
     if (docType === "PDD" && !sddTriggeredRef.current) {
       sddTriggeredRef.current = true;
       setTimeout(() => generateDocRef.current?.("SDD"), 500);
     }
     if (docType === "SDD" && !uipathTriggeredRef.current) {
       uipathTriggeredRef.current = true;
-      setTimeout(() => generateUiPathRef.current?.(false, "approval"), 500);
+      setTimeout(() => generateUiPathRef.current?.(), 500);
     }
   }, [idea.id]);
 
@@ -2150,22 +1173,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
   const hasPddDoc = useMemo(() => displayMessages.some(m => m.docType === "PDD" && m.docId), [displayMessages]);
   const hasSddDoc = useMemo(() => displayMessages.some(m => m.docType === "SDD" && m.docId), [displayMessages]);
 
-  const packageCharacteristics = useMemo(() => {
-    const latestUiPathMsg = [...displayMessages].reverse().find(m => m.uipathData);
-    if (!latestUiPathMsg?.uipathData) return undefined;
-    const pkg = latestUiPathMsg.uipathData;
-    const workflows = pkg.workflows || [];
-    const totalActivities = workflows.reduce((sum: number, wf: any) => sum + (wf.steps?.length || 0), 0);
-    const uipathMessageCount = displayMessages.filter(m => m.uipathData).length;
-    return {
-      hasReFramework: pkg.internal?.useReFramework === true || workflows.some((wf: any) => wf.name?.includes("GetTransactionData") || wf.name?.includes("SetTransactionStatus")),
-      hasDocumentUnderstanding: workflows.some((wf: any) => (wf.steps || []).some((s: any) => s.activityType?.includes("DigitizeDocument") || s.activityType?.includes("ClassifyDocument"))),
-      workflowCount: workflows.length,
-      activityCount: totalActivities,
-      isFirstProductionDeploy: uipathMessageCount <= 1,
-    };
-  }, [displayMessages]);
-
   const { data: pddApprovalData } = useQuery<{ document: any; approval: any }>({
     queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"],
     enabled: hasPddDoc,
@@ -2183,9 +1190,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       }
     }
     if (hasSddDoc && sddApprovalData?.document && !sddApprovalData?.approval) {
-      if (getApprovalReadiness("SDD", sddApprovalData.document.artifactsValid) === "blocked") {
-        return null;
-      }
       const sddMsg = [...displayMessages].reverse().find(m => m.docType === "SDD" && m.docId);
       if (sddMsg && !approvedDocIds.has(sddMsg.docId!)) {
         return { docType: "SDD", docId: sddMsg.docId! };
@@ -2204,6 +1208,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       });
       if (!res.ok) throw new Error(await res.text());
       handleDocApproved(pendingApprovalDoc.docType as "PDD" | "SDD", pendingApprovalDoc.docId);
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "PDD"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "documents", "latest", "SDD"] });
     } catch (err: any) {
       toast({ title: "Approval failed", description: err.message, variant: "destructive" });
     } finally {
@@ -2373,13 +1379,6 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
         </div>
       </div>
 
-      <MetaValidationBar
-        isGenerating={isStreaming}
-        metaValidationStatus={effectiveMetaValidationChipStatus}
-        fixCount={effectiveMetaValidationFixCount}
-        packageCharacteristics={packageCharacteristics}
-      />
-
       {guidance && (
         <div className="mx-3 mt-3 p-3 rounded-md bg-primary/5 border border-primary/10">
           <div className="flex items-start gap-2">
@@ -2397,43 +1396,13 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
       )}
 
       <div className="flex-1 overflow-y-auto scrollbar-thin px-3 py-3 space-y-3" data-testid="chat-messages">
-        {(() => {
-          const effectiveFeasibility = feasibilityData
-            ? { type: feasibilityData.type as "rpa" | "agent" | "hybrid", rationale: feasibilityData.rationale, complexity: feasibilityData.complexity, effortEstimate: feasibilityData.effortEstimate }
-            : (idea.automationType && idea.automationTypeRationale)
-              ? { type: idea.automationType as "rpa" | "agent" | "hybrid", rationale: idea.automationTypeRationale, complexity: (idea as any).feasibilityComplexity || null, effortEstimate: (idea as any).feasibilityEffortEstimate || null }
-              : null;
-
-          const asIsApprovalIndex = effectiveFeasibility ? displayMessages.findIndex(
-            (m) => m.role === "assistant" && (m.content.includes("As-Is process map approved") || m.content.includes("As-Is process map re-approved") || m.content.includes("feasibility assessment"))
-          ) : -1;
-          const fallbackIndex = effectiveFeasibility ? Math.max(0, displayMessages.findIndex((m) => m.role === "assistant") + 1) : -1;
-          const feasibilityInsertIndex = asIsApprovalIndex >= 0 ? asIsApprovalIndex + 1 : fallbackIndex;
-
-          const rendered: JSX.Element[] = [];
-
-          displayMessages.forEach((msg, idx) => {
-            if (effectiveFeasibility && idx === feasibilityInsertIndex) {
-              rendered.push(
-                <div key="feasibility-card" className="flex justify-start" data-testid="chat-feasibility-card">
-                  <div className="max-w-[95%] w-full">
-                    <FeasibilityCard
-                      automationType={effectiveFeasibility.type}
-                      rationale={effectiveFeasibility.rationale}
-                      complexity={effectiveFeasibility.complexity}
-                      effortEstimate={effectiveFeasibility.effortEstimate}
-                    />
-                  </div>
-                </div>
-              );
-            }
-
+        {displayMessages.map((msg) => {
           if (msg.docType && msg.docId != null) {
             const latestDocOfType = [...displayMessages]
               .filter((m) => m.docType === msg.docType)
               .pop();
             const isLatest = latestDocOfType?.id === msg.id;
-            rendered.push(
+            return (
               <div key={msg.id} className="flex justify-start" data-testid={`chat-message-${msg.id}`}>
                 <div className="max-w-[95%] w-full">
                   <DocumentCard
@@ -2443,25 +1412,14 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     ideaId={idea.id}
                     isApproved={!isLatest || approvedDocIds.has(msg.docId)}
                     onApproved={() => handleDocApproved(msg.docType!, msg.docId)}
-                    artifactsValid={msg.docType === "SDD" && isLatest ? sddApprovalData?.document?.artifactsValid : undefined}
                   />
                 </div>
               </div>
             );
-            return;
           }
 
           if (msg.uipathData) {
-            const linkedRunId = messageToRunId.get(msg.id);
-            const completedRun = linkedRunId ? completedUiPathRuns.get(linkedRunId) : undefined;
-            const cardStatus = completedRun?.status as "BUILDING" | "studio_stable" | "openable_with_warnings" | "handoff_only" | "structurally_invalid" | "FAILED" | undefined;
-            const cardWarnings = completedRun?.warnings;
-            const cardComplianceScore = completedRun?.complianceScore;
-            const cardCompletenessLevel = completedRun?.completenessLevel;
-            const cardOutcomeSummary = completedRun?.outcomeSummary;
-            const cardDependencyMap = completedRun?.dependencyMap;
-            const isLatestUiPathMsg = displayMessages.filter(m => m.uipathData).pop()?.id === msg.id;
-            rendered.push(
+            return (
               <div key={msg.id} className="flex justify-start" data-testid={`chat-message-${msg.id}`}>
                 <div className="max-w-[95%] w-full">
                   <UiPathPackageCard
@@ -2469,22 +1427,14 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     ideaId={idea.id}
                     onDeployProgress={(step) => setDeployStep(step)}
                     onDeployComplete={() => setDeployStep("")}
-                    onRetry={isLatestUiPathMsg ? () => startUiPathRun("retry", true) : undefined}
-                    status={cardStatus}
-                    warnings={cardWarnings}
-                    templateComplianceScore={cardComplianceScore}
-                    completenessLevel={cardCompletenessLevel}
-                    outcomeSummary={cardOutcomeSummary}
-                    pipelineDependencyMap={cardDependencyMap}
                   />
                 </div>
               </div>
             );
-            return;
           }
 
           if (msg.deployReport && (msg.deployReport.results?.length > 0 || msg.deployReport.packageId || msg.deployReport.processName)) {
-            rendered.push(
+            return (
               <div key={msg.id} className="flex justify-start" data-testid={`chat-message-${msg.id}`}>
                 <div className="max-w-[95%] w-full space-y-2">
                   {msg.content && (
@@ -2508,26 +1458,16 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                 </div>
               </div>
             );
-            return;
           }
 
           if (msg.isStreaming && msg.role === "assistant") {
-            if (deployStep && deployPipelineLogEntries.length > 0) {
-              rendered.push(<PipelineLogPanel key={`${msg.id}-deploy-pipeline-log`} entries={deployPipelineLogEntries} isComplete={deployPipelineComplete} onCancel={undefined} />);
-              return;
-            }
             if (deployStep) {
-              rendered.push(<StreamingProgressIndicator key={`${msg.id}-deploy`} mode="deploy" deployStep={deployStep} />);
-              return;
-            }
-            if (uipathShowProgressPanel) {
-              rendered.push(<UiPathProgressPanel key={`${msg.id}-uipath-progress`} entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} isRunning={uipathIsRunning} onDismiss={uipathDismissProgressPanel} finalStatus={uipathFinalStatus} />);
-              return;
+              return <StreamingProgressIndicator key={`${msg.id}-deploy`} mode="deploy" deployStep={deployStep} />;
             }
             if (isGeneratingDoc || isGeneratingDocRef.current) {
               const docType = (generatingDocType || generatingDocTypeRef.current || "PDD") as "PDD" | "SDD";
               if (streamingDocContent && streamingDocContent.length > 10) {
-                rendered.push(
+                return (
                   <div key={`${msg.id}-streaming-doc`} className="flex justify-start" data-testid="streaming-doc-card">
                     <div className="max-w-[95%] w-full">
                       <DocumentCard
@@ -2542,18 +1482,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
                     </div>
                   </div>
                 );
-                return;
               }
-              rendered.push(<StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="doc" docType={docType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />);
-              return;
+              return <StreamingProgressIndicator key={`${msg.id}-doc-${docType}`} mode="doc" docType={docType} currentSection={docProgressSection} onCancel={cancelDocGeneration} />;
             }
             if (!msg.content) {
-              rendered.push(<StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" liveStatus={liveStatus} stage={idea.stage} classifiedIntent={classifiedIntent} />);
-              return;
+              return <StreamingProgressIndicator key={`${msg.id}-thinking`} mode="thinking" stage={idea.stage} />;
             }
           }
 
-          rendered.push(
+          return (
             <div
               key={msg.id}
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
@@ -2604,29 +1541,8 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
               </div>
             </div>
           );
-        });
-
-        if (effectiveFeasibility && feasibilityInsertIndex >= displayMessages.length) {
-            rendered.push(
-              <div key="feasibility-card" className="flex justify-start" data-testid="chat-feasibility-card">
-                <div className="max-w-[95%] w-full">
-                  <FeasibilityCard
-                    automationType={effectiveFeasibility.type}
-                    rationale={effectiveFeasibility.rationale}
-                    complexity={effectiveFeasibility.complexity}
-                    effortEstimate={effectiveFeasibility.effortEstimate}
-                  />
-                </div>
-              </div>
-            );
-          }
-
-          return rendered;
-        })()}
-        {uipathShowProgressPanel && !streamingMsg && (
-          <UiPathProgressPanel entries={pipelineLogEntries} isComplete={pipelineComplete} onCancel={() => cancelUiPathRun()} cancelState={uipathCancelState} startTime={uipathStartTime} isRunning={uipathIsRunning} onDismiss={uipathDismissProgressPanel} finalStatus={uipathFinalStatus} />
-        )}
-        {isGeneratingDoc && !streamingMsg && !uipathShowProgressPanel && (
+        })}
+        {isGeneratingDoc && !streamingMsg && (
           streamingDocContent && streamingDocContent.length > 10 ? (
             <div className="flex justify-start" data-testid="streaming-doc-card-bottom">
               <div className="max-w-[95%] w-full">
@@ -2649,53 +1565,15 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
           <StreamingProgressIndicator mode="deploy" deployStep={deployStep} />
         )}
 
-        {currentUiPathRun?.status === "STALLED" && !uipathIsRunning && (
-          <div className="flex justify-center py-2" data-testid="uipath-stalled-indicator">
-            <div className="flex flex-col items-center gap-2">
-              <div className="flex items-center gap-2 text-xs text-amber-500">
-                <Package className="h-3.5 w-3.5 animate-pulse" />
-                <span>Still processing — waiting for server updates...</span>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs"
-                onClick={() => cancelUiPathRun()}
-                data-testid="button-cancel-stalled"
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {currentUiPathRun?.status === "FAILED" && !isGeneratingDoc && (
-          <div className="flex justify-center py-2" data-testid="uipath-failed-section">
-            <div className="flex flex-col items-center gap-2">
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/15 text-red-500 text-xs font-medium" data-testid="badge-status-failed">
-                Build Failed
-              </span>
-              <Button
-                className="bg-amber-500 hover:bg-amber-600 text-white text-xs"
-                onClick={() => startUiPathRun("retry", true)}
-                data-testid="button-retry-build"
-              >
-                <Package className="h-3.5 w-3.5 mr-1.5" />
-                Retry UiPath Package
-              </Button>
-            </div>
-          </div>
-        )}
-
         {(() => {
           const hasUiPath = displayMessages.some((m) => m.uipathData);
           const hasSddApproval = !!(sddApprovalData?.approval);
-          if (hasSddApproval && !hasUiPath && !isGeneratingDoc && (!currentUiPathRun || (currentUiPathRun.status !== "BUILDING" && currentUiPathRun.status !== "STALLED" && currentUiPathRun.status !== "FAILED"))) {
+          if (hasSddApproval && !hasUiPath && !isGeneratingDoc) {
             return (
               <div className="flex justify-center py-2" data-testid="uipath-generate-section">
                 <Button
                   className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs"
-                  onClick={() => startUiPathRun("retry")}
+                  onClick={generateUiPath}
                   data-testid="button-generate-uipath"
                 >
                   <Package className="h-3.5 w-3.5 mr-1.5" />
@@ -2768,9 +1646,9 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             </button>
           </div>
         )}
-        <div className={`flex items-end gap-2 rounded-lg bg-card border p-2 transition-colors duration-500 ${
+        <div className={`flex items-end gap-2 rounded-lg bg-card border p-2 transition-all duration-500 ${
           !isStreaming && displayMessages.length > 0 && displayMessages[displayMessages.length - 1]?.role === "assistant" && displayMessages[displayMessages.length - 1]?.content.endsWith("?")
-            ? "border-primary/40 ring-1 ring-primary/20"
+            ? "border-primary/40 ring-1 ring-primary/20 animate-pulse"
             : "border-card-border"
         }`}>
           <input
@@ -2798,7 +1676,7 @@ function ChatPanel({ idea, switchProcessMapViewRef, onMapApprovalReady }: { idea
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={deployStep ? "Deploying... Type to queue your next message" : isGeneratingDoc ? `Generating ${generatingDocType}... Type to queue your next message` : isStreaming ? "Type to queue your next message..." : "Describe your process..."}
-            className="min-h-[36px] max-h-[200px] resize-y border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
+            className="min-h-[36px] max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 p-0 text-xs placeholder:text-muted-foreground/50"
             rows={1}
             data-testid="input-chat-message"
           />
@@ -2951,7 +1829,7 @@ function ExportDialog({ ideaId, ideaTitle }: { ideaId: string; ideaTitle: string
   );
 }
 
-type MobileTab = "stages" | "map" | "chat" | "artifacts";
+type MobileTab = "stages" | "map" | "chat";
 
 export default function Workspace() {
   const [, params] = useRoute("/workspace/:id");
@@ -2961,11 +1839,9 @@ export default function Workspace() {
   >(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [showArtifactHub, setShowArtifactHub] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const switchProcessMapViewRef = useRef<((view: "as-is" | "to-be" | "sdd") => void) | null>(null);
-  const mapApprovalHandlerRef = useRef<((approvedView: string, isReapproval?: boolean) => void) | null>(null);
   const { toast } = useToast();
   const isMobile = useIsMobile();
   const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
@@ -3093,16 +1969,8 @@ export default function Workspace() {
   const mapPanel = (
     <ProcessMapPanel
       ideaId={idea.id}
-      onApproved={(approvedView?: string, isReapproval?: boolean) => {
-        if (approvedView === "sdd") {
-          const sddMsg = [...displayMessages].reverse().find(m => m.docType === "SDD" && m.docId);
-          handleDocApproved("SDD", sddMsg?.docId);
-        } else {
-          queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
-          if (approvedView) {
-            mapApprovalHandlerRef.current?.(approvedView, isReapproval);
-          }
-        }
+      onApproved={() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/ideas", idea.id, "messages"] });
       }}
       onCompletenessChange={(pct) => {
         if (pct >= 85) {
@@ -3114,13 +1982,12 @@ export default function Workspace() {
     />
   );
 
-  const chatPanel = <ChatPanel idea={idea} switchProcessMapViewRef={switchProcessMapViewRef} onMapApprovalReady={(fn) => { mapApprovalHandlerRef.current = fn; }} />;
+  const chatPanel = <ChatPanel idea={idea} switchProcessMapViewRef={switchProcessMapViewRef} />;
 
   const mobileTabs = [
     { id: "stages" as MobileTab, label: "Stages", icon: ListChecks },
     { id: "map" as MobileTab, label: "Map", icon: MapIcon },
     { id: "chat" as MobileTab, label: "Chat", icon: MessageSquare },
-    { id: "artifacts" as MobileTab, label: "Artifacts", icon: Archive },
   ];
 
   return (
@@ -3212,24 +2079,6 @@ export default function Workspace() {
               </>
             )}
           </div>
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={showArtifactHub ? "default" : "ghost"}
-                  size="icon"
-                  className={`h-8 w-8 ${showArtifactHub ? "bg-primary/20 text-primary" : ""}`}
-                  onClick={() => setShowArtifactHub(!showArtifactHub)}
-                  data-testid="button-toggle-artifact-hub"
-                >
-                  <Archive className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p className="text-xs">Artifact Hub</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
           <ExportDialog ideaId={idea.id} ideaTitle={idea.title} />
           {canDeleteIdea && (
             <div className="relative shrink-0">
@@ -3277,7 +2126,6 @@ export default function Workspace() {
             {mobileTab === "stages" && stagePanel}
             {mobileTab === "map" && <div className="h-full">{mapPanel}</div>}
             {mobileTab === "chat" && chatPanel}
-            {mobileTab === "artifacts" && <ArtifactHub ideaId={idea.id} ideaTitle={idea.title} />}
           </div>
           <div className="flex items-center border-t border-border bg-card shrink-0" data-testid="mobile-tab-bar">
             {mobileTabs.map((tab) => (
@@ -3305,7 +2153,7 @@ export default function Workspace() {
             data-testid="workspace-panels"
           >
             <ResizablePanel
-              defaultSize={showArtifactHub ? 12 : 15}
+              defaultSize={15}
               minSize={12}
               maxSize={25}
               className="bg-card/20"
@@ -3315,33 +2163,19 @@ export default function Workspace() {
 
             <ResizableHandle withHandle />
 
-            <ResizablePanel defaultSize={showArtifactHub ? 38 : 50} minSize={25}>
+            <ResizablePanel defaultSize={50} minSize={30}>
               {mapPanel}
             </ResizablePanel>
 
             <ResizableHandle withHandle />
 
             <ResizablePanel
-              defaultSize={showArtifactHub ? 30 : 35}
-              minSize={20}
+              defaultSize={35}
+              minSize={25}
               maxSize={50}
             >
               {chatPanel}
             </ResizablePanel>
-
-            {showArtifactHub && (
-              <>
-                <ResizableHandle withHandle />
-                <ResizablePanel
-                  defaultSize={20}
-                  minSize={15}
-                  maxSize={30}
-                  className="bg-card/20"
-                >
-                  <ArtifactHub ideaId={idea.id} ideaTitle={idea.title} />
-                </ResizablePanel>
-              </>
-            )}
           </ResizablePanelGroup>
         </div>
       )}

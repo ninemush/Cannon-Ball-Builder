@@ -13,12 +13,8 @@ import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
-import { MetaValidationDashboard } from "@/components/meta-validation-dashboard";
-import { PipelineHealthDashboard } from "@/components/pipeline-health-dashboard";
-import { PipelineDebugPanel } from "@/components/pipeline-debug-panel";
 import {
   ShieldAlert,
-  Shield,
   Users,
   ScrollText,
   Monitor,
@@ -52,9 +48,6 @@ import {
   Trash2,
   ArrowRightLeft,
   Database,
-  Code,
-  MessageSquare,
-  Bug,
 } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -294,93 +287,12 @@ function AuditLogTab() {
   );
 }
 
-interface LlmModelResponse {
-  model: string;
-  provider: string;
-  supportedModels: { id: string; label: string }[];
-}
-
-interface LlmCodeModelResponse {
-  model: string | null;
-  provider: string;
-  supportedModels: { id: string; label: string }[];
-}
-
-interface LlmMetaValidationModelResponse {
-  model: string;
-  provider: string;
-  supportedModels: { id: string; label: string }[];
-}
-
 function SystemTab() {
   const { toast } = useToast();
   const { data: users } = useQuery<User[]>({ queryKey: ["/api/users"] });
   const { data: ideas } = useQuery<Idea[]>({ queryKey: ["/api/ideas"] });
-  const { data: llmData, isLoading: llmLoading } = useQuery<LlmModelResponse>({ queryKey: ["/api/settings/llm-model"] });
-  const { data: codeModelData, isLoading: codeModelLoading } = useQuery<LlmCodeModelResponse>({ queryKey: ["/api/settings/llm-code-model"] });
-  const { data: metaValidationModelData, isLoading: metaValidationModelLoading } = useQuery<LlmMetaValidationModelResponse>({ queryKey: ["/api/settings/llm-meta-validation-model"] });
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [confirmModelOpen, setConfirmModelOpen] = useState(false);
-  const [selectedCodeModel, setSelectedCodeModel] = useState<string | null>(null);
-  const [confirmCodeModelOpen, setConfirmCodeModelOpen] = useState(false);
-  const [selectedMetaValidationModel, setSelectedMetaValidationModel] = useState<string | null>(null);
-  const [confirmMetaValidationModelOpen, setConfirmMetaValidationModelOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  const updateModelMutation = useMutation({
-    mutationFn: async (model: string) => {
-      const res = await apiRequest("PUT", "/api/settings/llm-model", { model });
-      return res.json();
-    },
-    onSuccess: (data: LlmModelResponse) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/llm-model"] });
-      toast({ title: "Chat model updated", description: `Active chat model changed to ${data.model}` });
-      setSelectedModel(null);
-      setConfirmModelOpen(false);
-    },
-    onError: (err: Error) => {
-      toast({ title: "Failed to update model", description: err.message, variant: "destructive" });
-      setSelectedModel(null);
-      setConfirmModelOpen(false);
-    },
-  });
-
-  const updateCodeModelMutation = useMutation({
-    mutationFn: async (model: string | null) => {
-      const res = await apiRequest("PUT", "/api/settings/llm-code-model", { model: model || "" });
-      return res.json();
-    },
-    onSuccess: (data: LlmCodeModelResponse) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/llm-code-model"] });
-      toast({ title: "Code model updated", description: data.model ? `Code model changed to ${data.model}` : "Code model reset to default (chat model)" });
-      setSelectedCodeModel(null);
-      setConfirmCodeModelOpen(false);
-    },
-    onError: (err: Error) => {
-      toast({ title: "Failed to update code model", description: err.message, variant: "destructive" });
-      setSelectedCodeModel(null);
-      setConfirmCodeModelOpen(false);
-    },
-  });
-
-  const updateMetaValidationModelMutation = useMutation({
-    mutationFn: async (model: string) => {
-      const res = await apiRequest("PUT", "/api/settings/llm-meta-validation-model", { model });
-      return res.json();
-    },
-    onSuccess: (data: LlmMetaValidationModelResponse) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/llm-meta-validation-model"] });
-      toast({ title: "Meta-validation model updated", description: `Meta-validation model changed to ${data.model}` });
-      setSelectedMetaValidationModel(null);
-      setConfirmMetaValidationModelOpen(false);
-    },
-    onError: (err: Error) => {
-      toast({ title: "Failed to update meta-validation model", description: err.message, variant: "destructive" });
-      setSelectedMetaValidationModel(null);
-      setConfirmMetaValidationModelOpen(false);
-    },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: async (ideaId: string) => {
@@ -413,197 +325,12 @@ function SystemTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-4 space-y-2" data-testid="card-chat-model">
+        <Card className="p-4 space-y-2" data-testid="card-model">
           <div className="flex items-center gap-2 text-muted-foreground text-sm">
             <Brain className="h-4 w-4" />
-            Chat Model
+            Model
           </div>
-          {llmLoading ? (
-            <Skeleton className="h-5 w-32" />
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm font-semibold" data-testid="text-current-model">
-                {llmData?.provider === "anthropic" ? "Anthropic" : llmData?.provider === "openai" ? "OpenAI" : llmData?.provider === "google" ? "Google" : llmData?.provider} {llmData?.model}
-              </p>
-              <Select
-                value={selectedModel || llmData?.model || ""}
-                onValueChange={(val) => {
-                  if (val !== llmData?.model) {
-                    setSelectedModel(val);
-                    setConfirmModelOpen(true);
-                  }
-                }}
-              >
-                <SelectTrigger className="h-8 text-xs" data-testid="select-chat-model-trigger">
-                  <SelectValue placeholder="Change model..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {llmData?.supportedModels.map((m) => (
-                    <SelectItem key={m.id} value={m.id} data-testid={`select-chat-model-option-${m.id}`}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <AlertDialog open={confirmModelOpen} onOpenChange={(open) => { setConfirmModelOpen(open); if (!open) setSelectedModel(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Change Chat Model?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will change the chat model from <strong>{llmData?.model}</strong> to <strong>{selectedModel}</strong> for conversation and document generation.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel data-testid="button-cancel-model-change">
-                  Cancel
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => selectedModel && updateModelMutation.mutate(selectedModel)}
-                  disabled={updateModelMutation.isPending}
-                  data-testid="button-confirm-model-change"
-                >
-                  {updateModelMutation.isPending ? "Saving..." : "Confirm"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </Card>
-        <Card className="p-4 space-y-2" data-testid="card-code-model">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Code className="h-4 w-4" />
-            Code Model
-          </div>
-          {codeModelLoading ? (
-            <Skeleton className="h-5 w-32" />
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm font-semibold" data-testid="text-current-code-model">
-                {codeModelData?.model
-                  ? `${codeModelData.provider === "anthropic" ? "Anthropic" : codeModelData.provider === "openai" ? "OpenAI" : codeModelData.provider === "google" ? "Google" : codeModelData.provider} ${codeModelData.model}`
-                  : "Using chat model"}
-              </p>
-              <Select
-                value={selectedCodeModel || codeModelData?.model || "__default__"}
-                onValueChange={(val) => {
-                  const newVal = val === "__default__" ? null : val;
-                  const currentVal = codeModelData?.model || null;
-                  if (newVal !== currentVal) {
-                    setSelectedCodeModel(val === "__default__" ? "__default__" : val);
-                    setConfirmCodeModelOpen(true);
-                  }
-                }}
-              >
-                <SelectTrigger className="h-8 text-xs" data-testid="select-code-model-trigger">
-                  <SelectValue placeholder="(defaults to chat model)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__default__" data-testid="select-code-model-option-default">
-                    (defaults to chat model)
-                  </SelectItem>
-                  {codeModelData?.supportedModels.map((m) => (
-                    <SelectItem key={m.id} value={m.id} data-testid={`select-code-model-option-${m.id}`}>
-                      {m.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <AlertDialog open={confirmCodeModelOpen} onOpenChange={(open) => { setConfirmCodeModelOpen(open); if (!open) setSelectedCodeModel(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Change Code Model?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {selectedCodeModel === "__default__"
-                    ? <>This will reset the code model to use the chat model for XAML and package generation.</>
-                    : <>This will change the code model to <strong>{selectedCodeModel}</strong> for XAML enrichment and UiPath package generation.</>
-                  }
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel data-testid="button-cancel-code-model-change">
-                  Cancel
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => {
-                    if (selectedCodeModel === "__default__") {
-                      updateCodeModelMutation.mutate(null);
-                    } else if (selectedCodeModel) {
-                      updateCodeModelMutation.mutate(selectedCodeModel);
-                    }
-                  }}
-                  disabled={updateCodeModelMutation.isPending}
-                  data-testid="button-confirm-code-model-change"
-                >
-                  {updateCodeModelMutation.isPending ? "Saving..." : "Confirm"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </Card>
-        <Card className="p-4 space-y-2" data-testid="card-meta-validation-model">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Stethoscope className="h-4 w-4" />
-            Meta-Validation Model
-          </div>
-          {metaValidationModelLoading ? (
-            <Skeleton className="h-5 w-32" />
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm font-semibold" data-testid="text-current-meta-validation-model">
-                {metaValidationModelData?.provider === "anthropic" ? "Anthropic" : metaValidationModelData?.provider === "openai" ? "OpenAI" : metaValidationModelData?.provider === "google" ? "Google" : metaValidationModelData?.provider} {metaValidationModelData?.model}
-              </p>
-              <Select
-                value={selectedMetaValidationModel || metaValidationModelData?.model || ""}
-                onValueChange={(val) => {
-                  if (val !== metaValidationModelData?.model) {
-                    setSelectedMetaValidationModel(val);
-                    setConfirmMetaValidationModelOpen(true);
-                  }
-                }}
-              >
-                <SelectTrigger className="h-8 text-xs" data-testid="select-meta-validation-model-trigger">
-                  <SelectValue placeholder="Change model..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {metaValidationModelData?.supportedModels.map((m) => (
-                    <SelectItem key={m.id} value={m.id} data-testid={`select-meta-validation-model-option-${m.id}`}>
-                      {m.label}{m.id === "claude-haiku-4-5" ? " (Recommended)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="text-xs text-muted-foreground space-y-1">
-                <p>Controls which AI model reviews generated XAML for errors.</p>
-                <p>Fast and cheap (recommended for most processes): Haiku 4.5, Gemini 2.5 Flash, GPT-4o</p>
-                <p>More thorough (catches subtler issues, higher cost): Sonnet 4, GPT-5, GPT-5.2, Gemini 2.5 Pro, Opus 4, GPT-5.3 Codex (optimised for code analysis — may catch structural XAML issues other models miss)</p>
-              </div>
-            </div>
-          )}
-          <AlertDialog open={confirmMetaValidationModelOpen} onOpenChange={(open) => { setConfirmMetaValidationModelOpen(open); if (!open) setSelectedMetaValidationModel(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Change Meta-Validation Model?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will change the meta-validation model from <strong>{metaValidationModelData?.model}</strong> to <strong>{selectedMetaValidationModel}</strong>. More capable models (Sonnet, GPT-5) catch subtler issues but cost more and take longer. Faster models (Haiku, Flash) work well for pattern-matching checks and are more cost-effective.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel data-testid="button-cancel-meta-validation-model-change">
-                  Cancel
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => selectedMetaValidationModel && updateMetaValidationModelMutation.mutate(selectedMetaValidationModel)}
-                  disabled={updateMetaValidationModelMutation.isPending}
-                  data-testid="button-confirm-meta-validation-model-change"
-                >
-                  {updateMetaValidationModelMutation.isPending ? "Saving..." : "Confirm"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <p className="text-sm font-semibold">Claude claude-sonnet-4-6</p>
         </Card>
         <Card className="p-4 space-y-2" data-testid="card-api-status">
           <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -734,100 +461,46 @@ function SystemTab() {
   );
 }
 
-type ScopeCategory = {
-  category: string;
-  service: string;
-  scopes: Array<{ id: string; description: string }>;
-};
-
-type TaxonomyEntry = {
-  flagKey: string;
-  displayName: string;
-  oauthScopeGroups?: Array<{
-    groupLabel: string;
-    scopes: Array<{ id: string; description: string }>;
-  }>;
-};
-
-function deriveScopeCategoriesFromTaxonomy(taxonomy: TaxonomyEntry[]): ScopeCategory[] {
-  const categories: ScopeCategory[] = [];
-  for (const entry of taxonomy) {
-    if (entry.oauthScopeGroups) {
-      for (const group of entry.oauthScopeGroups) {
-        categories.push({
-          category: group.groupLabel,
-          service: entry.displayName,
-          scopes: group.scopes,
-        });
-      }
-    }
-  }
-  return categories;
-}
-
-function useScopeCategories(): ScopeCategory[] {
-  const { data } = useQuery<{ taxonomy: TaxonomyEntry[]; hierarchy: unknown }>({
-    queryKey: ["/api/settings/uipath/taxonomy"],
-    staleTime: 300000,
-    retry: 1,
-  });
-
-  const taxonomy = data?.taxonomy;
-  if (taxonomy && taxonomy.length > 0) {
-    const derived = deriveScopeCategoriesFromTaxonomy(taxonomy);
-    if (derived.length > 0) return derived;
-  }
-
-  return FALLBACK_SCOPE_CATEGORIES;
-}
-
-const FALLBACK_SCOPE_CATEGORIES: ScopeCategory[] = [
-  { category: "Orchestrator — Core", service: "Orchestrator", scopes: [
+const UIPATH_SCOPE_CATEGORIES = [
+  { category: "Core", scopes: [
     { id: "OR.Default", description: "General Orchestrator access" },
     { id: "OR.Administration", description: "Administration" },
+    { id: "OR.Administration.Read", description: "Read administration data" },
+    { id: "OR.Administration.Write", description: "Write administration data" },
+  ]},
+  { category: "Folders & Execution", scopes: [
     { id: "OR.Folders", description: "Full folder access" },
     { id: "OR.Folders.Read", description: "Read folders" },
+    { id: "OR.Folders.Write", description: "Write folders" },
     { id: "OR.Execution", description: "Full execution access" },
+    { id: "OR.Execution.Read", description: "Read executions" },
+    { id: "OR.Execution.Write", description: "Write executions" },
   ]},
-  { category: "Orchestrator — Jobs & Robots", service: "Orchestrator", scopes: [
+  { category: "Assets & Queues", scopes: [
+    { id: "OR.Assets", description: "Full asset access" },
+    { id: "OR.Assets.Read", description: "Read assets" },
+    { id: "OR.Assets.Write", description: "Write assets" },
+    { id: "OR.Queues", description: "Full queue access" },
+    { id: "OR.Queues.Read", description: "Read queues" },
+    { id: "OR.Queues.Write", description: "Write queues" },
+  ]},
+  { category: "Jobs & Robots", scopes: [
     { id: "OR.Jobs", description: "Full job access" },
     { id: "OR.Jobs.Read", description: "Read jobs" },
     { id: "OR.Jobs.Write", description: "Write jobs" },
     { id: "OR.Robots", description: "Full robot access" },
     { id: "OR.Robots.Read", description: "Read robots" },
-    { id: "OR.Machines", description: "Full machine access" },
-  ]},
-  { category: "Orchestrator — Queues & Assets", service: "Orchestrator", scopes: [
-    { id: "OR.Queues", description: "Full queue access" },
-    { id: "OR.Queues.Read", description: "Read queues" },
-    { id: "OR.Queues.Write", description: "Write queues" },
-    { id: "OR.Assets", description: "Full asset access" },
-    { id: "OR.Assets.Read", description: "Read assets" },
-    { id: "OR.Assets.Write", description: "Write assets" },
-  ]},
-  { category: "Orchestrator — Action Center & Storage", service: "Orchestrator", scopes: [
-    { id: "OR.Tasks", description: "Full task access (Action Center)" },
-    { id: "OR.Tasks.Read", description: "Read tasks" },
-    { id: "OR.Tasks.Write", description: "Write tasks" },
-    { id: "OR.Buckets", description: "Full storage bucket access" },
-    { id: "OR.Buckets.Read", description: "Read storage buckets" },
-    { id: "OR.Buckets.Write", description: "Write storage buckets" },
-    { id: "OR.Triggers", description: "Full trigger access" },
-    { id: "OR.Triggers.Read", description: "Read triggers" },
-    { id: "OR.Triggers.Write", description: "Write triggers" },
-  ]},
-  { category: "Orchestrator — Advanced", service: "Orchestrator", scopes: [
-    { id: "OR.Administration.Read", description: "Read administration data" },
-    { id: "OR.Administration.Write", description: "Write administration data" },
-    { id: "OR.Folders.Write", description: "Write folders" },
-    { id: "OR.Execution.Read", description: "Read executions" },
-    { id: "OR.Execution.Write", description: "Write executions" },
     { id: "OR.Robots.Write", description: "Write robots" },
+  ]},
+  { category: "Machines & Hypervisor", scopes: [
+    { id: "OR.Machines", description: "Full machine access" },
     { id: "OR.Machines.Read", description: "Read machines" },
     { id: "OR.Machines.Write", description: "Write machines" },
     { id: "OR.Hypervisor", description: "Full hypervisor access" },
     { id: "OR.Hypervisor.Read", description: "Read hypervisor" },
     { id: "OR.Hypervisor.Write", description: "Write hypervisor" },
+  ]},
+  { category: "Settings & Users", scopes: [
     { id: "OR.Settings", description: "Full settings access" },
     { id: "OR.Settings.Read", description: "Read settings" },
     { id: "OR.Settings.Write", description: "Write settings" },
@@ -837,6 +510,8 @@ const FALLBACK_SCOPE_CATEGORIES: ScopeCategory[] = [
     { id: "OR.License", description: "Full license access" },
     { id: "OR.License.Read", description: "Read licenses" },
     { id: "OR.License.Write", description: "Write licenses" },
+  ]},
+  { category: "Monitoring & Analytics", scopes: [
     { id: "OR.Monitoring", description: "Full monitoring access" },
     { id: "OR.Monitoring.Read", description: "Read monitoring" },
     { id: "OR.Monitoring.Write", description: "Write monitoring" },
@@ -846,15 +521,19 @@ const FALLBACK_SCOPE_CATEGORIES: ScopeCategory[] = [
     { id: "OR.Audit", description: "Full audit access" },
     { id: "OR.Audit.Read", description: "Read audit logs" },
     { id: "OR.Audit.Write", description: "Write audit logs" },
-    { id: "OR.Webhooks", description: "Full webhook access" },
-    { id: "OR.Webhooks.Read", description: "Read webhooks" },
-    { id: "OR.Webhooks.Write", description: "Write webhooks" },
-    { id: "OR.ML", description: "Full ML access" },
-    { id: "OR.ML.Read", description: "Read ML models" },
-    { id: "OR.ML.Write", description: "Write ML models" },
+  ]},
+  { category: "Storage & Tasks", scopes: [
+    { id: "OR.Buckets", description: "Full storage bucket access" },
+    { id: "OR.Buckets.Read", description: "Read storage buckets" },
+    { id: "OR.Buckets.Write", description: "Write storage buckets" },
+    { id: "OR.Tasks", description: "Full task access (Action Center)" },
+    { id: "OR.Tasks.Read", description: "Read tasks" },
+    { id: "OR.Tasks.Write", description: "Write tasks" },
     { id: "OR.BackgroundTasks", description: "Full background task access" },
     { id: "OR.BackgroundTasks.Read", description: "Read background tasks" },
     { id: "OR.BackgroundTasks.Write", description: "Write background tasks" },
+  ]},
+  { category: "Testing", scopes: [
     { id: "OR.TestSets", description: "Full test set access" },
     { id: "OR.TestSets.Read", description: "Read test sets" },
     { id: "OR.TestSets.Write", description: "Write test sets" },
@@ -867,63 +546,17 @@ const FALLBACK_SCOPE_CATEGORIES: ScopeCategory[] = [
     { id: "OR.TestDataQueues", description: "Full test data queue access" },
     { id: "OR.TestDataQueues.Read", description: "Read test data queues" },
     { id: "OR.TestDataQueues.Write", description: "Write test data queues" },
+  ]},
+  { category: "AI & ML", scopes: [
+    { id: "OR.ML", description: "Full ML access" },
+    { id: "OR.ML.Read", description: "Read ML models" },
+    { id: "OR.ML.Write", description: "Write ML models" },
     { id: "OR.AutomationSolutions.Access", description: "Automation Solutions access" },
-    { id: "OR.Processes", description: "Full process access" },
   ]},
-  { category: "Test Manager", service: "Test Manager", scopes: [
-    { id: "TM.TestCases", description: "Full test case access" },
-    { id: "TM.TestCases.Read", description: "Read test cases" },
-    { id: "TM.TestCases.Write", description: "Write test cases" },
-    { id: "TM.TestSets", description: "Full test set access" },
-    { id: "TM.TestSets.Read", description: "Read test sets" },
-    { id: "TM.TestSets.Write", description: "Write test sets" },
-    { id: "TM.TestExecutions", description: "Full test execution access" },
-    { id: "TM.TestExecutions.Read", description: "Read test executions" },
-    { id: "TM.Requirements", description: "Full requirements access" },
-    { id: "TM.Projects", description: "Full project access" },
-    { id: "TM.Projects.Read", description: "Read projects" },
-    { id: "TM.Users.Read", description: "Read users" },
-  ]},
-  { category: "Document Understanding", service: "Document Understanding", scopes: [
-    { id: "Du.Classification.Api", description: "Document classification" },
-    { id: "Du.Digitization.Api", description: "Document digitization (OCR)" },
-    { id: "Du.Extraction.Api", description: "Document data extraction" },
-    { id: "Du.Validation.Api", description: "Document validation" },
-    { id: "Du.DocumentManager.Document", description: "Document manager access" },
-    { id: "Du.DataDeletion.Api", description: "Data deletion" },
-  ]},
-  { category: "Data Service", service: "Data Service", scopes: [
-    { id: "DataFabric.Schema.Read", description: "Read data schemas" },
-    { id: "DataFabric.Data.Read", description: "Read data entities" },
-    { id: "DataFabric.Data.Write", description: "Write data entities" },
-  ]},
-  { category: "Maestro", service: "Maestro", scopes: [
-    { id: "PIMS.Default", description: "General Maestro access" },
-    { id: "PIMS.Read", description: "Read Maestro data" },
-    { id: "PIMS.Write", description: "Write Maestro data" },
-    { id: "PIMS.Process", description: "Full process access" },
-    { id: "PIMS.Process.Read", description: "Read processes" },
-    { id: "PIMS.Process.Write", description: "Write processes" },
-    { id: "PIMS.Execution", description: "Full execution access" },
-    { id: "PIMS.Execution.Read", description: "Read executions" },
-  ]},
-  { category: "AI Center", service: "AI Center", scopes: [
-    { id: "AI.Deployer.Read", description: "Read AI deployments and skills" },
-    { id: "AI.Deployer.Write", description: "Write AI deployments and skills" },
-    { id: "AI.Trainer.Read", description: "Read AI training pipelines" },
-    { id: "AI.Trainer.Write", description: "Write AI training pipelines" },
-    { id: "AI.Helper.Read", description: "Read AI helper data" },
-  ]},
-  { category: "Platform Management", service: "Platform Management", scopes: [
-    { id: "PM.Security", description: "Security settings" },
-    { id: "PM.AuthSetting", description: "Auth settings" },
-    { id: "PM.OAuthApp", description: "OAuth application management" },
-    { id: "PM.RobotAccount", description: "Robot account access" },
-    { id: "PM.RobotAccount.Read", description: "Read robot accounts" },
-    { id: "PM.RobotAccount.Write", description: "Write robot accounts" },
-  ]},
-  { category: "IXP / Communications Mining", service: "IXP Platform", scopes: [
-    { id: "Ixp.ApiAccess", description: "IXP API access (Generative Extraction, Communications Mining)" },
+  { category: "Webhooks", scopes: [
+    { id: "OR.Webhooks", description: "Full webhook access" },
+    { id: "OR.Webhooks.Read", description: "Read webhooks" },
+    { id: "OR.Webhooks.Write", description: "Write webhooks" },
   ]},
 ];
 
@@ -941,9 +574,6 @@ function OrchestratorHealthPanel() {
   const [machinesOpen, setMachinesOpen] = useState(false);
   const [robotsOpen, setRobotsOpen] = useState(false);
   const [processesOpen, setProcessesOpen] = useState(false);
-  const [governanceOpen, setGovernanceOpen] = useState(false);
-  const [attendedOpen, setAttendedOpen] = useState(false);
-  const [studioOpen, setStudioOpen] = useState(false);
 
   const { data: diagnostics, isLoading: diagLoading, refetch: refetchDiag } = useQuery<{
     configured: boolean;
@@ -951,7 +581,6 @@ function OrchestratorHealthPanel() {
     tenantName?: string;
     latencyMs?: number;
     checks: Array<{ name: string; status: string; detail: string; remediation?: string }>;
-    serviceDetails?: Record<string, { status: string; confidence: string; evidence: string; reachable: string }>;
   }>({
     queryKey: ["/api/uipath/diagnostics"],
     enabled: false,
@@ -1011,46 +640,12 @@ function OrchestratorHealthPanel() {
     enabled: false,
   });
 
-  const { data: governanceData, isLoading: governanceLoading, refetch: refetchGovernance } = useQuery<{
-    available: boolean;
-    policies: Array<{ id: string; name: string; description: string; type: string; severity: string; restrictedActivities?: string[] }>;
-    message: string;
-  }>({
-    queryKey: ["/api/settings/uipath/governance-policies"],
-    enabled: false,
-  });
-
-  const { data: attendedData, isLoading: attendedLoading, refetch: refetchAttended } = useQuery<{
-    available: boolean;
-    attendedRobots: Array<{ id: number; name: string; machineName: string; status: string; userName?: string }>;
-    unattendedRobots: Array<{ id: number; name: string; machineName: string; status: string }>;
-    hasAttended: boolean;
-    hasUnattended: boolean;
-    message: string;
-  }>({
-    queryKey: ["/api/settings/uipath/attended-robots"],
-    enabled: false,
-  });
-
-  const { data: studioData, isLoading: studioLoading, refetch: refetchStudio } = useQuery<{
-    available: boolean;
-    projects: Array<{ id: string; name: string; description: string; projectType: string }>;
-    existingNames: string[];
-    message: string;
-  }>({
-    queryKey: ["/api/settings/uipath/studio-projects"],
-    enabled: false,
-  });
-
   const runDiagnostics = () => {
     setDiagExpanded(true);
     refetchDiag();
     refetchMachines();
     refetchRobots();
     refetchProcesses();
-    refetchGovernance();
-    refetchAttended();
-    refetchStudio();
   };
 
   const statusIcon = (status: string) => {
@@ -1124,9 +719,9 @@ function OrchestratorHealthPanel() {
 
       {diagExpanded && diagnostics && (
         <div className="space-y-2" data-testid="diagnostics-checklist">
-          {diagnostics.checks.map((check) => (
+          {diagnostics.checks.map((check, i) => (
             <div
-              key={`diag-${check.name}`}
+              key={i}
               className={`flex items-start gap-2.5 p-2.5 rounded-md border ${statusColor(check.status)}`}
               data-testid={`diag-check-${check.name.toLowerCase().replace(/\s/g, "-")}`}
             >
@@ -1142,32 +737,6 @@ function OrchestratorHealthPanel() {
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {diagExpanded && diagnostics?.serviceDetails && Object.keys(diagnostics.serviceDetails).length > 0 && (
-        <div className="space-y-2" data-testid="service-details-grid">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Service Availability</h4>
-          <div className="grid grid-cols-2 gap-1.5">
-            {Object.entries(diagnostics.serviceDetails).map(([name, detail]) => {
-              const statusDot = detail.status === "available" ? "bg-green-500"
-                : detail.status === "limited" ? "bg-amber-500"
-                : detail.status === "unavailable" ? "bg-red-500"
-                : "bg-gray-400";
-              const confLabel = detail.confidence === "inferred" ? " (inferred)" : detail.confidence === "deprecated" ? " (deprecated)" : "";
-              return (
-                <div
-                  key={name}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] border border-border/50 bg-muted/30"
-                  title={`${detail.evidence} | reachable: ${detail.reachable}`}
-                  data-testid={`service-detail-${name}`}
-                >
-                  <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDot}`} />
-                  <span className="text-foreground truncate">{name}{confLabel}</span>
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
 
@@ -1267,140 +836,6 @@ function OrchestratorHealthPanel() {
               ))}
             </div>
           )}
-
-          <button
-            type="button"
-            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
-            onClick={() => { setGovernanceOpen(!governanceOpen); if (!governanceData) refetchGovernance(); }}
-            aria-expanded={governanceOpen}
-            aria-controls="governance-list-panel"
-            data-testid="toggle-governance-list"
-          >
-            {governanceOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            <ShieldAlert className="h-3.5 w-3.5 text-[#e65100]" />
-            Governance Policies ({governanceData?.policies?.length ?? "..."})
-          </button>
-          {governanceOpen && (
-            <div id="governance-list-panel" className="ml-6 space-y-1" data-testid="governance-list">
-              {governanceLoading && <Skeleton className="h-8 w-full" />}
-              {governanceData && !governanceData.available && (
-                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                  {governanceData.message || "Automation Ops not available on this tenant."}
-                </p>
-              )}
-              {governanceData?.policies?.length === 0 && governanceData.available && (
-                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                  No active governance policies found.
-                </p>
-              )}
-              {governanceData?.policies?.map((policy, pi) => (
-                <div key={`gov-${policy.id}-${pi}`} className="p-2 rounded bg-card border border-border text-xs" data-testid={`row-policy-${policy.id}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">{policy.name}</span>
-                    <Badge variant={policy.severity === "error" ? "destructive" : policy.severity === "warning" ? "secondary" : "outline"} className="text-[10px] py-0">
-                      {policy.severity}
-                    </Badge>
-                    <Badge variant="outline" className="text-[10px] py-0">
-                      {policy.type}
-                    </Badge>
-                  </div>
-                  {policy.description && <p className="text-muted-foreground mt-1">{policy.description}</p>}
-                  {policy.restrictedActivities && policy.restrictedActivities.length > 0 && (
-                    <p className="text-amber-400 mt-1">Restricted: {policy.restrictedActivities.join(", ")}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button
-            type="button"
-            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
-            onClick={() => { setAttendedOpen(!attendedOpen); if (!attendedData) refetchAttended(); }}
-            aria-expanded={attendedOpen}
-            aria-controls="attended-list-panel"
-            data-testid="toggle-attended-list"
-          >
-            {attendedOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            <Monitor className="h-3.5 w-3.5 text-[#2e7d32]" />
-            Attended / Assistant ({attendedData ? `${attendedData.attendedRobots?.length ?? 0} attended, ${attendedData.unattendedRobots?.length ?? 0} unattended` : "..."})
-          </button>
-          {attendedOpen && (
-            <div id="attended-list-panel" className="ml-6 space-y-1" data-testid="attended-list">
-              {attendedLoading && <Skeleton className="h-8 w-full" />}
-              {attendedData && !attendedData.available && (
-                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                  {attendedData.message || "Robot session discovery not available."}
-                </p>
-              )}
-              {attendedData?.attendedRobots?.length === 0 && attendedData?.unattendedRobots?.length === 0 && attendedData.available && (
-                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                  No active robot sessions found.
-                </p>
-              )}
-              {attendedData?.attendedRobots?.map((robot, ri) => (
-                <div key={`attended-${robot.id}-${ri}`} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-attended-${robot.id}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">{robot.name}</span>
-                    <Badge variant="default" className="text-[10px] py-0 bg-green-600">Attended</Badge>
-                    <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
-                      {robot.status}
-                    </Badge>
-                  </div>
-                  <span className="text-muted-foreground">{robot.machineName}{robot.userName ? ` (${robot.userName})` : ""}</span>
-                </div>
-              ))}
-              {attendedData?.unattendedRobots?.map((robot, ri) => (
-                <div key={`unattended-${robot.id}-${ri}`} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-unattended-${robot.id}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">{robot.name}</span>
-                    <Badge variant="secondary" className="text-[10px] py-0">Unattended</Badge>
-                    <Badge variant={robot.status === "Available" ? "default" : "secondary"} className="text-[10px] py-0">
-                      {robot.status}
-                    </Badge>
-                  </div>
-                  <span className="text-muted-foreground">{robot.machineName}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button
-            type="button"
-            className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors w-full"
-            onClick={() => { setStudioOpen(!studioOpen); if (!studioData) refetchStudio(); }}
-            aria-expanded={studioOpen}
-            aria-controls="studio-list-panel"
-            data-testid="toggle-studio-list"
-          >
-            {studioOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            <FolderOpen className="h-3.5 w-3.5 text-[#1565c0]" />
-            Studio Projects ({studioData?.projects?.length ?? "..."})
-          </button>
-          {studioOpen && (
-            <div id="studio-list-panel" className="ml-6 space-y-1" data-testid="studio-list">
-              {studioLoading && <Skeleton className="h-8 w-full" />}
-              {studioData && !studioData.available && (
-                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                  {studioData.message || "Studio project discovery not available."}
-                </p>
-              )}
-              {studioData?.projects?.length === 0 && studioData.available && (
-                <p className="text-xs text-muted-foreground p-2 border border-dashed border-border rounded">
-                  No existing projects found.
-                </p>
-              )}
-              {studioData?.projects?.map((project, pi) => (
-                <div key={`studio-${project.id}-${pi}`} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs" data-testid={`row-studio-${project.id}`}>
-                  <div>
-                    <span className="font-medium text-foreground">{project.name}</span>
-                    <Badge variant="outline" className="ml-2 text-[10px] py-0">{project.projectType}</Badge>
-                  </div>
-                  {project.description && <span className="text-muted-foreground max-w-[200px] truncate">{project.description}</span>}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -1484,8 +919,6 @@ type UipathConnection = {
   scopes: string;
   folderId: string | null;
   folderName: string | null;
-  automationHubToken: string | null;
-  communicationsMiningToken: string | null;
   isActive: boolean;
   lastTestedAt: string | null;
   createdAt: string;
@@ -1700,542 +1133,8 @@ function ConnectionManagerPanel({ onEditConnection }: { onEditConnection: (conn:
   );
 }
 
-function IntegrationServicePanel() {
-  const { data: discovery, isLoading, refetch } = useQuery<{
-    available: boolean;
-    connectors: Array<{ id: string; name: string; description?: string; provider?: string; connectionCount: number }>;
-    connections: Array<{ id: string; connectorId: string; connectorName: string; name: string; status: string; createdAt?: string; provider?: string }>;
-    summary: string;
-  }>({
-    queryKey: ["/api/uipath/integration-service"],
-    staleTime: 60000,
-  });
-
-  const refreshMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/uipath/integration-service/refresh");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/uipath/integration-service"] });
-    },
-  });
-
-  const [expanded, setExpanded] = useState(false);
-
-  if (isLoading) {
-    return (
-      <Card className="p-4 mt-4 space-y-3" data-testid="card-integration-service-loading">
-        <Skeleton className="h-5 w-48" />
-        <Skeleton className="h-4 w-64" />
-      </Card>
-    );
-  }
-
-  if (!discovery) return null;
-
-  const activeConnections = discovery.connections.filter(
-    c => c.status.toLowerCase() === "connected" || c.status.toLowerCase() === "active"
-  );
-
-  return (
-    <Card className="p-4 mt-4 space-y-3" data-testid="card-integration-service">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ArrowRightLeft className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold text-foreground">Integration Service</h3>
-          {discovery.available ? (
-            <Badge variant="outline" className="text-[10px] border-green-600/30 bg-green-500/10 text-green-400" data-testid="badge-is-status">
-              Available
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-400" data-testid="badge-is-status">
-              Unavailable
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => {
-              refreshMutation.mutate();
-            }}
-            disabled={refreshMutation.isPending}
-            data-testid="button-refresh-is"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${refreshMutation.isPending ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-1"
-            onClick={() => setExpanded(!expanded)}
-            data-testid="button-expand-is"
-          >
-            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          </Button>
-        </div>
-      </div>
-
-      <p className="text-xs text-muted-foreground" data-testid="text-is-summary">
-        {discovery.summary}
-      </p>
-
-      {activeConnections.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {activeConnections.map(conn => (
-            <Badge
-              key={conn.id}
-              variant="outline"
-              className="text-[10px] border-green-600/30 bg-green-500/10 text-green-400"
-              data-testid={`badge-is-connection-${conn.id}`}
-            >
-              <CheckCircle2 className="h-3 w-3 mr-1" />
-              {conn.connectorName}: {conn.name}
-            </Badge>
-          ))}
-        </div>
-      )}
-
-      {expanded && (
-        <div className="space-y-3 pt-2 border-t border-border">
-          {discovery.connections.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-foreground mb-2">Connections ({discovery.connections.length})</h4>
-              <div className="space-y-1.5">
-                {discovery.connections.map(conn => (
-                  <div
-                    key={conn.id}
-                    className={`flex items-center justify-between px-3 py-2 rounded-md border text-xs ${
-                      conn.status.toLowerCase() === "connected" || conn.status.toLowerCase() === "active"
-                        ? "border-green-600/30 bg-green-500/5"
-                        : "border-border bg-muted/30"
-                    }`}
-                    data-testid={`row-is-connection-${conn.id}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      {conn.status.toLowerCase() === "connected" || conn.status.toLowerCase() === "active" ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                      ) : (
-                        <XCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      )}
-                      <div>
-                        <span className="font-medium text-foreground">{conn.connectorName}</span>
-                        <span className="text-muted-foreground ml-1.5">{conn.name}</span>
-                      </div>
-                    </div>
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] ${
-                        conn.status.toLowerCase() === "connected" || conn.status.toLowerCase() === "active"
-                          ? "border-green-600/30 text-green-400"
-                          : "border-muted text-muted-foreground"
-                      }`}
-                    >
-                      {conn.status}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {discovery.connectors.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-foreground mb-2">Available Connectors ({discovery.connectors.length})</h4>
-              <div className="flex flex-wrap gap-1.5">
-                {discovery.connectors.slice(0, 30).map(conn => (
-                  <Badge
-                    key={conn.id}
-                    variant="outline"
-                    className="text-[10px]"
-                    data-testid={`badge-is-connector-${conn.id}`}
-                  >
-                    {conn.name}
-                    {conn.connectionCount > 0 && (
-                      <span className="ml-1 text-green-400">({conn.connectionCount})</span>
-                    )}
-                  </Badge>
-                ))}
-                {discovery.connectors.length > 30 && (
-                  <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                    +{discovery.connectors.length - 30} more
-                  </Badge>
-                )}
-              </div>
-            </div>
-          )}
-
-          {discovery.connections.length === 0 && discovery.connectors.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              No connectors or connections discovered. Configure Integration Service in UiPath to enable pre-built enterprise system integrations.
-            </p>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function AutomationHubPanel() {
-  const { toast } = useToast();
-  const [hubToken, setHubToken] = useState("");
-  const [showHubToken, setShowHubToken] = useState(false);
-
-  const { data: hubStatus, isLoading: hubStatusLoading } = useQuery<{
-    configured: boolean;
-    connected: boolean;
-    message: string;
-    ideaCount?: number;
-  }>({
-    queryKey: ["/api/settings/automation-hub/status"],
-  });
-
-  const saveTokenMutation = useMutation({
-    mutationFn: async (token: string) => {
-      const res = await apiRequest("POST", "/api/settings/automation-hub/token", { token });
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/automation-hub/status"] });
-      setHubToken("");
-      if (data.status?.connected) {
-        toast({ title: "Automation Hub connected", description: data.status.message });
-      } else {
-        toast({ title: "Token saved", description: data.status?.message || "Token saved but connection test failed", variant: "destructive" });
-      }
-    },
-    onError: (error: Error) => {
-      toast({ title: "Failed to save token", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const clearTokenMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("DELETE", "/api/settings/automation-hub/token");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/automation-hub/status"] });
-      toast({ title: "Automation Hub token removed" });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Failed to remove token", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const { data: hubIdeas, isLoading: hubIdeasLoading } = useQuery<{
-    success: boolean;
-    ideas?: Array<{
-      id: number;
-      name: string;
-      description: string;
-      category: string;
-      submittedBy: string;
-      status: string;
-      department: string;
-      createdDate: string;
-    }>;
-    totalCount?: number;
-    message?: string;
-  }>({
-    queryKey: ["/api/automation-hub/ideas"],
-    enabled: !!hubStatus?.connected,
-  });
-
-  return (
-    <Card className="p-4 sm:p-6 space-y-4" data-testid="card-automation-hub">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Lightbulb className="h-5 w-5 text-[#e8450a]" />
-          <h3 className="text-sm font-semibold text-foreground">Automation Hub</h3>
-        </div>
-        {hubStatusLoading ? (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        ) : hubStatus?.connected ? (
-          <Badge variant="outline" className="border-green-600 text-green-500 text-[10px]" data-testid="badge-hub-connected">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Connected
-          </Badge>
-        ) : hubStatus?.configured ? (
-          <Badge variant="outline" className="border-yellow-600 text-yellow-500 text-[10px]" data-testid="badge-hub-error">
-            <AlertTriangle className="h-3 w-3 mr-1" />
-            Connection Error
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="text-muted-foreground text-[10px]" data-testid="badge-hub-not-configured">
-            Not Configured
-          </Badge>
-        )}
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        Connect to UiPath Automation Hub to import automation ideas and publish completed automations to the Automation Store.
-      </p>
-
-      {hubStatus?.message && !hubStatus.connected && hubStatus.configured && (
-        <div className="text-xs text-yellow-500 bg-yellow-500/10 rounded p-2" data-testid="text-hub-error">
-          {hubStatus.message}
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <Label className="text-xs text-muted-foreground">Automation Hub Open API Token</Label>
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Input
-              type={showHubToken ? "text" : "password"}
-              placeholder={hubStatus?.configured ? "••••••••" : "Paste your Automation Hub API token"}
-              value={hubToken}
-              onChange={(e) => setHubToken(e.target.value)}
-              className="pr-10 text-sm"
-              data-testid="input-hub-token"
-            />
-            <button
-              type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              onClick={() => setShowHubToken(!showHubToken)}
-              data-testid="button-toggle-hub-token"
-            >
-              {showHubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-          <Button
-            size="sm"
-            onClick={() => saveTokenMutation.mutate(hubToken)}
-            disabled={!hubToken.trim() || saveTokenMutation.isPending}
-            data-testid="button-save-hub-token"
-          >
-            {saveTokenMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-          </Button>
-          {hubStatus?.configured && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => clearTokenMutation.mutate()}
-              disabled={clearTokenMutation.isPending}
-              data-testid="button-clear-hub-token"
-            >
-              Clear
-            </Button>
-          )}
-        </div>
-        <p className="text-[10px] text-muted-foreground">
-          Generate an Open API token from Automation Hub &gt; Admin &gt; Open API.
-        </p>
-      </div>
-
-      {hubStatus?.connected && (
-        <div className="space-y-3 pt-2 border-t border-border">
-          <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-foreground">Pipeline Ideas</h4>
-            {hubStatus.ideaCount !== undefined && (
-              <span className="text-[10px] text-muted-foreground" data-testid="text-hub-idea-count">
-                {hubStatus.ideaCount} total
-              </span>
-            )}
-          </div>
-
-          {hubIdeasLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : hubIdeas?.success && hubIdeas.ideas && hubIdeas.ideas.length > 0 ? (
-            <div className="space-y-1.5 max-h-[300px] overflow-y-auto" data-testid="hub-ideas-list">
-              {hubIdeas.ideas.slice(0, 10).map((idea) => (
-                <div
-                  key={idea.id}
-                  className="flex items-center justify-between p-2 rounded border border-border hover:bg-muted/30 transition-colors"
-                  data-testid={`hub-idea-${idea.id}`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-foreground truncate">{idea.name}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                      {idea.category && <span>{idea.category}</span>}
-                      {idea.department && <span>{idea.department}</span>}
-                      {idea.status && <Badge variant="outline" className="text-[9px] px-1 py-0">{idea.status}</Badge>}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 text-[10px] text-[#e8450a] hover:text-[#e8450a] hover:bg-[#e8450a]/10 ml-2 shrink-0 px-2"
-                    onClick={async () => {
-                      try {
-                        const res = await apiRequest("POST", `/api/automation-hub/import/${idea.id}`);
-                        const data = await res.json();
-                        if (data.success) {
-                          toast({ title: "Idea imported", description: `"${idea.name}" imported as a new project` });
-                          queryClient.invalidateQueries({ queryKey: ["/api/ideas"] });
-                        } else {
-                          toast({ title: "Import failed", description: data.message, variant: "destructive" });
-                        }
-                      } catch (err: any) {
-                        toast({ title: "Import failed", description: err.message, variant: "destructive" });
-                      }
-                    }}
-                    data-testid={`button-import-hub-idea-${idea.id}`}
-                  >
-                    <Download className="h-3 w-3 mr-1" />
-                    Import
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : hubIdeas?.success && (!hubIdeas.ideas || hubIdeas.ideas.length === 0) ? (
-            <p className="text-xs text-muted-foreground text-center py-3">
-              No ideas found in Automation Hub.
-            </p>
-          ) : hubIdeas?.message ? (
-            <p className="text-xs text-destructive text-center py-3" data-testid="text-hub-ideas-error">
-              {hubIdeas.message}
-            </p>
-          ) : null}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function CommunicationsMiningPanel() {
-  const { toast } = useToast();
-  const [cmToken, setCmToken] = useState("");
-  const [showCmToken, setShowCmToken] = useState(false);
-
-  const { data: cmStatus, isLoading: cmStatusLoading } = useQuery<{
-    configured: boolean;
-    connected: boolean;
-    message: string;
-  }>({
-    queryKey: ["/api/settings/communications-mining/status"],
-  });
-
-  const saveTokenMutation = useMutation({
-    mutationFn: async (token: string) => {
-      const res = await apiRequest("POST", "/api/settings/communications-mining/token", { token });
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/communications-mining/status"] });
-      setCmToken("");
-      if (data.status?.connected) {
-        toast({ title: "Communications Mining connected", description: data.status.message });
-      } else {
-        toast({ title: "Token saved", description: data.status?.message || "Token saved but connection test failed", variant: "destructive" });
-      }
-    },
-    onError: (error: Error) => {
-      toast({ title: "Failed to save token", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const clearTokenMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("DELETE", "/api/settings/communications-mining/token");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/communications-mining/status"] });
-      toast({ title: "Communications Mining token removed" });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Failed to remove token", description: error.message, variant: "destructive" });
-    },
-  });
-
-  return (
-    <Card className="p-4 sm:p-6 space-y-4" data-testid="card-communications-mining">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="h-5 w-5 text-[#e8450a]" />
-          <h3 className="text-sm font-semibold text-foreground">Communications Mining</h3>
-        </div>
-        {cmStatusLoading ? (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        ) : cmStatus?.connected ? (
-          <Badge variant="outline" className="border-green-600 text-green-500 text-[10px]" data-testid="badge-cm-connected">
-            <CheckCircle2 className="h-3 w-3 mr-1" />
-            Connected
-          </Badge>
-        ) : cmStatus?.configured ? (
-          <Badge variant="outline" className="border-yellow-600 text-yellow-500 text-[10px]" data-testid="badge-cm-error">
-            <AlertTriangle className="h-3 w-3 mr-1" />
-            Connection Error
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="text-muted-foreground text-[10px]" data-testid="badge-cm-not-configured">
-            Not Configured
-          </Badge>
-        )}
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        Connect to UiPath Communications Mining for email/message stream analysis, intent detection, and intelligent routing. This service requires a dedicated API token (not OAuth).
-      </p>
-
-      {cmStatus?.message && !cmStatus.connected && cmStatus.configured && (
-        <div className="text-xs text-yellow-500 bg-yellow-500/10 rounded p-2" data-testid="text-cm-error">
-          {cmStatus.message}
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <Label className="text-xs text-muted-foreground">Communications Mining API Token</Label>
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Input
-              type={showCmToken ? "text" : "password"}
-              placeholder={cmStatus?.configured ? "••••••••" : "Paste your Communications Mining API token"}
-              value={cmToken}
-              onChange={(e) => setCmToken(e.target.value)}
-              className="pr-10 text-sm"
-              data-testid="input-cm-token"
-            />
-            <button
-              type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              onClick={() => setShowCmToken(!showCmToken)}
-              data-testid="button-toggle-cm-token"
-            >
-              {showCmToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-          <Button
-            size="sm"
-            onClick={() => saveTokenMutation.mutate(cmToken)}
-            disabled={!cmToken.trim() || saveTokenMutation.isPending}
-            data-testid="button-save-cm-token"
-          >
-            {saveTokenMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-          </Button>
-          {cmStatus?.configured && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => clearTokenMutation.mutate()}
-              disabled={clearTokenMutation.isPending}
-              data-testid="button-clear-cm-token"
-            >
-              Clear
-            </Button>
-          )}
-        </div>
-        <p className="text-[10px] text-muted-foreground">
-          Generate this in UiPath IXP &gt; My Account &gt; API token.
-        </p>
-      </div>
-    </Card>
-  );
-}
-
 function IntegrationsTab() {
   const { toast } = useToast();
-  const scopeCategories = useScopeCategories();
   const [step, setStep] = useState(0);
   const [showSecret, setShowSecret] = useState(false);
   const [orgName, setOrgName] = useState("");
@@ -2249,7 +1148,6 @@ function IntegrationsTab() {
   const [testResultMsg, setTestResultMsg] = useState<{ success: boolean; message: string } | null>(null);
   const [scopeVerification, setScopeVerification] = useState<{
     success: boolean;
-    internalError?: boolean;
     requestedScopes: string[];
     grantedScopes: string[];
     message: string;
@@ -2749,7 +1647,7 @@ function IntegrationsTab() {
                       e.preventDefault();
                       const val = (e.target as HTMLInputElement).value.trim();
                       if (val) {
-                        const parsed = val.split(/[\s,]+/).filter(s => s.includes("."));
+                        const parsed = val.split(/[\s,]+/).filter(s => s.startsWith("OR."));
                         if (parsed.length > 0) {
                           const scopeSet = new Set(parsed);
                           scopeSet.add("OR.Default");
@@ -2769,7 +1667,7 @@ function IntegrationsTab() {
                     const input = document.getElementById("paste-scopes") as HTMLInputElement;
                     const val = input?.value?.trim();
                     if (val) {
-                      const parsed = val.split(/[\s,]+/).filter(s => s.includes("."));
+                      const parsed = val.split(/[\s,]+/).filter(s => s.startsWith("OR."));
                       if (parsed.length > 0) {
                         const scopeSet = new Set(parsed);
                         scopeSet.add("OR.Default");
@@ -2791,7 +1689,7 @@ function IntegrationsTab() {
                 size="sm"
                 data-testid="button-select-all-scopes"
                 onClick={() => {
-                  const allIds = scopeCategories.flatMap(c => c.scopes.map(s => s.id));
+                  const allIds = UIPATH_SCOPE_CATEGORIES.flatMap(c => c.scopes.map(s => s.id));
                   setSelectedScopes(new Set(allIds));
                 }}
               >
@@ -2809,7 +1707,7 @@ function IntegrationsTab() {
             </div>
 
             <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1" data-testid="scope-list">
-              {scopeCategories.map((cat) => {
+              {UIPATH_SCOPE_CATEGORIES.map((cat) => {
                 const catScopeIds = cat.scopes.map(s => s.id);
                 const allChecked = catScopeIds.every(id => selectedScopes.has(id));
                 const someChecked = catScopeIds.some(id => selectedScopes.has(id));
@@ -3086,62 +1984,45 @@ function IntegrationsTab() {
 
             {scopeVerification && (
               <div className="border border-border rounded-lg p-4 space-y-3 mt-4" data-testid="scope-verification-results">
-                {scopeVerification.internalError ? (
-                  <div className="space-y-2" data-testid="internal-error-banner">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="h-4 w-4 text-orange-400" />
-                      <span className="text-sm font-medium text-orange-400">Internal Error</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      CannonBall encountered an internal error while probing services — this is not a UiPath issue. Please report this to the development team.
-                    </p>
-                    <p className="text-xs text-muted-foreground font-mono bg-muted/50 rounded px-2 py-1">
-                      {scopeVerification.message}
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-2">
-                      {scopeVerification.success ? (
-                        <CheckCircle2 className="h-4 w-4 text-green-400" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-red-400" />
-                      )}
-                      <span className="text-sm font-medium text-foreground">{scopeVerification.message}</span>
-                    </div>
+                <div className="flex items-center gap-2">
+                  {scopeVerification.success ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-400" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-red-400" />
+                  )}
+                  <span className="text-sm font-medium text-foreground">{scopeVerification.message}</span>
+                </div>
 
-                    {scopeVerification.services && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Service Availability</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {Object.entries(scopeVerification.services).map(([name, info]) => (
-                            <div
-                              key={name}
-                              className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs ${
-                                info.available
-                                  ? "bg-green-500/10 text-green-400"
-                                  : "bg-amber-500/10 text-amber-400"
-                              }`}
-                              data-testid={`service-status-${name.toLowerCase().replace(/\s+/g, "-")}`}
-                            >
-                              {info.available ? (
-                                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                              ) : (
-                                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                              )}
-                              <div className="min-w-0">
-                                <span className="font-medium">{name}</span>
-                                <span className="ml-1 text-muted-foreground">— {info.message}</span>
-                              </div>
-                            </div>
-                          ))}
+                {scopeVerification.services && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Service Availability</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {Object.entries(scopeVerification.services).map(([name, info]) => (
+                        <div
+                          key={name}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs ${
+                            info.available
+                              ? "bg-green-500/10 text-green-400"
+                              : "bg-amber-500/10 text-amber-400"
+                          }`}
+                          data-testid={`service-status-${name.toLowerCase().replace(/\s+/g, "-")}`}
+                        >
+                          {info.available ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                          ) : (
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <span className="font-medium">{name}</span>
+                            <span className="ml-1 text-muted-foreground">— {info.message}</span>
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
-                {!scopeVerification.internalError && scopeVerification.grantedScopes.length > 0 && (
+                {scopeVerification.grantedScopes.length > 0 && (
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Granted Scopes ({scopeVerification.grantedScopes.length})</p>
                     {(() => {
@@ -3152,9 +2033,6 @@ function IntegrationsTab() {
                         "Du": "Document Understanding",
                         "PM": "Platform Management",
                         "DataFabric": "Data Service",
-                        "PIMS": "Maestro",
-                        "Ixp": "IXP / Communications Mining",
-                        "AI": "AI Center",
                       };
                       for (const scope of scopeVerification.grantedScopes) {
                         const prefix = scope.startsWith("OR.") ? "OR"
@@ -3162,9 +2040,6 @@ function IntegrationsTab() {
                           : scope.startsWith("Du.") ? "Du"
                           : scope.startsWith("PM.") ? "PM"
                           : scope.startsWith("DataFabric.") ? "DataFabric"
-                          : scope.startsWith("PIMS.") ? "PIMS"
-                          : scope.startsWith("Ixp.") ? "Ixp"
-                          : scope.startsWith("AI.") ? "AI"
                           : "Other";
                         if (!groups[prefix]) groups[prefix] = [];
                         groups[prefix].push(scope);
@@ -3175,9 +2050,6 @@ function IntegrationsTab() {
                         "Du": "bg-amber-500/10 text-amber-400",
                         "PM": "bg-cyan-500/10 text-cyan-400",
                         "DataFabric": "bg-emerald-500/10 text-emerald-400",
-                        "PIMS": "bg-rose-500/10 text-rose-400",
-                        "Ixp": "bg-teal-500/10 text-teal-400",
-                        "AI": "bg-indigo-500/10 text-indigo-400",
                         "Other": "bg-primary/10 text-primary",
                       };
                       return Object.entries(groups).map(([prefix, scopes]) => (
@@ -3283,10 +2155,6 @@ function IntegrationsTab() {
         )}
 
         {config?.configured && <OrchestratorHealthPanel />}
-        {config?.configured && <IntegrationServicePanel />}
-
-        {config?.configured && <AutomationHubPanel />}
-        {config?.configured && <CommunicationsMiningPanel />}
 
         {step < 3 && (
           <div className="flex items-center gap-3 pt-2">
@@ -3302,305 +2170,6 @@ function IntegrationsTab() {
         )}
       </Card>
       )}
-    </div>
-  );
-}
-
-function MetadataFreshnessTab() {
-  const { toast } = useToast();
-
-  const { data: status, isLoading } = useQuery<{
-    generation: {
-      loaded: boolean;
-      source: string;
-      studioTarget: { line: string; version: string; targetFramework: string; expressionLanguage: string } | null;
-      packageCount: number;
-      lastRefreshedAt: string | null;
-      lastVerifiedAt: string | null;
-      stalenessLevel: string;
-      lastRefreshSuccessAt: string | null;
-      lastRefreshFailureAt: string | null;
-      packages: Record<string, { preferred: string; min: string; max: string; lastVerifiedAt: string; verificationSource: string }>;
-    };
-    integration: {
-      loaded: boolean;
-      endpointCount: number;
-      lastRefreshedAt: string | null;
-      lastVerifiedAt: string | null;
-      stalenessLevel: string;
-      lastRefreshSuccessAt: string | null;
-      lastRefreshFailureAt: string | null;
-      endpoints: Record<string, { confidence: string; reachabilityStatus: string; lastVerifiedAt: string }>;
-    };
-  }>({ queryKey: ["/api/admin/metadata/status"] });
-
-  const refreshMutation = useMutation({
-    mutationFn: async (family?: string) => {
-      const res = await apiRequest("POST", "/api/admin/metadata/refresh", family ? { family } : {});
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/metadata/status"] });
-      const results = data?.results || {};
-      const genSuccess = results.generation?.success !== false;
-      const intSuccess = results.integration?.success !== false;
-      if (genSuccess && intSuccess) {
-        toast({ title: "Metadata refreshed", description: "Snapshots updated successfully." });
-      } else {
-        const failedFamilies = [
-          !genSuccess ? "generation" : null,
-          !intSuccess ? "integration" : null,
-        ].filter(Boolean).join(", ");
-        toast({
-          title: "Partial refresh",
-          description: `Some families had issues: ${failedFamilies}. Check status for details.`,
-          variant: "destructive",
-        });
-      }
-    },
-    onError: (err: Error) => {
-      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
-    },
-  });
-
-  function stalenessColor(level: string) {
-    switch (level) {
-      case "fresh": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "stale": return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-      case "critical": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      default: return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
-    }
-  }
-
-  function confidenceBadge(confidence: string) {
-    switch (confidence) {
-      case "official": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "inferred": return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-      case "deprecated": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      default: return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
-    }
-  }
-
-  function reachabilityBadge(status: string) {
-    switch (status) {
-      case "reachable": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "limited": return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-      case "unreachable": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      default: return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
-    }
-  }
-
-  if (isLoading) {
-    return (
-      <Card className="p-6" data-testid="card-metadata-loading">
-        <div className="space-y-4">
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-3/4" />
-        </div>
-      </Card>
-    );
-  }
-
-  return (
-    <div className="space-y-4" data-testid="panel-metadata-freshness">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold" data-testid="text-metadata-title">Metadata Freshness</h3>
-        <Button
-          onClick={() => refreshMutation.mutate(undefined)}
-          disabled={refreshMutation.isPending}
-          size="sm"
-          data-testid="button-refresh-metadata"
-        >
-          {refreshMutation.isPending ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          Refresh Now
-        </Button>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card className="p-4" data-testid="card-generation-metadata">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium flex items-center gap-2">
-                <Code className="h-4 w-4" />
-                Generation Metadata
-              </h4>
-              {status?.generation.stalenessLevel && (
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stalenessColor(status.generation.stalenessLevel)}`} data-testid="badge-generation-staleness">
-                  {status.generation.stalenessLevel}
-                </span>
-              )}
-            </div>
-
-            {status?.generation.studioTarget && (
-              <div className="text-sm space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Studio Target</span>
-                  <span className="font-mono" data-testid="text-studio-version">{status.generation.studioTarget.version}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Framework</span>
-                  <span data-testid="text-target-framework">{status.generation.studioTarget.targetFramework}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Language</span>
-                  <span data-testid="text-expression-language">{status.generation.studioTarget.expressionLanguage}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Package Count</span>
-                  <span data-testid="text-package-count">{status.generation.packageCount}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Source</span>
-                  <span data-testid="text-generation-source">{status.generation.source}</span>
-                </div>
-              </div>
-            )}
-
-            {status?.generation.lastRefreshedAt && (
-              <div className="text-xs text-muted-foreground flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                Last refreshed: {new Date(status.generation.lastRefreshedAt).toLocaleString()}
-              </div>
-            )}
-
-            {(status?.generation.lastRefreshSuccessAt || status?.generation.lastRefreshFailureAt) && (
-              <div className="text-xs space-y-0.5" data-testid="gen-refresh-timestamps">
-                {status.generation.lastRefreshSuccessAt && (
-                  <div className="text-green-600 dark:text-green-400">
-                    Last success: {new Date(status.generation.lastRefreshSuccessAt).toLocaleString()}
-                  </div>
-                )}
-                {status.generation.lastRefreshFailureAt && (
-                  <div className="text-red-600 dark:text-red-400">
-                    Last failure: {new Date(status.generation.lastRefreshFailureAt).toLocaleString()}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {status?.generation.packages && Object.keys(status.generation.packages).length > 0 && (
-              <div className="space-y-1" data-testid="gen-package-details">
-                <p className="text-xs font-medium text-muted-foreground">Packages:</p>
-                <div className="space-y-0.5 max-h-32 overflow-y-auto">
-                  {Object.entries(status.generation.packages).map(([pkg, info]) => (
-                    <div key={pkg} className="text-xs" data-testid={`package-row-${pkg}`}>
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono truncate mr-2">{pkg.replace("UiPath.", "")}</span>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <span className="font-mono">{info.preferred}</span>
-                          <span className="text-muted-foreground">({info.min}–{info.max})</span>
-                        </div>
-                      </div>
-                      <div className="text-muted-foreground text-[10px] flex justify-between">
-                        <span>{info.verificationSource}</span>
-                        <span data-testid={`verified-at-${pkg}`}>Verified: {new Date(info.lastVerifiedAt).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refreshMutation.mutate("generation")}
-              disabled={refreshMutation.isPending}
-              data-testid="button-refresh-generation"
-            >
-              <RefreshCw className="mr-1 h-3 w-3" />
-              Refresh Generation
-            </Button>
-          </div>
-        </Card>
-
-        <Card className="p-4" data-testid="card-integration-metadata">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium flex items-center gap-2">
-                <Server className="h-4 w-4" />
-                Integration Endpoints
-              </h4>
-              {status?.integration.stalenessLevel && (
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stalenessColor(status.integration.stalenessLevel)}`} data-testid="badge-integration-staleness">
-                  {status.integration.stalenessLevel}
-                </span>
-              )}
-            </div>
-
-            <div className="text-sm space-y-1">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Endpoint Count</span>
-                <span data-testid="text-endpoint-count">{status?.integration.endpointCount || 0}</span>
-              </div>
-            </div>
-
-            {status?.integration.lastRefreshedAt && (
-              <div className="text-xs text-muted-foreground flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                Last refreshed: {new Date(status.integration.lastRefreshedAt).toLocaleString()}
-              </div>
-            )}
-
-            {(status?.integration.lastRefreshSuccessAt || status?.integration.lastRefreshFailureAt) && (
-              <div className="text-xs space-y-0.5" data-testid="int-refresh-timestamps">
-                {status.integration.lastRefreshSuccessAt && (
-                  <div className="text-green-600 dark:text-green-400">
-                    Last success: {new Date(status.integration.lastRefreshSuccessAt).toLocaleString()}
-                  </div>
-                )}
-                {status.integration.lastRefreshFailureAt && (
-                  <div className="text-red-600 dark:text-red-400">
-                    Last failure: {new Date(status.integration.lastRefreshFailureAt).toLocaleString()}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {status?.integration.endpoints && Object.keys(status.integration.endpoints).length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">Endpoints:</p>
-                <div className="space-y-1">
-                  {Object.entries(status.integration.endpoints).map(([key, ep]) => (
-                    <div key={key} className="text-xs" data-testid={`endpoint-row-${key}`}>
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono">{key}</span>
-                        <div className="flex gap-1">
-                          <span className={`px-1.5 py-0.5 rounded text-xs ${confidenceBadge(ep.confidence)}`}>
-                            {ep.confidence}
-                          </span>
-                          <span className={`px-1.5 py-0.5 rounded text-xs ${reachabilityBadge(ep.reachabilityStatus)}`}>
-                            {ep.reachabilityStatus}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="text-muted-foreground text-[10px] text-right" data-testid={`endpoint-verified-at-${key}`}>
-                        Verified: {new Date(ep.lastVerifiedAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refreshMutation.mutate("integration")}
-              disabled={refreshMutation.isPending}
-              data-testid="button-refresh-integration"
-            >
-              <RefreshCw className="mr-1 h-3 w-3" />
-              Refresh Integration
-            </Button>
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }
@@ -3655,22 +2224,6 @@ export default function SettingsPage() {
               <Plug className="mr-1.5 sm:mr-2 h-4 w-4" />
               <span className="text-xs sm:text-sm">Integrations</span>
             </TabsTrigger>
-            <TabsTrigger value="quality" data-testid="tab-quality">
-              <Shield className="mr-1.5 sm:mr-2 h-4 w-4" />
-              <span className="text-xs sm:text-sm">Quality</span>
-            </TabsTrigger>
-            <TabsTrigger value="metadata" data-testid="tab-metadata">
-              <Database className="mr-1.5 sm:mr-2 h-4 w-4" />
-              <span className="text-xs sm:text-sm">Metadata</span>
-            </TabsTrigger>
-            <TabsTrigger value="pipeline-health" data-testid="tab-pipeline-health">
-              <Activity className="mr-1.5 sm:mr-2 h-4 w-4" />
-              <span className="text-xs sm:text-sm">Pipeline Health</span>
-            </TabsTrigger>
-            <TabsTrigger value="debug" data-testid="tab-debug">
-              <Bug className="mr-1.5 sm:mr-2 h-4 w-4" />
-              <span className="text-xs sm:text-sm">Debug</span>
-            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -3685,24 +2238,6 @@ export default function SettingsPage() {
         </TabsContent>
         <TabsContent value="integrations" className="mt-4">
           <IntegrationsTab />
-        </TabsContent>
-        <TabsContent value="quality" className="mt-4">
-          <Card data-testid="card-quality-metrics">
-            <MetaValidationDashboard />
-          </Card>
-        </TabsContent>
-        <TabsContent value="metadata" className="mt-4">
-          <MetadataFreshnessTab />
-        </TabsContent>
-        <TabsContent value="pipeline-health" className="mt-4">
-          <Card data-testid="card-pipeline-health">
-            <PipelineHealthDashboard />
-          </Card>
-        </TabsContent>
-        <TabsContent value="debug" className="mt-4">
-          <Card data-testid="card-debug">
-            <PipelineDebugPanel />
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

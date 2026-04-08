@@ -2,24 +2,30 @@ import pLimit from "p-limit";
 import pRetry from "p-retry";
 
 /**
- * Batch Processing Utilities
+ * Batch Processing Utilities for Anthropic
  *
- * Works with any configured LLM provider via the abstraction layer.
+ * Supported models: claude-opus-4-5 (most capable), claude-sonnet-4-5 (balanced), claude-haiku-4-5 (fastest)
  *
  * USAGE:
  * ```typescript
  * import { batchProcess } from "./replit_integrations/batch";
- * import { getLLM } from "./lib/llm";
+ * import Anthropic from "@anthropic-ai/sdk";
+ *
+ * const anthropic = new Anthropic({
+ *   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+ *   baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+ * });
  *
  * const results = await batchProcess(
  *   items,
  *   async (item) => {
- *     const response = await getLLM().create({
- *       system: "You are a helpful assistant.",
- *       maxTokens: 8192,
+ *     const message = await anthropic.messages.create({
+ *       model: "claude-sonnet-4-5",
+ *       max_tokens: 8192,
  *       messages: [{ role: "user", content: `Process: ${item.name}` }],
  *     });
- *     return response.text;
+ *     const content = message.content[0];
+ *     return content.type === "text" ? content.text : "";
  *   }
  * );
  * ```

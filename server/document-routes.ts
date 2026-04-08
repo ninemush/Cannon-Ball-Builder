@@ -1,43 +1,201 @@
 import type { Express, Request, Response } from "express";
-import { getLLM, SDD_LLM_TIMEOUT_MS } from "./lib/llm";
-import { RunLogger, type StageEventListener } from "./lib/run-logger";
-import { sanitizeChatForLLM } from "./lib/sanitize-chat";
+import Anthropic from "@anthropic-ai/sdk";
 import { documentStorage } from "./document-storage";
 import { processMapStorage } from "./process-map-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { getPlatformCapabilities, type PlatformCapabilityProfile, type IntegrationServiceConnection, type IntegrationServiceConnector, type ConnectorOperation } from "./uipath-integration";
-import { generateUiPathPackage, generateDhg, findUiPathMessage, parseUiPathPackage, computeVersion, getCachedPipelineResult } from "./uipath-pipeline";
-import { generateConfigXlsx } from "./package-assembler";
-import { startUiPathGenerationRun, type TriggerSource, type RunCallbacks, type RunResult } from "./uipath-run-manager";
-import { UIPATH_PROMPT, buildUiPathPrompt, repairTruncatedPackageJson } from "./uipath-prompts";
-import { scanSddForUnverifiedPackages, buildSddScanGuidance, buildSddPackageGuidance } from "./catalog/prompt-guidance-filter";
-export { UIPATH_PROMPT, repairTruncatedPackageJson };
-import type { MetaValidationMode } from "./meta-validation";
-import { catalogService } from "./catalog/catalog-service";
-import { acquireDocGenerationLock, releaseDocGenerationLock, isGenerationCancelled, consumePendingInvalidation, runCompletionCallbacks } from "./lib/doc-generation-lock";
+import { getPlatformCapabilities, buildNuGetPackage } from "./uipath-integration";
+import { generateRichXamlFromSpec, generateDeveloperHandoffGuide, aggregateGaps as aggGapsImport } from "./xaml-generator";
+import { analyzeAndFix } from "./workflow-analyzer";
 import { evaluateTransition } from "./stage-transition";
 import { approveDocument } from "./document-service";
 import { escapeXml } from "./lib/xml-utils";
-import { metadataService } from "./catalog/metadata-service";
-import { ensureArtifactBlock, parseArtifactBlock } from "./lib/artifact-parser";
+import { sanitizeAndParseJson, trySanitizeAndParseJson, stripCodeFences, sanitizeJsonString } from "./lib/json-utils";
 import { z } from "zod";
-import type { UiPathPackage } from "./types/uipath-package";
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
   Table, TableRow, TableCell, WidthType, BorderStyle,
   AlignmentType, ShadingType, ImageRun,
 } from "docx";
 import { renderProcessMapImage } from "./process-map-renderer";
-import AdmZip from "adm-zip";
-import archiver from "archiver";
 
+const anthropic = new Anthropic({
+  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+});
 
 const PDD_PROMPT = `The SME has approved the As-Is process map. Now generate a Process Design Document. The PDD must include: 1) Executive Summary, 2) Process Scope, 3) As-Is Process Description (narrative form, referencing the steps in the map), 4) To-Be Process Description (describe the optimised automated process — how the workflow will operate once automation is applied, referencing the To-Be map steps), 5) Pain Points and Inefficiencies, 6) Automation Opportunity Assessment, 7) Assumptions and Exceptions, 8) Data and System Requirements. Write this as a professional document, not a bullet list. Be specific and use the details from our conversation.
 
 Format your response as sections separated by "## " headings. Each section should start with "## 1. Executive Summary", "## 2. Process Scope", etc.`;
 
 const SDD_PROMPT = `(Legacy fallback — see SDD_PROSE_PROMPT and SDD_ARTIFACTS_PROMPT for active prompts)`;
+
+const UIPATH_PROMPT = `Based on the approved SDD, generate a detailed UiPath automation package specification. Output a JSON object with this exact shape:
+
+{
+  "projectName": "string (PascalCase, no spaces)",
+  "description": "string",
+  "dependencies": [
+    "UiPath.System.Activities",
+    "UiPath.UIAutomation.Activities",
+    "... other specific UiPath package names needed"
+  ],
+  "workflows": [
+    {
+      "name": "string (PascalCase filename without .xaml)",
+      "description": "string",
+      "variables": [
+        {
+          "name": "string (camelCase variable name)",
+          "type": "String|Int32|Boolean|DataTable|Object|DateTime|Array<String>|Dictionary<String,Object>",
+          "defaultValue": "optional default value or empty string",
+          "scope": "workflow|sequence (where this variable is declared)"
+        }
+      ],
+      "steps": [
+        {
+          "activity": "string (human-readable step description)",
+          "activityType": "string (exact UiPath activity name, e.g. ui:TypeInto, ui:Click, ui:GetText, ui:OpenBrowser, ui:ExcelApplicationScope, ui:ReadRange, ui:WriteRange, ui:SendSmtpMailMessage, ui:GetImapMailMessage, ui:HttpClient, ui:ExecuteQuery, ui:ReadTextFile, ui:WriteTextFile, ui:AddQueueItem, ui:GetTransactionItem, ui:SetTransactionStatus, ui:LogMessage, ui:Assign, ui:Delay, ui:MessageBox, If, ForEach, While, Switch, TryCatch, RetryScope, InvokeWorkflowFile)",
+          "activityPackage": "string (UiPath package namespace, e.g. UiPath.UIAutomation.Activities, UiPath.Excel.Activities, UiPath.Mail.Activities, UiPath.WebAPI.Activities, UiPath.Database.Activities, UiPath.System.Activities)",
+          "properties": {
+            "key": "value (activity-specific properties like Selector, Input, Output, FileName, SheetName, URL, Method, Headers, Body, Query, Timeout, etc.)"
+          },
+          "selectorHint": "string or null (placeholder UI selector pattern for UI activities, e.g. '<html app=\"chrome\" /><webctrl tag=\"input\" id=\"username\" />' with TODO comments for elements needing real selectors)",
+          "errorHandling": "retry|catch|escalate|none (retry = wrap in RetryScope, catch = wrap in TryCatch, escalate = catch + Action Center escalation, none = no special handling)",
+          "notes": "string (implementation notes, business rules, or TODO items for the developer)"
+        }
+      ]
+    }
+  ]
+}
+
+IMPORTANT RULES:
+- Use SPECIFIC UiPath activity names in activityType (e.g. "ui:TypeInto" not just "Type Into")
+- For UI automation steps, always include a selectorHint with a realistic placeholder selector pattern and TODO comment
+- For system interaction steps (UI, API, DB, email), set errorHandling to "retry" or "catch"
+- For human-in-the-loop steps, set errorHandling to "escalate"
+- Include ALL variables needed by the workflow in the variables array
+- Include specific properties for each activity (e.g. Selector, Input, Output, FileName, URL, Method, etc.)
+- Map decision points to If/Switch activities with Condition properties
+- Map loops to ForEach/While activities
+- Include initialization steps (config read, variable setup) at the start of Main workflow
+- Include cleanup/logging steps at the end
+- List ALL required UiPath package dependencies
+- Be as specific and production-ready as possible
+
+Return ONLY the JSON object, no other text.`;
+
+const VALID_ERROR_HANDLING = new Set(["retry", "catch", "escalate", "none"]);
+
+const uipathPackageSchema = z.object({
+  projectName: z.string().default("UiPathPackage"),
+  description: z.string().default(""),
+  dependencies: z.array(z.string()).default([]),
+  workflows: z.array(z.object({
+    name: z.string().default("Main"),
+    description: z.string().default(""),
+    variables: z.array(z.object({
+      name: z.string().default("variable"),
+      type: z.string().default("String"),
+      defaultValue: z.preprocess(v => v == null ? "" : String(v), z.string().default("")),
+      scope: z.string().optional().default("workflow"),
+    })).optional().default([]),
+    steps: z.array(z.object({
+      activity: z.string().default("Activity"),
+      activityType: z.string().optional().default("ui:Comment"),
+      activityPackage: z.string().optional().default("UiPath.System.Activities"),
+      properties: z.record(z.unknown()).default({}),
+      selectorHint: z.preprocess(
+        v => typeof v === "object" && v !== null ? JSON.stringify(v) : v,
+        z.string().nullable().optional().default(null)
+      ),
+      errorHandling: z.preprocess(
+        v => {
+          const normalized = typeof v === "string" ? v.trim().toLowerCase() : "";
+          return VALID_ERROR_HANDLING.has(normalized) ? normalized : "none";
+        },
+        z.enum(["retry", "catch", "escalate", "none"]).optional().default("none")
+      ),
+      notes: z.preprocess(v => v == null ? "" : String(v), z.string().default("")),
+    })).default([]),
+  })).default([]),
+});
+
+function repairTruncatedPackageJson(rawText: string): any | null {
+  try {
+    let text = rawText.trim();
+    const fenceStart = text.match(/```(?:json)?\s*\n/);
+    if (fenceStart) {
+      text = text.slice(fenceStart.index! + fenceStart[0].length);
+      const fenceEnd = text.lastIndexOf("```");
+      if (fenceEnd > 0) text = text.slice(0, fenceEnd);
+    }
+
+    const firstBrace = text.indexOf("{");
+    if (firstBrace === -1) return null;
+    text = text.slice(firstBrace);
+
+    let inString = false;
+    let escaped = false;
+    let lastSafePos = 0;
+    const stack: string[] = [];
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\") { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === "{" || ch === "[") {
+        stack.push(ch === "{" ? "}" : "]");
+      } else if (ch === "}" || ch === "]") {
+        if (stack.length > 0) stack.pop();
+      }
+      if (ch === "," || ch === "}" || ch === "]") {
+        lastSafePos = i;
+      }
+    }
+
+    if (inString) {
+      text = text.slice(0, text.lastIndexOf('"'));
+    }
+
+    for (let attempts = 0; attempts < 30; attempts++) {
+      text = text.replace(/,\s*$/, "");
+
+      let s = false, esc = false;
+      const st: string[] = [];
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (esc) { esc = false; continue; }
+        if (c === "\\") { esc = true; continue; }
+        if (c === '"') { s = !s; continue; }
+        if (s) continue;
+        if (c === "{") st.push("}");
+        else if (c === "[") st.push("]");
+        else if (c === "}" || c === "]") { if (st.length > 0) st.pop(); }
+      }
+
+      if (s) {
+        text = text.slice(0, text.lastIndexOf('"'));
+        continue;
+      }
+
+      const closing = st.reverse().join("");
+      try {
+        return JSON.parse(text + closing);
+      } catch {
+        const cutPoints = [text.lastIndexOf(","), text.lastIndexOf("}")].filter(p => p > 0);
+        const cutAt = Math.max(...cutPoints, -1);
+        if (cutAt <= 0) return null;
+        text = text.slice(0, cutAt);
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 async function verifyIdeaAccess(req: Request, res: Response): Promise<string | null> {
   if (!req.session.userId) {
@@ -63,96 +221,61 @@ async function verifyIdeaAccess(req: Request, res: Response): Promise<string | n
   return ideaId;
 }
 
+function trimChatForDocGen(messages: { role: string; content: string }[]): { role: "user" | "assistant"; content: string }[] {
+  const filtered = messages
+    .filter((m) => !m.content.startsWith("[DOC:") && !m.content.startsWith("[UIPATH:"));
 
-function buildSddProsePrompt(platformCapabilities?: string, packageRegistryContext?: string, automationType?: string): string {
+  const deduped: { role: "user" | "assistant"; content: string }[] = [];
+  for (const m of filtered) {
+    let content = m.content;
+    if (content.length > 2000) {
+      content = content.slice(0, 2000) + "\n...[truncated]";
+    }
+    const role = m.role as "user" | "assistant";
+    if (deduped.length > 0 && deduped[deduped.length - 1].role === role) {
+      deduped[deduped.length - 1].content += "\n" + content;
+    } else {
+      deduped.push({ role, content });
+    }
+  }
+
+  const MAX_MSGS = 30;
+  let result = deduped.length > MAX_MSGS ? deduped.slice(deduped.length - MAX_MSGS) : deduped;
+
+  if (result.length > 0 && result[0].role !== "user") {
+    result = result.slice(1);
+  }
+  return result;
+}
+
+function buildSddProsePrompt(platformCapabilities?: string): string {
   const platformContext = platformCapabilities
-    ? `\n\nIMPORTANT — PLATFORM-AWARE DESIGN:\n${platformCapabilities}\n\nLeverage available services optimally. Key capabilities:\n- **Unattended/Attended**: Unattended for back-office, attended for human-assisted work\n- **AI Agents**: For intelligent decision-making and NLP-driven processes\n- **Action Center**: Human-in-the-loop approvals/validations with form schemas, SLAs, and Data Fabric entity linking\n- **Data Fabric**: Typed entities for cross-run data persistence, connecting Action Center, Apps, and workflows\n- **Apps**: Citizen-developer web UIs for input/oversight, connected to Data Fabric entities\n- **IXP**: Auto-select extraction: Classic DU for structured forms (invoices, POs), Generative Extraction for unstructured docs (contracts, reports), Communications Mining for email/message triage\n- **Integration Service**: Pre-built connectors (SAP, Salesforce, etc.) — prefer over custom HTTP\n- **Storage Buckets**: Centralized file storage\n- **AI Center**: Custom ML models\n- **Maestro**: BPMN orchestration combining service tasks, user tasks, and gateways — prefer over triggers for multi-step human+automated flows\n\nFor document processes: specify extraction approach, field mappings, and validation rules (confidence thresholds, review triggers) in the Architecture section.\nFor each available service, explain HOW it is used. For unavailable services, include a "Platform Recommendations" section with concrete benefits.`
+    ? `\n\nIMPORTANT — PLATFORM-AWARE DESIGN:\n${platformCapabilities}\n\nYou MUST design the solution to leverage the available services optimally. Consider the full breadth of the UiPath platform:\n- **Unattended vs Attended automation**: Use unattended bots for back-office tasks, attended for human-assisted work\n- **Agentic automation / AI Agents**: For processes needing intelligent decision-making, context understanding, or natural language processing\n- **Action Center**: For human-in-the-loop steps — approvals, validations, exception review, escalations\n- **Document Understanding**: For intelligent document processing — classification, extraction, validation of invoices, forms, contracts\n- **Integration Service**: For pre-built API connectors to enterprise systems (SAP, Salesforce, ServiceNow, etc.) instead of custom HTTP calls\n- **Storage Buckets**: For centralized file storage — input documents, output reports, templates, audit logs\n- **AI Center**: For custom ML models — classification, prediction, NLP, anomaly detection\n- **Test Manager**: For automated test suites to validate the automation\n- **Communications Mining**: For email/message triage and intelligent routing\n- **Apps**: For citizen developer interfaces where manual input or oversight is needed\n\nFor each available service, explain HOW it will be used in the solution. For unavailable services, include a "## 8. Platform Recommendations" section explaining what each missing service would unlock and the concrete benefits it would provide for this specific automation.`
     : "";
 
   return `The SME has approved the PDD. Generate the Solution Design Document for this UiPath automation. You are designing a solution that will be FULLY DEPLOYED — every artifact you specify will be automatically provisioned on the connected UiPath platform.
 
 Think holistically about the optimal combination of UiPath platform capabilities to deliver this automation. Don't default to a simple bot — evaluate whether the process benefits from agents, human-in-the-loop steps, document processing, ML models, or other advanced capabilities.${platformContext}
 
-CROSS-SERVICE INTEGRATION RULES (CRITICAL):
-- **Action Center + Data Fabric**: When designing human-in-the-loop steps (approvals, reviews, escalations), define complete form schemas with field names, data types, validation rules, and default values. Specify SLA configurations (due time, warning threshold, escalation policy). If the approval results should persist, design a Data Fabric entity to store them and reference it from the Action Center task definition.
-- **Data Fabric Entities**: For any process data that needs to persist across workflow runs, be shared between processes, or serve as a data source for Apps, define a Data Fabric entity with its complete schema (fields, types, relationships). Entity fields should match the process data model from the PDD.
-- **Apps Integration**: If UiPath Apps is available, reference existing apps that serve as user-facing interfaces for manual input, oversight dashboards, or human interaction points. Apps connect to Data Fabric entities and can trigger or receive data from automation workflows.
-- **Wired-Together Artifacts**: Action Center tasks should reference Data Fabric entities for result storage. Data Fabric entities should be referenced in XAML workflows for read/write operations. Apps should be linked to processes and entities in the Maestro process definitions.
-
 Include these sections:
 
-1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.). Explain how Action Center, Data Fabric, and Apps work together in this solution. If attended robots are available, explicitly recommend attended vs unattended execution for each component with justification.
-2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses. For each human-in-the-loop step, specify the complete form schema and SLA configuration. Reference existing deployed processes that can be reused if applicable.
-3) UiPath Activities and Packages Required — list specific UiPath packages and activities${packageRegistryContext ? " with EXACT version numbers from the verified package list provided below" : ""}. Include Integration Service connectors if applicable. Include UiPath.Persistence.Activities for Action Center tasks and Data Fabric HTTP activities for entity operations. When targeting Serverless (Cross-Platform) robots, use Modern Design activities only: UseExcel instead of ExcelApplicationScope, UseBrowser instead of OpenBrowser, SendMail/GetMail instead of SendSmtpMailMessage/GetImapMailMessage. Do NOT use CloseApplication or KillProcess on Serverless.
-4) Integration Points and API/System Connections — all external systems, APIs, databases, and how they connect (Integration Service connectors, custom HTTP, direct DB, etc.). Include Data Fabric entity service endpoints for data persistence.
-5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling. Include screenshot-on-error as a best practice: every TryCatch error handler should capture a screenshot before logging, especially critical for Serverless robots where no RDP is available for debugging.
+1) Automation Architecture Overview — describe the overall solution architecture, which UiPath services are used and why. Include a clear rationale for the chosen approach (e.g., why unattended vs attended, why Action Center for certain steps, etc.)
+2) Process Components and Workflow Breakdown — detail each workflow/component, its purpose, and how they interconnect. Specify which execution type (unattended, attended, agent-based) each component uses
+3) UiPath Activities and Packages Required — list specific UiPath packages and activities. Include Integration Service connectors if applicable
+4) Integration Points and API/System Connections — all external systems, APIs, databases, and how they connect (Integration Service connectors, custom HTTP, direct DB, etc.)
+5) Exception Handling Strategy — business exceptions, system exceptions, retry logic, Action Center escalations, dead-letter handling
 6) Security Considerations — credential management via Orchestrator assets, role-based access, data encryption, audit trail
 7) Test Strategy — unit tests, integration tests, UAT approach. Reference Test Manager if available
-7a) Governance Compliance — if governance policies are active, include a section confirming compliance with each active policy and how the solution design adheres to naming conventions, restricted activity rules, and required error handling patterns
-8) Data Model and Entity Design — define all Data Fabric entities with their complete field schemas, relationships between entities, and which workflows/Action Center tasks reference each entity
 
-${(automationType === "agent" || automationType === "hybrid") ? `AGENT ARCHITECTURE (MANDATORY for ${automationType} automation):
-Include a dedicated "## 8. Agent Architecture" section with:
-- **Agent Type**: autonomous, conversational, or coded
-- **Agent Identity**: name, purpose, and behavioral system prompt
-- **Tool Definitions**: each tool mapped to a deployed Orchestrator process by name, with input/output argument schemas
-- **Context Grounding Strategy**: storage buckets, document sources, refresh cadence, embedding model
-- **Escalation Rules**: conditions mapped to Action Center task catalogs by name
-- **Guardrails**: safety constraints, output validation, PII handling, max iteration limits
-- **Agent Interaction Flow**: which RPA process triggers the agent, what it returns, downstream steps
-
-` : ""}Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.${packageRegistryContext ? `\n\n${packageRegistryContext}\n\nPACKAGE VERSION RULES (MANDATORY):\n- For every UiPath package you reference, use the EXACT version shown in the verified package list above (e.g., "UiPath.System.Activities 25.10.7").\n- Do NOT write "Latest stable", "Latest", or invent version numbers.\n- If a package is needed but NOT listed in the verified list above, you MUST note: "[package name] — version not verified (not in verified catalog)" instead of guessing a version.` : ""}`;
+Format your response as sections separated by "## " headings. Each section should start with "## 1. Automation Architecture Overview", etc. Be comprehensive and specific. Do NOT include the Orchestrator Deployment Specification — that will be generated separately as section 9.`;
 }
 
-interface SlimArtifactsContext {
-  availableServices?: string;
-  activeConnections?: { connectorName: string; connectionName: string; connectionId: string }[];
-  automationType?: string;
-}
+function buildSddArtifactsPrompt(platformCapabilities?: string): string {
+  const platformContext = platformCapabilities
+    ? `\n\nPLATFORM AVAILABILITY:\n${platformCapabilities}\n\nOnly generate artifacts for services that are AVAILABLE. For unavailable services, do NOT include their artifact arrays.`
+    : "";
 
-function buildArtifactsContext(platformProfile: PlatformCapabilityProfile): SlimArtifactsContext {
-  const ctx: SlimArtifactsContext = {};
-
-  if (platformProfile?.configured) {
-    const availNames: string[] = [];
-    const avail = platformProfile.available || {};
-    for (const [key, val] of Object.entries(avail)) {
-      if (val) availNames.push(key);
-    }
-    if (availNames.length > 0) {
-      ctx.availableServices = availNames.map(n => `${n}: available`).join(", ");
-    }
-  }
-
-  if (platformProfile?.integrationService?.available) {
-    const is = platformProfile.integrationService;
-    const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
-    if (activeConns.length > 0) {
-      ctx.activeConnections = activeConns.map((c: IntegrationServiceConnection) => ({
-        connectorName: c.connectorName,
-        connectionName: c.name,
-        connectionId: c.id,
-      }));
-    }
-  }
-
-  return ctx;
-}
-
-function buildSddArtifactsPrompt(artifactsContext?: SlimArtifactsContext): string {
-  let platformContext = "";
-  if (artifactsContext?.availableServices) {
-    platformContext = `\n\nAVAILABLE PLATFORM SERVICES: ${artifactsContext.availableServices}\nOnly generate artifacts for services that are AVAILABLE. For unavailable services, do NOT include their artifact arrays.`;
-  }
-  if (artifactsContext?.activeConnections && artifactsContext.activeConnections.length > 0) {
-    const connList = artifactsContext.activeConnections.map(c => `- ${c.connectorName}: "${c.connectionName}" (ID: ${c.connectionId})`).join("\n");
-    platformContext += `\n\nACTIVE INTEGRATION SERVICE CONNECTIONS:\n${connList}\nUse exact connector/connection names and IDs in integrationServiceConnectors entries.`;
-  }
-  if (artifactsContext?.automationType) {
-    platformContext += `\n\nAutomation type: ${artifactsContext.automationType}`;
-  }
-
-  return `Based on the approved PDD, generate ONLY the Orchestrator & Platform Deployment Specification (Section 9) for a UiPath automation SDD.${platformContext}
+  return `Based on the approved PDD and conversation, generate ONLY the Orchestrator & Platform Deployment Specification (Section 9) for a UiPath automation SDD.${platformContext}
 
 You MUST output a fenced code block tagged \`\`\`orchestrator_artifacts with a complete JSON object defining EVERY deployable artifact needed. This is machine-parsed and used to AUTO-PROVISION all artifacts on the connected UiPath platform. Every artifact you include WILL be created automatically.
 
@@ -182,10 +305,7 @@ Here is the EXACT format:
     { "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }
   ],
   "documentUnderstanding": [
-    { "name": "ProjectName", "documentTypes": ["Invoice", "Receipt"], "extractionApproach": "classic_du|generative|hybrid", "description": "Purpose", "taxonomyFields": [{ "documentType": "Invoice", "fields": [{ "name": "InvoiceNumber", "type": "String" }, { "name": "TotalAmount", "type": "Number" }] }], "classifierType": "ML", "validationRules": [{ "field": "TotalAmount", "rule": "confidence >= 0.85", "action": "flag_for_review" }] }
-  ],
-  "communicationsMining": [
-    { "name": "StreamName", "sourceType": "email|chat|ticket", "description": "Purpose", "intents": ["Request", "Complaint", "Inquiry"], "entities": ["CustomerName", "OrderNumber"], "routingRules": [{ "intent": "Complaint", "action": "escalate", "target": "SeniorAgent" }] }
+    { "name": "ProjectName", "documentTypes": ["Invoice", "Receipt"], "description": "Purpose" }
   ],
   "requirements": [
     { "name": "REQ-001: Requirement name", "description": "Business requirement from PDD", "source": "PDD Section X" }
@@ -195,69 +315,6 @@ Here is the EXACT format:
   ],
   "testSets": [
     { "name": "Happy Path Tests", "description": "Core scenario validation", "testCaseNames": ["TC001 - Test case name"] }
-  ],
-  "agents": [
-    {
-      "name": "AgentName",
-      "agentType": "autonomous|conversational|coded",
-      "description": "Agent purpose and scope",
-      "systemPrompt": "Full behavioral instructions for the agent",
-      "tools": [
-        { "name": "ToolName", "description": "What this tool does", "processReference": "Orchestrator_Process_Name", "inputArguments": { "argName": "argType" }, "outputArguments": ["resultField"] }
-      ],
-      "contextGrounding": {
-        "storageBucket": "BucketName_from_storageBuckets_above",
-        "documentSources": ["Source description"],
-        "refreshStrategy": "daily|weekly|on-change",
-        "embeddingModel": "model name or default"
-      },
-      "guardrails": ["Safety constraint"],
-      "escalationRules": [
-        { "condition": "When to escalate", "target": "Human role", "actionCenterCatalog": "CatalogName_from_actionCenter_above", "priority": "High" }
-      ],
-      "maxIterations": 10,
-      "temperature": 0.3
-    }
-  ],
-  "knowledgeBases": [
-    { "name": "KBName", "description": "Purpose", "documentSources": ["Source"], "refreshFrequency": "weekly" }
-  ],
-  "promptTemplates": [
-    { "name": "TemplateName", "description": "Purpose", "template": "Prompt with {{variable}}", "variables": ["variable"] }
-  ],
-  "maestroProcesses": [
-    {
-      "name": "ProcessName",
-      "description": "End-to-end orchestrated process combining automated and human tasks",
-      "serviceTasks": [
-        { "name": "ServiceTaskName", "processRef": "ExactProcessNameFromOrchestrator", "description": "Automated step linked to an Orchestrator process" }
-      ],
-      "userTasks": [
-        { "name": "UserTaskName", "actionCenterCatalog": "CatalogNameFromActionCenterAbove", "assignee": "Role or group", "description": "Human review/approval step via Action Center" }
-      ],
-      "gateways": [
-        { "name": "GatewayName", "type": "exclusive|parallel|inclusive", "conditions": ["condition expression"], "description": "Decision or fork/join point" }
-      ],
-      "sequenceFlows": [
-        { "from": "SourceElementName", "to": "TargetElementName", "condition": "optional condition expression" }
-      ],
-      "crossReferences": {
-        "orchestratorProcesses": ["ExactProcessNameFromOrchestrator"],
-        "actionCenterCatalogs": ["CatalogNameFromActionCenterAbove"],
-        "queues": ["QueueNameFromQueuesAbove"]
-      }
-    }
-  ],
-  "integrationServiceConnectors": [
-    {
-      "connectorName": "ConnectorName (e.g. Gmail, SAP, Salesforce)",
-      "connectionName": "ExactConnectionNameFromTenant",
-      "connectionId": "connection-id",
-      "usedActions": ["ExactActionName from operation catalog"],
-      "usedTriggers": ["ExactTriggerName from operation catalog"],
-      "description": "How this connector is used in the automation",
-      "packageDependency": "UiPath.IntegrationService.Activities"
-    }
   ]
 }
 \`\`\`
@@ -271,46 +328,47 @@ Rules:
 - For time triggers, use UiPath 7-field cron expressions.
 - Include environments (Production at minimum).
 - Include Action Center task catalogs if the solution uses human-in-the-loop.
-- Include Document Understanding projects if the solution processes documents. For each DU project, specify the extractionApproach: "classic_du" for structured forms (invoices, receipts, POs), "generative" for unstructured documents (contracts, reports, correspondence), or "hybrid" for mixed document types. Include taxonomyFields with field name and type for each document type. Include validationRules with confidence thresholds and review triggers.
-- Include communicationsMining streams if the solution processes emails, chat messages, or tickets. Define intents, entities to extract, and routing rules.
+- Include Document Understanding projects if the solution processes documents.
 - Include requirements derived from PDD business rules, compliance constraints, SLAs, and acceptance criteria. Use "REQ-NNN:" prefix for traceability.
 - Include test cases covering key automation scenarios (happy path, exceptions, edge cases, regression). Use "TCNNN - " prefix.
 - Group test cases into logical test sets (e.g. "Happy Path Tests", "Exception Handling Tests", "Regression Tests"). Reference test case names exactly as defined above in the testCaseNames array.
-- AGENT ARTIFACTS (include when automation type is agent or hybrid):
-  - Each agent MUST specify agentType (autonomous, conversational, or coded).
-  - Agent tools MUST reference Orchestrator processes by exact name via processReference — these are resolved to deployed process IDs during provisioning.
-  - Agent contextGrounding.storageBucket MUST reference a storage bucket defined in the storageBuckets array above by exact name.
-  - Agent escalationRules.actionCenterCatalog MUST reference an Action Center catalog defined in the actionCenter array above by exact taskCatalog name.
-  - These cross-references are validated and wired during deployment — the agent config will contain resolved IDs for all referenced artifacts.
-- Include maestroProcesses when the solution involves multi-step orchestrated workflows combining automated service tasks and human user tasks. Each maestroProcess MUST:
-  - Reference exact Orchestrator process names in serviceTasks.processRef (matching processes defined in the SDD).
-  - Reference exact Action Center catalog names in userTasks.actionCenterCatalog (matching catalogs defined in the actionCenter array above).
-  - Define gateways for conditional routing (exclusive), parallel execution (parallel), or multi-path (inclusive).
-  - Define sequenceFlows connecting all elements (serviceTasks, userTasks, gateways) in execution order.
-  - Include crossReferences listing all referenced orchestratorProcesses, actionCenterCatalogs, and queues by exact name for deployment wiring.
-- INTEGRATION SERVICE CONNECTOR DEPENDENCIES: When the solution uses Integration Service connectors (e.g., Gmail, SAP, Salesforce, ServiceNow), include integrationServiceConnectors entries. Each entry MUST:
-  - Use the exact connectorName and connectionName from the discovered connected systems.
-  - Reference exact action/trigger names from the operation catalog in usedActions/usedTriggers.
-  - Always set packageDependency to "UiPath.IntegrationService.Activities".
-  - These are declared as dependencies so the deployment system can validate connector availability before provisioning.
 - Be comprehensive — this specification drives full automated deployment.
 
 Output ONLY "## 9. Orchestrator & Platform Deployment Specification" followed by the fenced artifacts block and any brief supporting prose. Nothing else.`;
 }
 
+function parseArtifactBlock(text: string): string | null {
+  const exactMatch = text.match(/```orchestrator_artifacts\s*\n([\s\S]*?)\n```/);
+  if (exactMatch) return exactMatch[0];
 
-interface GenerateDocumentResult {
-  content: string;
-  artifactsValid?: boolean;
-  artifactWarnings?: string[];
+  const jsonFenceMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+  if (jsonFenceMatch) {
+    const parsed = trySanitizeAndParseJson(jsonFenceMatch[1].trim());
+    if (parsed && (parsed.queues || parsed.assets || parsed.machines || parsed.triggers)) {
+      return "```orchestrator_artifacts\n" + JSON.stringify(parsed, null, 2) + "\n```";
+    }
+  }
+
+  const rawJsonMatch = text.match(/\{[\s\S]*"queues"[\s\S]*\}/);
+  if (rawJsonMatch) {
+    const parsed = trySanitizeAndParseJson(rawJsonMatch[0]);
+    if (parsed && (parsed.queues || parsed.assets || parsed.machines || parsed.triggers)) {
+      return "```orchestrator_artifacts\n" + JSON.stringify(parsed, null, 2) + "\n```";
+    }
+  }
+
+  return null;
 }
 
-async function generateDocument(ideaId: string, docType: string, onStageEvent?: StageEventListener): Promise<GenerateDocumentResult> {
+async function generateDocument(ideaId: string, docType: string): Promise<string> {
   const idea = await storage.getIdea(ideaId);
   if (!idea) throw new Error("Idea not found");
 
   const history = await chatStorage.getMessagesByIdeaId(ideaId);
-  const chatMessages = sanitizeChatForLLM(history);
+  const chatMessages = trimChatForDocGen(history.map((m) => ({
+    role: m.role as "user" | "assistant",
+    content: m.content,
+  })));
 
   let contextPrompt = "";
   if (docType === "PDD") {
@@ -330,29 +388,6 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
         if (platformProfile.unavailableRecommendations) {
           contextPrompt += `\n${platformProfile.unavailableRecommendations}`;
         }
-        if (platformProfile.integrationService?.available) {
-          const is = platformProfile.integrationService;
-          const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
-          if (activeConns.length > 0) {
-            const connMap = new Map<string, IntegrationServiceConnection[]>();
-            for (const conn of activeConns) {
-              const existing = connMap.get(conn.connectorName) || [];
-              existing.push(conn);
-              connMap.set(conn.connectorName, existing);
-            }
-            let isContext = `\n\nCONNECTED ENTERPRISE SYSTEMS (Integration Service):\nThe following systems are connected via UiPath Integration Service and available for this automation:\n`;
-            Array.from(connMap.entries()).forEach(([connectorName, conns]) => {
-              const connDetails = conns.map((c: IntegrationServiceConnection) => {
-                let detail = `"${c.name}"`;
-                if (c.connectionIdentity || c.accountName) detail += ` (account: ${c.connectionIdentity || c.accountName})`;
-                return detail;
-              }).join(", ");
-              isContext += `- **${connectorName}**: ${conns.length} connection(s) — ${connDetails}\n`;
-            });
-            isContext += `\nWhen describing integration points in the PDD, reference these connected systems by name. For example: "Email notifications will be sent via the Gmail connector available through Integration Service" rather than generic descriptions.`;
-            contextPrompt += isContext;
-          }
-        }
         console.log(`[PDD] Platform capabilities injected: ${platformProfile.summary}`);
       }
     } catch (err: any) {
@@ -366,23 +401,6 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
   }
 
   if (docType === "SDD") {
-    const sddRunId = `sdd-${ideaId}-${Date.now()}`;
-    const runLogger = new RunLogger(sddRunId, "SDD", onStageEvent);
-
-    try {
-      await storage.createGenerationRun({
-        ideaId,
-        runId: sddRunId,
-        status: "running",
-        generationMode: "sdd_generation",
-        triggeredBy: "manual",
-      });
-    } catch (e: any) {
-      console.warn(`[SDD] Failed to create generation run record: ${e.message}`);
-    }
-
-    try {
-    runLogger.stageStart("platform_capabilities");
     console.log("[SDD] Fetching platform capabilities for platform-aware SDD...");
     const platformProfile = await getPlatformCapabilities();
     let platformCapabilitiesText = platformProfile.configured
@@ -396,531 +414,104 @@ async function generateDocument(ideaId: string, docType: string, onStageEvent?: 
       }
       platformCapabilitiesText += `\nInclude a "## License Analysis & Optimization" section in the SDD covering:\n1. Current license utilization and whether it supports the proposed solution\n2. Recommendations for optimal license allocation (e.g., which robot types to use, how many slots needed)\n3. Any missing license types that would be needed and the business impact of not having them`;
     }
-    if (platformProfile.integrationService?.available && platformCapabilitiesText) {
-      const is = platformProfile.integrationService;
-      const activeConns = is.connections.filter((c: IntegrationServiceConnection) => c.status === "connected" || c.status === "active");
-      if (activeConns.length > 0) {
-        const connectorKeyToMeta = new Map<string, IntegrationServiceConnector>();
-        for (const conn of is.connectors) {
-          connectorKeyToMeta.set(conn.id, conn);
-        }
-
-        let connLines = activeConns.map((c: IntegrationServiceConnection) => {
-          const meta = c.connectorKey ? connectorKeyToMeta.get(c.connectorKey) : undefined;
-          let line = `- **${c.connectorName}**`;
-          if (meta?.categories && meta.categories.length > 0) {
-            line += ` [${meta.categories.join(", ")}]`;
-          }
-          line += `: connection "${c.name}" (ID: ${c.id})`;
-          if (c.connectionIdentity || c.accountName) {
-            line += `, account: ${c.connectionIdentity || c.accountName}`;
-          }
-          return line;
-        }).join("\n");
-
-        let opsCatalog = "";
-        const MAX_OPS_PER_CONNECTOR = 5;
-        const activeConnectorIds = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorId).filter(Boolean)));
-        const activeConnectorKeys = Array.from(new Set(activeConns.map((c: IntegrationServiceConnection) => c.connectorKey).filter(Boolean)));
-        const connectorsWithOps = is.connectors.filter((c: IntegrationServiceConnector) =>
-          (activeConnectorIds.includes(c.id) || activeConnectorKeys.includes(c.id)) && c.operations && c.operations.length > 0
-        );
-        if (connectorsWithOps.length > 0) {
-          opsCatalog = `\n\nINTEGRATION SERVICE — KEY OPERATIONS (top ${MAX_OPS_PER_CONNECTOR} per connector):\n`;
-          for (const connector of connectorsWithOps) {
-            const actions = connector.operations.filter((o: ConnectorOperation) => o.type === "action");
-            const triggers = connector.operations.filter((o: ConnectorOperation) => o.type === "trigger");
-            opsCatalog += `\n**${connector.name}** (${connector.operations.length} total operations):\n`;
-            if (actions.length > 0) {
-              const shown = actions.slice(0, MAX_OPS_PER_CONNECTOR);
-              opsCatalog += `  Actions: ${shown.map((a: ConnectorOperation) => `"${a.name}"`).join(", ")}${actions.length > MAX_OPS_PER_CONNECTOR ? ` (+${actions.length - MAX_OPS_PER_CONNECTOR} more)` : ""}\n`;
-            }
-            if (triggers.length > 0) {
-              const shown = triggers.slice(0, MAX_OPS_PER_CONNECTOR);
-              opsCatalog += `  Triggers: ${shown.map((t: ConnectorOperation) => `"${t.name}"`).join(", ")}${triggers.length > MAX_OPS_PER_CONNECTOR ? ` (+${triggers.length - MAX_OPS_PER_CONNECTOR} more)` : ""}\n`;
-            }
-          }
-          opsCatalog += `\nReference exact operation names above. Use UiPath.IntegrationService.Activities package. Declare connectors as dependencies in integrationServiceConnectors array.`;
-        }
-
-        platformCapabilitiesText += `\n\nINTEGRATION SERVICE — CONNECTED ENTERPRISE SYSTEMS:\nThe following Integration Service connections are ACTIVE and ready to use:\n${connLines}\n\nWhen designing integration points, you MUST use these Integration Service connectors instead of custom HTTP activities. Reference the specific connector name in the "UiPath Activities and Packages Required" section and include the UiPath.IntegrationService.Activities package. In the "Integration Points" section, specify the connector name and connection ID for each connected system.${opsCatalog}`;
-      }
-      if (is.connectors.length > 0 && activeConns.length === 0) {
-        const connectorNames = is.connectors.slice(0, 20).map((c: IntegrationServiceConnector) => c.name).filter(Boolean).join(", ");
-        platformCapabilitiesText += `\n\nINTEGRATION SERVICE:\n${is.connectors.length} connector(s) available but no active connections configured yet: ${connectorNames}.\nRecommend setting up Integration Service connections for any enterprise systems involved in this automation.`;
-      }
-    }
     console.log(`[SDD] Platform profile: ${platformProfile.summary}`);
-    runLogger.stageEnd("platform_capabilities", "succeeded", { configured: platformProfile.configured });
 
-    runLogger.stageStart("llm_parallel_generation");
     console.log("[SDD] Starting parallel generation (prose + artifacts)...");
     const startTime = Date.now();
-    const systemPrompt = `You are a Senior Solution Architect generating formal documents for the "${idea.title}" project. You think in solution patterns (dispatcher-performer, REFramework, attended hybrid, queue-driven fan-out) and select them with deliberate rationale — not by default. You make platform trade-offs explicitly: why Orchestrator queues vs Data Fabric, why attended vs unattended, why Integration Service connectors vs custom HTTP. You design for operability — every component has a monitoring, alerting, and SLA adherence story. You consider deployment topology (on-prem vs cloud, Serverless vs classic robots) and licensing implications. Your documents are architecturally intentional, not templated. Be specific and use details from the conversation.${contextPrompt}`;
+    const systemPrompt = `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`;
 
-    const studioProfileForSdd = catalogService.getStudioProfile();
-    const { guidance: packageGuidanceContext } = buildSddPackageGuidance(studioProfileForSdd);
-    const ideaAutomationType = (idea.automationType as string) || undefined;
-    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText, packageGuidanceContext, ideaAutomationType);
+    const sddProsePrompt = buildSddProsePrompt(platformCapabilitiesText);
+    const sddArtifactsPrompt = buildSddArtifactsPrompt(platformCapabilitiesText);
 
-    const slimArtifactsCtx = buildArtifactsContext(platformProfile);
-    slimArtifactsCtx.automationType = ideaAutomationType;
-    const sddArtifactsPrompt = buildSddArtifactsPrompt(slimArtifactsCtx);
-
-    const artifactsSystemPrompt = `You are a Senior Solution Architect generating deployment artifacts for the "${idea.title}" project. You think in solution patterns (dispatcher-performer, REFramework, attended hybrid, queue-driven fan-out) and select them with deliberate rationale. You make platform trade-offs explicitly, design for operability (monitoring, alerting, SLA adherence), and consider deployment topology and licensing implications.${contextPrompt}\n\nIMPORTANT: Your response MUST begin immediately with the \`\`\`orchestrator_artifacts fenced code block. Do NOT include any prose, explanation, or text before the opening fence.`;
-
-    const proseChatMessages = sanitizeChatForLLM(history, { maxMessages: 20 });
-
-    const sddTimeout = SDD_LLM_TIMEOUT_MS;
-    console.log(`[SDD] Using timeout of ${sddTimeout / 1000}s for LLM calls`);
-
-    const [proseResult, artifactsResult] = await Promise.allSettled([
-      getLLM().create({
-        maxTokens: 6144,
+    const [proseResponse, artifactsResponse] = await Promise.all([
+      anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 6144,
         system: systemPrompt,
-        messages: [...proseChatMessages, { role: "user", content: sddProsePrompt }],
-        timeoutMs: sddTimeout,
+        messages: [...chatMessages, { role: "user", content: sddProsePrompt }],
       }),
-      getLLM().create({
-        maxTokens: 4096,
-        system: artifactsSystemPrompt,
-        messages: [{ role: "user", content: sddArtifactsPrompt }],
-        timeoutMs: sddTimeout,
+      anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 3072,
+        system: systemPrompt,
+        messages: [...chatMessages, { role: "user", content: sddArtifactsPrompt }],
       }),
     ]);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[SDD] Parallel generation completed in ${elapsed}s`);
 
-    const failures: string[] = [];
-    if (proseResult.status === "rejected") failures.push(`prose: ${proseResult.reason?.message || "unknown error"}`);
-    if (artifactsResult.status === "rejected") failures.push(`artifacts: ${artifactsResult.reason?.message || "unknown error"}`);
+    const proseText = proseResponse.content.find((b) => b.type === "text")?.text || "";
+    const artifactsText = artifactsResponse.content.find((b) => b.type === "text")?.text || "";
 
-    if (failures.length > 0) {
-      const failureDetail = failures.join("; ");
-      console.error(`[SDD] Parallel generation failed after ${elapsed}s — ${failureDetail}`);
-      runLogger.stageEnd("llm_parallel_generation", "failed", { elapsedSeconds: elapsed, timeoutMs: sddTimeout, failures: failureDetail });
-      throw new Error(`SDD generation failed (${failureDetail})`);
+    let artifactBlock = parseArtifactBlock(artifactsText);
+
+    if (!artifactBlock) {
+      console.warn("[SDD] Artifacts call did not produce valid block, trying extraction from prose...");
+      artifactBlock = parseArtifactBlock(proseText);
     }
 
-    const proseResponse = (proseResult as PromiseFulfilledResult<any>).value;
-    const artifactsResponse = (artifactsResult as PromiseFulfilledResult<any>).value;
-
-    console.log(`[SDD] Parallel generation completed in ${elapsed}s`);
-    runLogger.stageEnd("llm_parallel_generation", "succeeded", { elapsedSeconds: elapsed, timeoutMs: sddTimeout });
-
-    const proseText = proseResponse.text;
-    let artifactsText = artifactsResponse.text;
-
-    if (!parseArtifactBlock(artifactsText)) {
-      console.warn("[SDD] Primary artifacts call did not produce valid artifact block, retrying with directive prompt...");
-      runLogger.stageStart("artifacts_retry");
-      let retrySucceeded = false;
+    if (!artifactBlock) {
+      console.warn("[SDD] Both parallel calls failed to produce artifacts block, running recovery extraction...");
       try {
-        const retryResponse = await getLLM().create({
-          maxTokens: 4096,
-          system: `You are a UiPath automation consultant. Output ONLY the orchestrator_artifacts fenced code block. Start your response immediately with \`\`\`orchestrator_artifacts — no prose, no explanation before or after.${contextPrompt}`,
+        const combinedText = proseText + "\n\n" + artifactsText;
+        const recoveryResponse = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 2048,
+          system: "You are a UiPath automation consultant. Extract the Orchestrator artifact definitions and output ONLY a fenced JSON block. Output nothing else.",
           messages: [{
             role: "user",
-            content: `Your previous attempt did not produce valid structured output. Generate ONLY the deployment artifacts block now.\n\n${sddArtifactsPrompt}`
+            content: `From this document, extract ALL Orchestrator and platform artifacts and output them as a single fenced block:\n\n\`\`\`orchestrator_artifacts\n{ "queues": [...], "assets": [...], "machines": [...], "triggers": [...], "storageBuckets": [...], "environments": [...], "actionCenter": [...], "documentUnderstanding": [...], "testCases": [...], "requirements": [...], "testSets": [...] }\n\`\`\`\n\nDocument:\n${combinedText.slice(0, 8000)}`
           }],
-          timeoutMs: sddTimeout,
         });
-        if (parseArtifactBlock(retryResponse.text)) {
-          console.log(`[SDD] Artifacts retry succeeded`);
-          runLogger.recordRetry("artifacts_retry", 1);
-          artifactsText = retryResponse.text;
-          retrySucceeded = true;
+        const recoveryText = recoveryResponse.content.find((b) => b.type === "text")?.text || "";
+        artifactBlock = parseArtifactBlock(recoveryText);
+        if (artifactBlock) {
+          console.log("[SDD] Recovery extraction succeeded");
         } else {
-          console.warn(`[SDD] Artifacts retry did not produce valid block`);
-          runLogger.recordRetry("artifacts_retry", 1, "Response did not produce valid artifact block");
+          console.error("[SDD] Recovery extraction also failed — SDD will lack orchestrator_artifacts block");
         }
-      } catch (retryErr: any) {
-        console.error(`[SDD] Artifacts retry error:`, retryErr?.message);
-        runLogger.recordRetry("artifacts_retry", 1, retryErr?.message || "Unknown retry error");
+      } catch (err: any) {
+        console.error("[SDD] Recovery extraction error:", err?.message);
       }
-      runLogger.stageEnd("artifacts_retry", retrySucceeded ? "succeeded" : "degraded", { retries: 1 });
     }
 
-    runLogger.stageStart("artifact_validation");
-    const ensureResult = await ensureArtifactBlock(proseText, artifactsText);
-
-    const hasBlock = /```orchestrator_artifacts/.test(ensureResult.content);
-    console.log(`[SDD] Final document: ${ensureResult.content.length} chars, has artifacts block: ${hasBlock}, artifactsValid: ${ensureResult.artifactsValid}`);
-    if (!ensureResult.artifactsValid) {
-      console.warn(`[SDD] Artifact validation failed: ${ensureResult.validationResult.failure} — ${ensureResult.validationResult.details}`);
-      runLogger.stageEnd("artifact_validation", "degraded", {
-        artifactsValid: false,
-        failure: ensureResult.validationResult.failure,
-      });
+    let deploySpecContent: string;
+    if (artifactBlock) {
+      deploySpecContent = `## 9. Orchestrator & Platform Deployment Specification\n\n${artifactBlock}`;
     } else {
-      runLogger.stageEnd("artifact_validation", "succeeded", { artifactsValid: true, hasWarnings: ensureResult.artifactWarnings.length > 0 });
-    }
-    if (ensureResult.artifactWarnings.length > 0) {
-      console.warn(`[SDD] Artifact warnings: ${ensureResult.artifactWarnings.join("; ")}`);
+      deploySpecContent = "";
     }
 
-    const outcome = runLogger.buildOutcomeSummary();
-    await runLogger.flush();
-    const sddFinalStatus = outcome.status === "succeeded_degraded"
-      ? "completed_with_warnings"
-      : outcome.status === "failed" ? "failed" : "completed";
-    try {
-      let sddSnapPddId: number | undefined;
-      let sddSnapSddId: number | undefined;
-      try {
-        const [snapPdd, snapSdd] = await Promise.all([
-          documentStorage.getLatestDocument(ideaId, "PDD"),
-          documentStorage.getLatestDocument(ideaId, "SDD"),
-        ]);
-        if (snapPdd) sddSnapPddId = snapPdd.id;
-        if (snapSdd) sddSnapSddId = snapSdd.id;
-      } catch (snapErr: any) {
-        console.warn(`[SDD] Failed to snapshot document IDs for run ${sddRunId}: ${snapErr?.message}`);
-      }
-      await storage.completeGenerationRun(sddRunId, {
-        status: sddFinalStatus,
-        outcomeReport: JSON.stringify(outcome),
-        pddDocumentId: sddSnapPddId,
-        sddDocumentId: sddSnapSddId,
-      });
-    } catch {}
-
-    return { content: ensureResult.content, artifactsValid: ensureResult.artifactsValid, artifactWarnings: ensureResult.artifactWarnings };
-    } catch (sddErr: any) {
-      const runningStages = runLogger.getStages().filter(s => s.outcome === "running");
-      for (const rs of runningStages) {
-        runLogger.stageEnd(rs.stage, "failed", undefined, sddErr?.message);
-      }
-      const failOutcome = runLogger.buildOutcomeSummary({ status: "failed", errorMessage: sddErr?.message });
-      await runLogger.flush();
-      try {
-        await storage.failGenerationRun(sddRunId, sddErr?.message || "Unknown SDD generation error");
-        await storage.completeGenerationRun(sddRunId, {
-          status: "failed",
-          outcomeReport: JSON.stringify(failOutcome),
-        });
-      } catch {}
-      throw sddErr;
-    }
-  }
-
-  const pddRunId = `${docType.toLowerCase()}-${ideaId}-${Date.now()}`;
-  const pddLogger = new RunLogger(pddRunId, docType, onStageEvent);
-
-  try {
-    await storage.createGenerationRun({
-      ideaId,
-      runId: pddRunId,
-      status: "running",
-      generationMode: `${docType.toLowerCase()}_generation`,
-      triggeredBy: "manual",
-    });
-  } catch (e: any) {
-    console.warn(`[${docType}] Failed to create generation run record: ${e.message}`);
-  }
-
-  pddLogger.stageStart("llm_generation");
-  const studioProfile = catalogService.getStudioProfile();
-  const prompt = docType === "PDD" ? PDD_PROMPT : buildUiPathPrompt(studioProfile).prompt;
-  const maxTokens = 4096;
-  try {
-    const response = await getLLM().create({
-      maxTokens: maxTokens,
-      system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`,
-      messages: [...chatMessages, { role: "user", content: prompt }],
-    });
-    pddLogger.stageEnd("llm_generation", "succeeded");
-
-    let unverifiedPackageMentions: string[] | undefined;
-    let guidanceDiagnosticsPayload: Record<string, unknown> | undefined;
-    if (docType === "SDD") {
-      try {
-        const sddGuidanceResult = buildSddScanGuidance(studioProfile);
-        unverifiedPackageMentions = scanSddForUnverifiedPackages(response.text, sddGuidanceResult.packageIds);
-        guidanceDiagnosticsPayload = {
-          totalConsidered: sddGuidanceResult.diagnostics.totalConsidered,
-          totalIncluded: sddGuidanceResult.diagnostics.totalIncluded,
-          totalExcluded: sddGuidanceResult.diagnostics.totalExcluded,
-          budgetApplied: sddGuidanceResult.diagnostics.budgetApplied,
-          budgetTruncatedCount: sddGuidanceResult.diagnostics.budgetTruncatedCount,
-          targetFramework: sddGuidanceResult.diagnostics.targetFramework,
-          includedPackages: sddGuidanceResult.diagnostics.included.map(e => ({ packageId: e.packageId, version: e.version })),
-          excludedPackages: sddGuidanceResult.diagnostics.excluded.map(e => ({ packageId: e.packageId, reasons: e.reasons })),
-          unverifiedPackageMentions: unverifiedPackageMentions,
-        };
-        if (unverifiedPackageMentions.length > 0) {
-          console.warn(`[SDD Diagnostics] Unverified package mentions in generated SDD: ${unverifiedPackageMentions.join(", ")}`);
-        }
-        console.log(`[SDD Diagnostics] Guidance diagnostics: ${JSON.stringify(guidanceDiagnosticsPayload)}`);
-      } catch (scanErr: any) {
-        console.warn(`[SDD Diagnostics] Failed to scan for unverified packages: ${scanErr.message}`);
-      }
-    }
-
-    const outcome = pddLogger.buildOutcomeSummary();
-    await pddLogger.flush();
-    try {
-      let pddSnapPddId: number | undefined;
-      let pddSnapSddId: number | undefined;
-      try {
-        const [snapPdd, snapSdd] = await Promise.all([
-          documentStorage.getLatestDocument(ideaId, "PDD"),
-          documentStorage.getLatestDocument(ideaId, "SDD"),
-        ]);
-        if (snapPdd) pddSnapPddId = snapPdd.id;
-        if (snapSdd) pddSnapSddId = snapSdd.id;
-      } catch (snapErr: any) {
-        console.warn(`[PDD] Failed to snapshot document IDs for run ${pddRunId}: ${snapErr?.message}`);
-      }
-      await storage.completeGenerationRun(pddRunId, {
-        status: "completed",
-        outcomeReport: JSON.stringify({
-          ...outcome,
-          ...(guidanceDiagnosticsPayload ? { guidanceDiagnostics: guidanceDiagnosticsPayload } : {}),
-        }),
-        pddDocumentId: pddSnapPddId,
-        sddDocumentId: pddSnapSddId,
-      });
-    } catch {}
-
-    return {
-      content: response.text,
-      ...(guidanceDiagnosticsPayload ? { guidanceDiagnostics: guidanceDiagnosticsPayload } : {}),
-    };
-  } catch (docErr: any) {
-    pddLogger.stageEnd("llm_generation", "failed", undefined, docErr?.message);
-    const failOutcome = pddLogger.buildOutcomeSummary({ status: "failed", errorMessage: docErr?.message });
-    await pddLogger.flush();
-    try {
-      await storage.failGenerationRun(pddRunId, docErr?.message || `${docType} generation failed`);
-      await storage.completeGenerationRun(pddRunId, {
-        status: "failed",
-        outcomeReport: JSON.stringify(failOutcome),
-      });
-    } catch {}
-    throw docErr;
-  }
-}
-
-export type DownloadZipEntry = { name: string; content: string | Buffer };
-
-export type DownloadSource = "viable-buffer" | "reconstructed-from-cache" | "raw-nupkg" | null;
-
-export interface DownloadPathResult {
-  zipEntries: DownloadZipEntry[] | null;
-  downloadSource: DownloadSource;
-  isHandoffOnly: boolean;
-  failReason?: string;
-}
-
-export interface DownloadPathInput {
-  packageBuffer: Buffer;
-  packageViable: boolean;
-  xamlEntries: { name: string; content: string }[];
-  archiveManifest: string[];
-  projectName: string;
-  dependencyMap: Record<string, string>;
-  dhgContent: string;
-  libPrefix: string;
-  sddContent: string;
-  pkgDescription: string;
-  resolveProjectJson: () => string;
-}
-
-export function resolveDownloadPath(input: DownloadPathInput): DownloadPathResult {
-  const hasViableBuffer = !!(input.packageBuffer && input.packageBuffer.length > 0);
-  const hasCachedXaml = !!(input.xamlEntries && input.xamlEntries.length > 0 && input.archiveManifest);
-  const isHandoffOnly = input.packageViable === false;
-
-  console.log(`[Download] packageBuffer present: ${hasViableBuffer}, cached XAML entries present: ${hasCachedXaml}, packageViable: ${input.packageViable}, handoff-only: ${isHandoffOnly}`);
-
-  let zipEntries: DownloadZipEntry[] | null = null;
-  let downloadSource: DownloadSource = null;
-
-  if (hasViableBuffer) {
-    try {
-      const nupkgZip = new AdmZip(input.packageBuffer);
-      const nupkgEntries = nupkgZip.getEntries();
-      const entries: DownloadZipEntry[] = [];
-      for (const entry of nupkgEntries) {
-        if (entry.isDirectory) continue;
-        const entryName: string = entry.entryName;
-        if (entryName.startsWith("_rels/") || entryName.startsWith("package/") || entryName === "[Content_Types].xml" || entryName.endsWith(".nuspec")) {
-          continue;
-        }
-        const flatName = entryName.startsWith(input.libPrefix) ? entryName.slice(input.libPrefix.length) : entryName;
-        entries.push({ name: flatName, content: entry.getData() });
-      }
-      zipEntries = entries;
-      downloadSource = "viable-buffer";
-      console.log(`[Download] Built ${entries.length} entries from viable packageBuffer`);
-    } catch (zipErr: unknown) {
-      const msg = zipErr instanceof Error ? zipErr.message : String(zipErr);
-      console.warn(`[Download] Failed to extract from packageBuffer: ${msg} — will attempt cached XAML reconstruction`);
-    }
-  }
-
-  if (!zipEntries && hasCachedXaml) {
-    console.log(`[Download] Attempting reconstruction from ${input.xamlEntries.length} cached XAML entries`);
-    try {
-      const entries: DownloadZipEntry[] = [];
-      const xamlByBasename = new Map<string, string>();
-      const xamlByFullPath = new Map<string, string>();
-      for (const entry of input.xamlEntries) {
-        xamlByBasename.set(entry.name, entry.content);
-        xamlByFullPath.set(entry.name, entry.content);
-      }
-
-      const nugetMetaPrefixes = ["_rels/", "package/", "[Content_Types].xml"];
-      for (const archivePath of input.archiveManifest) {
-        if (nugetMetaPrefixes.some(p => archivePath.startsWith(p)) || archivePath.endsWith(".nuspec")) {
-          continue;
-        }
-        const flatName = archivePath.startsWith(input.libPrefix) ? archivePath.slice(input.libPrefix.length) : archivePath;
-        const basename = archivePath.split("/").pop() || archivePath;
-
-        if (archivePath.endsWith(".xaml")) {
-          const xamlContent = xamlByFullPath.get(archivePath) || xamlByFullPath.get(flatName) || xamlByBasename.get(basename);
-          if (xamlContent) {
-            entries.push({ name: flatName, content: xamlContent });
-          } else {
-            console.warn(`[Download] XAML entry not found in cached entries: ${archivePath}`);
-          }
-        } else if (archivePath.endsWith("project.json")) {
-          entries.push({ name: flatName, content: input.resolveProjectJson() });
-        } else if (archivePath.endsWith("DeveloperHandoffGuide.md") && input.dhgContent) {
-          entries.push({ name: flatName, content: input.dhgContent });
-        } else if (archivePath.endsWith("Config.xlsx") || archivePath.endsWith("Data/Config.xlsx")) {
-          const configContent = generateConfigXlsx(input.projectName, input.sddContent);
-          entries.push({ name: flatName, content: configContent });
-        } else {
-          console.warn(`[Download] Skipping non-reconstructable entry: ${archivePath}`);
-        }
-      }
-      if (entries.length > 0 && entries.some(e => e.name === "Main.xaml" || e.name.endsWith("/Main.xaml"))) {
-        zipEntries = entries;
-        downloadSource = "reconstructed-from-cache";
-        console.log(`[Download] Reconstruction succeeded: ${entries.length} entries from ${input.xamlEntries.length} cached XAML entries`);
+    let content = proseText;
+    const existingDeploySpec = /## (?:8|9)[\.\s].*(?:Orchestrator|Deployment)/i.test(content);
+    if (deploySpecContent) {
+      if (existingDeploySpec) {
+        content = content.replace(/## (?:8|9)[\.\s].*(?:Orchestrator|Deployment)[\s\S]*$/, deploySpecContent.trim());
       } else {
-        console.warn(`[Download] Reconstruction produced ${entries.length} entries (missing Main.xaml) — reconstruction failed`);
+        content = content.trimEnd() + "\n\n" + deploySpecContent.trim();
       }
-    } catch (entryErr: unknown) {
-      const msg = entryErr instanceof Error ? entryErr.message : String(entryErr);
-      console.warn(`[Download] Reconstruction from cached XAML failed: ${msg}`);
-      zipEntries = null;
     }
+
+    const hasBlock = /```orchestrator_artifacts/.test(content);
+    console.log(`[SDD] Final document: ${content.length} chars, has artifacts block: ${hasBlock}`);
+    return content;
   }
 
-  if (!zipEntries && hasViableBuffer) {
-    downloadSource = "raw-nupkg";
-    console.log(`[Download] Falling back to raw nupkg delivery (handoff-only: ${isHandoffOnly})`);
-    return { zipEntries: null, downloadSource, isHandoffOnly };
-  }
+  const prompt = docType === "PDD" ? PDD_PROMPT : UIPATH_PROMPT;
+  const maxTokens = 4096;
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: maxTokens,
+    system: `You are a professional automation consultant generating formal documents for the "${idea.title}" project. Be specific and use details from the conversation.${contextPrompt}`,
+    messages: [...chatMessages, { role: "user", content: prompt }],
+  });
 
-  if (!zipEntries) {
-    const reason = !hasViableBuffer && !hasCachedXaml
-      ? "No package buffer and no cached XAML entries available."
-      : !hasViableBuffer
-        ? "Package buffer is empty and reconstruction from cached XAML entries failed."
-        : "Package extraction and reconstruction both failed.";
-    console.error(`[Download] Download failed: ${reason}`);
-    return { zipEntries: null, downloadSource: null, isHandoffOnly, failReason: reason };
-  }
-
-  return { zipEntries, downloadSource, isHandoffOnly };
+  const textBlock = response.content.find((b) => b.type === "text");
+  return textBlock?.text || "";
 }
 
 export function registerDocumentRoutes(app: Express): void {
-  app.get("/api/ideas/:ideaId/artifacts", async (req: Request, res: Response) => {
-    const ideaId = await verifyIdeaAccess(req, res);
-    if (!ideaId) return;
-
-    try {
-      const idea = await storage.getIdea(ideaId);
-      if (!idea) return res.status(404).json({ message: "Idea not found" });
-
-      const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
-      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
-      const pddApproval = await documentStorage.getApproval(ideaId, "PDD");
-      const sddApproval = await documentStorage.getApproval(ideaId, "SDD");
-
-      const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-      const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-      const asIsApproval = await processMapStorage.getApproval(ideaId, "as-is");
-      const toBeApproval = await processMapStorage.getApproval(ideaId, "to-be");
-
-      const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
-      let uipathData: { projectName?: string; workflowCount?: number; dependencyCount?: number } | null = null;
-      if (uipathMsg) {
-        try {
-          const pkg = JSON.parse(uipathMsg.content.slice(8, -1));
-          uipathData = {
-            projectName: pkg.projectName,
-            workflowCount: pkg.workflows?.length || 0,
-            dependencyCount: pkg.dependencies?.length || 0,
-          };
-        } catch {}
-      }
-
-      const artifacts = [
-        {
-          type: "as-is" as const,
-          label: "As-Is Process Map",
-          exists: asIsNodes.length > 0,
-          status: asIsApproval && !asIsApproval.invalidated ? "Approved" : asIsNodes.length > 0 ? "Draft" : "Not Generated",
-          version: asIsApproval?.version || null,
-          nodeCount: asIsNodes.length,
-        },
-        {
-          type: "to-be" as const,
-          label: "To-Be Process Map",
-          exists: toBeNodes.length > 0,
-          status: toBeApproval && !toBeApproval.invalidated ? "Approved" : toBeNodes.length > 0 ? "Draft" : "Not Generated",
-          version: toBeApproval?.version || null,
-          nodeCount: toBeNodes.length,
-        },
-        {
-          type: "pdd" as const,
-          label: "Process Design Document",
-          exists: !!pdd,
-          status: pddApproval ? "Approved" : pdd ? (pdd.status === "approved" ? "Approved" : "Draft") : "Not Generated",
-          version: pdd?.version || null,
-        },
-        {
-          type: "sdd" as const,
-          label: "Solution Design Document",
-          exists: !!sdd,
-          status: sddApproval ? "Approved" : sdd ? (sdd.status === "approved" ? "Approved" : "Draft") : "Not Generated",
-          version: sdd?.version || null,
-          artifactsValid: sdd?.artifactsValid ?? null,
-          ...(sdd && sdd.artifactsValid === false ? { blockedReason: "Deployment artifacts are missing or invalid. Revise the SDD to regenerate artifacts." } : {}),
-          ...(sdd?.artifactWarnings ? { artifactWarnings: JSON.parse(sdd.artifactWarnings) } : {}),
-        },
-        {
-          type: "uipath" as const,
-          label: "UiPath Package",
-          exists: !!uipathMsg,
-          status: uipathMsg ? "Generated" : "Not Generated",
-          version: null,
-          meta: uipathData,
-        },
-        {
-          type: "dhg" as const,
-          label: "Developer Handoff Guide",
-          exists: !!uipathMsg,
-          status: uipathMsg ? "Available" : "Not Generated",
-          version: null,
-        },
-      ];
-
-      return res.json({ artifacts });
-    } catch (error) {
-      console.error("Error fetching artifacts summary:", error);
-      return res.status(500).json({ message: "Failed to fetch artifacts" });
-    }
-  });
-
   app.get("/api/ideas/:ideaId/documents", async (req: Request, res: Response) => {
     const ideaId = await verifyIdeaAccess(req, res);
     if (!ideaId) return;
@@ -954,31 +545,6 @@ export function registerDocumentRoutes(app: Express): void {
       return res.status(400).json({ message: "Invalid document type" });
     }
 
-    const lockResult = acquireDocGenerationLock(ideaId, type);
-    if (!lockResult.acquired) {
-      console.warn(`[Document Generate] Rejected duplicate ${type} generation for idea=${ideaId} — ${lockResult.reason}`);
-      return res.status(409).json({ message: `${type} generation already in progress` });
-    }
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    const sseWrite = (data: Record<string, unknown>) => {
-      try {
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify(data)}\n\n`);
-          if (typeof (res as any).flush === "function") (res as any).flush();
-        }
-      } catch {}
-    };
-
-    const onStageEvent: StageEventListener = (event) => {
-      sseWrite({ stageEvent: event });
-    };
-
     try {
       const existing = await documentStorage.getLatestDocument(ideaId, type);
       const version = existing ? existing.version + 1 : 1;
@@ -987,56 +553,12 @@ export function registerDocumentRoutes(app: Express): void {
         await documentStorage.updateDocument(existing.id, { status: "superseded" });
       }
 
-      const genResult = await generateDocument(ideaId, type, onStageEvent);
-
-      if (isGenerationCancelled(ideaId, type)) {
-        console.warn(`[Document Generate] ${type} generation for idea=${ideaId} was cancelled during execution — discarding results`);
-        sseWrite({ error: true, message: `${type} generation was cancelled due to map re-approval` });
-        res.end();
-        return;
-      }
-
-      let content = genResult.content;
-      const artifactsValid = type === "SDD" ? (genResult.artifactsValid ?? null) : null;
-      const artifactWarnings = type === "SDD" && genResult.artifactWarnings?.length
-        ? JSON.stringify(genResult.artifactWarnings) : null;
+      const content = await generateDocument(ideaId, type);
 
       const nodes = type === "PDD"
         ? await processMapStorage.getNodesByIdeaId(ideaId, "as-is")
         : [];
       const snapshot = JSON.stringify({ generatedFrom: type === "PDD" ? "as-is-map" : "pdd", nodes });
-
-      if (type === "PDD") {
-        try {
-          const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
-          const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
-          const ts = Date.now();
-
-          if (asIsNodes.length > 0 && !content.includes(`/process-map/image?viewType=as-is`)) {
-            const asIsImg = `\n\n![As-Is Process Map](/api/ideas/${ideaId}/process-map/image?viewType=as-is&v=${ts})`;
-            const asIsHeadingMatch = content.match(/#{1,3}\s.*As[- ]Is\s+Process\s+(Description|Map)/i);
-            if (asIsHeadingMatch) {
-              const insertIdx = (asIsHeadingMatch.index || 0) + asIsHeadingMatch[0].length;
-              content = content.slice(0, insertIdx) + asIsImg + content.slice(insertIdx);
-            } else {
-              content += `\n\n### As-Is Process Map${asIsImg}\n`;
-            }
-          }
-
-          if (toBeNodes.length > 0 && !content.includes(`/process-map/image?viewType=to-be`)) {
-            const toBeImg = `\n\n![To-Be Process Map](/api/ideas/${ideaId}/process-map/image?viewType=to-be&v=${ts})`;
-            const toBeHeadingMatch = content.match(/#{1,3}\s.*To[- ]Be\s+Process\s+(Description|Map)/i);
-            if (toBeHeadingMatch) {
-              const insertIdx = (toBeHeadingMatch.index || 0) + toBeHeadingMatch[0].length;
-              content = content.slice(0, insertIdx) + toBeImg + content.slice(insertIdx);
-            } else {
-              content += `\n\n### To-Be Process Map${toBeImg}\n`;
-            }
-          }
-        } catch (imgErr: any) {
-          console.warn(`[Document Generate] Could not inject process map images into PDD:`, imgErr?.message);
-        }
-      }
 
       const doc = await documentStorage.createDocument({
         ideaId,
@@ -1045,24 +567,7 @@ export function registerDocumentRoutes(app: Express): void {
         status: "draft",
         content,
         snapshotJson: snapshot,
-        artifactsValid,
-        artifactWarnings,
       });
-
-      if (type === "SDD" && artifactsValid === false) {
-        await chatStorage.createMessage(
-          ideaId,
-          "assistant",
-          "⚠️ **SDD generated, but deployment artifacts are missing or invalid.** The document has been saved, but it cannot be approved for package generation until valid deployment artifacts are present. You can request a revision to regenerate the artifacts section."
-        );
-      } else if (type === "SDD" && artifactWarnings) {
-        const warnings = genResult.artifactWarnings || [];
-        await chatStorage.createMessage(
-          ideaId,
-          "assistant",
-          `ℹ️ **SDD generated with minor artifact warnings.** The document is valid and can be approved, but some artifact entries have missing optional fields that will use defaults:\n${warnings.map(w => `- ${w}`).join("\n")}`
-        );
-      }
 
       await chatStorage.createMessage(
         ideaId,
@@ -1070,28 +575,12 @@ export function registerDocumentRoutes(app: Express): void {
         `[DOC:${type}:${doc.id}]${content}`
       );
 
-      sseWrite({ done: true, doc });
-      res.end();
+      return res.json(doc);
     } catch (error: any) {
       const msg = error?.message || error?.toString() || "Unknown error";
       console.error(`Error generating ${type}:`, msg);
       if (error?.status) console.error(`API status: ${error.status}`);
-      sseWrite({ error: true, message: `Failed to generate ${type}: ${msg.slice(0, 200)}` });
-      res.end();
-    } finally {
-      releaseDocGenerationLock(ideaId, type);
-      const pending = consumePendingInvalidation(ideaId);
-      if (pending) {
-        console.log(`[Document Generate] Running deferred cascade invalidation for idea=${ideaId} after ${type} generation completed`);
-        try {
-          const { cascadeInvalidate } = await import("./cascade-invalidation");
-          const existingApproval = await processMapStorage.getApproval(ideaId, pending.viewType);
-          await cascadeInvalidate(ideaId, pending.viewType, existingApproval || { deferred: true }, pending.nextVersion);
-        } catch (cascadeErr: any) {
-          console.error(`[Document Generate] Deferred cascade invalidation failed:`, cascadeErr?.message);
-        }
-      }
-      await runCompletionCallbacks(ideaId);
+      return res.status(500).json({ message: `Failed to generate ${type}: ${msg.slice(0, 200)}` });
     }
   });
 
@@ -1143,26 +632,96 @@ export function registerDocumentRoutes(app: Express): void {
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 
       const history = await chatStorage.getMessagesByIdeaId(ideaId);
-      const chatMessages = sanitizeChatForLLM(history);
+      const chatMessages = history.map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
 
       const revisionPrompt = `The user has requested a revision to the ${type}. Here is the current document:\n\n${currentDoc.content}\n\nRevision request: ${revision}\n\nPlease regenerate the complete ${type} with this revision applied. Keep the same section structure (## headings). Output only the revised document.`;
 
-      const response = await getLLM().create({
-        maxTokens: 8192,
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 8192,
         system: `You are a professional automation consultant revising a ${type} for the "${idea.title}" project.`,
         messages: [...chatMessages, { role: "user", content: revisionPrompt }],
       });
 
-      let content = response.text;
-      let artifactsValid: boolean | null = null;
-      let artifactWarnings: string | null = null;
+      const textBlock = response.content.find((b) => b.type === "text");
+      let content = textBlock?.text || "";
 
       if (type === "SDD" && content.length > 0) {
-        const ensureResult = await ensureArtifactBlock(content);
-        content = ensureResult.content;
-        artifactsValid = ensureResult.artifactsValid;
-        artifactWarnings = ensureResult.artifactWarnings.length > 0
-          ? JSON.stringify(ensureResult.artifactWarnings) : null;
+        const hasArtifactsBlock = /```orchestrator_artifacts\s*\n[\s\S]*?\n```/.test(content);
+        if (!hasArtifactsBlock) {
+          console.log("[SDD Revision] orchestrator_artifacts block missing, extracting...");
+          try {
+            const extractionResponse = await anthropic.messages.create({
+              model: "claude-sonnet-4-6",
+              max_tokens: 2048,
+              system: "You are a UiPath automation consultant. Extract the Orchestrator artifact definitions from the SDD document and output ONLY a fenced JSON block. Output nothing else.",
+              messages: [{
+                role: "user",
+                content: `From this Solution Design Document, extract ALL Orchestrator artifacts needed and output them as a single fenced JSON block using this exact format:
+
+\`\`\`orchestrator_artifacts
+{
+  "queues": [{ "name": "QueueName", "description": "Purpose", "maxRetries": 3, "uniqueReference": true }],
+  "assets": [{ "name": "AssetName", "type": "Text|Integer|Bool|Credential", "value": "default or empty", "description": "Purpose" }],
+  "machines": [{ "name": "TemplateName", "type": "Unattended|Attended|Development", "slots": 1, "description": "Purpose" }],
+  "triggers": [{ "name": "TriggerName", "type": "Queue|Time", "queueName": "if queue trigger", "cron": "if time trigger", "description": "Purpose" }],
+  "storageBuckets": [{ "name": "BucketName", "description": "Purpose" }],
+  "actionCenter": [{ "taskCatalog": "CatalogName", "assignedRole": "Role", "sla": "24 hours", "escalation": "description", "description": "Purpose" }]
+}
+\`\`\`
+
+Here is the SDD:
+${content}`
+              }],
+            });
+            const extractBlock = extractionResponse.content.find((b) => b.type === "text");
+            const extractedText = extractBlock?.text || "";
+            let artifactBlock: string | null = null;
+            const exactMatch = extractedText.match(/```orchestrator_artifacts\s*\n([\s\S]*?)\n```/);
+            if (exactMatch) {
+              artifactBlock = exactMatch[0];
+            } else {
+              const jsonFenceMatch = extractedText.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+              if (jsonFenceMatch) {
+                try {
+                  const parsed = JSON.parse(jsonFenceMatch[1].trim());
+                  if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers) {
+                    artifactBlock = "```orchestrator_artifacts\n" + JSON.stringify(parsed, null, 2) + "\n```";
+                  }
+                } catch { /* not valid JSON */ }
+              }
+              if (!artifactBlock) {
+                const rawJsonMatch = extractedText.match(/\{[\s\S]*"queues"[\s\S]*\}/);
+                if (rawJsonMatch) {
+                  try {
+                    const parsed = JSON.parse(rawJsonMatch[0]);
+                    if (parsed.queues || parsed.assets || parsed.machines || parsed.triggers) {
+                      artifactBlock = "```orchestrator_artifacts\n" + JSON.stringify(parsed, null, 2) + "\n```";
+                    }
+                  } catch { /* not valid JSON */ }
+                }
+              }
+            }
+            if (artifactBlock) {
+              const section8Regex = /## (?:8|9)[\.\s][^\n]*/i;
+              const section8Match = content.match(section8Regex);
+              if (section8Match) {
+                const insertPos = content.indexOf(section8Match[0]) + section8Match[0].length;
+                content = content.slice(0, insertPos) + `\n\n${artifactBlock}` + content.slice(insertPos);
+              } else {
+                content += `\n\n## 9. Orchestrator & Platform Deployment Specification\n\n${artifactBlock}`;
+              }
+              console.log("[SDD Revision] Successfully appended orchestrator_artifacts block");
+            } else {
+              console.warn("[SDD Revision] Follow-up extraction failed. Raw:", extractedText.slice(0, 500));
+            }
+          } catch (extractErr: any) {
+            console.error("[SDD Revision] Artifact extraction failed:", extractErr?.message);
+          }
+        }
       }
 
       await documentStorage.updateDocument(currentDoc.id, { status: "superseded" });
@@ -1174,8 +733,6 @@ export function registerDocumentRoutes(app: Express): void {
         status: "draft",
         content,
         snapshotJson: currentDoc.snapshotJson,
-        artifactsValid,
-        artifactWarnings,
       });
 
       await chatStorage.createMessage(
@@ -1195,138 +752,162 @@ export function registerDocumentRoutes(app: Express): void {
     const ideaId = await verifyIdeaAccess(req, res);
     if (!ideaId) return;
 
-    const triggerSource: TriggerSource = (req.query.trigger as TriggerSource) || "manual";
-    const forceRegenerate = !!req.query.force;
+    try {
+      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+      if (!sdd || sdd.status !== "approved") {
+        return res.status(400).json({ message: "SDD must be approved first" });
+      }
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-    res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-    if (typeof (res as any).flush === "function") (res as any).flush();
+      const existingMessages = await chatStorage.getMessagesByIdeaId(ideaId);
+      const existingUiPath = [...existingMessages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
+      if (existingUiPath && !req.query.force) {
+        try {
+          const existingData = JSON.parse(existingUiPath.content.slice(8, -1));
+          if ((existingData.workflows || []).length > 0) {
+            return res.json({ package: existingData });
+          }
+          console.log(`[UiPath] Cached package for ${ideaId} has 0 workflows — regenerating`);
+        } catch { /* fall through to regeneration */ }
+      }
 
-    const heartbeatInterval = setInterval(() => {
-      try {
-        if (res.writableEnded) { clearInterval(heartbeatInterval); return; }
-        res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-        if (typeof (res as any).flush === "function") (res as any).flush();
-      } catch {}
-    }, 15000);
-    req.on("close", () => clearInterval(heartbeatInterval));
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
 
-    const sendProgress = (message: string) => {
-      try {
-        if (res.writableEnded) return;
+      const sendProgress = (message: string) => {
         res.write(`data: ${JSON.stringify({ progress: message })}\n\n`);
-        if (typeof (res as any).flush === "function") (res as any).flush();
-      } catch {}
-    };
-
-    let requestedMode: "baseline_openable" | "full_implementation" | undefined;
-    if (req.body?.generationMode === "baseline_openable") {
-      requestedMode = "baseline_openable";
-    }
-
-    let userMetaValidationMode: MetaValidationMode = "Auto";
-    try {
-      const storedMode = await storage.getAppSetting(`meta_validation_mode_${req.session.userId}`);
-      if (storedMode === "Always" || storedMode === "Off" || storedMode === "Auto") {
-        userMetaValidationMode = storedMode;
-      }
-    } catch {}
-
-    function buildOutcomeSummary(outcomeReport: any) {
-      if (!outcomeReport) return undefined;
-      return {
-        stubbedActivities: outcomeReport.remediations.filter((r: any) => r.level === "activity").length,
-        stubbedSequences: outcomeReport.remediations.filter((r: any) => r.level === "sequence").length,
-        stubbedWorkflows: outcomeReport.remediations.filter((r: any) => r.level === "workflow").length,
-        autoRepairs: outcomeReport.autoRepairs.length,
-        fullyGenerated: outcomeReport.fullyGeneratedFiles.length,
-        totalEstimatedMinutes: outcomeReport.totalEstimatedEffortMinutes,
       };
-    }
 
-    const callbacks: RunCallbacks = {
-      onProgress: sendProgress,
-      onPipelineEvent: (event) => {
-        try {
-          if (res.writableEnded) return;
-          res.write(`data: ${JSON.stringify({ pipelineEvent: event })}\n\n`);
-          if (typeof (res as any).flush === "function") (res as any).flush();
-          if (event.type === "completed" || event.type === "started") {
-            sendProgress(event.message);
-          }
-        } catch {}
-      },
-      onMetaValidation: (event) => {
-        try {
-          if (res.writableEnded) return;
-          res.write(`data: ${JSON.stringify({ metaValidation: event })}\n\n`);
-        } catch {}
-      },
-      onComplete: (result: RunResult) => {
-        try {
-          if (res.writableEnded) return;
-          clearInterval(heartbeatInterval);
-          const outcomeSummary = result.pipelineResult?.outcomeReport
-            ? buildOutcomeSummary(result.pipelineResult.outcomeReport)
-            : undefined;
-          res.write(`data: ${JSON.stringify({
-            done: true,
-            package: result.packageJson,
-            status: result.status,
-            warnings: result.pipelineResult?.warnings || [],
-            templateComplianceScore: result.pipelineResult?.templateComplianceScore,
-            outcomeSummary,
-          })}\n\n`);
-          res.end();
-        } catch {}
-      },
-      onFail: (error: string, context?: Record<string, any>) => {
-        try {
-          if (res.writableEnded) return;
-          clearInterval(heartbeatInterval);
-          const payload: Record<string, any> = {
-            done: false,
-            status: "FAILED",
-            error,
-          };
-          if (context?.stage) payload.stage = context.stage;
-          if (context?.packageJson) payload.package = context.packageJson;
-          if (context?.qualityGateWarning) {
-            payload.qualityGateWarning = true;
-            payload.qualityGateViolations = context.qualityGateViolations;
-            payload.qualityGateSummary = context.qualityGateSummary;
-          }
-          res.write(`data: ${JSON.stringify(payload)}\n\n`);
-          res.end();
-        } catch {}
-      },
-    };
+      sendProgress("Loading idea and documents...");
 
-    try {
-      await startUiPathGenerationRun(ideaId, triggerSource, {
-        generationMode: requestedMode,
-        metaValidationMode: userMetaValidationMode,
-        forceRegenerate,
-        callbacks,
-      });
-    } catch (err: any) {
-      clearInterval(heartbeatInterval);
-      if (err.message.includes("already in progress")) {
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ done: false, status: "FAILED", error: err.message })}\n\n`);
-          res.end();
+      const idea = await storage.getIdea(ideaId);
+      if (!idea) {
+        res.write(`data: ${JSON.stringify({ error: "Idea not found" })}\n\n`);
+        return res.end();
+      }
+
+      const pdd = await documentStorage.getLatestDocument(ideaId, "PDD");
+      const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+      const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
+      const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
+      const mapSummary = mapNodes.map((n) => ({ name: n.name, type: n.nodeType, role: n.role, system: n.system, description: n.description }));
+
+      let systemCtx = `You are a UiPath automation architect generating a production-ready package structure for "${idea.title}".\n\nApproved SDD:\n${sdd.content}`;
+      if (pdd) {
+        systemCtx += `\n\nApproved PDD:\n${pdd.content}`;
+      }
+      if (mapSummary.length > 0) {
+        systemCtx += `\n\nProcess Map Steps:\n${JSON.stringify(mapSummary)}`;
+      }
+
+      sendProgress("Calling LLM to generate package specification...");
+
+      const keepAliveInterval = setInterval(() => {
+        sendProgress("Still generating package specification...");
+      }, 15000);
+
+      let response;
+      try {
+        response = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 16384,
+          system: systemCtx,
+          messages: [{ role: "user", content: UIPATH_PROMPT }],
+        });
+      } finally {
+        clearInterval(keepAliveInterval);
+      }
+
+      sendProgress("LLM response received, parsing JSON...");
+
+      const textBlock = response.content.find((b) => b.type === "text");
+      const rawText = textBlock?.text || "{}";
+
+      if (response.stop_reason === "max_tokens") {
+        console.warn(`[UiPath] LLM response truncated at max_tokens for ${ideaId} — attempting repair`);
+        sendProgress("Response truncated, attempting JSON repair...");
+      }
+
+      let packageJson;
+      try {
+        const parsed = sanitizeAndParseJson(rawText);
+        packageJson = uipathPackageSchema.parse(parsed);
+        sendProgress("Package JSON parsed successfully");
+      } catch (parseErr: any) {
+        sendProgress("Initial parse failed, attempting repair...");
+        const repaired = repairTruncatedPackageJson(rawText);
+        if (repaired) {
+          try {
+            packageJson = uipathPackageSchema.parse(repaired);
+            console.log(`[UiPath] Repaired truncated JSON for ${ideaId}: ${(repaired.workflows || []).length} workflows recovered`);
+            sendProgress(`Repaired JSON: ${(repaired.workflows || []).length} workflows recovered`);
+          } catch (repairErr: any) {
+            console.error(`[UiPath] Repair also failed for ${ideaId}:`, repairErr?.message);
+          }
         }
-        return;
+        if (!packageJson) {
+          console.error(`[UiPath] Package parse/validation failed for ${ideaId}:`, parseErr?.message || parseErr);
+          console.error(`[UiPath] Raw LLM response (first 500 chars):`, rawText.slice(0, 500));
+          res.write(`data: ${JSON.stringify({ error: "Failed to parse AI-generated package. Please try again." })}\n\n`);
+          return res.end();
+        }
       }
-      console.error("Error starting UiPath generation run:", err);
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ done: false, status: "FAILED", error: err.message || "Failed to start generation" })}\n\n`);
-        res.end();
+
+      if (!packageJson.workflows || packageJson.workflows.length === 0) {
+        console.error(`[UiPath] Generated package for ${ideaId} has 0 workflows — not storing`);
+        res.write(`data: ${JSON.stringify({ error: "AI generated a package with no workflows. Please try again." })}\n\n`);
+        return res.end();
       }
+
+      sendProgress(`Validating ${packageJson.workflows.length} workflow(s)...`);
+
+      await chatStorage.createMessage(
+        ideaId,
+        "assistant",
+        `[UIPATH:${JSON.stringify(packageJson)}]`
+      );
+
+      sendProgress("Package spec stored. Pre-building .nupkg with AI enrichment...");
+
+      try {
+        const enrichPkg = { ...packageJson } as any;
+        if (sdd?.content) enrichPkg._sddContent = sdd.content;
+        if (idea.automationType) enrichPkg._automationType = idea.automationType;
+        if (mapNodes.length > 0) {
+          enrichPkg._processNodes = mapNodes;
+          const allEdges = await processMapStorage.getEdgesByIdeaId(ideaId, toBeNodes.length > 0 ? "to-be" : "as-is");
+          enrichPkg._processEdges = allEdges;
+        }
+        if (sdd?.content) {
+          const { parseArtifactsFromSDD, extractArtifactsWithLLM } = await import("./uipath-deploy");
+          let artifacts = parseArtifactsFromSDD(sdd.content);
+          if (!artifacts) artifacts = await extractArtifactsWithLLM(sdd.content);
+          if (artifacts) enrichPkg._orchestratorArtifacts = artifacts;
+        }
+
+        const now = new Date();
+        const patch = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
+        const version = `1.0.${patch}`;
+
+        sendProgress("AI-enriching XAML workflows...");
+        const buildResult = await buildNuGetPackage(enrichPkg, version, ideaId);
+        console.log(`[UiPath] Pre-built .nupkg for "${idea.title}" — ${buildResult.buffer.length} bytes, ${buildResult.gaps.length} gaps`);
+        sendProgress(`Pre-build complete: ${packageJson.workflows.length} workflow(s) enriched`);
+      } catch (prebuildErr: any) {
+        console.error(`[UiPath] Pre-build failed (deploy will rebuild):`, prebuildErr?.message);
+        sendProgress("Pre-build skipped — deploy will build on demand");
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true, package: packageJson })}\n\n`);
+      return res.end();
+    } catch (error) {
+      console.error("Error generating UiPath package:", error);
+      if (!res.headersSent) {
+        return res.status(500).json({ message: "Failed to generate UiPath package" });
+      }
+      res.write(`data: ${JSON.stringify({ error: "Failed to generate UiPath package" })}\n\n`);
+      return res.end();
     }
   });
 
@@ -1335,143 +916,140 @@ export function registerDocumentRoutes(app: Express): void {
     if (!ideaId) return;
 
     try {
-      const sddApprovalCheck = await documentStorage.getApproval(ideaId, "SDD");
-      if (!sddApprovalCheck) {
-        return res.status(400).json({ message: "SDD must be approved first" });
-      }
-
       const idea = await storage.getIdea(ideaId);
       if (!idea) return res.status(404).json({ message: "Idea not found" });
 
       const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-      const pipelineResult = getCachedPipelineResult(ideaId);
-      if (!pipelineResult) {
-        return res.status(404).json({
-          error: "PACKAGE_NOT_BUILT",
-          message: "No package has been successfully generated for this idea. Use the Generate Package action to build one first.",
-        });
-      }
-      console.log(`[Download] Serving cached pipeline result for ${ideaId}`);
-
-      const uipathMsg = findUiPathMessage(messages);
+      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
       if (!uipathMsg) {
-        return res.status(404).json({
-          error: "PACKAGE_NOT_BUILT",
-          message: "No package has been successfully generated for this idea. Use the Generate Package action to build one first.",
-        });
+        return res.status(404).json({ message: "No UiPath package found" });
       }
 
+      const jsonStr = uipathMsg.content.slice(8, -1);
       let pkg;
       try {
-        pkg = parseUiPathPackage(uipathMsg);
+        pkg = JSON.parse(jsonStr);
       } catch {
         return res.status(500).json({ message: "Invalid package data" });
       }
 
-      const approvedSdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
-      const sddContent = approvedSdd?.content || "";
+      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+      const sddContent = sdd?.content || "";
 
-      const isServerless = pkg.internal?.targetFramework === "Portable" || pkg.internal?.isServerless;
-      const libPrefix = isServerless ? "lib/net6.0/" : "lib/net45/";
+      const archiverModule = require("archiver") as typeof import("archiver");
+      const archive = (archiverModule as any)("zip", { zlib: { level: 9 } });
 
-      const downloadResult = resolveDownloadPath({
-        packageBuffer: pipelineResult.packageBuffer,
-        packageViable: pipelineResult.packageViable,
-        xamlEntries: pipelineResult.xamlEntries,
-        archiveManifest: pipelineResult.archiveManifest,
-        projectName: pipelineResult.projectName,
-        dependencyMap: pipelineResult.dependencyMap,
-        dhgContent: pipelineResult.dhgContent,
-        libPrefix,
-        sddContent,
-        pkgDescription: pkg.description || "",
-        resolveProjectJson: () => {
-          const _metaTarget = metadataService.getStudioTarget();
-          if (!_metaTarget) {
-            console.error("[document-routes] MetadataService has no studio target — project.json fields will use fallback defaults.");
-          }
-          const _resolvedFramework = _metaTarget ? (isServerless ? "Portable" : _metaTarget.targetFramework) : (isServerless ? "Portable" : "Windows");
-          const _resolvedLang = _resolvedFramework === "Portable" ? "CSharp" : (_metaTarget?.expressionLanguage || "VisualBasic");
-          return JSON.stringify({
-            name: pipelineResult.projectName,
-            description: pkg.description || "",
-            main: "Main.xaml",
-            dependencies: pipelineResult.dependencyMap || {},
-            webServices: [],
-            entitiesStores: [],
-            schemaVersion: "4.0",
-            studioVersion: _metaTarget?.version || "",
-            projectVersion: "1.0.0",
-            runtimeOptions: {
-              autoDispose: false,
-              netFrameworkLazyLoading: false,
-              isPausable: true,
-              isAttended: false,
-              requiresUserInteraction: false,
-              supportsPersistence: false,
-              executionType: "Workflow",
-              readyForPiP: false,
-              startsInPiP: false,
-              mustRestoreAllDependencies: true,
-            },
-            designOptions: {
-              projectProfile: "Development",
-              outputType: "Process",
-              libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
-              processOptions: { ignoredFiles: [] },
-              fileInfoCollection: [],
-              modernBehavior: true,
-            },
-            expressionLanguage: _resolvedLang,
-            entryPoints: [{ filePath: "Main.xaml", uniqueId: "00000000-0000-0000-0000-000000000000", input: [], output: [] }],
-            isTemplate: false,
-            templateProjectData: {},
-            publishData: {},
-            targetFramework: _resolvedFramework,
-            sourceLanguage: _resolvedLang,
-          }, null, 2);
-        },
-      });
-
-      if (downloadResult.downloadSource === "raw-nupkg") {
-        res.setHeader("Content-Type", "application/octet-stream");
-        res.setHeader("Content-Disposition", `attachment; filename="${pkg.projectName || "UiPathPackage"}.nupkg"`);
-        if (downloadResult.isHandoffOnly) {
-          res.setHeader("X-Package-Readiness", "handoff-only");
-          res.setHeader("X-Package-Warning", "This package is not deployment-ready. It requires developer remediation before use.");
-        }
-        console.log(`[Download] Serving raw nupkg for ${ideaId} (handoff-only: ${downloadResult.isHandoffOnly})`);
-        res.end(pipelineResult.packageBuffer);
-        return;
-      }
-
-      if (!downloadResult.zipEntries) {
-        console.error(`[Download] Download failed for ${ideaId}: ${downloadResult.failReason}`);
-        return res.status(500).json({
-          error: "PACKAGE_UNRECONSTRUCTABLE",
-          message: `Unable to produce a downloadable package. ${downloadResult.failReason} Please regenerate the package.`,
-        });
-      }
-
-      const { zipEntries, downloadSource, isHandoffOnly } = downloadResult;
-      const isReconstructedHandoff = isHandoffOnly && downloadSource === "reconstructed-from-cache";
-      console.log(`[Download] Serving package for ${ideaId} (source: ${downloadSource}, handoff-only: ${isHandoffOnly}, reconstructed-handoff: ${isReconstructedHandoff})`);
-
-      const archive = archiver("zip", { zlib: { level: 9 } });
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename="${pkg.projectName || "UiPathPackage"}.zip"`);
-      if (isHandoffOnly) {
-        res.setHeader("X-Package-Readiness", "handoff-only");
-        res.setHeader("X-Package-Warning", "This package is not deployment-ready. It requires developer remediation before use.");
-      }
-      if (isReconstructedHandoff) {
-        res.setHeader("X-Package-Source", "reconstructed-from-cache");
-      }
+
       archive.pipe(res);
 
-      for (const entry of zipEntries) {
-        archive.append(entry.content, { name: entry.name });
+      const { generateInitAllSettingsXaml: genInit, aggregatePackages: aggPkgs } = require("./xaml-generator");
+      const allXamlResults: any[] = [];
+
+      const workflows = pkg.workflows || [];
+      for (const wf of workflows) {
+        const result = generateRichXamlFromSpec(wf, sddContent || undefined);
+        allXamlResults.push(result);
+        archive.append(result.xaml, { name: `${wf.name || "Workflow"}.xaml` });
       }
+
+      const initXaml = genInit();
+      archive.append(initXaml, { name: "InitAllSettings.xaml" });
+
+      const richPkgs = aggPkgs(allXamlResults);
+      const depMap: Record<string, string> = {};
+      for (const d of (pkg.dependencies || [])) {
+        depMap[d] = "*";
+      }
+      for (const rp of richPkgs) {
+        if (!depMap[rp]) depMap[rp] = "*";
+      }
+      if (!depMap["UiPath.Excel.Activities"]) {
+        depMap["UiPath.Excel.Activities"] = "*";
+      }
+
+      const projectJson = {
+        name: pkg.projectName || idea.title.replace(/\s+/g, "_"),
+        description: pkg.description || idea.description,
+        main: "Main.xaml",
+        dependencies: depMap,
+        schemaVersion: "4.0",
+        studioVersion: "23.10.0",
+        projectVersion: "1.0.0",
+        runtimeOptions: { autoDispose: false, netFrameworkLazyLoading: false },
+      };
+      archive.append(JSON.stringify(projectJson, null, 2), { name: "project.json" });
+
+      archive.append("Settings\nName,Value,Description\nOrchestratorURL,,Orchestrator base URL\nProcessTimeout,30,Max process timeout in minutes\nMaxRetries,3,Maximum retry attempts\n\nConstants\nName,Value,Description\nApplicationName," + (pkg.projectName || "Automation") + ",Process name\nVersion,1.0.0,Package version", { name: "Data/Config.xlsx" });
+
+      let readme = `# ${pkg.projectName || idea.title}\n\n`;
+      readme += `${pkg.description || idea.description}\n\n`;
+      readme += `## Import Instructions\n\n`;
+      readme += `1. Open UiPath Studio\n`;
+      readme += `2. Click "Open Project" and navigate to this folder\n`;
+      readme += `3. Select project.json\n`;
+      readme += `4. Install any missing dependencies from the Package Manager\n`;
+      readme += `5. Review each XAML workflow file\n\n`;
+      readme += `## Workflows\n\n`;
+      for (const wf of workflows) {
+        readme += `### ${wf.name}\n${wf.description || ""}\n\n`;
+        if (wf.steps) {
+          for (const step of wf.steps) {
+            readme += `- **${step.activity}**: ${step.notes || ""}\n`;
+          }
+          readme += "\n";
+        }
+      }
+      archive.append(readme, { name: "README.md" });
+
+      const analysisReports: Array<{ fileName: string; report: any }> = [];
+      for (let i = 0; i < allXamlResults.length; i++) {
+        const wfName = (workflows[i]?.name || "Workflow").replace(/\s+/g, "_");
+        const { report } = analyzeAndFix(allXamlResults[i].xaml);
+        analysisReports.push({ fileName: `${wfName}.xaml`, report });
+      }
+
+      const allGapsForDhg = aggGapsImport(allXamlResults);
+      const allUsedPkgsForDhg = Object.keys(depMap);
+      const wfNamesForDhg = workflows.map((wf: any) => (wf.name || "Workflow").replace(/\s+/g, "_"));
+
+      const zipEnrichment = pkg._enrichment || pkg.enrichment || null;
+      const zipUseReFramework = zipEnrichment?.useReFramework ?? pkg._useReFramework ?? pkg.useReFramework ?? false;
+      const zipPainPoints = (pkg._painPoints || pkg.painPoints || []).map((p: any) => ({
+        name: p.name || "",
+        description: p.description || "",
+      }));
+      const zipExtractedArtifacts = pkg._extractedArtifacts || pkg.extractedArtifacts || undefined;
+
+      const zipDeployReportMsg = [...messages].reverse().find((m) => m.content.includes("[DEPLOY_REPORT:"));
+      let zipDeploymentResults: any[] | undefined;
+      if (zipDeployReportMsg) {
+        const drMatch = zipDeployReportMsg.content.match(/\[DEPLOY_REPORT:([\s\S]*?)\]$/);
+        if (drMatch) {
+          try {
+            const drData = JSON.parse(drMatch[1]);
+            zipDeploymentResults = drData.results || [];
+          } catch {}
+        }
+      }
+
+      const dhgContent = generateDeveloperHandoffGuide({
+        projectName: pkg.projectName || idea.title.replace(/\s+/g, "_"),
+        description: pkg.description || idea.description,
+        gaps: allGapsForDhg,
+        usedPackages: allUsedPkgsForDhg,
+        workflowNames: wfNamesForDhg,
+        sddContent: sddContent || undefined,
+        enrichment: zipEnrichment,
+        useReFramework: zipUseReFramework,
+        painPoints: zipPainPoints,
+        deploymentResults: zipDeploymentResults,
+        extractedArtifacts: zipExtractedArtifacts,
+        automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
+        analysisReports,
+      });
+      archive.append(dhgContent, { name: "DeveloperHandoffGuide.md" });
 
       const autoType = idea.automationType as string || "";
       if (autoType === "agent" || autoType === "hybrid") {
@@ -1507,21 +1085,84 @@ export function registerDocumentRoutes(app: Express): void {
     if (!ideaId) return;
 
     try {
+      const idea = await storage.getIdea(ideaId);
+      if (!idea) return res.status(404).json({ message: "Idea not found" });
+
       const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-      const uipathMsg = findUiPathMessage(messages);
+      const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
       if (!uipathMsg) {
         return res.status(404).json({ message: "No UiPath package found. Generate the package first." });
       }
 
+      const jsonStr = uipathMsg.content.slice(8, -1);
       let pkg;
       try {
-        pkg = parseUiPathPackage(uipathMsg);
+        pkg = JSON.parse(jsonStr);
       } catch {
         return res.status(500).json({ message: "Invalid package data" });
       }
 
-      const dhgResult = await generateDhg(ideaId, pkg);
-      res.json({ content: dhgResult.dhgContent, projectName: dhgResult.projectName });
+      const sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+      const sddContent = sdd?.content || "";
+
+      const aggGaps = aggGapsImport;
+      const workflows = pkg.workflows || [];
+      const allXamlResults: any[] = [];
+      for (const wf of workflows) {
+        const result = generateRichXamlFromSpec(wf, sddContent || undefined);
+        allXamlResults.push(result);
+      }
+
+      const analysisReports: Array<{ fileName: string; report: any }> = [];
+      for (let i = 0; i < allXamlResults.length; i++) {
+        const wfName = (workflows[i]?.name || "Workflow").replace(/\s+/g, "_");
+        const { report } = analyzeAndFix(allXamlResults[i].xaml);
+        analysisReports.push({ fileName: `${wfName}.xaml`, report });
+      }
+
+      const allGapsForDhg = aggGaps(allXamlResults);
+      const depMap: Record<string, string> = {};
+      for (const d of (pkg.dependencies || [])) depMap[d] = "*";
+      const wfNamesForDhg = workflows.map((wf: any) => (wf.name || "Workflow").replace(/\s+/g, "_"));
+
+      const enrichment = pkg._enrichment || pkg.enrichment || null;
+      const useReFramework = enrichment?.useReFramework ?? pkg._useReFramework ?? pkg.useReFramework ?? false;
+      const painPoints = (pkg._painPoints || pkg.painPoints || []).map((p: any) => ({
+        name: p.name || "",
+        description: p.description || "",
+      }));
+
+      const deployReportMsg = [...messages].reverse().find((m) => m.content.includes("[DEPLOY_REPORT:"));
+      let deploymentResults: any[] | undefined;
+      if (deployReportMsg) {
+        const drMatch = deployReportMsg.content.match(/\[DEPLOY_REPORT:([\s\S]*?)\]$/);
+        if (drMatch) {
+          try {
+            const drData = JSON.parse(drMatch[1]);
+            deploymentResults = drData.results || [];
+          } catch {}
+        }
+      }
+
+      const extractedArtifacts = pkg._extractedArtifacts || pkg.extractedArtifacts || undefined;
+
+      const dhgContent = generateDeveloperHandoffGuide({
+        projectName: pkg.projectName || idea.title.replace(/\s+/g, "_"),
+        description: pkg.description || idea.description,
+        gaps: allGapsForDhg,
+        usedPackages: Object.keys(depMap),
+        workflowNames: wfNamesForDhg,
+        sddContent: sddContent || undefined,
+        enrichment,
+        useReFramework,
+        painPoints,
+        deploymentResults,
+        extractedArtifacts,
+        automationType: idea.automationType as "rpa" | "agent" | "hybrid" || undefined,
+        analysisReports,
+      });
+
+      res.json({ content: dhgContent, projectName: pkg.projectName || idea.title });
     } catch (error) {
       console.error("Error generating DHG:", error);
       if (!res.headersSent) {
@@ -1599,34 +1240,17 @@ export function registerDocumentRoutes(app: Express): void {
           try {
             const mapImage = await renderProcessMapImage(nodes, edges, viewType);
             if (mapImage) {
-              if (mapImage.pages && mapImage.pages.length > 1) {
-                for (let pageIdx = 0; pageIdx < mapImage.pages.length; pageIdx++) {
-                  const page = mapImage.pages[pageIdx];
-                  docChildren.push(new Paragraph({
-                    children: [
-                      new ImageRun({
-                        data: page.buffer,
-                        transformation: { width: page.width, height: page.height },
-                        type: "png",
-                      }),
-                    ],
-                    spacing: { before: pageIdx === 0 ? 100 : 50, after: 50 },
-                    alignment: AlignmentType.CENTER,
-                  }));
-                }
-              } else {
-                docChildren.push(new Paragraph({
-                  children: [
-                    new ImageRun({
-                      data: mapImage.buffer,
-                      transformation: { width: mapImage.width, height: mapImage.height },
-                      type: "png",
-                    }),
-                  ],
-                  spacing: { before: 100, after: 200 },
-                  alignment: AlignmentType.CENTER,
-                }));
-              }
+              docChildren.push(new Paragraph({
+                children: [
+                  new ImageRun({
+                    data: mapImage.buffer,
+                    transformation: { width: mapImage.width, height: mapImage.height },
+                    type: "png",
+                  }),
+                ],
+                spacing: { before: 100, after: 200 },
+                alignment: AlignmentType.CENTER,
+              }));
             } else {
               docChildren.push(new Paragraph({
                 children: [new TextRun({ text: "[Process map image could not be generated]", italics: true, color: "888888" })],
@@ -2075,6 +1699,10 @@ export function registerDocumentRoutes(app: Express): void {
   });
 }
 
+function generateXamlStub(workflow: any, sddContent?: string): string {
+  const result = generateRichXamlFromSpec(workflow, sddContent);
+  return result.xaml;
+}
 
 function extractSddSection(sddContent: string, heading: string): string {
   const lines = sddContent.split("\n");
@@ -2091,7 +1719,7 @@ function extractSddSection(sddContent: string, heading: string): string {
   return result.join("\n").trim();
 }
 
-function extractAgentPrompt(sddContent: string, type: "system" | "user", pkg: UiPathPackage): string {
+function extractAgentPrompt(sddContent: string, type: "system" | "user", pkg: any): string {
   const projectName = pkg.projectName || "Automation";
   const description = pkg.description || "";
 
@@ -2132,7 +1760,7 @@ function extractAgentPrompt(sddContent: string, type: "system" | "user", pkg: Ui
   return template;
 }
 
-function extractToolDefinitions(sddContent: string, pkg: UiPathPackage): any[] {
+function extractToolDefinitions(sddContent: string, pkg: any): any[] {
   const tools: any[] = [];
 
   const agentTools = pkg.agents?.[0]?.tools || [];
@@ -2167,7 +1795,7 @@ function extractToolDefinitions(sddContent: string, pkg: UiPathPackage): any[] {
   return tools;
 }
 
-function generateKBPlaceholder(sddContent: string, pkg: UiPathPackage): string {
+function generateKBPlaceholder(sddContent: string, pkg: any): string {
   const projectName = pkg.projectName || "Automation";
   let md = `# Knowledge Base — ${projectName}\n\n`;
   md += `This folder should contain the documents the agent needs for retrieval-augmented generation (RAG).\n\n`;
@@ -2194,7 +1822,7 @@ function generateKBPlaceholder(sddContent: string, pkg: UiPathPackage): string {
   return md;
 }
 
-function generateAgentConfig(agentName: string, sddContent: string, pkg: UiPathPackage): any {
+function generateAgentConfig(agentName: string, sddContent: string, pkg: any): any {
   const agent = pkg.agents?.[0] || {};
   return {
     name: agentName,

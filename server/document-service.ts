@@ -2,7 +2,6 @@ import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
 import { evaluateTransition } from "./stage-transition";
-import { parseArtifactBlockAsObject, validateArtifactBlock } from "./lib/artifact-parser";
 
 export interface ApproveDocumentOptions {
   ideaId: string;
@@ -18,7 +17,6 @@ export interface ApproveDocumentResult {
   document: any;
   transition?: any;
   alreadyApproved?: boolean;
-  artifactWarnings?: string[];
 }
 
 export async function approveDocument(opts: ApproveDocumentOptions): Promise<ApproveDocumentResult> {
@@ -38,24 +36,6 @@ export async function approveDocument(opts: ApproveDocumentOptions): Promise<App
 
   if (doc.status === "approved") {
     return { approval: null, document: doc, alreadyApproved: true };
-  }
-
-  let artifactWarnings: string[] = [];
-  if (docType === "SDD") {
-    const hasStoredValidity = doc.artifactsValid !== null && doc.artifactsValid !== undefined;
-    if (hasStoredValidity && doc.artifactsValid === false) {
-      throw new Error("SDD cannot be approved: deployment artifacts are missing or invalid. Please revise the SDD to regenerate the artifacts section.");
-    }
-    if (!hasStoredValidity) {
-      const validation = validateArtifactBlock(doc.content);
-      if (!validation.valid) {
-        console.warn(`[Document Service] SDD approval blocked — artifact validation failed: ${validation.failure} — ${validation.details}`);
-        throw new Error(`SDD cannot be approved: deployment artifacts are ${validation.failure === "missing_fence" ? "missing" : "invalid"} (${validation.details}). Please revise the SDD to regenerate the artifacts section.`);
-      }
-    }
-    if (doc.artifactWarnings) {
-      try { artifactWarnings = JSON.parse(doc.artifactWarnings); } catch {}
-    }
   }
 
   const existingApproval = await documentStorage.getApproval(ideaId, docType);
@@ -95,26 +75,29 @@ export async function approveDocument(opts: ApproveDocumentOptions): Promise<App
         const sddDoc = await documentStorage.getDocument(doc.id);
         let artifactSummary = "";
         if (sddDoc?.content) {
-          const artifacts: any = parseArtifactBlockAsObject(sddDoc.content);
-          if (artifacts) {
-            const parts: string[] = [];
-            if (artifacts.queues?.length) parts.push(`${artifacts.queues.length} queue(s)`);
-            if (artifacts.assets?.length) parts.push(`${artifacts.assets.length} asset(s)`);
-            if (artifacts.machines?.length) parts.push(`${artifacts.machines.length} machine template(s)`);
-            if (artifacts.triggers?.length) parts.push(`${artifacts.triggers.length} trigger(s)`);
-            if (artifacts.storageBuckets?.length) parts.push(`${artifacts.storageBuckets.length} storage bucket(s)`);
-            if (artifacts.robotAccounts?.length) parts.push(`${artifacts.robotAccounts.length} robot account(s)`);
-            if (artifacts.actionCenter?.length) parts.push(`${artifacts.actionCenter.length} Action Center catalog(s)`);
-            if (artifacts.documentUnderstanding?.length) parts.push(`${artifacts.documentUnderstanding.length} DU project(s)`);
-            if (artifacts.testCases?.length) parts.push(`${artifacts.testCases.length} test case(s)`);
-            if (artifacts.testDataQueues?.length) parts.push(`${artifacts.testDataQueues.length} test data queue(s)`);
-            if (artifacts.testSets?.length) parts.push(`${artifacts.testSets.length} test set(s)`);
-            if (artifacts.requirements?.length) parts.push(`${artifacts.requirements.length} requirement(s)`);
-            if (artifacts.agents?.length) parts.push(`${artifacts.agents.length} agent(s)`);
-            if (artifacts.knowledgeBases?.length) parts.push(`${artifacts.knowledgeBases.length} knowledge base(s)`);
-            if (artifacts.promptTemplates?.length) parts.push(`${artifacts.promptTemplates.length} prompt template(s)`);
-            if (artifacts.folder) artifactSummary += `Target folder: **${artifacts.folder}**\n`;
-            if (parts.length) artifactSummary += `Artifacts to provision: ${parts.join(", ")}`;
+          const artifactMatch = sddDoc.content.match(/```orchestrator_artifacts\s*([\s\S]*?)```/);
+          if (artifactMatch) {
+            try {
+              const artifacts = JSON.parse(artifactMatch[1]);
+              const parts: string[] = [];
+              if (artifacts.queues?.length) parts.push(`${artifacts.queues.length} queue(s)`);
+              if (artifacts.assets?.length) parts.push(`${artifacts.assets.length} asset(s)`);
+              if (artifacts.machines?.length) parts.push(`${artifacts.machines.length} machine template(s)`);
+              if (artifacts.triggers?.length) parts.push(`${artifacts.triggers.length} trigger(s)`);
+              if (artifacts.storageBuckets?.length) parts.push(`${artifacts.storageBuckets.length} storage bucket(s)`);
+              if (artifacts.robotAccounts?.length) parts.push(`${artifacts.robotAccounts.length} robot account(s)`);
+              if (artifacts.actionCenter?.length) parts.push(`${artifacts.actionCenter.length} Action Center catalog(s)`);
+              if (artifacts.documentUnderstanding?.length) parts.push(`${artifacts.documentUnderstanding.length} DU project(s)`);
+              if (artifacts.testCases?.length) parts.push(`${artifacts.testCases.length} test case(s)`);
+              if (artifacts.testDataQueues?.length) parts.push(`${artifacts.testDataQueues.length} test data queue(s)`);
+              if (artifacts.testSets?.length) parts.push(`${artifacts.testSets.length} test set(s)`);
+              if (artifacts.requirements?.length) parts.push(`${artifacts.requirements.length} requirement(s)`);
+              if (artifacts.agents?.length) parts.push(`${artifacts.agents.length} agent(s)`);
+              if (artifacts.knowledgeBases?.length) parts.push(`${artifacts.knowledgeBases.length} knowledge base(s)`);
+              if (artifacts.promptTemplates?.length) parts.push(`${artifacts.promptTemplates.length} prompt template(s)`);
+              if (artifacts.folder) artifactSummary += `Target folder: **${artifacts.folder}**\n`;
+              if (parts.length) artifactSummary += `Artifacts to provision: ${parts.join(", ")}`;
+            } catch {}
           }
         }
         const ideaName = idea?.title || "this automation";
@@ -141,5 +124,5 @@ export async function approveDocument(opts: ApproveDocumentOptions): Promise<App
     console.error("[Document Service] Transition evaluation failed:", transErr?.message);
   }
 
-  return { approval, document: { ...doc, status: "approved" }, transition, ...(artifactWarnings.length > 0 ? { artifactWarnings } : {}) };
+  return { approval, document: { ...doc, status: "approved" }, transition };
 }

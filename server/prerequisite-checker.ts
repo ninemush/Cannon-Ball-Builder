@@ -1,7 +1,5 @@
 import * as orch from "./orchestrator-client";
 import { getConfig, getHeaders, getBaseUrl, UiPathAuthError } from "./uipath-auth";
-import { metadataService } from "./catalog/metadata-service";
-import type { ServiceResourceType } from "./catalog/metadata-schemas";
 
 export type CheckStatus = "pass" | "warning" | "blocking";
 
@@ -21,15 +19,7 @@ export interface PrerequisiteReport {
   passCount: number;
 }
 
-export async function checkMachineAvailability(hasServerless?: boolean): Promise<CheckResult> {
-  if (hasServerless) {
-    return {
-      name: "Machine Availability",
-      status: "pass",
-      detail: "Serverless runtime detected — machine templates are not required for Serverless robots",
-    };
-  }
-
+export async function checkMachineAvailability(): Promise<CheckResult> {
   try {
     const machines = await orch.getMachines();
     if (machines.length === 0) {
@@ -37,7 +27,7 @@ export async function checkMachineAvailability(hasServerless?: boolean): Promise
         name: "Machine Availability",
         status: "blocking",
         detail: "No machines registered in the target folder",
-        remediation: "Register at least one machine in Orchestrator > Machines before deploying, or use Serverless robots which don't require machine templates.",
+        remediation: "Register at least one machine in Orchestrator > Machines before deploying.",
       };
     }
 
@@ -74,15 +64,7 @@ export async function checkMachineAvailability(hasServerless?: boolean): Promise
   }
 }
 
-export async function checkRobotLicense(hasServerless?: boolean): Promise<CheckResult> {
-  if (hasServerless) {
-    return {
-      name: "Robot License",
-      status: "pass",
-      detail: "Serverless runtime detected — Serverless robots are managed by UiPath cloud infrastructure and do not require traditional robot licenses",
-    };
-  }
-
+export async function checkRobotLicense(): Promise<CheckResult> {
   try {
     const robots = await orch.getRobots();
     if (robots.length === 0) {
@@ -90,27 +72,27 @@ export async function checkRobotLicense(hasServerless?: boolean): Promise<CheckR
         name: "Robot License",
         status: "blocking",
         detail: "No robots found in the target folder",
-        remediation: "Ensure at least one Unattended robot is available in the folder. Check Orchestrator > Robots. Alternatively, use Serverless robots which are managed by UiPath cloud.",
+        remediation: "Ensure at least one Unattended robot is available in the folder. Check Orchestrator > Robots.",
       };
     }
 
     const unattended = robots.filter(
-      (r) => r.Type === "Unattended" || r.Type === "NonProduction" || r.Type === "Serverless"
+      (r) => r.Type === "Unattended" || r.Type === "NonProduction"
     );
 
     if (unattended.length === 0) {
       return {
         name: "Robot License",
         status: "warning",
-        detail: `${robots.length} robot(s) found, but none are Unattended or Serverless type`,
-        remediation: "For background automation, at least one Unattended or Serverless robot is recommended.",
+        detail: `${robots.length} robot(s) found, but none are Unattended type`,
+        remediation: "For background automation, at least one Unattended robot is recommended.",
       };
     }
 
     return {
       name: "Robot License",
       status: "pass",
-      detail: `${unattended.length} Unattended/Serverless robot(s) available out of ${robots.length} total`,
+      detail: `${unattended.length} Unattended robot(s) available out of ${robots.length} total`,
     };
   } catch (err: any) {
     return {
@@ -203,46 +185,25 @@ export async function checkActionCenterLicense(): Promise<CheckResult> {
 }
 
 export async function checkTestManagerLicense(): Promise<CheckResult> {
-  const confidence = metadataService.getServiceConfidence("TM");
-  const reachability = metadataService.getServiceReachability("TM");
-
-  if (confidence === "deprecated") {
-    return {
-      name: "Test Manager",
-      status: "warning",
-      detail: `Test Manager endpoint is marked as deprecated (confidence: ${confidence})`,
-      remediation: "Test Manager may be unavailable. Test gate (Stage 9) will be skipped.",
-    };
-  }
-
-  if (reachability === "unreachable") {
-    return {
-      name: "Test Manager",
-      status: "warning",
-      detail: `Test Manager endpoint marked unreachable by metadata (reachability: ${reachability})`,
-      remediation: "Test Manager requires a specific license. Test gate (Stage 9) will be skipped.",
-    };
-  }
-
   try {
     const testSets = await orch.getTestSets();
     return {
       name: "Test Manager",
       status: "pass",
-      detail: `Test Manager reachable (${testSets.length} test set(s), confidence: ${confidence})`,
+      detail: `Test Manager reachable (${testSets.length} test set(s))`,
     };
   } catch {
     try {
       const config = await getConfig();
       if (config) {
         const headers = await getHeaders();
-        const base = getBaseUrl(config);
+        const base = getBaseUrl(config as any);
         const res = await fetch(`${base}/odata/TestSets?$top=1`, { headers });
         if (res.ok) {
           return {
             name: "Test Manager",
             status: "pass",
-            detail: `Test Manager reachable (via Orchestrator OData, confidence: ${confidence})`,
+            detail: "Test Manager reachable (via Orchestrator OData)",
           };
         }
       }
@@ -250,123 +211,20 @@ export async function checkTestManagerLicense(): Promise<CheckResult> {
     return {
       name: "Test Manager",
       status: "warning",
-      detail: `Test Manager not available on this tenant (confidence: ${confidence})`,
+      detail: "Test Manager not available on this tenant",
       remediation: "Test Manager requires a specific license. Test gate (Stage 9) will be skipped.",
     };
   }
 }
 
-export async function checkDataFabricAvailability(): Promise<CheckResult> {
-  const confidence = metadataService.getServiceConfidence("DF");
-  const reachability = metadataService.getServiceReachability("DF");
-
-  if (confidence === "deprecated" || reachability === "unreachable") {
-    return {
-      name: "Data Fabric",
-      status: "warning",
-      detail: `Data Fabric endpoint metadata: confidence=${confidence}, reachability=${reachability}`,
-      remediation: "Data Fabric entity provisioning will fall back to manual steps.",
-    };
-  }
-
-  try {
-    const config = await getConfig();
-    if (!config) {
-      return {
-        name: "Data Fabric",
-        status: "warning",
-        detail: "UiPath is not configured",
-      };
-    }
-    const headers = await getHeaders();
-    const dfUrl = metadataService.getServiceUrl("DF", config);
-    const res = await fetch(`${dfUrl}/api/EntityService/Entity`, { headers });
-    if (res.ok) {
-      return {
-        name: "Data Fabric",
-        status: "pass",
-        detail: `Data Fabric Entity API is reachable (confidence: ${confidence})`,
-      };
-    }
-    return {
-      name: "Data Fabric",
-      status: "warning",
-      detail: `Data Fabric returned ${res.status} (confidence: ${confidence})`,
-      remediation: "Data Fabric may not be enabled on this tenant. Entity provisioning will use manual steps.",
-    };
-  } catch (err: any) {
-    return {
-      name: "Data Fabric",
-      status: "warning",
-      detail: `Could not check Data Fabric: ${err.message}`,
-      remediation: "Data Fabric entity provisioning will fall back to manual steps.",
-    };
-  }
-}
-
-export async function checkAppsAvailability(): Promise<CheckResult> {
-  try {
-    const config = await getConfig();
-    if (!config) {
-      return {
-        name: "Apps",
-        status: "warning",
-        detail: "UiPath is not configured",
-      };
-    }
-    const headers = await getHeaders();
-    const cloudBase = metadataService.getCloudBaseUrl(config);
-    const res = await fetch(`${cloudBase}/apps_/api/v2/apps?$top=1`, { headers });
-    if (res.ok) {
-      return {
-        name: "Apps",
-        status: "pass",
-        detail: "UiPath Apps service is reachable",
-      };
-    }
-    const altRes = await fetch(`${cloudBase}/apps_/api/v1/apps?pageSize=1`, { headers });
-    if (altRes.ok) {
-      return {
-        name: "Apps",
-        status: "pass",
-        detail: "UiPath Apps service is reachable (v1 API)",
-      };
-    }
-    return {
-      name: "Apps",
-      status: "warning",
-      detail: `Apps service returned ${res.status}`,
-      remediation: "UiPath Apps may not be available on this tenant.",
-    };
-  } catch (err: any) {
-    return {
-      name: "Apps",
-      status: "warning",
-      detail: `Could not check Apps: ${err.message}`,
-    };
-  }
-}
-
-export async function checkAll(hasServerless?: boolean): Promise<PrerequisiteReport> {
-  let serverless = hasServerless;
-  if (serverless === undefined) {
-    try {
-      const sessions = await orch.getSessions();
-      serverless = sessions.some((s: any) =>
-        (s.RuntimeType || "").toLowerCase() === "serverless" ||
-        (s.RobotType || "").toLowerCase() === "serverless"
-      );
-    } catch {}
-  }
+export async function checkAll(): Promise<PrerequisiteReport> {
   const results = await Promise.all([
-    checkMachineAvailability(serverless),
-    checkRobotLicense(serverless),
+    checkMachineAvailability(),
+    checkRobotLicense(),
     checkFolderPermissions(),
     checkPackageFeedWritable(),
     checkActionCenterLicense(),
     checkTestManagerLicense(),
-    checkDataFabricAvailability(),
-    checkAppsAvailability(),
   ]);
 
   const blockingCount = results.filter((r) => r.status === "blocking").length;

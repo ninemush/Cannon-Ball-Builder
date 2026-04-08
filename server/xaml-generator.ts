@@ -7,194 +7,16 @@ import {
   enforceDisplayName,
   type AnalysisReport,
 } from "./workflow-analyzer";
-import { escapeXml, escapeXmlExpression, normalizeXmlExpression, serializeSafeAttributeValue, reportAttributeSerializerBypass } from "./lib/xml-utils";
+import { escapeXml } from "./lib/xml-utils";
 import type { DeploymentResult } from "@shared/models/deployment";
-import type { AICenterSkill } from "./uipath-integration";
-import { isActivityAllowed } from "./uipath-activity-policy";
-import type { AutomationPattern } from "./uipath-activity-registry";
-import { ACTIVITY_NAME_ALIAS_MAP } from "./uipath-activity-registry";
-import { inferTypeFromPrefix } from "./shared/type-inference";
-import type { XamlGenerationContext } from "./types/uipath-package";
-import type { PipelineOutcomeReport } from "./uipath-pipeline";
-import { XMLValidator } from "fast-xml-parser";
-import { catalogService } from "./catalog/catalog-service";
-import type { StudioProfile } from "./catalog/metadata-service";
-import { validateMapClrTypeOutput, reportCriticalTypeDiagnostic } from "./emission-gate";
 
-export {
-  ensureBracketWrapped,
-  looksLikeVariableRef,
-  smartBracketWrap,
-  normalizeXaml,
-  normalizeXaml as makeUiPathCompliant,
-  normalizeAssignArgumentNesting,
-  type TargetFramework,
-} from "./xaml/xaml-compliance";
-
-import { ensureBracketWrapped, smartBracketWrap, parseInvokeArgs } from "./xaml/xaml-compliance";
-
-export {
-  type XamlGap,
-  type DhgDeploymentResult,
-  type XamlValidationViolation,
-  type ActivityStubResult,
-  type SequenceStubResult,
-  type StubWorkflowOptions,
-  type StructuralPreservationResult,
-  type QuoteRepairValidationResult,
-  extractSystemFromGap,
-  validateXamlContent,
-  validateAndRepairXamlContent,
-  replaceActivityWithStub,
-  replaceSequenceChildrenWithStub,
-  generateStubWorkflow,
-  preserveStructureAndStubLeaves,
-  generateDhgSummary,
-} from "./xaml/gap-analyzer";
-
-import { type XamlGap, type DhgDeploymentResult, extractSystemFromGap } from "./xaml/gap-analyzer";
-import type { TargetFramework } from "./xaml/xaml-compliance";
-
-export type GenerationMode = "baseline_openable" | "full_implementation";
-
-export interface GenerationModeConfig {
-  mode: GenerationMode;
-  reason: string;
-  flatScaffold: boolean;
-  blockReFramework: boolean;
-  blockForbiddenActivities: boolean;
-}
-
-const BASELINE_FORBIDDEN_ACTIVITIES = new Set([
-  "ui:TakeScreenshot",
-  "ui:AddLogFields",
-]);
-
-const SILENTLY_FORBIDDEN_ACTIVITIES = new Set([
-  "ui:AddLogFields",
-]);
-
-const REFRAMEWORK_FILES = new Set([
-  "GetTransactionData.xaml",
-  "SetTransactionStatus.xaml",
-  "CloseAllApplications.xaml",
-  "KillAllProcesses.xaml",
-  "Init.xaml",
-]);
-
-export function selectGenerationMode(
-  automationPattern: string,
-  confidence?: number,
-  profile?: StudioProfile | null,
-): GenerationModeConfig {
-  const resolvedProfile = profile !== undefined ? profile : catalogService.getStudioProfile();
-
-  const isSimpleOrApi = automationPattern === "simple-linear" || automationPattern === "api-data-driven";
-  const isLowConfidence = confidence !== undefined && confidence < 0.6;
-  const isTransactional = automationPattern === "transactional-queue";
-
-  const targetFramework = resolvedProfile?.targetFramework || "Windows";
-  const projectType = resolvedProfile?.projectType || "Process";
-
-  if (projectType === "Library") {
-    return {
-      mode: "baseline_openable",
-      reason: `Project type "Library" defaults to baseline_openable for reliable Studio-openable output (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
-      flatScaffold: true,
-      blockReFramework: true,
-      blockForbiddenActivities: true,
-    };
-  }
-
-  if (isTransactional && !isLowConfidence) {
-    return {
-      mode: "full_implementation",
-      reason: `Pattern "${automationPattern}" supports full implementation with REFramework (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
-      flatScaffold: false,
-      blockReFramework: false,
-      blockForbiddenActivities: false,
-    };
-  }
-
-  if (isSimpleOrApi || isLowConfidence) {
-    return {
-      mode: "baseline_openable",
-      reason: isLowConfidence
-        ? `Low confidence (${(confidence! * 100).toFixed(0)}%) — defaulting to baseline_openable for safety`
-        : `Pattern "${automationPattern}" defaults to baseline_openable for reliable Studio-openable output`,
-      flatScaffold: true,
-      blockReFramework: true,
-      blockForbiddenActivities: true,
-    };
-  }
-
-  if (automationPattern === "ui-automation" || automationPattern === "hybrid") {
-    return {
-      mode: "full_implementation",
-      reason: `Pattern "${automationPattern}" supports full implementation (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
-      flatScaffold: false,
-      blockReFramework: false,
-      blockForbiddenActivities: false,
-    };
-  }
-
-  return {
-    mode: "baseline_openable",
-    reason: `Unknown pattern "${automationPattern}" — defaulting to baseline_openable`,
-    flatScaffold: true,
-    blockReFramework: true,
-    blockForbiddenActivities: true,
-  };
-}
-
-
-export function applyActivityPolicy(
-  xamlContent: string,
-  modeConfig: GenerationModeConfig,
-  fileName: string,
-): { content: string; blocked: string[] } {
-  if (!modeConfig.blockForbiddenActivities) {
-    return { content: xamlContent, blocked: [] };
-  }
-  const blocked: string[] = [];
-  let content = xamlContent;
-
-  for (const forbidden of Array.from(BASELINE_FORBIDDEN_ACTIVITIES)) {
-    const escaped = forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const selfClosingRe = new RegExp(`<${escaped}[^>]*\\/>`, "g");
-    const openCloseRe = new RegExp(`<${escaped}[^>]*>[\\s\\S]*?<\\/${escaped}>`, "g");
-    const silent = SILENTLY_FORBIDDEN_ACTIVITIES.has(forbidden);
-    const replacement = silent ? "" : `<ui:Comment Text="[baseline_openable] Removed forbidden activity: ${forbidden}" DisplayName="Policy: ${forbidden} blocked" />`;
-    if (content.includes(forbidden.replace("ui:", "<ui:"))) {
-      blocked.push(forbidden);
-      content = content.replace(selfClosingRe, replacement);
-      content = content.replace(openCloseRe, replacement);
-    }
-  }
-
-  if (modeConfig.blockReFramework) {
-    content = content.replace(/WorkflowFileName="Workflows\\([^"]+)"/g, 'WorkflowFileName="$1"');
-    content = content.replace(/WorkflowFileName="Workflows\/([^"]+)"/g, 'WorkflowFileName="$1"');
-    content = content.replace(/WorkflowFileName="([^"]+)"/g, (_match: string, p1: string) => {
-      const cleaned = p1.replace(/\\/g, "/").replace(/^[./]+/, "");
-      return `WorkflowFileName="${cleaned}"`;
-    });
-  }
-
-  return { content, blocked };
-}
-
-export function isReFrameworkFile(fileName: string): boolean {
-  const basename = fileName.split("/").pop() || fileName;
-  return REFRAMEWORK_FILES.has(basename);
-}
-
-export function isCurrentPatternActivityAllowed(activity: string, genCtx?: XamlGenerationContext): boolean {
-  const pattern = genCtx?.automationPattern || "";
-  if (!pattern) return true;
-  return isActivityAllowed(activity, pattern as AutomationPattern);
-}
-
+export type XamlGap = {
+  category: "selector" | "credential" | "endpoint" | "logic" | "config" | "manual" | "agent";
+  activity: string;
+  description: string;
+  placeholder: string;
+  estimatedMinutes: number;
+};
 
 export type XamlGeneratorResult = {
   xaml: string;
@@ -202,6 +24,131 @@ export type XamlGeneratorResult = {
   usedPackages: string[];
   variables: VariableDecl[];
 };
+
+const UIPATH_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"`;
+
+const UIPATH_VB_SETTINGS = `
+  <mva:VisualBasic.Settings>
+    <x:Null />
+  </mva:VisualBasic.Settings>
+  <sap2010:WorkflowViewState.IdRef>__ROOT_ID__</sap2010:WorkflowViewState.IdRef>
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>System.IO</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>System.Xml</x:String>
+      <x:String>System.Xml.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+      <x:String>Microsoft.VisualBasic</x:String>
+      <x:String>Microsoft.VisualBasic.Activities</x:String>
+      <x:String>System.Activities</x:String>
+      <x:String>System.Activities.Statements</x:String>
+      <x:String>System.Activities.Expressions</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
+      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Data</AssemblyReference>
+      <AssemblyReference>System</AssemblyReference>
+      <AssemblyReference>System.Core</AssemblyReference>
+      <AssemblyReference>System.Xml</AssemblyReference>
+      <AssemblyReference>System.Xml.Linq</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>`;
+
+export function makeUiPathCompliant(rawXaml: string): string {
+  let idCounter = 0;
+  const viewStateEntries: { id: string; width: number; height: number }[] = [];
+
+  function nextId(prefix: string): string {
+    idCounter++;
+    return `${prefix}_${idCounter}`;
+  }
+
+  function getHintSize(tag: string): { w: number; h: number } {
+    if (tag.startsWith("Sequence") || tag.startsWith("StateMachine")) return { w: 400, h: 300 };
+    if (tag.startsWith("If")) return { w: 400, h: 280 };
+    if (tag.startsWith("TryCatch")) return { w: 400, h: 260 };
+    if (tag.startsWith("ForEach")) return { w: 400, h: 240 };
+    if (tag.startsWith("State")) return { w: 300, h: 200 };
+    if (tag.startsWith("Transition")) return { w: 200, h: 60 };
+    return { w: 334, h: 90 };
+  }
+
+  let xml = rawXaml;
+
+  const oldNsBlock = xml.match(/xmlns="http:\/\/schemas\.microsoft\.com\/netfx\/2009\/xaml\/activities"[\s\S]*?xmlns:x="http:\/\/schemas\.microsoft\.com\/winfx\/2006\/xaml"/);
+  if (oldNsBlock) {
+    xml = xml.replace(oldNsBlock[0], UIPATH_NAMESPACES);
+  }
+
+  const classMatch = xml.match(/x:Class="([^"]+)"/);
+  const className = classMatch ? classMatch[1].replace(/[^A-Za-z0-9_]/g, "") : "Workflow";
+  const rootId = nextId(className);
+
+  const activityTagPattern = /<(Sequence|If|TryCatch|ForEach|Assign|State|StateMachine|Transition|Flowchart|FlowStep|FlowDecision|ui:[A-Za-z]+)\s+((?:[^>]*?\s+)?)DisplayName="([^"]*)"([^>]*?)(\s*\/?>)/g;
+  xml = xml.replace(activityTagPattern, (match, tag, preAttrs, displayName, rest, closing) => {
+    if (preAttrs.includes("WorkflowViewState.IdRef") || rest.includes("WorkflowViewState.IdRef")) return match;
+    const prefix = tag.replace("ui:", "").replace(/[^A-Za-z]/g, "");
+    const id = nextId(prefix);
+    const hint = getHintSize(tag);
+    viewStateEntries.push({ id, width: hint.w, height: hint.h });
+    const pre = preAttrs ? `${preAttrs}` : "";
+    return `<${tag} ${pre}DisplayName="${displayName}" sap2010:WorkflowViewState.IdRef="${id}" sap:VirtualizedContainerService.HintSize="${hint.w},${hint.h}"${rest}${closing}`;
+  });
+
+  const firstChildMatch = xml.match(/<(Sequence|StateMachine|Flowchart)\s+DisplayName="[^"]*"/);
+  if (firstChildMatch) {
+    const rootHint = firstChildMatch[1] === "StateMachine" ? { w: 600, h: 500 } : firstChildMatch[1] === "Flowchart" ? { w: 600, h: 400 } : { w: 500, h: 400 };
+    viewStateEntries.push({ id: rootId, width: rootHint.w, height: rootHint.h });
+  }
+
+  const vbSettingsBlock = UIPATH_VB_SETTINGS.replace("__ROOT_ID__", rootId);
+
+  const firstTag = xml.match(/<(Sequence|StateMachine|Flowchart)\s/);
+  if (firstTag && firstTag.index !== undefined) {
+    xml = xml.slice(0, firstTag.index) + vbSettingsBlock + "\n  " + xml.slice(firstTag.index);
+  }
+
+  let viewStateManager = `\n  <sap2010:WorkflowViewState.ViewStateManager>\n    <sap2010:ViewStateManager>`;
+  for (const entry of viewStateEntries) {
+    viewStateManager += `\n      <sap2010:ViewStateData Id="${entry.id}" sap:VirtualizedContainerService.HintSize="${entry.width},${entry.height}">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </sap2010:ViewStateData>`;
+  }
+  viewStateManager += `\n    </sap2010:ViewStateManager>\n  </sap2010:WorkflowViewState.ViewStateManager>`;
+
+  xml = xml.replace(/<\/Activity>\s*$/, viewStateManager + "\n</Activity>");
+
+  xml = xml.replace(/scg:DataTable/g, "scg2:DataTable");
+  xml = xml.replace(/scg:DataRow/g, "scg2:DataRow");
+
+  return xml;
+}
 
 type VariableDecl = {
   name: string;
@@ -216,8 +163,6 @@ type ActivityContext = {
   description: string;
   role: string;
   isPainPoint: boolean;
-  targetFramework?: TargetFramework;
-  autopilotEnabled?: boolean;
 };
 
 type WorkflowStep = {
@@ -240,7 +185,7 @@ type WorkflowSpec = {
   arguments?: Array<{ name: string; direction: string; type: string; required?: boolean }>;
 };
 
-function classifyActivity(ctx: ActivityContext, genCtx?: XamlGenerationContext): {
+function classifyActivity(ctx: ActivityContext): {
   activityType: string;
   activityPackage: string;
   properties: Record<string, string>;
@@ -258,11 +203,7 @@ function classifyActivity(ctx: ActivityContext, genCtx?: XamlGenerationContext):
     return classifyExcel(ctx, combined);
   }
   if (system.includes("email") || system.includes("outlook") || system.includes("smtp") || combined.includes("email") || combined.includes("mail")) {
-    const emailResult = classifyEmail(ctx, combined);
-    if (!isCurrentPatternActivityAllowed(emailResult.activityType, genCtx)) {
-      return classifyGeneral(ctx, combined);
-    }
-    return emailResult;
+    return classifyEmail(ctx, combined);
   }
   if (system.includes("api") || system.includes("http") || system.includes("rest") || system.includes("web service") || combined.includes("api") || combined.includes("http request")) {
     return classifyApi(ctx, combined);
@@ -276,22 +217,8 @@ function classifyActivity(ctx: ActivityContext, genCtx?: XamlGenerationContext):
   if (combined.includes("file") || combined.includes("folder") || combined.includes("directory") || combined.includes("read") || combined.includes("write") || combined.includes("download") || combined.includes("upload")) {
     return classifyFile(ctx, combined);
   }
-  if (combined.includes("data fabric") || combined.includes("data service") || combined.includes("data entity") || combined.includes("entity record") || combined.includes("dataservice")) {
-    return classifyDataFabric(ctx, combined);
-  }
-  if (combined.includes("action center") || combined.includes("human task") || combined.includes("create task") || combined.includes("wait for task") || combined.includes("approval task") || combined.includes("task catalog")) {
-    return classifyActionCenterTask(ctx, combined);
-  }
-  if (combined.includes("ml skill") || combined.includes("ml model") || combined.includes("ai center") || combined.includes("ai skill") || combined.includes("predict") || combined.includes("classify") || combined.includes("classification") || combined.includes("anomaly detect") || combined.includes("nlp") || combined.includes("sentiment") || combined.includes("machine learning")) {
-    return classifyMLSkill(ctx, combined, genCtx);
-  }
-
   if (combined.includes("browser") || combined.includes("web") || combined.includes("click") || combined.includes("type") || combined.includes("navigate") || combined.includes("login") || combined.includes("portal") || combined.includes("screen") || combined.includes("ui ") || combined.includes("application")) {
-    const uiResult = classifyUI(ctx, combined);
-    if (!isCurrentPatternActivityAllowed(uiResult.activityType, genCtx)) {
-      return classifyGeneral(ctx, combined);
-    }
-    return uiResult;
+    return classifyUI(ctx, combined);
   }
 
   if (ctx.nodeType === "agent-task" || ctx.nodeType === "agent-loop") {
@@ -301,198 +228,21 @@ function classifyActivity(ctx: ActivityContext, genCtx?: XamlGenerationContext):
   return classifyGeneral(ctx, combined);
 }
 
-function classifyDataFabric(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
-  const gaps: XamlGap[] = [];
-  const variables: VariableDecl[] = [];
-
-  if (combined.includes("delete") || combined.includes("remove")) {
-    variables.push({ name: "str_EntityName", type: "String", defaultValue: '"TODO_EntityName"' });
-    variables.push({ name: "str_RecordId", type: "String", defaultValue: '"TODO_RecordId"' });
-    gaps.push({
-      category: "config",
-      activity: "DeleteEntity",
-      description: `Configure Data Service entity type and record ID for "${ctx.name}"`,
-      placeholder: "Entity type name and record identifier",
-      estimatedMinutes: 10,
-    });
-    return {
-      activityType: "ui:DeleteEntity",
-      activityPackage: "UiPath.DataService.Activities",
-      properties: {
-        EntityType: "[str_EntityName]",
-        EntityId: "[str_RecordId]",
-      },
-      errorHandling: "catch",
-      variables,
-      gaps,
-    };
-  }
-
-  if (combined.includes("update") || combined.includes("upsert") || combined.includes("modify")) {
-    variables.push({ name: "str_EntityName", type: "String", defaultValue: '"TODO_EntityName"' });
-    variables.push({ name: "entityRecord", type: "UiPath.DataService.DataServiceEntity" });
-    gaps.push({
-      category: "config",
-      activity: "UpdateEntity",
-      description: `Configure Data Service entity type and field mappings for "${ctx.name}"`,
-      placeholder: "Entity type name and field-value assignments on entityRecord",
-      estimatedMinutes: 15,
-    });
-    return {
-      activityType: "ui:UpdateEntity",
-      activityPackage: "UiPath.DataService.Activities",
-      properties: {
-        EntityType: "[str_EntityName]",
-        EntityObject: "[entityRecord]",
-      },
-      errorHandling: "catch",
-      variables,
-      gaps,
-    };
-  }
-
-  if (combined.includes("write") || combined.includes("create") || combined.includes("insert") || combined.includes("add") || combined.includes("save")) {
-    variables.push({ name: "str_EntityName", type: "String", defaultValue: '"TODO_EntityName"' });
-    variables.push({ name: "entityRecord", type: "UiPath.DataService.DataServiceEntity" });
-    gaps.push({
-      category: "config",
-      activity: "CreateEntity",
-      description: `Configure Data Service entity type and field values for "${ctx.name}"`,
-      placeholder: "Entity type name and field-value assignments on entityRecord",
-      estimatedMinutes: 15,
-    });
-    return {
-      activityType: "ui:CreateEntity",
-      activityPackage: "UiPath.DataService.Activities",
-      properties: {
-        EntityType: "[str_EntityName]",
-        EntityObject: "[entityRecord]",
-      },
-      errorHandling: "catch",
-      variables,
-      gaps,
-    };
-  }
-
-  if (combined.includes("get by id") || combined.includes("lookup") || combined.includes("fetch by id") || combined.includes("single record") || combined.includes("getentitybyid")) {
-    variables.push({ name: "str_EntityName", type: "String", defaultValue: '"TODO_EntityName"' });
-    variables.push({ name: "str_RecordId", type: "String", defaultValue: '"TODO_RecordId"' });
-    variables.push({ name: "entityResult", type: "UiPath.DataService.DataServiceEntity" });
-    gaps.push({
-      category: "config",
-      activity: "GetEntityById",
-      description: `Configure Data Service entity type and record ID for "${ctx.name}"`,
-      placeholder: "Entity type name and record identifier",
-      estimatedMinutes: 10,
-    });
-    return {
-      activityType: "ui:GetEntityById",
-      activityPackage: "UiPath.DataService.Activities",
-      properties: {
-        EntityType: "[str_EntityName]",
-        EntityId: "[str_RecordId]",
-        Result: "[entityResult]",
-      },
-      errorHandling: "catch",
-      variables,
-      gaps,
-    };
-  }
-
-  variables.push({ name: "str_EntityName", type: "String", defaultValue: '"TODO_EntityName"' });
-  variables.push({ name: "str_QueryFilter", type: "String", defaultValue: '"TODO_ODataFilter"' });
-  variables.push({ name: "entityResults", type: "System.Collections.Generic.List(UiPath.DataService.DataServiceEntity)" });
-  gaps.push({
-    category: "config",
-    activity: "QueryEntity",
-    description: `Configure Data Service entity type and query filter for "${ctx.name}"`,
-    placeholder: "Entity type name and OData filter expression",
-    estimatedMinutes: 15,
-  });
-  return {
-    activityType: "ui:QueryEntity",
-    activityPackage: "UiPath.DataService.Activities",
-    properties: {
-      EntityType: "[str_EntityName]",
-      Filter: "[str_QueryFilter]",
-      Result: "[entityResults]",
-    },
-    errorHandling: "catch",
-    variables,
-    gaps,
-  };
-}
-
-function classifyActionCenterTask(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
-  const gaps: XamlGap[] = [];
-  const variables: VariableDecl[] = [];
-
-  if (combined.includes("wait") || combined.includes("complete") || combined.includes("resume")) {
-    variables.push({ name: "formTask", type: "UiPath.Persistence.Activities.FormTask" });
-    variables.push({ name: "taskOutput", type: "System.Collections.Generic.Dictionary(System.String,System.Object)" });
-    variables.push({ name: "taskAction", type: "String", defaultValue: '""' });
-    gaps.push({
-      category: "config",
-      activity: "WaitForFormTaskAndResume",
-      description: `Configure task completion handling for "${ctx.name}" — map output fields`,
-      placeholder: "Map form output fields to workflow variables",
-      estimatedMinutes: 15,
-    });
-    return {
-      activityType: "ui:WaitForFormTaskAndResume",
-      activityPackage: "UiPath.Persistence.Activities",
-      properties: {
-        TaskObject: "[formTask]",
-        TaskAction: "[taskAction]",
-      },
-      errorHandling: "catch",
-      variables,
-      gaps,
-    };
-  }
-
-  variables.push({ name: "formTask", type: "UiPath.Persistence.Activities.FormTask" });
-  variables.push({ name: "str_TaskTitle", type: "String", defaultValue: `"${escapeXml(ctx.name)}"` });
-  variables.push({ name: "str_TaskCatalog", type: "String", defaultValue: '"TODO_TaskCatalogName"' });
-  gaps.push({
-    category: "config",
-    activity: "CreateFormTask",
-    description: `Configure Action Center task catalog, form data, and SLA for "${ctx.name}"`,
-    placeholder: "Task catalog name, form field mappings, priority, SLA hours",
-    estimatedMinutes: 20,
-  });
-  return {
-    activityType: "ui:CreateFormTask",
-    activityPackage: "UiPath.Persistence.Activities",
-    properties: {
-      TaskCatalog: "[str_TaskCatalog]",
-      TaskTitle: "[str_TaskTitle]",
-      TaskPriority: "Normal",
-      Title: "[str_TaskTitle]",
-      FormSchemaPath: '"TODO: Set form schema path"',
-    },
-    errorHandling: "catch",
-    variables,
-    gaps,
-  };
-}
-
 function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
   const variables: VariableDecl[] = [];
-  const isCrossPlatform = ctx.targetFramework === "Portable";
 
   if (combined.includes("read") || combined.includes("extract") || combined.includes("get") || combined.includes("open")) {
     variables.push({ name: "dt_ExcelData", type: "System.Data.DataTable" });
     gaps.push({
       category: "config",
-      activity: isCrossPlatform ? "UseExcel" : "ExcelReadRange",
+      activity: "ExcelReadRange",
       description: `Configure Excel file path for "${ctx.name}"`,
       placeholder: "C:\\Data\\Input.xlsx",
       estimatedMinutes: 10,
     });
     return {
-      activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
+      activityType: "ui:ExcelApplicationScope",
       activityPackage: "UiPath.Excel.Activities",
       properties: { WorkbookPath: "TODO: Set Excel file path" },
       errorHandling: "retry",
@@ -505,13 +255,13 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
     variables.push({ name: "dt_OutputData", type: "System.Data.DataTable" });
     gaps.push({
       category: "config",
-      activity: isCrossPlatform ? "UseExcel" : "ExcelWriteRange",
+      activity: "ExcelWriteRange",
       description: `Configure output Excel file path for "${ctx.name}"`,
       placeholder: "C:\\Data\\Output.xlsx",
       estimatedMinutes: 10,
     });
     return {
-      activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
+      activityType: "ui:ExcelApplicationScope",
       activityPackage: "UiPath.Excel.Activities",
       properties: { WorkbookPath: "TODO: Set output Excel file path" },
       errorHandling: "retry",
@@ -523,13 +273,13 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
   variables.push({ name: "dt_ExcelData", type: "System.Data.DataTable" });
   gaps.push({
     category: "config",
-    activity: isCrossPlatform ? "UseExcel" : "ExcelApplicationScope",
+    activity: "ExcelApplicationScope",
     description: `Configure Excel file path for "${ctx.name}"`,
     placeholder: "C:\\Data\\Workbook.xlsx",
     estimatedMinutes: 10,
   });
   return {
-    activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
+    activityType: "ui:ExcelApplicationScope",
     activityPackage: "UiPath.Excel.Activities",
     properties: { WorkbookPath: "TODO: Set Excel file path" },
     errorHandling: "retry",
@@ -541,7 +291,6 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
 function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
   const variables: VariableDecl[] = [];
-  const isCrossPlatform = ctx.targetFramework === "Portable";
 
   if (combined.includes("send") || combined.includes("notify") || combined.includes("forward") || combined.includes("reply")) {
     variables.push({ name: "str_EmailTo", type: "String", defaultValue: '""' });
@@ -549,24 +298,28 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
     variables.push({ name: "str_EmailBody", type: "String", defaultValue: '""' });
     gaps.push({
       category: "credential",
-      activity: isCrossPlatform ? "SendMail" : "SendSmtpMailMessage",
-      description: `Configure ${isCrossPlatform ? "mail" : "SMTP"} credentials for "${ctx.name}"`,
+      activity: "SendSmtpMailMessage",
+      description: `Configure SMTP credentials for "${ctx.name}"`,
       placeholder: "Use Orchestrator Credential asset",
       estimatedMinutes: 15,
     });
     gaps.push({
       category: "config",
-      activity: isCrossPlatform ? "SendMail" : "SendSmtpMailMessage",
-      description: `Set ${isCrossPlatform ? "mail account" : "SMTP server and port"} for "${ctx.name}"`,
-      placeholder: isCrossPlatform ? "Use Integration Service mail connector" : "smtp.office365.com:587",
+      activity: "SendSmtpMailMessage",
+      description: `Set SMTP server and port for "${ctx.name}"`,
+      placeholder: "smtp.office365.com:587",
       estimatedMinutes: 5,
     });
     return {
-      activityType: isCrossPlatform ? "ui:SendMail" : "ui:SendSmtpMailMessage",
+      activityType: "ui:SendSmtpMailMessage",
       activityPackage: "UiPath.Mail.Activities",
-      properties: isCrossPlatform
-        ? { To: "TODO: Set recipient email", Subject: "TODO: Set email subject", Body: "TODO: Set email body" }
-        : { To: "TODO: Set recipient email", Subject: "TODO: Set email subject", Body: "TODO: Set email body", Server: "TODO: Set SMTP server", Port: "587" },
+      properties: {
+        To: "TODO: Set recipient email",
+        Subject: "TODO: Set email subject",
+        Body: "TODO: Set email body",
+        Server: "TODO: Set SMTP server",
+        Port: "587",
+      },
       errorHandling: "retry",
       variables,
       gaps,
@@ -576,29 +329,24 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
   variables.push({ name: "list_Emails", type: "System.Collections.Generic.List(System.Net.Mail.MailMessage)" });
   gaps.push({
     category: "credential",
-    activity: isCrossPlatform ? "GetMail" : "GetImapMailMessage",
-    description: `Configure ${isCrossPlatform ? "mail account" : "IMAP"} credentials for "${ctx.name}"`,
+    activity: "GetImapMailMessage",
+    description: `Configure IMAP credentials for "${ctx.name}"`,
     placeholder: "Use Orchestrator Credential asset",
     estimatedMinutes: 15,
   });
   return {
-    activityType: isCrossPlatform ? "ui:GetMail" : "ui:GetImapMailMessage",
+    activityType: "ui:GetImapMailMessage",
     activityPackage: "UiPath.Mail.Activities",
-    properties: isCrossPlatform
-      ? { Top: "10" }
-      : { Server: "TODO: Set IMAP server", Port: "993", Top: "10", Email: "TODO: Set IMAP email", Password: "TODO: Set IMAP password" },
+    properties: {
+      Server: "TODO: Set IMAP server",
+      Port: "993",
+      Top: "10",
+    },
     errorHandling: "retry",
     variables,
     gaps,
   };
 }
-
-const INTEGRATION_SERVICE_SYSTEMS = [
-  "sap", "salesforce", "servicenow", "microsoft 365", "office 365",
-  "dynamics", "workday", "oracle", "hubspot", "jira", "slack",
-  "google", "sharepoint", "teams", "zendesk", "snowflake",
-  "aws", "azure", "dropbox", "box", "docusign", "twilio",
-];
 
 function classifyApi(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
@@ -606,17 +354,6 @@ function classifyApi(ctx: ActivityContext, combined: string): ReturnType<typeof 
     { name: "str_ApiResponse", type: "String", defaultValue: '""' },
     { name: "int_StatusCode", type: "Int32", defaultValue: "0" },
   ];
-
-  const matchedSystem = INTEGRATION_SERVICE_SYSTEMS.find(s => combined.includes(s));
-  if (matchedSystem) {
-    gaps.push({
-      category: "config",
-      activity: "HttpClient",
-      description: `Consider using Integration Service connector for ${matchedSystem} instead of custom HTTP — "${ctx.name}". The UiPath.IntegrationService.Activities package provides pre-built connectors with managed authentication.`,
-      placeholder: `Use UiPath Integration Service ${matchedSystem} connector with pre-built authentication`,
-      estimatedMinutes: 5,
-    });
-  }
 
   let method = "GET";
   if (combined.includes("post") || combined.includes("create") || combined.includes("submit") || combined.includes("send")) {
@@ -644,7 +381,7 @@ function classifyApi(ctx: ActivityContext, combined: string): ReturnType<typeof 
 
   return {
     activityType: "ui:HttpClient",
-    activityPackage: "UiPath.WebAPI.Activities",
+    activityPackage: "UiPath.Web.Activities",
     properties: {
       EndPoint: "TODO: Set API endpoint URL",
       Method: method,
@@ -828,48 +565,24 @@ function classifyFile(ctx: ActivityContext, combined: string): ReturnType<typeof
 function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof classifyActivity> {
   const gaps: XamlGap[] = [];
   const variables: VariableDecl[] = [];
-  const isCrossPlatform = ctx.targetFramework === "Portable";
-  const autopilotProps: Record<string, string> = {};
-  if (ctx.autopilotEnabled) {
-    autopilotProps["InformativeScreenshot"] = "True";
-  }
 
-  const resilienceProps: Record<string, string> = {
-    "Target.WaitForReady": "INTERACTIVE",
-    "Target.Timeout": "30000",
-  };
-
-  const appName = escapeXml(ctx.system || "application");
-  const selectorBase = `<html app='${appName}' />`;
-
-  const useModern = isCrossPlatform || ctx.targetFramework === "Windows";
-
-  const isDesktopApp = combined.includes("desktop") || combined.includes("application") || combined.includes("erp") ||
-    combined.includes("sap") || combined.includes("mainframe") || combined.includes("citrix") ||
-    combined.includes("terminal") || combined.includes("rdp");
-  const isBrowserBased = combined.includes("browser") || combined.includes("url") || combined.includes("web") ||
-    combined.includes("portal") || combined.includes("website") || combined.includes("http");
+  const selectorBase = `<html app='${escapeXml(ctx.system || "application")}' />`;
 
   if (combined.includes("open") || combined.includes("launch") || combined.includes("navigate") || combined.includes("browser") || combined.includes("url")) {
-    const useDesktop = useModern && isDesktopApp && !isBrowserBased;
-    const activityType = useDesktop ? "ui:UseApplication" : (useModern ? "ui:UseBrowser" : "ui:OpenBrowser");
-    const activityLabel = useDesktop ? "UseApplication" : (useModern ? "UseBrowser" : "OpenBrowser");
     gaps.push({
       category: "selector",
-      activity: activityLabel,
-      description: useDesktop
-        ? `Set target application path for "${ctx.name}"`
-        : `Set target URL for "${ctx.name}"`,
-      placeholder: useDesktop ? "C:\\Program Files\\Application\\app.exe" : "https://application.example.com",
+      activity: "OpenBrowser",
+      description: `Set target URL for "${ctx.name}"`,
+      placeholder: "https://application.example.com",
       estimatedMinutes: 5,
     });
-    const props: Record<string, string> = useDesktop
-      ? { ApplicationPath: "TODO: Set application executable path", ...autopilotProps, ...resilienceProps }
-      : { Url: "TODO: Set application URL", BrowserType: "Chrome", ...autopilotProps, ...resilienceProps };
     return {
-      activityType,
+      activityType: "ui:OpenBrowser",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: props,
+      properties: {
+        Url: "TODO: Set application URL",
+        BrowserType: "Chrome",
+      },
       selectorHint: selectorBase,
       errorHandling: "retry",
       variables,
@@ -878,32 +591,20 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   }
 
   if (combined.includes("type") || combined.includes("enter") || combined.includes("input") || combined.includes("fill")) {
-    const fieldHint = extractFieldHint(combined);
-    const selectorAttr = fieldHint ? `name='${escapeXml(fieldHint)}'` : "name='TODO_field_name'";
-    const targetSelector = `${selectorBase}<webctrl tag='INPUT' ${selectorAttr} />`;
-    const isPlaceholder = !fieldHint;
-    if (isPlaceholder) {
-      gaps.push({
-        category: "selector",
-        activity: useModern ? "TypeInto (Modern)" : "TypeInto",
-        description: `Configure UI selector for input field in "${ctx.name}"`,
-        placeholder: `<webctrl tag='INPUT' name='TODO' />`,
-        estimatedMinutes: 15,
-      });
-    }
-    const typeProps: Record<string, string> = {
-      Text: "TODO: Set text to type",
-      ...autopilotProps,
-      ...resilienceProps,
-    };
-    if (useModern) {
-      typeProps["Target.Selector"] = targetSelector;
-    }
+    gaps.push({
+      category: "selector",
+      activity: "TypeInto",
+      description: `Configure UI selector for input field in "${ctx.name}"`,
+      placeholder: `<webctrl tag='INPUT' name='TODO' />`,
+      estimatedMinutes: 15,
+    });
     return {
       activityType: "ui:TypeInto",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: typeProps,
-      selectorHint: targetSelector,
+      properties: {
+        Text: "TODO: Set text to type",
+      },
+      selectorHint: `${selectorBase}<webctrl tag='INPUT' name='TODO_field_name' />`,
       errorHandling: "retry",
       variables,
       gaps,
@@ -911,28 +612,18 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
   }
 
   if (combined.includes("click") || combined.includes("press") || combined.includes("button") || combined.includes("submit") || combined.includes("select")) {
-    const buttonHint = extractButtonHint(combined);
-    const selectorAttr = buttonHint ? `aaname='${escapeXml(buttonHint)}'` : "name='TODO_button_name'";
-    const targetSelector = `${selectorBase}<webctrl tag='BUTTON' ${selectorAttr} />`;
-    const isPlaceholder = !buttonHint;
-    if (isPlaceholder) {
-      gaps.push({
-        category: "selector",
-        activity: useModern ? "Click (Modern)" : "Click",
-        description: `Configure UI selector for clickable element in "${ctx.name}"`,
-        placeholder: `<webctrl tag='BUTTON' name='TODO' />`,
-        estimatedMinutes: 15,
-      });
-    }
-    const clickProps: Record<string, string> = { ...autopilotProps, ...resilienceProps };
-    if (useModern) {
-      clickProps["Target.Selector"] = targetSelector;
-    }
+    gaps.push({
+      category: "selector",
+      activity: "Click",
+      description: `Configure UI selector for clickable element in "${ctx.name}"`,
+      placeholder: `<webctrl tag='BUTTON' name='TODO' />`,
+      estimatedMinutes: 15,
+    });
     return {
       activityType: "ui:Click",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: clickProps,
-      selectorHint: targetSelector,
+      properties: {},
+      selectorHint: `${selectorBase}<webctrl tag='BUTTON' name='TODO_button_name' />`,
       errorHandling: "retry",
       variables,
       gaps,
@@ -941,175 +632,40 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
 
   if (combined.includes("get text") || combined.includes("extract") || combined.includes("scrape") || combined.includes("read") || combined.includes("copy")) {
     variables.push({ name: "str_ExtractedText", type: "String", defaultValue: '""' });
-    const targetSelector = `${selectorBase}<webctrl tag='SPAN' id='TODO_element_id' />`;
     gaps.push({
       category: "selector",
-      activity: useModern ? "GetText (Modern)" : "GetText",
+      activity: "GetText",
       description: `Configure UI selector for text extraction in "${ctx.name}"`,
       placeholder: `<webctrl tag='SPAN' id='TODO' />`,
       estimatedMinutes: 15,
     });
-    const getTextProps: Record<string, string> = { ...autopilotProps, ...resilienceProps };
-    if (useModern) {
-      getTextProps["Target.Selector"] = targetSelector;
-    }
     return {
       activityType: "ui:GetText",
       activityPackage: "UiPath.UIAutomation.Activities",
-      properties: getTextProps,
-      selectorHint: targetSelector,
+      properties: {},
+      selectorHint: `${selectorBase}<webctrl tag='SPAN' id='TODO_element_id' />`,
       errorHandling: "retry",
       variables,
       gaps,
     };
   }
 
-  const elementHint = extractButtonHint(combined) || extractFieldHint(combined);
-  const fallbackAttr = elementHint ? `aaname='${escapeXml(elementHint)}'` : "aaname='TODO_element'";
-  const targetSelector = `${selectorBase}<webctrl tag='*' ${fallbackAttr} />`;
-  const isPlaceholder = !elementHint;
-  if (isPlaceholder) {
-    gaps.push({
-      category: "selector",
-      activity: useModern ? "Click (Modern)" : "ClickOnText",
-      description: `Configure UI selector for "${ctx.name}"`,
-      placeholder: `<webctrl tag='*' aaname='TODO' />`,
-      estimatedMinutes: 15,
-    });
-  }
-  const fallbackProps: Record<string, string> = { ...autopilotProps, ...resilienceProps };
-  if (useModern) {
-    fallbackProps["Target.Selector"] = targetSelector;
-  }
+  gaps.push({
+    category: "selector",
+    activity: "ClickOnText",
+    description: `Configure UI selector for "${ctx.name}"`,
+    placeholder: `<webctrl tag='*' aaname='TODO' />`,
+    estimatedMinutes: 15,
+  });
   return {
     activityType: "ui:Click",
     activityPackage: "UiPath.UIAutomation.Activities",
-    properties: fallbackProps,
-    selectorHint: targetSelector,
+    properties: {},
+    selectorHint: `${selectorBase}<webctrl tag='*' aaname='TODO_element' />`,
     errorHandling: "retry",
     variables,
     gaps,
   };
-}
-
-function extractButtonHint(text: string): string | null {
-  const patterns = [
-    /(?:clicks?|presses?|submits?|taps?)\s+(?:the\s+)?["']([A-Za-z0-9\s]+?)["']/i,
-    /(?:clicks?|presses?)\s+(?:the\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+button/i,
-    /button\s+(?:called|named|labeled)\s+["']?([A-Za-z0-9\s]+?)["']?(?:\s|$|\.)/i,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m && m[1] && m[1].length >= 2 && m[1].length <= 40) return m[1].trim();
-  }
-  return null;
-}
-
-function extractFieldHint(text: string): string | null {
-  const patterns = [
-    /(?:field|input|textbox)\s+(?:called|named|labeled)\s+["']?([A-Za-z0-9\s_-]+?)["']?(?:\s|$|\.)/i,
-    /(?:types?|enters?|fills?)\s+(?:.*?\s)?(?:in(?:to)?|for)\s+(?:the\s+)?["']?([A-Za-z0-9\s_-]{2,30}?)["']?\s+(?:field|input|textbox)/i,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m && m[1] && m[1].length >= 2 && m[1].length <= 40) return m[1].trim();
-  }
-  return null;
-}
-
-function classifyMLSkill(ctx: ActivityContext, combined: string, genCtx?: XamlGenerationContext): ReturnType<typeof classifyActivity> {
-  const gaps: XamlGap[] = [];
-
-  const matchedSkill = findMatchingAICenterSkill(ctx.name, ctx.description || "", combined, genCtx);
-  const skillName = matchedSkill ? matchedSkill.name : "";
-  const inputType = matchedSkill?.inputType || "String";
-  const outputType = matchedSkill?.outputType || "String";
-
-  if (matchedSkill && genCtx) {
-    if (!genCtx.referencedMLSkillNames.includes(matchedSkill.name)) {
-      genCtx.referencedMLSkillNames.push(matchedSkill.name);
-    }
-  }
-
-  const variables: VariableDecl[] = [
-    { name: "str_MLInput", type: "String", defaultValue: '""' },
-    { name: "str_MLOutput", type: "String", defaultValue: '""' },
-    { name: "str_MLSkillName", type: "String", defaultValue: skillName ? `"${skillName}"` : '""' },
-  ];
-
-  if (!matchedSkill) {
-    gaps.push({
-      category: "config",
-      activity: "MLSkill",
-      description: `Configure ML Skill name and endpoint for "${ctx.name}" — no matching deployed skill found on the tenant. Deploy the skill in AI Center first.`,
-      placeholder: "ML_Skill_Name from AI Center",
-      estimatedMinutes: 15,
-    });
-  }
-
-  gaps.push({
-    category: "config",
-    activity: "MLSkill",
-    description: matchedSkill
-      ? `Map input (${inputType}) / output (${outputType}) schema for ML Skill "${matchedSkill.name}" in "${ctx.name}" (package: ${matchedSkill.mlPackageName})`
-      : `Map input/output schema for ML Skill invocation in "${ctx.name}"`,
-    placeholder: matchedSkill
-      ? `Input: ${inputType}, Output: ${outputType}`
-      : "Define input JSON and parse output prediction",
-    estimatedMinutes: matchedSkill ? 10 : 20,
-  });
-
-  return {
-    activityType: "ui:MLSkill",
-    activityPackage: "UiPath.MLActivities",
-    properties: {
-      MLSkillName: skillName || "[TODO: Set ML Skill name from AI Center]",
-      Input: "str_MLInput",
-      Output: "str_MLOutput",
-      Timeout: "120000",
-    },
-    errorHandling: "catch",
-    variables,
-    gaps,
-  };
-}
-
-function findMatchingAICenterSkill(stepName: string, description: string, combined: string, genCtx?: XamlGenerationContext): AICenterSkill | null {
-  const skills = genCtx?.aiCenterSkills as AICenterSkill[] || [];
-  if (skills.length === 0) return null;
-
-  const deployed = skills.filter(s => {
-    const st = s.status.toLowerCase();
-    return st === "deployed" || st === "available";
-  });
-  if (deployed.length === 0) return skills[0] || null;
-
-  const stepLower = stepName.toLowerCase();
-  const descLower = description.toLowerCase();
-
-  for (const skill of deployed) {
-    const skillNameLower = skill.name.toLowerCase();
-    if (stepLower.includes(skillNameLower) || descLower.includes(skillNameLower) || combined.includes(skillNameLower)) {
-      return skill;
-    }
-  }
-
-  for (const skill of deployed) {
-    const pkgLower = (skill.mlPackageName || "").toLowerCase();
-    if (pkgLower && (stepLower.includes(pkgLower) || descLower.includes(pkgLower) || combined.includes(pkgLower))) {
-      return skill;
-    }
-  }
-
-  if (deployed.length === 1) return deployed[0];
-
-  for (const skill of deployed) {
-    const skillWords = skill.name.toLowerCase().split(/[\s_-]+/);
-    const matchCount = skillWords.filter(w => w.length > 2 && combined.includes(w)).length;
-    if (matchCount >= Math.ceil(skillWords.length / 2)) return skill;
-  }
-
-  return deployed[0];
 }
 
 function classifyGeneral(ctx: ActivityContext, _combined: string): ReturnType<typeof classifyActivity> {
@@ -1166,175 +722,31 @@ function classifyAgent(ctx: ActivityContext, _combined: string): ReturnType<type
   };
 }
 
-const VBNET_RESERVED_WORDS_SET = new Set([
-  "addhandler", "addressof", "alias", "and", "andalso", "as", "boolean", "byref",
-  "byte", "byval", "call", "case", "catch", "cbool", "cbyte", "cchar", "cdate",
-  "cdbl", "cdec", "char", "cint", "class", "clng", "cobj", "const", "continue",
-  "csbyte", "cshort", "csng", "cstr", "ctype", "cuint", "culng", "cushort",
-  "date", "decimal", "declare", "default", "delegate", "dim", "directcast", "do",
-  "double", "each", "else", "elseif", "end", "endif", "enum", "erase", "error",
-  "event", "exit", "false", "finally", "for", "friend", "function", "get",
-  "gettype", "getxmlnamespace", "global", "gosub", "goto", "handles", "if",
-  "implements", "imports", "in", "inherits", "integer", "interface", "is", "isnot",
-  "let", "lib", "like", "long", "loop", "me", "mod", "module", "mustinherit",
-  "mustoverride", "mybase", "myclass", "namespace", "narrowing", "new", "next",
-  "not", "nothing", "notinheritable", "notoverridable", "object", "of", "on",
-  "operator", "option", "optional", "or", "orelse", "overloads", "overridable",
-  "overrides", "paramarray", "partial", "private", "property", "protected", "public",
-  "raiseevent", "readonly", "redim", "rem", "removehandler", "resume", "return",
-  "sbyte", "select", "set", "shadows", "shared", "short", "single", "static",
-  "step", "stop", "string", "structure", "sub", "synclock", "then", "throw", "to",
-  "true", "try", "trycast", "typeof", "uinteger", "ulong", "ushort", "using",
-  "variant", "wend", "when", "while", "widening", "with", "withevents", "writeonly",
-  "xor",
-]);
-
-function sanitizeVarName(name: string): string {
-  let sanitized = name.replace(/\./g, "_");
-  sanitized = sanitized.replace(/[^a-zA-Z0-9_]/g, "_");
-  sanitized = sanitized.replace(/^[0-9]+/, "");
-  sanitized = sanitized.replace(/_+/g, "_");
-  sanitized = sanitized.replace(/^_|_$/g, "");
-  if (!sanitized) sanitized = "var1";
-  if (VBNET_RESERVED_WORDS_SET.has(sanitized.toLowerCase())) {
-    sanitized = `_${sanitized}`;
-  }
-  return sanitized;
-}
-
-
-function inferTypeFromDefaultValue(defaultValue: string | undefined): string | null {
-  if (!defaultValue) return null;
-  const trimmed = defaultValue.trim();
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return null;
-  if (trimmed === "True" || trimmed === "False") return "x:Boolean";
-  if (/^-?\d+$/.test(trimmed)) return "x:Int32";
-  if (/^-?\d+\.\d+$/.test(trimmed)) return "x:Double";
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return "x:String";
-  if (trimmed.startsWith("&quot;") && trimmed.endsWith("&quot;")) return "x:String";
-  return null;
-}
-
-function buildTextExpressionBlocks(isCSharp: boolean): string {
-  return `
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>${isCSharp ? "" : `
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>`}
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-      <x:String>System.ComponentModel</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
-      <AssemblyReference>mscorlib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-      <AssemblyReference>System.ServiceModel</AssemblyReference>
-      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>`;
-}
-
-function renderVariablesBlock(variables: VariableDecl[], targetFramework?: TargetFramework): string {
-  const isCSharp = targetFramework === "Portable";
-  const screenshotDefault = isCSharp
-    ? '"screenshots/error_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png"'
-    : '"screenshots/error_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".png"';
-  const withScreenshot = [...variables, { name: "str_ScreenshotPath", type: "String", defaultValue: `[${screenshotDefault}]` }];
-  if (withScreenshot.length === 0) return "<Sequence.Variables />";
+function renderVariablesBlock(variables: VariableDecl[]): string {
+  if (variables.length === 0) return "<Sequence.Variables />";
 
   const uniqueVars = new Map<string, VariableDecl>();
-  for (const v of withScreenshot) {
+  for (const v of variables) {
     if (!uniqueVars.has(v.name)) {
       uniqueVars.set(v.name, v);
     }
   }
 
   let xml = "<Sequence.Variables>\n";
-  const emittedNames = new Set<string>();
   uniqueVars.forEach((v) => {
-    let typeAttr = mapClrType(v.type);
-    const safeName = sanitizeVarName(v.name);
-    if (emittedNames.has(safeName)) return;
-    emittedNames.add(safeName);
-    if (typeAttr === "x:Object") {
-      const prefixType = inferTypeFromPrefix(safeName);
-      if (prefixType) {
-        typeAttr = prefixType;
-      } else {
-        const defaultType = inferTypeFromDefaultValue(v.defaultValue);
-        if (defaultType) typeAttr = defaultType;
-      }
-    }
-    let defaultAttr = "";
+    const typeAttr = mapClrType(v.type);
     if (v.defaultValue) {
-      const isObjectType = typeAttr === "x:Object" || typeAttr.includes("System.Object");
-      if (isObjectType) {
-        console.warn(`[Variable Guard] Omitting Default="${v.defaultValue}" for x:Object variable "${safeName}" — UiPath does not support Literal<Object>`);
-      } else {
-        defaultAttr = ` Default="${serializeSafeAttributeValue(v.defaultValue)}"`;
-      }
+      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" Default="${escapeXml(v.defaultValue)}" />\n`;
+    } else {
+      xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(v.name)}" />\n`;
     }
-    xml += `        <Variable x:TypeArguments="${typeAttr}" Name="${escapeXml(safeName)}"${defaultAttr} />\n`;
   });
   xml += "      </Sequence.Variables>";
   return xml;
 }
 
-function generateXMembersBlock(
-  args: Array<{ name: string; direction: string; type: string }>,
-  targetFramework?: TargetFramework
-): string {
-  if (!args || args.length === 0) return "";
-  const lines: string[] = [];
-  lines.push("  <x:Members>");
-  for (const arg of args) {
-    const clrType = mapClrType(arg.type, "critical");
-    const dir = arg.direction || "InArgument";
-    const typeExpr = ensureBalancedParens(`${dir}(${clrType})`);
-    lines.push(`    <x:Property Name="${escapeXml(arg.name)}" Type="${typeExpr}" />`);
-  }
-  lines.push("  </x:Members>");
-  return lines.join("\n");
-}
-
-function ensureBalancedParens(typeExpr: string): string {
-  const opens = (typeExpr.match(/\(/g) || []).length;
-  const closes = (typeExpr.match(/\)/g) || []).length;
-  if (opens > closes) {
-    return typeExpr + ")".repeat(opens - closes);
-  }
-  return typeExpr;
-}
-
-type MapClrTypeContext = "critical" | "non-critical";
-
-function mapClrType(type: string, context: MapClrTypeContext = "non-critical"): string {
-  const trimmed = type.trim();
-  const lower = trimmed.toLowerCase();
+function mapClrType(type: string): string {
+  const lower = type.toLowerCase();
   if (lower === "string" || lower === "system.string") return "x:String";
   if (lower === "int32" || lower === "integer" || lower === "int" || lower === "system.int32") return "x:Int32";
   if (lower === "int64" || lower === "long" || lower === "system.int64") return "x:Int64";
@@ -1344,107 +756,14 @@ function mapClrType(type: string, context: MapClrTypeContext = "non-critical"): 
   if (lower === "datetime" || lower === "system.datetime") return "s:DateTime";
   if (lower === "timespan" || lower === "system.timespan") return "s:TimeSpan";
   if (lower === "object" || lower === "system.object") return "x:Object";
-  if (lower === "securestring" || lower === "system.security.securestring") return "s:Security.SecureString";
-
-  if ((lower.includes("datatable") || lower.includes("system.data.datatable")) && !lower.includes("dictionary")) return "scg2:DataTable";
+  if (lower.includes("datatable") || lower.includes("system.data.datatable")) return "scg2:DataTable";
   if (lower.includes("datarow") || lower.includes("system.data.datarow")) return "scg2:DataRow";
-  if (lower.includes("securestring")) return "s:Security.SecureString";
+  if (lower.includes("securestring") || lower.includes("system.security.securestring")) return "s:Security.SecureString";
   if (lower.includes("mailmessage") || lower.includes("system.net.mail.mailmessage")) return "s:Net.Mail.MailMessage";
-  if (lower.includes("queueitem") && !lower.includes("queueitemdata")) return "ui:QueueItem";
+  if (lower.includes("list(") || lower.includes("list<")) return type;
+  if (lower.includes("dictionary") || lower.includes("dictionary<")) return type;
+  if (lower.includes("queueitem") || lower.includes("uipath.core.queueitem")) return "ui:QueueItem";
   if (lower.includes("queueitemdata") || lower.includes("uipath.core.queueitemdata")) return "ui:QueueItemData";
-
-  const dictMatch = trimmed.match(/^Dictionary\s*<\s*([^,]+)\s*,\s*([^>]+)\s*>$/i);
-  if (dictMatch) {
-    const keyType = mapClrType(dictMatch[1].trim(), context);
-    const valType = mapClrType(dictMatch[2].trim(), context);
-    return `scg:Dictionary(${keyType}, ${valType})`;
-  }
-
-  const listMatch = trimmed.match(/^List\s*<\s*([^>]+)\s*>$/i);
-  if (listMatch) {
-    const itemType = mapClrType(listMatch[1].trim(), context);
-    return `scg:List(${itemType})`;
-  }
-
-  const arrayMatch = trimmed.match(/^Array\s*<\s*([^>]+)\s*>$/i);
-  if (arrayMatch) {
-    const itemType = mapClrType(arrayMatch[1].trim(), context);
-    return `scg:List(${itemType})`;
-  }
-
-  const arrayBracketMatch = trimmed.match(/^(\w+)\[\]$/);
-  if (arrayBracketMatch) {
-    const itemType = mapClrType(arrayBracketMatch[1].trim(), context);
-    return `scg:List(${itemType})`;
-  }
-
-  if (trimmed.includes("clr-namespace:")) {
-    if (/\[/.test(trimmed)) {
-      const reason = "clr-namespace type with leaked brackets";
-      if (context === "critical") {
-        console.error(`[mapClrType] CRITICAL: ${reason} in critical context: "${trimmed}" — blocking`);
-        reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason, context, source: "xaml-generator" });
-      } else {
-        console.warn(`[mapClrType] ${reason}: "${trimmed}" — falling back to x:Object`);
-      }
-      return "x:Object";
-    }
-    if (!/assembly=/.test(trimmed)) {
-      const reason = "clr-namespace type without assembly qualification";
-      if (context === "critical") {
-        console.error(`[mapClrType] CRITICAL: ${reason} in critical context: "${trimmed}" — blocking`);
-        reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason, context, source: "xaml-generator" });
-      } else {
-        console.warn(`[mapClrType] ${reason}: "${trimmed}" — falling back to x:Object`);
-      }
-      return "x:Object";
-    }
-    return trimmed;
-  }
-
-  if (/\[/.test(trimmed)) {
-    const reason = "unrecognized type with bracket syntax";
-    if (context === "critical") {
-      console.error(`[mapClrType] CRITICAL: ${reason} in critical context: "${trimmed}" — blocking`);
-      reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason, context, source: "xaml-generator" });
-    } else {
-      console.warn(`[mapClrType] ${reason}: "${trimmed}" — falling back to x:Object`);
-    }
-    return "x:Object";
-  }
-
-  const hasUnbalancedParens = (() => {
-    let depth = 0;
-    for (const ch of trimmed) {
-      if (ch === "(") depth++;
-      else if (ch === ")") { depth--; if (depth < 0) return true; }
-    }
-    return depth !== 0;
-  })();
-  if (hasUnbalancedParens) {
-    const reason = "unbalanced parentheses in type";
-    if (context === "critical") {
-      console.error(`[mapClrType] CRITICAL: ${reason} in critical context: "${trimmed}" — blocking`);
-      reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason, context, source: "xaml-generator" });
-    } else {
-      console.warn(`[mapClrType] ${reason}: "${trimmed}" — falling back to x:Object`);
-    }
-    return "x:Object";
-  }
-
-  const validation = validateMapClrTypeOutput(type, type, context);
-  if (!validation.valid) {
-    if (context === "critical") {
-      console.error(`[mapClrType] CRITICAL: ${validation.diagnostic}`);
-      reportCriticalTypeDiagnostic({ inputType: type, resolvedType: "x:Object", reason: validation.diagnostic || "malformed type output", context, source: "xaml-generator" });
-      return "x:Object";
-    }
-    if (validation.fallback) {
-      console.warn(`[mapClrType] ${validation.diagnostic}`);
-      return validation.fallback;
-    }
-  }
-
   return type;
 }
 
@@ -1459,546 +778,22 @@ function isNonCriticalActivity(activityType: string): boolean {
   return nonCritical.some(t => activityType === t);
 }
 
-function sanitizeObjectLiteralArguments(xaml: string): string {
-  return xaml.replace(
-    /(<(?:In|Out|InOut)Argument\s+x:TypeArguments="x:Object"(?:\s+[^>]*)?>)([^<]+)(<\/(?:In|Out|InOut)Argument>)/g,
-    (_match, openTag: string, content: string, closeTag: string) => {
-      const trimmed = content.trim();
-      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-        return `${openTag}${content}${closeTag}`;
-      }
-      if (trimmed.length > 0) {
-        console.warn(`[Argument Guard] Bracket-wrapping literal content "${trimmed}" in x:Object argument`);
-        return `${openTag}[${trimmed}]${closeTag}`;
-      }
-      return `${openTag}${content}${closeTag}`;
-    }
-  );
-}
-
-const CATALOG_INTEGER_PROPERTY_NAMES = new Set([
-  "TimeoutMS", "DelayBefore", "DelayAfter", "DelayBetween",
-  "MaxRetries", "NumberOfRetries", "MaxNumberOfRetries",
-]);
-
-const _integerPropertyCache = new Map<string, boolean>();
-function isSchemaIntegerProperty(propName: string): boolean {
-  if (_integerPropertyCache.has(propName)) return _integerPropertyCache.get(propName)!;
-  if (!catalogService.isLoaded()) return false;
-  const integerClrTypes = new Set(["System.Int32", "System.Int64", "System.UInt32", "System.Byte"]);
-  const allActivities = catalogService.getAllActivities();
-  for (const schema of allActivities) {
-    for (const prop of schema.activity.properties) {
-      if (prop.name === propName && integerClrTypes.has(prop.clrType)) {
-        _integerPropertyCache.set(propName, true);
-        return true;
-      }
-    }
-  }
-  _integerPropertyCache.set(propName, false);
-  return false;
-}
-
-const TIMESPAN_PROPERTY_NAMES = new Set([
-  "RetryInterval", "Timeout", "DelayBefore", "DelayAfter",
-  "TimeoutMS", "DelayBetween", "WaitTime", "Duration",
-]);
-
-function trySerializeTimeSpan(key: string, value: any): string | null {
-  if (!TIMESPAN_PROPERTY_NAMES.has(key)) return null;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-
-  const hours = parseInt(value.hours || value.Hours || "0", 10) || 0;
-  const minutes = parseInt(value.minutes || value.Minutes || "0", 10) || 0;
-  const seconds = parseInt(value.seconds || value.Seconds || "0", 10) || 0;
-  const totalMs = parseInt(value.milliseconds || value.Milliseconds || value.ms || "0", 10) || 0;
-
-  if (hours === 0 && minutes === 0 && seconds === 0 && totalMs === 0) {
-    return null;
-  }
-
-  if (hours === 0 && minutes === 0 && seconds === 0 && totalMs > 0) {
-    const totalSec = Math.floor(totalMs / 1000);
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }
-
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-export function isChildElementProperty(activityType: string, propertyName: string): boolean {
-  if (!catalogService.isLoaded()) return false;
-  const cleanActivityType = activityType.replace(/^[a-z]+:/, "");
-  const schema = catalogService.getActivitySchema(cleanActivityType) || catalogService.getActivitySchema(activityType);
-  if (!schema?.activity?.properties) return false;
-  const propDef = schema.activity.properties.find((p: any) => p.name === propertyName);
-  return propDef?.xamlSyntax === "child-element";
-}
-
-export interface ChildElementEmission {
-  propertyName: string;
-  value: string;
-  argumentWrapper: string;
-  typeArguments: string | null;
-}
-
-export function getChildElementInfo(activityType: string, propertyName: string): { argumentWrapper: string; typeArguments: string | null } | null {
-  if (!catalogService.isLoaded()) return null;
-  const cleanActivityType = activityType.replace(/^[a-z]+:/, "");
-  const schema = catalogService.getActivitySchema(cleanActivityType) || catalogService.getActivitySchema(activityType);
-  if (!schema?.activity?.properties) return null;
-  const propDef = schema.activity.properties.find((p: any) => p.name === propertyName);
-  if (!propDef || propDef.xamlSyntax !== "child-element") return null;
-  return {
-    argumentWrapper: propDef.argumentWrapper || "InArgument",
-    typeArguments: propDef.typeArguments || null,
-  };
-}
-
-export function renderChildElements(activityType: string, childElements: ChildElementEmission[]): string {
-  if (childElements.length === 0) return "";
-  let xml = "";
-  for (const ce of childElements) {
-    const typeAttr = ce.typeArguments ? ` x:TypeArguments="${ce.typeArguments}"` : "";
-    const propTag = `${activityType}.${ce.propertyName}`;
-    xml += `\n              <${propTag}>`;
-    xml += `<${ce.argumentWrapper}${typeAttr}>${serializeSafeAttributeValue(ce.value)}</${ce.argumentWrapper}>`;
-    xml += `</${propTag}>`;
-  }
-  return xml;
-}
-
-export function sanitizePropertyValue(key: string, value: any): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  if (CATALOG_INTEGER_PROPERTY_NAMES.has(key) || isSchemaIntegerProperty(key)) {
-    if (typeof value === "string") {
-      const trimmed = value.trim().replace(/["']/g, "");
-      if (/^-?\d+$/.test(trimmed)) {
-        return trimmed;
-      }
-    }
-    if (typeof value === "number" && Number.isInteger(value)) {
-      return String(value);
-    }
-  }
-  if (typeof value === "string") {
-    if (value === "[object Object]") {
-      return `PLACEHOLDER_${key}_object_value`;
-    }
-    if (value === "...") {
-      return `PLACEHOLDER_${key}`;
-    }
-    const isVbExpression = /^\[.*\]$/.test(value.trim());
-    if (isVbExpression) {
-      const inner = value.trim().slice(1, -1);
-      return `[${inner}]`;
-    }
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    const items = value.map((item: any) => {
-      if (typeof item === "string") return item;
-      if (typeof item === "object" && item !== null) return JSON.stringify(item);
-      return String(item);
-    });
-    const vbItems = items.map(i => `"${i.replace(/"/g, '""')}"`);
-    return `New String() {${vbItems.join(", ")}}`;
-  }
-  if (typeof value === "object") {
-    if (key.toLowerCase().includes("header")) {
-      const entries = Object.entries(value as Record<string, any>);
-      if (entries.length === 0) return `New Dictionary(Of String, String)()`;
-      const kvPairs = entries.map(([k, v]) => `{"${String(k)}", "${String(v)}"}`).join(", ");
-      return `New Dictionary(Of String, String) From {${kvPairs}}`;
-    }
-    const timeSpanResult = trySerializeTimeSpan(key, value);
-    if (timeSpanResult !== null) return timeSpanResult;
-    return `__STRUCTURED_OBJECT__${JSON.stringify(value)}`;
-  }
-  return `ERROR_UNSERIALIZABLE_${key}`;
-}
-
-const PSEUDO_XAML_ATTR_KEYS = new Set(["Then", "Else", "Cases", "Body", "Finally", "Try", "_convertedInputArgs", "_convertedOutputArgs", "DisplayName"]);
-
-const CONTROL_FLOW_ACTIVITY_TYPES = new Set(["If", "Switch", "ForEach", "TryCatch"]);
-
-const HIGH_RISK_ACTIVITY_TYPES = new Set([
-  "ui:HttpClient", "uweb:HttpClient",
-  "ui:ExecuteQuery", "udb:ExecuteQuery",
-  "ui:SendSmtpMailMessage", "umail:SendSmtpMailMessage",
-  "ui:InvokeCode",
-  "ui:StartProcess",
-  "ui:TypeInto", "ui:Click",
-  "ui:GetCredential", "ui:GetAsset",
-  "ui:AddQueueItem", "ui:GetTransactionItem", "ui:SetTransactionStatus",
-  "ui:ExcelApplicationScope", "ui:UseExcel",
-  "ui:ReadRange", "ui:WriteRange",
-  "ui:ReadTextFile", "ui:WriteTextFile",
-  "ui:ReadCsvFile", "ui:WriteCsvFile",
-]);
-
-function upgradeErrorHandlingForHighRisk(
-  errorHandling: "retry" | "catch" | "escalate" | "none",
-  activityType: string,
-): "retry" | "catch" | "escalate" | "none" {
-  if (errorHandling !== "none") return errorHandling;
-  if (HIGH_RISK_ACTIVITY_TYPES.has(activityType)) return "catch";
-  if (!activityType.includes(":") && HIGH_RISK_ACTIVITY_TYPES.has(`ui:${activityType}`)) return "catch";
-  return errorHandling;
-}
-
-interface NestedActivityObject {
-  activityType: string;
-  displayName?: string;
-  properties?: Record<string, string>;
-  selectorHint?: string;
-  [key: string]: unknown;
-}
-
-function isNestedActivityObject(val: unknown): val is NestedActivityObject {
-  return typeof val === "object" && val !== null && typeof (val as Record<string, unknown>).activityType === "string";
-}
-
-function isControlFlowActivity(activityType: string): boolean {
-  return CONTROL_FLOW_ACTIVITY_TYPES.has(activityType) ||
-    CONTROL_FLOW_ACTIVITY_TYPES.has(activityType.replace("System.Activities.", ""));
-}
-
-function sanitizePropsForRendering(props: Record<string, string>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(props)) {
-    if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-    const sanitized = sanitizePropertyValue(key, value);
-    if (sanitized === "") continue;
-    result[key] = sanitized;
-  }
-  return result;
-}
-
-function buildRawPropertiesForControlFlow(obj: NestedActivityObject): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  const props = obj.properties || {};
-  for (const [k, v] of Object.entries(props)) {
-    result[k] = v;
-  }
-  const pseudoKeysList = ["Then", "Else", "Cases", "Body", "Finally", "Try"];
-  for (const pseudoKey of pseudoKeysList) {
-    if (pseudoKey in obj && !(pseudoKey in result)) {
-      result[pseudoKey] = obj[pseudoKey];
-    }
-  }
-  return result;
-}
-
-function renderActivityOrControlFlow(
-  activityType: string,
-  displayName: string,
-  sanitizedProps: Record<string, string>,
-  rawObj: NestedActivityObject,
-  targetFramework?: TargetFramework
-): string {
-  if (isControlFlowActivity(activityType)) {
-    const rawProperties = buildRawPropertiesForControlFlow(rawObj);
-    return renderControlFlowActivity(activityType, displayName, sanitizedProps, rawProperties, targetFramework);
-  }
-  const selectorHint = typeof rawObj.selectorHint === "string" ? rawObj.selectorHint : undefined;
-  return renderActivity(activityType, displayName, sanitizedProps, selectorHint, undefined, undefined, targetFramework);
-}
-
-function renderControlFlowActivity(
-  activityType: string,
-  displayName: string,
-  properties: Record<string, string>,
-  rawProperties: Record<string, unknown>,
-  targetFramework?: TargetFramework
-): string {
-  const enforced = enforceDisplayName(activityType, displayName);
-  const baseType = activityType.replace("System.Activities.", "");
-
-  if (baseType === "If") {
-    const rawCondition = properties["Condition"] || rawProperties["Condition"] || "";
-    const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
-    const condition = needsConditionReview ? "True" : rawCondition;
-
-    let thenContent = "";
-    const thenProp = rawProperties["Then"];
-    if (isNestedActivityObject(thenProp)) {
-      const nestedProps = sanitizePropsForRendering(thenProp.properties || {});
-      thenContent = renderActivityOrControlFlow(thenProp.activityType, thenProp.displayName || "Then Activity", nestedProps, thenProp , targetFramework);
-    } else if (typeof thenProp === "string" && thenProp.length > 0 && thenProp !== "..." && thenProp !== "[object Object]") {
-      thenContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Then: ${escapeXml(String(thenProp))}&quot;]" DisplayName="Then: ${escapeXml(enforced)}" />`;
-    } else {
-      thenContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Then path: ${escapeXml(enforced)}&quot;]" DisplayName="Then Path" />`;
-    }
-
-    let elseContent = "";
-    const elseProp = rawProperties["Else"];
-    if (isNestedActivityObject(elseProp)) {
-      const nestedProps = sanitizePropsForRendering(elseProp.properties || {});
-      elseContent = renderActivityOrControlFlow(elseProp.activityType, elseProp.displayName || "Else Activity", nestedProps, elseProp , targetFramework);
-    } else if (typeof elseProp === "string" && elseProp.length > 0 && elseProp !== "..." && elseProp !== "[object Object]") {
-      elseContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Else: ${escapeXml(String(elseProp))}&quot;]" DisplayName="Else: ${escapeXml(enforced)}" />`;
-    } else {
-      elseContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Else path: ${escapeXml(enforced)}&quot;]" DisplayName="Else Path" />`;
-    }
-
-    return `${needsConditionReview ? `\n          <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(enforced)}" DisplayName="Review Condition" />` : ""}
-          <If DisplayName="${escapeXml(enforced)}" Condition="${serializeSafeAttributeValue(`[${String(condition)}]`)}">
-            <If.Then>
-              <Sequence DisplayName="Then: ${escapeXml(enforced)}">${thenContent}
-              </Sequence>
-            </If.Then>
-            <If.Else>
-              <Sequence DisplayName="Else: ${escapeXml(enforced)}">${elseContent}
-              </Sequence>
-            </If.Else>
-          </If>`;
-  }
-
-  if (baseType === "Switch") {
-    const rawExpression = properties["Expression"] || rawProperties["Expression"] || "";
-    const needsExpressionReview = !rawExpression || rawExpression === "TODO_Expression" || rawExpression.startsWith("TODO_") || rawExpression.startsWith("PLACEHOLDER_");
-    const expression = needsExpressionReview ? "Nothing" : rawExpression;
-    const casesProp = rawProperties["Cases"];
-    let caseElements = "";
-
-    if (casesProp && typeof casesProp === "object" && !Array.isArray(casesProp)) {
-      for (const [caseKey, caseVal] of Object.entries(casesProp)) {
-        let caseBody = "";
-        if (isNestedActivityObject(caseVal)) {
-          caseBody = renderActivityOrControlFlow(caseVal.activityType, caseVal.displayName || caseKey, caseVal.properties || {}, caseVal, targetFramework);
-        } else {
-          caseBody = `\n                  <ui:LogMessage Level="Info" Message="[&quot;Case: ${escapeXml(caseKey)}&quot;]" DisplayName="Case: ${escapeXml(caseKey)}" />`;
-        }
-        caseElements += `
-                <Sequence x:Key="${escapeXml(caseKey)}" DisplayName="Case: ${escapeXml(caseKey)}">${caseBody}
-                </Sequence>`;
-      }
-    }
-    if (!caseElements) {
-      caseElements = `
-                <Sequence x:Key="TODO" DisplayName="Default Case">
-                  <ui:LogMessage Level="Info" Message="[&quot;Default case: ${escapeXml(enforced)}&quot;]" DisplayName="Default Case" />
-                </Sequence>`;
-    }
-
-    return `${needsExpressionReview ? `\n          <ui:Comment Text="TODO: Replace default Nothing expression with actual value for: ${escapeXml(enforced)}" DisplayName="Review Expression" />` : ""}
-          <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="${serializeSafeAttributeValue(`[${String(expression)}]`)}">
-            <Switch.Cases>${caseElements}
-            </Switch.Cases>
-            <Switch.Default>
-              <Sequence DisplayName="Default: ${escapeXml(enforced)}">
-                <ui:LogMessage Level="Info" Message="[&quot;Switch default: ${escapeXml(enforced)}&quot;]" DisplayName="Default Path" />
-              </Sequence>
-            </Switch.Default>
-          </Switch>`;
-  }
-
-  if (baseType === "ForEach") {
-    let itemType = properties["TypeArgument"] || rawProperties["TypeArgument"] || "x:Object";
-    const rawValues = properties["Values"] || rawProperties["Values"] || "";
-    const needsValuesReview = !rawValues || rawValues === "TODO_Collection" || rawValues.startsWith("TODO_") || rawValues.startsWith("PLACEHOLDER_");
-    const values = needsValuesReview ? "New List(Of Object)" : rawValues;
-    const valExpr = String(values).replace(/^\[|\]$/g, "");
-    const isDataTableIteration = /\bdt_\w*\.Rows\b/i.test(valExpr) || /\.AsEnumerable\(\)/i.test(valExpr)
-      || /\bDataTable\b.*\.Rows\b/i.test(valExpr) || /\.Rows\b/i.test(valExpr);
-    if (isDataTableIteration) {
-      if (itemType !== "scg2:DataRow") {
-        console.warn(`[ForEach Guard] Type mismatch in renderControlFlowActivity: x:TypeArguments="${itemType}" but Values expression "${valExpr}" iterates DataTable rows — auto-correcting to scg2:DataRow`);
-        itemType = "scg2:DataRow";
-      }
-    } else if (itemType === "x:Object") {
-      const prefixType = inferTypeFromPrefix(valExpr);
-      if (prefixType && prefixType !== "x:Object") {
-        itemType = prefixType;
-      }
-    }
-
-    const rawIteratorName = String(properties["IteratorVariable"] || rawProperties["IteratorVariable"] || "item");
-    const iteratorName = sanitizeVarName(rawIteratorName);
-
-    let bodyContent = "";
-    const bodyProp = rawProperties["Body"];
-    if (isNestedActivityObject(bodyProp)) {
-      const nestedProps = sanitizePropsForRendering(bodyProp.properties || {});
-      bodyContent = renderActivityOrControlFlow(bodyProp.activityType, bodyProp.displayName || "Loop Body", nestedProps, bodyProp , targetFramework);
-    } else {
-      bodyContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Processing item in: ${escapeXml(enforced)}&quot;]" DisplayName="Loop Body" />`;
-    }
-
-    return `${needsValuesReview ? `\n          <ui:Comment Text="TODO: Replace default empty collection with actual data source for: ${escapeXml(enforced)}" DisplayName="Review Collection" />` : ""}
-          <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="${serializeSafeAttributeValue(`[${String(values)}]`)}">
-            <ForEach.Body>
-              <ActivityAction x:TypeArguments="${escapeXml(String(itemType))}">
-                <ActivityAction.Argument>
-                  <DelegateInArgument x:TypeArguments="${escapeXml(String(itemType))}" Name="${escapeXml(iteratorName)}" />
-                </ActivityAction.Argument>
-                <Sequence DisplayName="Body: ${escapeXml(enforced)}">${bodyContent}
-                </Sequence>
-              </ActivityAction>
-            </ForEach.Body>
-          </ForEach>`;
-  }
-
-  if (baseType === "TryCatch") {
-    let tryContent = "";
-    const tryProp = rawProperties["Try"];
-    if (isNestedActivityObject(tryProp)) {
-      const nestedProps = sanitizePropsForRendering(tryProp.properties || {});
-      tryContent = renderActivityOrControlFlow(tryProp.activityType, tryProp.displayName || "Try Body", nestedProps, tryProp , targetFramework);
-    } else {
-      tryContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Try block: ${escapeXml(enforced)}&quot;]" DisplayName="Try Body" />`;
-    }
-
-    let finallyContent = "";
-    const finallyProp = rawProperties["Finally"];
-    if (isNestedActivityObject(finallyProp)) {
-      const nestedProps = sanitizePropsForRendering(finallyProp.properties || {});
-      finallyContent = renderActivityOrControlFlow(finallyProp.activityType, finallyProp.displayName || "Finally", nestedProps, finallyProp , targetFramework);
-    }
-
-    return `
-          <TryCatch DisplayName="${escapeXml(enforced)}">
-            <TryCatch.Try>
-              <Sequence DisplayName="Try: ${escapeXml(enforced)}">${tryContent}
-              </Sequence>
-            </TryCatch.Try>
-            <TryCatch.Catches>
-              <Catch x:TypeArguments="s:Exception">
-                <ActivityAction x:TypeArguments="s:Exception">
-                  <ActivityAction.Argument>
-                    <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
-                  </ActivityAction.Argument>
-                  <Sequence DisplayName="Catch: ${escapeXml(enforced)}">
-                    <ui:LogMessage Level="Error" Message="[&quot;Error in ${escapeXml(enforced)}: &quot; &amp; exception.Message]" DisplayName="Log Exception" />
-                  </Sequence>
-                </ActivityAction>
-              </Catch>
-            </TryCatch.Catches>${finallyContent ? `
-            <TryCatch.Finally>
-              <Sequence DisplayName="Finally: ${escapeXml(enforced)}">${finallyContent}
-              </Sequence>
-            </TryCatch.Finally>` : ""}
-          </TryCatch>`;
-  }
-
-  return renderActivity(activityType, displayName, properties as Record<string, string>, undefined, undefined, undefined, targetFramework);
-}
-
-export function renderActivity(
+function renderActivity(
   activityType: string,
   displayName: string,
   properties: Record<string, string>,
   selectorHint?: string,
   operationalProps?: { timeout?: number; continueOnError?: boolean; delayBefore?: number; delayAfter?: number },
-  annotationOpts?: { stepNumber?: number; stepName?: string; businessContext?: string; errorStrategy?: string; placeholders?: string[]; aiReasoning?: string },
-  targetFramework?: TargetFramework
+  annotationOpts?: { stepNumber?: number; stepName?: string; businessContext?: string; errorStrategy?: string; placeholders?: string[]; aiReasoning?: string }
 ): string {
-  const BUILTIN_ACTIVITY_TYPES = new Set([
-    "Assign", "If", "TryCatch", "Sequence", "Delay", "Rethrow", "Throw",
-    "While", "DoWhile", "ForEach", "Switch", "Flowchart", "FlowDecision",
-    "FlowStep", "FlowSwitch", "Parallel", "ParallelForEach",
-    "InvokeWorkflowFile", "StateMachine", "State", "FinalState",
-  ]);
-
-  const RENDER_ACTIVITY_INHERITED_PROPS = new Set([
-    "DisplayName", "ContinueOnError", "Timeout", "Private", "DelayBefore", "DelayAfter",
-    "TimeoutMS", "Annotation", "AnnotationText", "sap2010:Annotation.AnnotationText",
-    "Selector", "Result", "WorkflowFileName",
-    "To", "Value", "TypeArgument", "Condition",
-    "Values", "IteratorVariable", "Body",
-    "Level", "Message",
-  ]);
-
-  if (catalogService.isLoaded()) {
-    const lookupName = activityType.replace(/^[a-zA-Z][a-zA-Z0-9]*:/, "");
-    if (!BUILTIN_ACTIVITY_TYPES.has(lookupName) && !BUILTIN_ACTIVITY_TYPES.has(activityType)) {
-      const schema = catalogService.getActivitySchema(lookupName);
-      if (!schema) {
-        console.warn(`[renderActivity] Unknown activity type "${activityType}" — not in catalog, emitting comment placeholder`);
-        return `
-          <!-- UNKNOWN ACTIVITY: ${escapeXml(activityType)} — "${escapeXml(displayName)}" -->
-          <ui:Comment Text="Unknown activity type: ${escapeXml(activityType)}. Manual implementation required." DisplayName="${escapeXml(displayName)} (stub)" />`;
-      }
-
-      const catalogKnownProps = new Set<string>();
-      if (schema.activity && schema.activity.properties) {
-        for (const p of schema.activity.properties) {
-          catalogKnownProps.add(p.name);
-        }
-      }
-
-      const filteredKeys: string[] = [];
-      for (const key of Object.keys(properties)) {
-        if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-        if (RENDER_ACTIVITY_INHERITED_PROPS.has(key)) continue;
-        if (catalogKnownProps.has(key)) continue;
-        filteredKeys.push(key);
-      }
-      if (filteredKeys.length > 0) {
-        console.log(`[renderActivity] Pre-emission filter: removed ${filteredKeys.length} non-catalog property(ies) from ${activityType} "${displayName}": ${filteredKeys.join(", ")}`);
-        for (const key of filteredKeys) {
-          delete properties[key];
-        }
-      }
-    }
-  }
-
   const enforced = enforceDisplayName(activityType, displayName);
-  const isCrossPlatform = targetFramework === "Portable";
-
-  const LOGMESSAGE_KNOWN_PROPS = new Set(["Level", "Message", "DisplayName"]);
-  if (activityType === "ui:LogMessage") {
-    const hasMessage = "Message" in properties;
-    if (!hasMessage) {
-      for (const [key, value] of Object.entries(properties)) {
-        if (!LOGMESSAGE_KNOWN_PROPS.has(key) && !PSEUDO_XAML_ATTR_KEYS.has(key)) {
-          properties["Message"] = value;
-          delete properties[key];
-          break;
-        }
-      }
-    }
-    for (const key of Object.keys(properties)) {
-      if (!LOGMESSAGE_KNOWN_PROPS.has(key) && !PSEUDO_XAML_ATTR_KEYS.has(key) && key !== "sap2010:Annotation.AnnotationText") {
-        delete properties[key];
-      }
-    }
-  }
-
   let propAttrs = "";
-  const childElementEmissions: ChildElementEmission[] = [];
   for (const [key, value] of Object.entries(properties)) {
-    if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-    const childInfo = getChildElementInfo(activityType, key);
-    if (childInfo) {
-      const sanitized = sanitizePropertyValue(key, value);
-      if (sanitized === "") continue;
-      const effectiveValue = sanitized.startsWith("__STRUCTURED_OBJECT__")
-        ? sanitized.slice("__STRUCTURED_OBJECT__".length)
-        : sanitized;
-      childElementEmissions.push({ propertyName: key, value: effectiveValue, ...childInfo });
-      continue;
-    }
-    const sanitized = sanitizePropertyValue(key, value);
-    if (sanitized === "") continue;
-    if (sanitized.startsWith("__STRUCTURED_OBJECT__")) {
-      reportAttributeSerializerBypass(`structured-object-skip:${activityType}.${key}`);
-      continue;
-    }
-    propAttrs += ` ${key}="${serializeSafeAttributeValue(sanitized)}"`;
-
+    propAttrs += ` ${key}="${escapeXml(value)}"`;
   }
 
-  if (selectorHint && !isCrossPlatform) {
-    propAttrs += ` Selector="${serializeSafeAttributeValue(selectorHint)}"`;
+  if (selectorHint) {
+    propAttrs += ` Selector="${escapeXml(selectorHint)}"`;
   }
 
   if (isUiActivity(activityType)) {
@@ -2006,15 +801,8 @@ export function renderActivity(
     propAttrs += ` TimeoutMS="${timeout}"`;
   }
 
-  const ACTIVITIES_WITH_CONTINUE_ON_ERROR = new Set([
-    "ui:Click", "ui:TypeInto", "ui:GetText", "ui:ElementExists",
-    "ui:OpenBrowser", "ui:NavigateTo", "ui:AttachBrowser", "ui:AttachWindow",
-    "ui:UseBrowser", "ui:UseApplicationBrowser",
-  ]);
-  if (ACTIVITIES_WITH_CONTINUE_ON_ERROR.has(activityType)) {
-    const continueOnError = operationalProps?.continueOnError ?? false;
-    propAttrs += ` ContinueOnError="${continueOnError ? "True" : "False"}"`;
-  }
+  const continueOnError = operationalProps?.continueOnError ?? (isNonCriticalActivity(activityType) ? true : false);
+  propAttrs += ` ContinueOnError="${continueOnError ? "True" : "False"}"`;
 
   if (operationalProps?.delayBefore && operationalProps.delayBefore > 0) {
     propAttrs += ` DelayBefore="${operationalProps.delayBefore}"`;
@@ -2030,176 +818,12 @@ export function renderActivity(
     }
   }
 
-  if (isCrossPlatform && (activityType === "ui:UseBrowser" || activityType === "ui:UseApplication")) {
-    const url = properties["Url"] || "TODO: Set application URL";
-    return `
-          <${activityType} DisplayName="${escapeXml(enforced)}" Url="${serializeSafeAttributeValue(String(url))}"${selectorHint ? ` Selector="${serializeSafeAttributeValue(selectorHint)}"` : ""}>
-            <${activityType}.Body>
-              <Sequence DisplayName="Actions: ${escapeXml(enforced)}">
-              </Sequence>
-            </${activityType}.Body>
-          </${activityType}>`;
-  }
-
-  const isInvokeActivity = activityType === "ui:InvokeWorkflowFile" || activityType === "InvokeWorkflowFile" ||
-    activityType === "ui:InvokeWorkflow" || activityType === "InvokeWorkflow" ||
-    activityType === "ui:InvokeWorkflowInteractive" || activityType === "InvokeWorkflowInteractive";
-
-  const convertedInputArgs = properties["_convertedInputArgs"] || "";
-  const convertedOutputArgs = properties["_convertedOutputArgs"] || "";
-  const hasConvertedArgs = isInvokeActivity && (convertedInputArgs || convertedOutputArgs);
-
-  const invokePropertyBindings: Array<{ key: string; value: string; direction: "In" | "Out" | "InOut" }> = [];
-
-  if (isInvokeActivity) {
-    const INVOKE_ALLOWED_ATTRS = new Set([
-      "WorkflowFileName", "WorkflowFilePath", "FileName",
-      "DisplayName", "ContinueOnError", "Timeout", "Isolated",
-      "TargetFolder", "LogMessage", "TimeoutMS",
-    ]);
-    const pseudoProps = new Set(["Then", "Else", "Body", "Cases", "Finally", "Try", "Catches"]);
-    const keysToRemove: string[] = [];
-    for (const key of Object.keys(properties)) {
-      if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-      if (key.startsWith("_converted")) continue;
-      if (INVOKE_ALLOWED_ATTRS.has(key)) continue;
-      if (key.startsWith("sap2010:") || key.startsWith("xmlns")) continue;
-      if (pseudoProps.has(key)) {
-        keysToRemove.push(key);
-        continue;
-      }
-      const val = properties[key];
-      const strVal = val == null ? "" : String(val).trim();
-      if (strVal) {
-        let direction: "In" | "Out" | "InOut" = "In";
-        if (key.startsWith("out_")) direction = "Out";
-        else if (key.startsWith("io_")) direction = "InOut";
-        invokePropertyBindings.push({ key, value: strVal, direction });
-      }
-      keysToRemove.push(key);
-    }
-    for (const key of keysToRemove) {
-      delete properties[key];
-    }
-
-    propAttrs = "";
-    for (const [key, value] of Object.entries(properties)) {
-      if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-      if (key.startsWith("_converted")) continue;
-      const childInfo = getChildElementInfo(activityType, key);
-      if (childInfo) {
-        const sanitized = sanitizePropertyValue(key, value);
-        if (sanitized === "") continue;
-        const effectiveValue = sanitized.startsWith("__STRUCTURED_OBJECT__")
-          ? sanitized.slice("__STRUCTURED_OBJECT__".length)
-          : sanitized;
-        childElementEmissions.push({ propertyName: key, value: effectiveValue, ...childInfo });
-        continue;
-      }
-      const sanitized = sanitizePropertyValue(key, value);
-      if (sanitized === "") continue;
-      if (sanitized.startsWith("__STRUCTURED_OBJECT__")) {
-        reportAttributeSerializerBypass(`structured-object-skip:${activityType}.${key}`);
-        continue;
-      }
-      propAttrs += ` ${key}="${serializeSafeAttributeValue(sanitized)}"`;
-    }
-  }
-
-  let innerActivity: string;
-  if (activityType === "Assign") {
-    const rawToValue = properties["To"] || properties["to"] || "[variable]";
-    const rawAssignValue = properties["Value"] || properties["value"] || "[value]";
-    const toType = properties["TypeArgument"] || "x:String";
-    const toValue = ensureBracketWrapped(rawToValue);
-    const assignValue = smartBracketWrap(rawAssignValue);
-    const safeToValue = normalizeXmlExpression(toValue);
-    let safeAssignValue = normalizeXmlExpression(assignValue);
-    if (toType === "x:Object") {
-      const valContent = safeAssignValue.trim();
-      const isLiteral = !(valContent.startsWith("[") && valContent.endsWith("]"));
-      if (isLiteral && valContent.length > 0) {
-        safeAssignValue = `[${valContent}]`;
-        console.warn(`[Argument Guard] Bracket-wrapping literal value "${valContent}" for x:Object Assign "${enforced}"`);
-      }
-    }
-    innerActivity = `<Assign DisplayName="${escapeXml(enforced)}"${propAttrs.replace(/\s+(To|Value|to|value|TypeArgument)="[^"]*"/g, "")}>
-              <Assign.To><OutArgument x:TypeArguments="${toType}">${safeToValue}</OutArgument></Assign.To>
-              <Assign.Value><InArgument x:TypeArguments="${toType}">${safeAssignValue}</InArgument></Assign.Value>
-            </Assign>`;
-  } else if (hasConvertedArgs || (isInvokeActivity && invokePropertyBindings.length > 0)) {
-    let argsContent = "";
-    if (convertedInputArgs) argsContent += parseInvokeArgs(convertedInputArgs, "In");
-    if (convertedOutputArgs) argsContent += parseInvokeArgs(convertedOutputArgs, "Out");
-
-    const convertedKeyValues = new Map<string, string>();
-    const convertedKeyPattern = /x:Key="([^"]+)"[^>]*>([^<]*)</g;
-    let ckm;
-    while ((ckm = convertedKeyPattern.exec(argsContent)) !== null) {
-      convertedKeyValues.set(ckm[1], ckm[2].trim());
-    }
-    for (const binding of invokePropertyBindings) {
-      const argType = binding.direction === "Out" ? "OutArgument" : binding.direction === "InOut" ? "InOutArgument" : "InArgument";
-      const safeValue = escapeXmlExpression(binding.value);
-      if (convertedKeyValues.has(binding.key)) {
-        const existingValue = convertedKeyValues.get(binding.key) || "";
-        const propValue = binding.value.replace(/^\[|\]$/g, "").trim();
-        const existingNorm = existingValue.replace(/^\[|\]$/g, "").trim();
-        if (propValue === existingNorm) {
-          continue;
-        }
-        argsContent += `                <${argType} x:TypeArguments="x:Object" x:Key="${escapeXml(binding.key)}">${safeValue}</${argType}>\n`;
-        continue;
-      }
-      argsContent += `                <${argType} x:TypeArguments="x:Object" x:Key="${escapeXml(binding.key)}">${safeValue}</${argType}>\n`;
-    }
-
-    const childElementXml = renderChildElements(activityType, childElementEmissions);
-    if (argsContent || childElementXml) {
-      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs}>
-              <${activityType}.Arguments>
-${argsContent}              </${activityType}.Arguments>${childElementXml}
-            </${activityType}>`;
-    } else {
-      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
-    }
-  } else {
-    const childElementXml = renderChildElements(activityType, childElementEmissions);
-    if (childElementXml) {
-      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs}>${childElementXml}
-            </${activityType}>`;
-    } else {
-      innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
-    }
-  }
-
-  if (isCrossPlatform && isUiActivity(activityType) && selectorHint) {
-    const appSelector = selectorHint.match(/<html[^>]*\/>/)
-      ? escapeXml(selectorHint.match(/<html[^>]*\/>/)![0])
-      : "";
-    const targetSelector = selectorHint.replace(/<html[^>]*\/>\s*/, "");
-    const useAppType = selectorHint.includes("app=") ? "ui:UseApplication" : "ui:UseBrowser";
-    return `
-          <${useAppType} DisplayName="Scope: ${escapeXml(enforced)}" Url="TODO: Set target URL" Selector="${appSelector}">
-            <${useAppType}.Body>
-              <Sequence DisplayName="Actions: ${escapeXml(enforced)}">
-                <${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} Target.Selector="${escapeXml(targetSelector)}" />
-              </Sequence>
-            </${useAppType}.Body>
-          </${useAppType}>`;
-  }
-
   return `
-          ${innerActivity}`;
+          <${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
 }
 
-function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retry" | "catch" | "escalate" | "none", targetFramework?: TargetFramework, genCtx?: XamlGenerationContext): string {
+function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retry" | "catch" | "escalate" | "none"): string {
   if (errorHandling === "none") return innerXml;
-
-  const isCSharp = targetFramework === "Portable";
-  const concat = isCSharp ? " + " : " &amp; ";
-  const automationPattern = genCtx?.automationPattern || "";
-  const suppressDiagnostics = automationPattern === "simple-linear" || automationPattern === "api-data-driven";
 
   const strategyDesc = errorHandling === "retry" ? "Retry up to 3 times with 5s interval"
     : errorHandling === "escalate" ? "Log escalation and rethrow for manual intervention"
@@ -2208,104 +832,26 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
   const annotAttr = ` sap2010:Annotation.AnnotationText="${escapeXml(annotation)}"`;
 
   if (errorHandling === "retry") {
-    const escapedStep = escapeXml(stepName);
-    const alreadyHasRetryScope = /<ui:RetryScope[\s>]/.test(innerXml);
-    const retryScreenshot = suppressDiagnostics ? "" : `
-                        <TryCatch DisplayName="Safe Screenshot on Retry Failure">
-                          <TryCatch.Try>
-                            <Sequence DisplayName="Capture Screenshot">
-                              <ui:TakeScreenshot DisplayName="Screenshot on Retry Failure: ${escapedStep}" />
-                              <ui:LogMessage Level="Warn" Message="[&quot;Retry exhausted for ${escapedStep}, screenshot captured&quot;]" DisplayName="Log Retry Screenshot" />
-                            </Sequence>
-                          </TryCatch.Try>
-                          <TryCatch.Catches>
-                            <Catch x:TypeArguments="s:Exception">
-                              <ActivityAction x:TypeArguments="s:Exception">
-                                <ActivityAction.Argument>
-                                  <DelegateInArgument x:TypeArguments="s:Exception" Name="ssEx" />
-                                </ActivityAction.Argument>
-                                <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}ssEx.Message]" DisplayName="Log Screenshot Failure" />
-                              </ActivityAction>
-                            </Catch>
-                          </TryCatch.Catches>
-                        </TryCatch>`;
-    const retryBody = alreadyHasRetryScope ? innerXml : `
-              <ui:RetryScope DisplayName="Retry: ${escapedStep}" NumberOfRetries="3" RetryInterval="00:00:05">
-                <ui:RetryScope.Condition>
-                  <ui:ShouldRetry />
-                </ui:RetryScope.Condition>
-                <Sequence DisplayName="Retry Body: ${escapedStep}">${innerXml}
-                </Sequence>
-              </ui:RetryScope>`;
     return `
-          <TryCatch DisplayName="Try Retry: ${escapedStep}"${annotAttr}>
-            <TryCatch.Try>${retryBody}
-            </TryCatch.Try>
-            <TryCatch.Catches>
-              <Catch x:TypeArguments="s:Exception">
-                <ActivityAction x:TypeArguments="s:Exception">
-                  <ActivityAction.Argument>
-                    <DelegateInArgument x:TypeArguments="s:Exception" Name="retryEx" />
-                  </ActivityAction.Argument>
-                  <Sequence DisplayName="Handle Retry Failure: ${escapedStep}">${retryScreenshot}
-                    <ui:LogMessage Level="Error" Message="[&quot;[Retry Exhausted] ${escapedStep} failed after retries — &quot;${concat}retryEx.Message]" DisplayName="Log Retry Failure" />
-                    <Rethrow DisplayName="Rethrow" />
-                  </Sequence>
-                </ActivityAction>
-              </Catch>
-            </TryCatch.Catches>
-          </TryCatch>`;
+          <ui:RetryScope DisplayName="Retry: ${escapeXml(stepName)}" NumberOfRetries="3" RetryInterval="00:00:05"${annotAttr}>
+            <ui:RetryScope.Body>
+              <Sequence DisplayName="Retry Body: ${escapeXml(stepName)}">${innerXml}
+              </Sequence>
+            </ui:RetryScope.Body>
+            <ui:RetryScope.Condition>
+              <ui:ShouldRetry />
+            </ui:RetryScope.Condition>
+          </ui:RetryScope>`;
   }
 
-  const escapedStep = escapeXml(stepName);
-  const screenshotCapture = suppressDiagnostics ? "" : `
-                    <TryCatch DisplayName="Safe Screenshot Capture">
-                      <TryCatch.Try>
-                        <Sequence DisplayName="Capture Screenshot">
-                          <ui:TakeScreenshot DisplayName="Screenshot on Error: ${escapedStep}" />
-                          <ui:LogMessage Level="Info" Message="[&quot;Screenshot captured for error diagnostics&quot;]" DisplayName="Log Screenshot Captured" />
-                        </Sequence>
-                      </TryCatch.Try>
-                      <TryCatch.Catches>
-                        <Catch x:TypeArguments="s:Exception">
-                          <ActivityAction x:TypeArguments="s:Exception">
-                            <ActivityAction.Argument>
-                              <DelegateInArgument x:TypeArguments="s:Exception" Name="screenshotEx" />
-                            </ActivityAction.Argument>
-                            <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}screenshotEx.Message]" DisplayName="Log Screenshot Failure" />
-                          </ActivityAction>
-                        </Catch>
-                      </TryCatch.Catches>
-                    </TryCatch>`;
-
-  const timestampExpr = isCSharp
-    ? `[DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ")]`
-    : `[DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ssZ")]`;
-  const stackTraceExpr = isCSharp
-    ? `[exception.StackTrace != null ? exception.StackTrace.Substring(0, Math.Min(exception.StackTrace.Length, 500)) : ""]`
-    : `[If(exception.StackTrace IsNot Nothing, exception.StackTrace.Substring(0, Math.Min(exception.StackTrace.Length, 500)), "")]`;
-  const addLogFields = suppressDiagnostics ? "" : `
-                    <ui:AddLogFields DisplayName="Add Diagnostic Fields: ${escapedStep}">
-                      <ui:AddLogFields.Fields>
-                        <scg:Dictionary x:TypeArguments="x:String, x:Object">
-                          <x:String x:Key="ErrorStep">${escapedStep}</x:String>
-                          <x:String x:Key="ErrorMessage">[exception.Message]</x:String>
-                          <x:String x:Key="ErrorType">[exception.GetType().Name]</x:String>
-                          <x:String x:Key="ErrorTimestamp">${timestampExpr}</x:String>
-                          <x:String x:Key="StackTraceSummary">${stackTraceExpr}</x:String>
-                          <x:String x:Key="ScreenshotCaptured">True</x:String>
-                        </scg:Dictionary>
-                      </ui:AddLogFields.Fields>
-                    </ui:AddLogFields>`;
-
   const catchAction = errorHandling === "escalate"
-    ? `<ui:LogMessage Level="Error" Message="[&quot;[Escalation Required] ${escapedStep} failed (&quot;${concat}exception.GetType().Name${concat}&quot;): &quot;${concat}exception.Message]" DisplayName="Log Escalation" />`
-    : `<ui:LogMessage Level="Error" Message="[&quot;[Error] ${escapedStep} failed (&quot;${concat}exception.GetType().Name${concat}&quot;): &quot;${concat}exception.Message]" DisplayName="Log Error" />`;
+    ? `<ui:LogMessage Level="Error" Message="[Escalation Required] ${escapeXml(stepName)} failed — manual intervention needed" DisplayName="Log Escalation" />`
+    : `<ui:LogMessage Level="Error" Message="[Error] ${escapeXml(stepName)} failed" DisplayName="Log Error" />`;
 
   return `
-          <TryCatch DisplayName="Try: ${escapedStep}"${annotAttr}>
+          <TryCatch DisplayName="Try: ${escapeXml(stepName)}"${annotAttr}>
             <TryCatch.Try>
-              <Sequence DisplayName="Execute: ${escapedStep}">${innerXml}
+              <Sequence DisplayName="Execute: ${escapeXml(stepName)}">${innerXml}
               </Sequence>
             </TryCatch.Try>
             <TryCatch.Catches>
@@ -2314,7 +860,7 @@ function wrapInTryCatch(innerXml: string, stepName: string, errorHandling: "retr
                   <ActivityAction.Argument>
                     <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
                   </ActivityAction.Argument>
-                  <Sequence DisplayName="Handle Exception: ${escapedStep}">${screenshotCapture}${addLogFields}
+                  <Sequence DisplayName="Handle Exception: ${escapeXml(stepName)}">
                     ${catchAction}
                     <Rethrow DisplayName="Rethrow" />
                   </Sequence>
@@ -2337,7 +883,7 @@ function renderAgentTaskSequence(stepName: string, description: string, role: st
               <Variable x:TypeArguments="x:String" Name="str_AgentInput" Default="&quot;&quot;" />
               <Variable x:TypeArguments="x:String" Name="str_AgentOutput" Default="&quot;&quot;" />
             </Sequence.Variables>
-            <ui:LogMessage Level="Info" Message="[&quot;Invoking agent for: ${safeStepName}&quot;]" DisplayName="Log Agent Start: ${safeStepName}" />
+            <ui:LogMessage Level="Info" Message="'Invoking agent for: ${safeStepName}'" DisplayName="Log Agent Start: ${safeStepName}" />
             <ui:InvokeWorkflowFile DisplayName="Invoke Agent: ${safeStepName}" WorkflowFileName="AgentInvocation_Stub.xaml">
               <ui:InvokeWorkflowFile.Arguments>
                 <InArgument x:TypeArguments="x:String" x:Key="in_AgentName">"${safeStepName}"</InArgument>
@@ -2349,7 +895,7 @@ function renderAgentTaskSequence(stepName: string, description: string, role: st
               <Assign.To><OutArgument x:TypeArguments="x:String">[str_AgentOutput]</OutArgument></Assign.To>
               <Assign.Value><InArgument x:TypeArguments="x:String">[str_AgentOutput]</InArgument></Assign.Value>
             </Assign>
-            <ui:LogMessage Level="Info" Message="[&quot;Agent completed: ${safeStepName}&quot;]" DisplayName="Log Agent Complete: ${safeStepName}" />
+            <ui:LogMessage Level="Info" Message="'Agent completed: ${safeStepName}'" DisplayName="Log Agent Complete: ${safeStepName}" />
           </Sequence>`;
 }
 
@@ -2360,8 +906,8 @@ function renderAgentDecision(stepName: string, description: string, role: string
     `[Agent Decision] ${stepName}\nAgent Role: ${agentRole}\nJudgment Call: ${description || stepName}\nThis decision is evaluated by a UiPath Agent using LLM reasoning rather than deterministic rules.\nThe agent analyzes context and makes a judgment-based determination.`
   );
 
-  const defaultThen = thenXml || `\n              <ui:LogMessage Level="Info" Message="[&quot;Agent decision YES path: ${safeStepName}&quot;]" DisplayName="Agent Then Path" />`;
-  const defaultElse = elseXml || `\n              <ui:LogMessage Level="Info" Message="[&quot;Agent decision NO path: ${safeStepName}&quot;]" DisplayName="Agent Else Path" />`;
+  const defaultThen = thenXml || `\n              <ui:LogMessage Level="Info" Message="'Agent decision YES path: ${safeStepName}'" DisplayName="Agent Then Path" />`;
+  const defaultElse = elseXml || `\n              <ui:LogMessage Level="Info" Message="'Agent decision NO path: ${safeStepName}'" DisplayName="Agent Else Path" />`;
 
   return `
           <Sequence DisplayName="Agent Decision Setup: ${safeStepName}" sap2010:Annotation.AnnotationText="${annotationText}">
@@ -2369,7 +915,7 @@ function renderAgentDecision(stepName: string, description: string, role: string
               <Variable x:TypeArguments="x:Boolean" Name="bool_AgentDecisionResult" Default="False" />
               <Variable x:TypeArguments="x:String" Name="str_AgentDecisionInput" Default="&quot;&quot;" />
             </Sequence.Variables>
-            <ui:LogMessage Level="Info" Message="[&quot;Invoking agent decision for: ${safeStepName}&quot;]" DisplayName="Log Agent Decision Start" />
+            <ui:LogMessage Level="Info" Message="'Invoking agent decision for: ${safeStepName}'" DisplayName="Log Agent Decision Start" />
             <ui:InvokeWorkflowFile DisplayName="Agent Evaluate: ${safeStepName}" WorkflowFileName="AgentInvocation_Stub.xaml">
               <ui:InvokeWorkflowFile.Arguments>
                 <InArgument x:TypeArguments="x:String" x:Key="in_AgentName">"${safeStepName}"</InArgument>
@@ -2387,7 +933,7 @@ function renderAgentDecision(stepName: string, description: string, role: string
                 </Sequence>
               </If.Else>
             </If>
-            <ui:LogMessage Level="Info" Message="[&quot;Agent decision completed: ${safeStepName}&quot;]" DisplayName="Log Agent Decision Complete" />
+            <ui:LogMessage Level="Info" Message="'Agent decision completed: ${safeStepName}'" DisplayName="Log Agent Decision Complete" />
           </Sequence>`;
 }
 
@@ -2400,13 +946,13 @@ function wrapInIf(innerXml: string, condition: string, displayName: string): str
             </If.Then>
             <If.Else>
               <Sequence DisplayName="Else: ${escapeXml(displayName)}">
-                <ui:LogMessage Level="Info" Message="[&quot;Condition not met: ${escapeXml(displayName)}&quot;]" DisplayName="Log Else Path" />
+                <ui:LogMessage Level="Info" Message="'Condition not met: ${escapeXml(displayName)}'" DisplayName="Log Else Path" />
               </Sequence>
             </If.Else>
           </If>`;
 }
 
-function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec, targetFramework?: TargetFramework, genCtx?: XamlGenerationContext): {
+function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec): {
   xml: string;
   packages: string[];
   variables: VariableDecl[];
@@ -2430,26 +976,10 @@ function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec, targetFramewor
       }
     }
 
-    const rawProperties = act.properties || {};
-
-    if (isControlFlowActivity(act.activityType)) {
-      const sanitizedProps: Record<string, string> = {};
-      for (const [key, value] of Object.entries(rawProperties)) {
-        if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-        const strVal = sanitizePropertyValue(key, value);
-        if (strVal === "") continue;
-        sanitizedProps[key] = strVal;
-      }
-      innerXml += renderControlFlowActivity(act.activityType, act.displayName, sanitizedProps, rawProperties, targetFramework).replace(/\n          /, "\n            ");
-      continue;
-    }
-
     const props: Record<string, string> = {};
     const placeholders: string[] = [];
-    for (const [key, value] of Object.entries(rawProperties)) {
-      if (PSEUDO_XAML_ATTR_KEYS.has(key)) continue;
-      const strVal = sanitizePropertyValue(key, value);
-      if (strVal === "") continue;
+    for (const [key, value] of Object.entries(act.properties || {})) {
+      const strVal = String(value);
       props[key] = strVal;
       if (strVal.startsWith("PLACEHOLDER_") || strVal.startsWith("TODO")) {
         placeholders.push(key);
@@ -2470,7 +1000,7 @@ function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec, targetFramewor
       aiReasoning: `Selected ${act.activityType} from ${act.package}`,
     };
 
-    innerXml += renderActivity(act.activityType, act.displayName, props, act.selectorHint, operationalProps, annotationOpts, targetFramework).replace(/\n          /, "\n            ");
+    innerXml += renderActivity(act.activityType, act.displayName, props, act.selectorHint, operationalProps, annotationOpts).replace(/\n          /, "\n            ");
   }
 
   for (const gap of enrichedNode.gaps || []) {
@@ -2478,26 +1008,16 @@ function renderEnrichedActivities(enrichedNode: EnrichedNodeSpec, targetFramewor
   }
 
   const firstAct = enrichedNode.activities[0];
-  let rawErrorHandling: "retry" | "catch" | "escalate" | "none" = firstAct.errorHandling || "none";
-  let errorHandling = upgradeErrorHandlingForHighRisk(rawErrorHandling, firstAct.activityType);
-  if (errorHandling === "none" && enrichedNode.activities.length > 1) {
-    for (const act of enrichedNode.activities) {
-      const upgraded = upgradeErrorHandlingForHighRisk(act.errorHandling || "none", act.activityType);
-      if (upgraded !== "none") {
-        errorHandling = upgraded;
-        break;
-      }
-    }
-  }
+  const errorHandling = firstAct.errorHandling || "none";
 
   let xml: string;
   if (enrichedNode.activities.length === 1) {
-    xml = wrapInTryCatch(innerXml, enrichedNode.nodeName, errorHandling, targetFramework, genCtx);
+    xml = wrapInTryCatch(innerXml, enrichedNode.nodeName, errorHandling);
   } else {
     const sequenceXml = `
           <Sequence DisplayName="${escapeXml(enrichedNode.nodeName)}">${innerXml}
           </Sequence>`;
-    xml = wrapInTryCatch(sequenceXml, enrichedNode.nodeName, errorHandling, targetFramework, genCtx);
+    xml = wrapInTryCatch(sequenceXml, enrichedNode.nodeName, errorHandling);
   }
 
   return { xml, packages, variables, gaps };
@@ -2508,10 +1028,7 @@ export function generateRichXamlFromNodes(
   edges: ProcessEdge[],
   workflowName: string,
   projectDescription: string,
-  enrichment?: EnrichmentResult | null,
-  targetFramework?: TargetFramework,
-  autopilotEnabled?: boolean,
-  genCtx?: XamlGenerationContext
+  enrichment?: EnrichmentResult | null
 ): XamlGeneratorResult {
   const allGaps: XamlGap[] = [];
   const allVariables: VariableDecl[] = [];
@@ -2539,7 +1056,7 @@ export function generateRichXamlFromNodes(
         <!-- Generated: ${timestamp} -->
         <!-- Process Map: ${nodes.length} nodes, ${edges.length} edges -->
         <!-- Trace: Each activity below references its source process map step -->
-        <ui:LogMessage Level="Info" Message="[&quot;=== Starting: ${escapeXml(workflowName)} ===&quot;]" DisplayName="Log Start" />`;
+        <ui:LogMessage Level="Info" Message="'=== Starting: ${escapeXml(workflowName)} ==='" DisplayName="Log Start" />`;
 
   const startNodes = sortedNodes.filter(n => n.nodeType === "start");
   const endNodes = sortedNodes.filter(n => n.nodeType === "end");
@@ -2549,7 +1066,7 @@ export function generateRichXamlFromNodes(
   if (startNodes.length > 0) {
     for (const node of startNodes) {
       activities += `
-        <ui:LogMessage Level="Info" Message="[&quot;Initialization: ${escapeXml(node.name)}&quot;]" DisplayName="Init: ${escapeXml(node.name)}" />`;
+        <ui:LogMessage Level="Info" Message="'Initialization: ${escapeXml(node.name)}'" DisplayName="Init: ${escapeXml(node.name)}" />`;
     }
     activities += `
         <!-- TODO: Add config file reading (InitAllSettings) and variable initialization here -->`;
@@ -2583,7 +1100,7 @@ export function generateRichXamlFromNodes(
       activities += `
         <!-- Agent Step: ${nodeTrace} -->`;
       const agentXml = renderAgentTaskSequence(node.name, node.description || "", node.role || "");
-      const wrappedAgent = wrapInTryCatch(agentXml, node.name, "catch", targetFramework, genCtx);
+      const wrappedAgent = wrapInTryCatch(agentXml, node.name, "catch");
       activities += wrappedAgent;
       allVariables.push({ name: "str_AgentInput", type: "String", defaultValue: '""' });
       allVariables.push({ name: "str_AgentOutput", type: "String", defaultValue: '""' });
@@ -2611,14 +1128,14 @@ export function generateRichXamlFromNodes(
         const targetEnriched = enrichedMap.get(outEdge.target);
         let branchXml: string;
         if (targetEnriched && targetEnriched.activities.length > 0) {
-          const rendered = renderEnrichedActivities(targetEnriched, targetFramework, genCtx);
+          const rendered = renderEnrichedActivities(targetEnriched);
           branchXml = rendered.xml;
           rendered.packages.forEach(p => usedPackages.add(p));
           allVariables.push(...rendered.variables);
           allGaps.push(...rendered.gaps);
         } else {
-          const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false, targetFramework }, genCtx);
-          branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint, undefined, undefined, targetFramework);
+          const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false });
+          branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
         }
         const label = (outEdge.label || "").toLowerCase();
         if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
@@ -2629,7 +1146,7 @@ export function generateRichXamlFromNodes(
       }
 
       const agentDecisionXml = renderAgentDecision(node.name, node.description || "", node.role || "", thenActivities, elseActivities);
-      const wrappedDecision = wrapInTryCatch(agentDecisionXml, node.name, "catch", targetFramework, genCtx);
+      const wrappedDecision = wrapInTryCatch(agentDecisionXml, node.name, "catch");
       activities += wrappedDecision;
       allVariables.push({ name: "bool_AgentDecisionResult", type: "Boolean", defaultValue: "False" });
       allVariables.push({ name: "str_AgentDecisionInput", type: "String", defaultValue: '""' });
@@ -2649,9 +1166,7 @@ export function generateRichXamlFromNodes(
         const edgeLabels = outEdges.map(e => `"${e.label || "unlabeled"}" → node #${e.target}`).join(", ");
         activities += `
         <!-- Decision: ${nodeTrace} | Branches: ${edgeLabels} -->`;
-        const rawCondition = outEdges.find(e => e.label)?.label || "";
-        const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
-        const condition = needsConditionReview ? "True" : rawCondition;
+        const condition = outEdges.find(e => e.label)?.label || "TODO_Condition";
         allVariables.push({ name: `bool_${node.name.replace(/[^A-Za-z0-9]/g, "")}`, type: "Boolean", defaultValue: "False" });
 
         let thenActivities = "";
@@ -2663,14 +1178,14 @@ export function generateRichXamlFromNodes(
           const label = (outEdge.label || "").toLowerCase();
           let branchXml: string;
           if (targetEnriched && targetEnriched.activities.length > 0) {
-            const rendered = renderEnrichedActivities(targetEnriched, targetFramework, genCtx);
+            const rendered = renderEnrichedActivities(targetEnriched);
             branchXml = rendered.xml;
             rendered.packages.forEach(p => usedPackages.add(p));
             allVariables.push(...rendered.variables);
             allGaps.push(...rendered.gaps);
           } else {
-            const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false, targetFramework }, genCtx);
-            branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint, undefined, undefined, targetFramework);
+            const classified = classifyActivity({ system: targetNode.system || "", nodeType: targetNode.nodeType, name: targetNode.name, description: targetNode.description || "", role: targetNode.role || "", isPainPoint: targetNode.isPainPoint || false });
+            branchXml = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
           }
           if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
             thenActivities += branchXml;
@@ -2679,13 +1194,9 @@ export function generateRichXamlFromNodes(
           }
         }
 
-        if (!thenActivities) thenActivities = `\n            <ui:LogMessage Level="Info" Message="[&quot;Then: ${escapeXml(node.name)}&quot;]" DisplayName="Then Path" />`;
-        if (!elseActivities) elseActivities = `\n              <ui:LogMessage Level="Info" Message="[&quot;Else: ${escapeXml(node.name)}&quot;]" DisplayName="Else Path" />`;
+        if (!thenActivities) thenActivities = `\n            <ui:LogMessage Level="Info" Message="'Then: ${escapeXml(node.name)}'" DisplayName="Then Path" />`;
+        if (!elseActivities) elseActivities = `\n              <ui:LogMessage Level="Info" Message="'Else: ${escapeXml(node.name)}'" DisplayName="Else Path" />`;
 
-        if (needsConditionReview) {
-          activities += `
-        <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
-        }
         activities += `
         <If DisplayName="Decision: ${escapeXml(node.name)}" Condition="[${escapeXml(condition)}]">
           <If.Then>
@@ -2702,7 +1213,7 @@ export function generateRichXamlFromNodes(
 
       activities += `
         <!-- Source: ${nodeTrace} | AI-Enriched: ${enrichedSpec.activities.length} activities -->`;
-      const rendered = renderEnrichedActivities(enrichedSpec, targetFramework, genCtx);
+      const rendered = renderEnrichedActivities(enrichedSpec);
       rendered.packages.forEach(p => usedPackages.add(p));
       allVariables.push(...rendered.variables);
       allGaps.push(...rendered.gaps);
@@ -2717,8 +1228,6 @@ export function generateRichXamlFromNodes(
       description: node.description || "",
       role: node.role || "",
       isPainPoint: node.isPainPoint || false,
-      targetFramework,
-      autopilotEnabled,
     };
 
     if (node.nodeType === "decision") {
@@ -2726,9 +1235,7 @@ export function generateRichXamlFromNodes(
       const edgeLabels = outEdges.map(e => `"${e.label || "unlabeled"}" → node #${e.target}`).join(", ");
       activities += `
         <!-- Decision: ${nodeTrace} | Branches: ${edgeLabels} -->`;
-      const rawCondition = outEdges.find(e => e.label)?.label || "";
-      const needsConditionReview = !rawCondition || rawCondition === "TODO_Condition" || rawCondition.startsWith("TODO_") || rawCondition.startsWith("PLACEHOLDER_");
-      const condition = needsConditionReview ? "True" : rawCondition;
+      const condition = outEdges.find(e => e.label)?.label || "TODO_Condition";
 
       allVariables.push({ name: "bool_Decision", type: "Boolean", defaultValue: "False" });
       allGaps.push({
@@ -2751,10 +1258,9 @@ export function generateRichXamlFromNodes(
           description: targetNode.description || "",
           role: targetNode.role || "",
           isPainPoint: targetNode.isPainPoint || false,
-          targetFramework,
         };
-        const classified = classifyActivity(branchCtx, genCtx);
-        const branchActivity = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint, undefined, undefined, targetFramework);
+        const classified = classifyActivity(branchCtx);
+        const branchActivity = renderActivity(classified.activityType, targetNode.name, classified.properties, classified.selectorHint);
         const label = (outEdge.label || "").toLowerCase();
         if (label.includes("yes") || label.includes("true") || label.includes("approve") || label.includes("pass")) {
           thenActivities += branchActivity;
@@ -2765,13 +1271,9 @@ export function generateRichXamlFromNodes(
 
       if (!thenActivities) {
         thenActivities = `
-            <ui:LogMessage Level="Info" Message="[&quot;Then branch: ${escapeXml(node.name)}&quot;]" DisplayName="Then Path" />`;
+            <ui:LogMessage Level="Info" Message="'Then branch: ${escapeXml(node.name)}'" DisplayName="Then Path" />`;
       }
 
-      if (needsConditionReview) {
-        activities += `
-        <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
-      }
       activities += `
         <If DisplayName="Decision: ${escapeXml(node.name)}" Condition="[${escapeXml(condition)}]">
           <If.Then>
@@ -2780,14 +1282,14 @@ export function generateRichXamlFromNodes(
           </If.Then>
           <If.Else>
             <Sequence DisplayName="No: ${escapeXml(node.name)}">${elseActivities || `
-              <ui:LogMessage Level="Info" Message="[&quot;Else branch: ${escapeXml(node.name)}&quot;]" DisplayName="Else Path" />`}
+              <ui:LogMessage Level="Info" Message="'Else branch: ${escapeXml(node.name)}'" DisplayName="Else Path" />`}
             </Sequence>
           </If.Else>
         </If>`;
       continue;
     }
 
-    const classified = classifyActivity(ctx, genCtx);
+    const classified = classifyActivity(ctx);
     usedPackages.add(classified.activityPackage);
     for (const cv of classified.variables) {
       allVariables.push({ name: enforceVariableName(cv.name, mapClrType(cv.type)), type: cv.type, defaultValue: cv.defaultValue });
@@ -2808,59 +1310,43 @@ export function generateRichXamlFromNodes(
         stepName: node.name,
         businessContext: node.description || node.name,
         placeholders: classifiedPlaceholders.length > 0 ? classifiedPlaceholders : undefined,
-      },
-      targetFramework
+      }
     );
 
     activities += `
         <!-- Source: ${nodeTrace} | Activity: ${classified.activityType}${node.isPainPoint ? " | ⚠ Pain Point" : ""} -->`;
-    const upgradedErrorHandling = upgradeErrorHandlingForHighRisk(classified.errorHandling, classified.activityType);
-    const wrappedXml = wrapInTryCatch(activityXml, node.name, upgradedErrorHandling, targetFramework, genCtx);
+    const wrappedXml = wrapInTryCatch(activityXml, node.name, classified.errorHandling);
     activities += wrappedXml;
   }
 
   for (const node of endNodes) {
     activities += `
-        <ui:LogMessage Level="Info" Message="[&quot;Completed: ${escapeXml(node.name)}&quot;]" DisplayName="End: ${escapeXml(node.name)}" />`;
+        <ui:LogMessage Level="Info" Message="'Completed: ${escapeXml(node.name)}'" DisplayName="End: ${escapeXml(node.name)}" />`;
   }
 
   activities += `
-        <ui:LogMessage Level="Info" Message="[&quot;=== Completed: ${escapeXml(workflowName)} ===&quot;]" DisplayName="Log Completion" />`;
+        <ui:LogMessage Level="Info" Message="'=== Completed: ${escapeXml(workflowName)} ==='" DisplayName="Log Completion" />`;
 
-  const variablesBlock = renderVariablesBlock(allVariables, targetFramework);
-
-  const isMainWorkflow2 = workflowName.toLowerCase() === "main" || workflowName.toLowerCase() === "main.xaml";
-  const isInitAllSettings = workflowName.toLowerCase().includes("initallsettings");
-  const wfArgs = !isMainWorkflow2 && enrichment?.arguments?.length ? enrichment.arguments : [];
-  const hasDictConfigRef = !isMainWorkflow2 && !isInitAllSettings && activities.includes("dict_Config");
-  if (hasDictConfigRef && !wfArgs.some(a => a.name === "in_Config")) {
-    wfArgs.push({ name: "in_Config", direction: "InArgument", type: "scg:Dictionary(x:String, x:Object)" });
-  }
-  const xMembersBlock = generateXMembersBlock(wfArgs, targetFramework);
-  const dictConfigVariable = hasDictConfigRef
-    ? `<Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" Default="[in_Config]" />\n    `
-    : "";
+  const variablesBlock = renderVariablesBlock(allVariables);
 
   const xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(workflowName.replace(/\s+/g, "_"))}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
-    ${dictConfigVariable}${variablesBlock}${activities}
+  <Sequence DisplayName="${escapeXml(workflowName)}">
+    ${variablesBlock}${activities}
   </Sequence>
 </Activity>`;
 
   return {
-    xaml: sanitizeObjectLiteralArguments(xaml),
+    xaml,
     gaps: allGaps,
     usedPackages: Array.from(usedPackages),
     variables: allVariables,
@@ -2869,11 +1355,7 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
 
 export function generateRichXamlFromSpec(
   workflow: WorkflowSpec,
-  sddContent?: string,
-  aiCenterSkills?: AICenterSkill[],
-  targetFramework?: TargetFramework,
-  autopilotEnabled?: boolean,
-  genCtx?: XamlGenerationContext
+  sddContent?: string
 ): XamlGeneratorResult {
   const allGaps: XamlGap[] = [];
   const allVariables: VariableDecl[] = [];
@@ -2884,7 +1366,7 @@ export function generateRichXamlFromSpec(
   const steps = workflow.steps || [];
 
   activities += `
-        <ui:LogMessage Level="Info" Message="[&quot;=== Starting: ${escapeXml(wfName)} ===&quot;]" DisplayName="Log Start" />`;
+        <ui:LogMessage Level="Info" Message="'=== Starting: ${escapeXml(wfName)} ==='" DisplayName="Log Start" />`;
 
   if (workflow.arguments && workflow.arguments.length > 0) {
     const validationXaml = generateArgumentValidationXaml(workflow.arguments, wfName);
@@ -2912,7 +1394,7 @@ export function generateRichXamlFromSpec(
       activities += `
         <!-- Agent Step: ${escapeXml(stepName)} -->`;
       const agentXml = renderAgentTaskSequence(stepName, step.notes || "", step.role || "");
-      const wrappedAgent = wrapInTryCatch(agentXml, stepName, "catch", targetFramework, genCtx);
+      const wrappedAgent = wrapInTryCatch(agentXml, stepName, "catch");
       activities += wrappedAgent;
       allVariables.push({ name: "str_AgentInput", type: "String", defaultValue: '""' });
       allVariables.push({ name: "str_AgentOutput", type: "String", defaultValue: '""' });
@@ -2930,7 +1412,7 @@ export function generateRichXamlFromSpec(
       activities += `
         <!-- Agent Decision: ${escapeXml(stepName)} -->`;
       const agentDecisionXml = renderAgentDecision(stepName, step.notes || "", step.role || "", "", "");
-      const wrappedDecision = wrapInTryCatch(agentDecisionXml, stepName, "catch", targetFramework, genCtx);
+      const wrappedDecision = wrapInTryCatch(agentDecisionXml, stepName, "catch");
       activities += wrappedDecision;
       allVariables.push({ name: "bool_AgentDecisionResult", type: "Boolean", defaultValue: "False" });
       allVariables.push({ name: "str_AgentDecisionInput", type: "String", defaultValue: '""' });
@@ -2950,35 +1432,19 @@ export function generateRichXamlFromSpec(
         allVariables.push(...step.variables);
       }
 
-      const rawStepProps = step.properties || {};
       const props: Record<string, string> = {};
-      for (const [k, v] of Object.entries(rawStepProps)) {
-        if (PSEUDO_XAML_ATTR_KEYS.has(k)) continue;
-        const sanitized = sanitizePropertyValue(k, v);
-        if (sanitized === "") continue;
-        props[k] = sanitized;
+      if (step.properties) {
+        for (const [k, v] of Object.entries(step.properties)) {
+          props[k] = String(v);
+        }
       }
 
-      let activityXml: string;
-      if (isControlFlowActivity(step.activityType)) {
-        activityXml = renderControlFlowActivity(
-          step.activityType,
-          stepName,
-          props,
-          rawStepProps,
-          targetFramework
-        );
-      } else {
-        activityXml = renderActivity(
-          step.activityType,
-          stepName,
-          props,
-          step.selectorHint,
-          undefined,
-          undefined,
-          targetFramework
-        );
-      }
+      const activityXml = renderActivity(
+        step.activityType,
+        stepName,
+        props,
+        step.selectorHint
+      );
 
       if (step.selectorHint) {
         allGaps.push({
@@ -2990,10 +1456,8 @@ export function generateRichXamlFromSpec(
         });
       }
 
-      const rawStepErrorHandling = step.errorHandling || "none";
-      const stepActivityType = step.activityType || "";
-      const errorHandling = upgradeErrorHandlingForHighRisk(rawStepErrorHandling, stepActivityType);
-      const wrappedXml = wrapInTryCatch(activityXml, stepName, errorHandling, targetFramework, genCtx);
+      const errorHandling = step.errorHandling || "none";
+      const wrappedXml = wrapInTryCatch(activityXml, stepName, errorHandling);
       activities += wrappedXml;
     } else {
       const ctx: ActivityContext = {
@@ -3003,11 +1467,9 @@ export function generateRichXamlFromSpec(
         description: step.notes || "",
         role: "",
         isPainPoint: false,
-        targetFramework,
-        autopilotEnabled,
       };
 
-      const classified = classifyActivity(ctx, genCtx);
+      const classified = classifyActivity(ctx);
       usedPackages.add(classified.activityPackage);
       allVariables.push(...classified.variables);
       allGaps.push(...classified.gaps);
@@ -3016,55 +1478,37 @@ export function generateRichXamlFromSpec(
         classified.activityType,
         stepName,
         classified.properties,
-        classified.selectorHint,
-        undefined,
-        undefined,
-        targetFramework
+        classified.selectorHint
       );
 
-      const upgradedClassifiedErrorHandling = upgradeErrorHandlingForHighRisk(classified.errorHandling, classified.activityType);
-      const wrappedXml = wrapInTryCatch(activityXml, stepName, upgradedClassifiedErrorHandling, targetFramework, genCtx);
+      const wrappedXml = wrapInTryCatch(activityXml, stepName, classified.errorHandling);
       activities += wrappedXml;
     }
   }
 
   activities += `
-        <ui:LogMessage Level="Info" Message="[&quot;=== Completed: ${escapeXml(wfName)} ===&quot;]" DisplayName="Log Completion" />`;
+        <ui:LogMessage Level="Info" Message="'=== Completed: ${escapeXml(wfName)} ==='" DisplayName="Log Completion" />`;
 
-  const variablesBlock = renderVariablesBlock(allVariables, targetFramework);
-
-  const specArgs = workflow.arguments || [];
-  const isSpecMainWf = wfName.toLowerCase() === "main" || wfName.toLowerCase() === "main.xaml";
-  const isSpecInitAll = wfName.toLowerCase().includes("initallsettings");
-  const specHasDictConfig = !isSpecMainWf && !isSpecInitAll && activities.includes("dict_Config");
-  if (specHasDictConfig && !specArgs.some((a: any) => a.name === "in_Config")) {
-    specArgs.push({ name: "in_Config", direction: "InArgument", type: "scg:Dictionary(x:String, x:Object)" });
-  }
-  const xMembersBlockSpec = generateXMembersBlock(specArgs, targetFramework);
-  const specDictConfigVar = specHasDictConfig
-    ? `<Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" Default="[in_Config]" />\n    `
-    : "";
+  const variablesBlock = renderVariablesBlock(allVariables);
 
   const xaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(wfName.replace(/\s+/g, "_"))}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-${xMembersBlockSpec}  <Sequence DisplayName="${escapeXml(wfName)}">
-    ${specDictConfigVar}${variablesBlock}${activities}
+  <Sequence DisplayName="${escapeXml(wfName)}">
+    ${variablesBlock}${activities}
   </Sequence>
 </Activity>`;
 
   return {
-    xaml: sanitizeObjectLiteralArguments(xaml),
+    xaml,
     gaps: allGaps,
     usedPackages: Array.from(usedPackages),
     variables: allVariables,
@@ -3077,95 +1521,47 @@ function extractSddSection(sddContent: string, sectionNumber: number): string | 
   return match ? match[1].trim() : null;
 }
 
-export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetFramework?: TargetFramework, credentialStrategy?: string): string {
-  const isCSharp = targetFramework === "Portable";
-  const initConcat = isCSharp ? " + " : " &amp; ";
-  const toStringCall = isCSharp ? ".ToString()" : ".ToString";
+export function generateInitAllSettingsXaml(orchestratorArtifacts?: any): string {
   const assetCount = orchestratorArtifacts?.assets?.length || 0;
   const queueCount = orchestratorArtifacts?.queues?.length || 0;
-  const strategy = credentialStrategy || "GetCredential";
   let assetActivities = `
       <!-- InitAllSettings.xaml — Auto-generated by CannonBall -->
       <!-- Reads Config.xlsx (Settings + Constants sheets) and retrieves Orchestrator assets -->
-      <!-- Assets: ${assetCount} | Queues: ${queueCount} | Strategy: ${strategy} -->`;
+      <!-- Assets: ${assetCount} | Queues: ${queueCount} -->`;
   const assets = orchestratorArtifacts?.assets || [];
-  const credAssets = assets.filter((a: any) => a.type === "Credential" || !a.type);
-  const textAssets = assets.filter((a: any) => a.type && a.type !== "Credential");
+  const credAssets = assets.filter((a: any) => a.type === "Credential");
+  const textAssets = assets.filter((a: any) => a.type !== "Credential");
 
-  const emitGetCredential = strategy === "GetCredential" || strategy === "mixed";
-  const emitGetAsset = strategy === "GetAsset" || strategy === "mixed";
-
-  if (emitGetCredential && credAssets.length > 0) {
+  if (credAssets.length > 0) {
     for (const asset of credAssets) {
-      const dictKey = isCSharp ? `"${escapeXml(asset.name)}"` : `&quot;${escapeXml(asset.name)}&quot;`;
       assetActivities += `
           <ui:GetCredential DisplayName="Get ${escapeXml(asset.name)}" AssetName="${escapeXml(asset.name)}" Username="[str_TempUser]" Password="[sec_TempPass]" />
-          <Assign DisplayName="Store ${escapeXml(asset.name)} User in Config">
-            <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config(${dictKey})]</OutArgument></Assign.To>
-            <Assign.Value><InArgument x:TypeArguments="x:Object">[str_TempUser]</InArgument></Assign.Value>
+          <Assign DisplayName="Store ${escapeXml(asset.name)} User">
+            <Assign.To><OutArgument x:TypeArguments="x:String">[str_TempUser]</OutArgument></Assign.To>
+            <Assign.Value><InArgument x:TypeArguments="x:String">[str_TempUser]</InArgument></Assign.Value>
           </Assign>`;
     }
   }
 
-  if (emitGetAsset && textAssets.length > 0) {
+  if (textAssets.length > 0) {
     for (const asset of textAssets) {
-      const dictKey = isCSharp ? `"${escapeXml(asset.name)}"` : `&quot;${escapeXml(asset.name)}&quot;`;
+      const varType = asset.type === "Integer" ? "x:Int32" : asset.type === "Bool" ? "x:Boolean" : "x:String";
       assetActivities += `
-          <ui:GetAsset DisplayName="Get ${escapeXml(asset.name)}" AssetName="${escapeXml(asset.name)}">
-            <ui:GetAsset.AssetValue>
-              <OutArgument x:TypeArguments="x:String">[str_AssetValue]</OutArgument>
-            </ui:GetAsset.AssetValue>
-          </ui:GetAsset>
-          <Assign DisplayName="Store ${escapeXml(asset.name)} in Config">
-            <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config(${dictKey})]</OutArgument></Assign.To>
-            <Assign.Value><InArgument x:TypeArguments="x:Object">[str_AssetValue]</InArgument></Assign.Value>
-          </Assign>`;
+          <ui:GetAsset DisplayName="Get ${escapeXml(asset.name)}" AssetName="${escapeXml(asset.name)}" Value="[str_AssetValue]" />`;
     }
   }
-
-  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
-  const sq = `&quot;`;
-
-  const excelBlock = isCSharp
-    ? `<ui:UseExcel DisplayName="Read Config File" ExcelFile="[str_ConfigPath]">
-      <ui:UseExcel.Body>
-        <Sequence DisplayName="Read Config Sheets">
-          <ui:ReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
-          <ui:ReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
-        </Sequence>
-      </ui:UseExcel.Body>
-    </ui:UseExcel>`
-    : `<ui:ExcelApplicationScope DisplayName="Read Config File" WorkbookPath="[str_ConfigPath]">
-      <ui:ExcelApplicationScope.Body>
-        <ActivityAction x:TypeArguments="x:Object">
-          <ActivityAction.Handler>
-            <Sequence DisplayName="Read Config Sheets">
-              <ui:ExcelReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
-              <ui:ExcelReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
-            </Sequence>
-          </ActivityAction.Handler>
-        </ActivityAction>
-      </ui:ExcelApplicationScope.Body>
-    </ui:ExcelApplicationScope>`;
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="InitAllSettings"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=${nsS}"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
-  <x:Members>
-    <x:Property Name="out_Config" Type="OutArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
-  </x:Members>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Initialize All Settings">
     <Sequence.Variables>
       <Variable x:TypeArguments="scg2:DataTable" Name="dt_Settings" />
@@ -3173,137 +1569,40 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
       <Variable x:TypeArguments="x:String" Name="str_ConfigPath" Default="Data\\Config.xlsx" />
       <Variable x:TypeArguments="x:String" Name="str_AssetValue" />
       <Variable x:TypeArguments="x:String" Name="str_TempUser" />
-      <Variable x:TypeArguments="s:Security.SecureString" Name="sec_TempPass" />
+      <Variable x:TypeArguments="x:String" Name="sec_TempPass" />
       <Variable x:TypeArguments="scg2:DataRow" Name="row_Current" />
-      <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" Default="[${isCSharp ? "new Dictionary&lt;string, object&gt;()" : "New Dictionary(Of String, Object)"}]" />
     </Sequence.Variables>
-    <ui:LogMessage Level="Info" Message="[${sq}Reading configuration from Config.xlsx...${sq}]" DisplayName="Log Config Start" />
-    ${excelBlock}
+    <ui:LogMessage Level="Info" Message="'Reading configuration from Config.xlsx...'" DisplayName="Log Config Start" />
+    <ui:ExcelApplicationScope DisplayName="Read Config File" WorkbookPath="[str_ConfigPath]">
+      <ui:ExcelApplicationScope.Body>
+        <Sequence DisplayName="Read Config Sheets">
+          <ui:ExcelReadRange DisplayName="Read Settings Sheet" SheetName="Settings" DataTable="[dt_Settings]" />
+          <ui:ExcelReadRange DisplayName="Read Constants Sheet" SheetName="Constants" DataTable="[dt_Constants]" />
+        </Sequence>
+      </ui:ExcelApplicationScope.Body>
+    </ui:ExcelApplicationScope>
     <ForEach x:TypeArguments="scg2:DataRow" DisplayName="Process Settings Rows" Values="[dt_Settings.Rows]">
       <ActivityAction x:TypeArguments="scg2:DataRow">
-        <ActivityAction.Argument>
-          <DelegateInArgument x:TypeArguments="scg2:DataRow" Name="row" />
-        </ActivityAction.Argument>
+        <Argument x:TypeArguments="scg2:DataRow" x:Name="row" />
         <Sequence DisplayName="Process Setting Row">
-          <Assign DisplayName="Store Setting in Config Dictionary">
-            <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config(row(&quot;Name&quot;)${toStringCall})]</OutArgument></Assign.To>
-            <Assign.Value><InArgument x:TypeArguments="x:Object">[row(&quot;Value&quot;)]</InArgument></Assign.Value>
-          </Assign>
-          <ui:LogMessage Level="Trace" Message="[&quot;Processing setting: &quot;${initConcat}row(&quot;Name&quot;)${toStringCall}]" DisplayName="Log Setting" />
+          <ui:LogMessage Level="Trace" Message="[&quot;Processing setting: &quot; &amp; row(&quot;Name&quot;).ToString]" DisplayName="Log Setting" />
         </Sequence>
       </ActivityAction>
     </ForEach>${assetActivities}
     <ForEach x:TypeArguments="scg2:DataRow" DisplayName="Process Constants Rows" Values="[dt_Constants.Rows]">
       <ActivityAction x:TypeArguments="scg2:DataRow">
-        <ActivityAction.Argument>
-          <DelegateInArgument x:TypeArguments="scg2:DataRow" Name="constRow" />
-        </ActivityAction.Argument>
+        <Argument x:TypeArguments="scg2:DataRow" x:Name="constRow" />
         <Sequence DisplayName="Store Constant">
-          <Assign DisplayName="Store Constant in Config Dictionary">
-            <Assign.To><OutArgument x:TypeArguments="x:Object">[dict_Config(constRow(&quot;Name&quot;)${toStringCall})]</OutArgument></Assign.To>
-            <Assign.Value><InArgument x:TypeArguments="x:Object">[constRow(&quot;Value&quot;)]</InArgument></Assign.Value>
-          </Assign>
-          <ui:LogMessage Level="Trace" Message="[&quot;Loaded constant: &quot;${initConcat}constRow(&quot;Name&quot;)${toStringCall}]" DisplayName="Log Constant" />
+          <ui:LogMessage Level="Trace" Message="[&quot;Loaded constant: &quot; &amp; constRow(&quot;Name&quot;).ToString]" DisplayName="Log Constant" />
         </Sequence>
       </ActivityAction>
     </ForEach>
-    <Assign DisplayName="Output Config Dictionary">
-      <Assign.To><OutArgument x:TypeArguments="scg:Dictionary(x:String, x:Object)">[out_Config]</OutArgument></Assign.To>
-      <Assign.Value><InArgument x:TypeArguments="scg:Dictionary(x:String, x:Object)">[dict_Config]</InArgument></Assign.Value>
-    </Assign>
-    <ui:LogMessage Level="Info" Message="[&quot;Configuration loaded successfully&quot;]" DisplayName="Log Config Complete" />
+    <ui:LogMessage Level="Info" Message="'Configuration loaded successfully'" DisplayName="Log Config Complete" />
   </Sequence>
 </Activity>`;
 }
 
-export function generateInitXaml(targetFramework?: TargetFramework): string {
-  const isCSharp = targetFramework === "Portable";
-  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
-  const sq = `&quot;`;
-  const concat = isCSharp ? " + " : " &amp; ";
-
-  return `<?xml version="1.0" encoding="utf-8"?>
-<Activity mc:Ignorable="sap sap2010" x:Class="Init"
-  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
-  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=${nsS}"
-  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
-  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
-  xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
-  <x:Members>
-    <x:Property Name="in_Config" Type="InArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
-    <x:Property Name="io_Config" Type="InOutArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
-  </x:Members>
-  <Sequence DisplayName="Init">
-    <Sequence.Variables>
-      <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" />
-      <Variable x:TypeArguments="x:Boolean" Name="bool_InitSuccess" Default="False" />
-    </Sequence.Variables>
-    <ui:LogMessage Level="Info" Message="[${sq}=== Initialization Started ===${sq}]" DisplayName="Log Init Start" />
-    <TryCatch DisplayName="Init — Safe Initialization">
-      <TryCatch.Try>
-        <Sequence DisplayName="Initialize Settings and Applications">
-          <ui:InvokeWorkflowFile DisplayName="Invoke InitAllSettings" WorkflowFileName="InitAllSettings.xaml">
-            <ui:InvokeWorkflowFile.Arguments>
-              <OutArgument x:TypeArguments="scg:Dictionary(x:String, x:Object)" x:Key="out_Config">[dict_Config]</OutArgument>
-            </ui:InvokeWorkflowFile.Arguments>
-          </ui:InvokeWorkflowFile>
-          <Assign DisplayName="Store Config">
-            <Assign.To><OutArgument x:TypeArguments="scg:Dictionary(x:String, x:Object)">[io_Config]</OutArgument></Assign.To>
-            <Assign.Value><InArgument x:TypeArguments="scg:Dictionary(x:String, x:Object)">[dict_Config]</InArgument></Assign.Value>
-          </Assign>
-          <ui:LogMessage Level="Info" Message="[${sq}Configuration loaded successfully${sq}]" DisplayName="Log Config Loaded" />
-          <Assign DisplayName="Set Init Success">
-            <Assign.To><OutArgument x:TypeArguments="x:Boolean">[bool_InitSuccess]</OutArgument></Assign.To>
-            <Assign.Value><InArgument x:TypeArguments="x:Boolean">True</InArgument></Assign.Value>
-          </Assign>
-        </Sequence>
-      </TryCatch.Try>
-      <TryCatch.Catches>
-        <Catch x:TypeArguments="s:Exception">
-          <ActivityAction x:TypeArguments="s:Exception">
-            <ActivityAction.Argument>
-              <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
-            </ActivityAction.Argument>
-            <Sequence DisplayName="Handle Init Exception">
-              <ui:LogMessage Level="Error" Message="[${sq}Initialization failed: ${sq}${concat}exception.Message]" DisplayName="Log Init Failure" />
-              <Assign DisplayName="Set Init Failed">
-                <Assign.To><OutArgument x:TypeArguments="x:Boolean">[bool_InitSuccess]</OutArgument></Assign.To>
-                <Assign.Value><InArgument x:TypeArguments="x:Boolean">False</InArgument></Assign.Value>
-              </Assign>
-            </Sequence>
-          </ActivityAction>
-        </Catch>
-      </TryCatch.Catches>
-    </TryCatch>
-    <If DisplayName="Check Init Result" Condition="[bool_InitSuccess]">
-      <If.Then>
-        <ui:LogMessage Level="Info" Message="[${sq}=== Initialization Complete ===${sq}]" DisplayName="Log Init Complete" />
-      </If.Then>
-      <If.Else>
-        <Sequence DisplayName="Handle Init Failure">
-          <ui:LogMessage Level="Error" Message="[${sq}=== Initialization FAILED — process cannot continue ===${sq}]" DisplayName="Log Init Failed" />
-          <Throw DisplayName="Throw Init Failure Exception">
-            <Throw.Exception>
-              <InArgument x:TypeArguments="s:Exception">[New System.Exception(${sq}Initialization failed — check logs for details${sq})]</InArgument>
-            </Throw.Exception>
-          </Throw>
-        </Sequence>
-      </If.Else>
-    </If>
-  </Sequence>
-</Activity>`;
-}
-
-export function generateReframeworkMainXaml(projectName: string, queueName: string, targetFramework?: TargetFramework): string {
-  const isCSharp = targetFramework === "Portable";
-  const concat = isCSharp ? " + " : " &amp; ";
+export function generateReframeworkMainXaml(projectName: string, queueName: string): string {
   const safeName = escapeXml(projectName.replace(/\s+/g, "_"));
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- REFramework Main.xaml — Auto-generated by CannonBall -->
@@ -3314,97 +1613,42 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
 <Activity mc:Ignorable="sap sap2010" x:Class="Main"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
-  xmlns:sads="clr-namespace:System.Activities.Statements;assembly=System.Activities"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${isCSharp ? "" : `
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>`}
-  <sap2010:WorkflowViewState.IdRef>Main_1</sap2010:WorkflowViewState.IdRef>
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>${isCSharp ? "" : `
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>`}
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-      <x:String>System.ComponentModel</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
-      <AssemblyReference>mscorlib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-      <AssemblyReference>System.ServiceModel</AssemblyReference>
-      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <StateMachine DisplayName="${safeName} - REFramework Main">
     <StateMachine.Variables>
       <Variable x:TypeArguments="x:Int32" Name="int_TransactionNumber" Default="0" />
       <Variable x:TypeArguments="x:Int32" Name="int_RetryNumber" Default="0" />
       <Variable x:TypeArguments="x:Int32" Name="int_MaxRetries" Default="3" />
       <Variable x:TypeArguments="x:String" Name="str_TransactionID" />
-      <Variable x:TypeArguments="x:String" Name="str_QueueName" Default="${serializeSafeAttributeValue(`"${queueName}"`)}" />
+      <Variable x:TypeArguments="x:String" Name="str_QueueName" Default="'${escapeXml(queueName)}'" />
       <Variable x:TypeArguments="ui:QueueItem" Name="qi_TransactionItem" />
       <Variable x:TypeArguments="x:Boolean" Name="bool_SystemReady" Default="False" />
-      <Variable x:TypeArguments="scg:Dictionary(x:String, x:Object)" Name="dict_Config" />
     </StateMachine.Variables>
 
     <State DisplayName="Init" x:Name="State_Init">
       <State.Entry>
         <Sequence DisplayName="Initialize Process">
-          <ui:LogMessage Level="Info" Message="[&quot;=== Initializing ${safeName} ===&quot;]" DisplayName="Log Init Start" />
-          <ui:InvokeWorkflowFile DisplayName="Invoke Init" WorkflowFileName="Init.xaml">
-            <ui:InvokeWorkflowFile.Arguments>
-              <InOutArgument x:TypeArguments="scg:Dictionary(x:String, x:Object)" x:Key="io_Config">[dict_Config]</InOutArgument>
-            </ui:InvokeWorkflowFile.Arguments>
-          </ui:InvokeWorkflowFile>
+          <ui:LogMessage Level="Info" Message="'=== Initializing ${safeName} ==='" DisplayName="Log Init Start" />
+          <ui:InvokeWorkflowFile DisplayName="Initialize Settings" WorkflowFileName="InitAllSettings.xaml" />
           <Assign DisplayName="Set System Ready">
             <Assign.To><OutArgument x:TypeArguments="x:Boolean">[bool_SystemReady]</OutArgument></Assign.To>
             <Assign.Value><InArgument x:TypeArguments="x:Boolean">True</InArgument></Assign.Value>
           </Assign>
-          <ui:LogMessage Level="Info" Message="[&quot;Initialization complete&quot;]" DisplayName="Log Init Complete" />
+          <ui:LogMessage Level="Info" Message="'Initialization complete'" DisplayName="Log Init Complete" />
         </Sequence>
       </State.Entry>
-      <State.Transitions>
-        <Transition DisplayName="Init -&gt; Get Transaction">
-          <Transition.To><x:Reference>State_GetTransaction</x:Reference></Transition.To>
-          <Transition.Condition>[bool_SystemReady]</Transition.Condition>
-        </Transition>
-        <Transition DisplayName="Init -&gt; End (Failed)">
-          <Transition.To><x:Reference>State_End</x:Reference></Transition.To>
-          <Transition.Condition>[${isCSharp ? "!bool_SystemReady" : "Not bool_SystemReady"}]</Transition.Condition>
-        </Transition>
-      </State.Transitions>
+      <Transition DisplayName="Init -> Get Transaction" To="{x:Reference State_GetTransaction}">
+        <Transition.Condition>[bool_SystemReady]</Transition.Condition>
+      </Transition>
+      <Transition DisplayName="Init -> End (Failed)" To="{x:Reference State_End}">
+        <Transition.Condition>[Not bool_SystemReady]</Transition.Condition>
+      </Transition>
     </State>
 
     <State DisplayName="Get Transaction Data" x:Name="State_GetTransaction">
@@ -3419,16 +1663,12 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
           </ui:InvokeWorkflowFile>
         </Sequence>
       </State.Entry>
-      <State.Transitions>
-        <Transition DisplayName="Has Transaction -&gt; Process">
-          <Transition.To><x:Reference>State_Process</x:Reference></Transition.To>
-          <Transition.Condition>[${isCSharp ? "qi_TransactionItem != null" : "qi_TransactionItem IsNot Nothing"}]</Transition.Condition>
-        </Transition>
-        <Transition DisplayName="No Transaction -&gt; End">
-          <Transition.To><x:Reference>State_End</x:Reference></Transition.To>
-          <Transition.Condition>[${isCSharp ? "qi_TransactionItem == null" : "qi_TransactionItem Is Nothing"}]</Transition.Condition>
-        </Transition>
-      </State.Transitions>
+      <Transition DisplayName="Has Transaction -> Process" To="{x:Reference State_Process}">
+        <Transition.Condition>[qi_TransactionItem IsNot Nothing]</Transition.Condition>
+      </Transition>
+      <Transition DisplayName="No Transaction -> End" To="{x:Reference State_End}">
+        <Transition.Condition>[qi_TransactionItem Is Nothing]</Transition.Condition>
+      </Transition>
     </State>
 
     <State DisplayName="Process Transaction" x:Name="State_Process">
@@ -3456,46 +1696,9 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
           <TryCatch.Catches>
             <Catch x:TypeArguments="s:Exception">
               <ActivityAction x:TypeArguments="s:Exception">
-                <ActivityAction.Argument>
-                  <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
-                </ActivityAction.Argument>
+                <Argument x:TypeArguments="s:Exception" x:Name="exception" />
                 <Sequence DisplayName="Handle Exception">
-                  <Sequence.Variables>
-                    <Variable x:TypeArguments="x:String" Name="str_ErrorScreenshotPath" />
-                  </Sequence.Variables>
-                  <Assign DisplayName="Set Error Screenshot Path">
-                    <Assign.To>
-                      <OutArgument x:TypeArguments="x:String">[str_ErrorScreenshotPath]</OutArgument>
-                    </Assign.To>
-                    <Assign.Value>
-                      <InArgument x:TypeArguments="x:String">[${isCSharp ? `"screenshots/error_tx_"${concat}int_TransactionNumber.ToString()${concat}"_"${concat}DateTime.Now.ToString("yyyyMMdd_HHmmss")${concat}".png"` : `"screenshots/error_tx_"${concat}int_TransactionNumber.ToString${concat}"_"${concat}DateTime.Now.ToString("yyyyMMdd_HHmmss")${concat}".png"`}]</InArgument>
-                    </Assign.Value>
-                  </Assign>
-                  <TryCatch DisplayName="Safe Screenshot Capture">
-                    <TryCatch.Try>
-                      <ui:TakeScreenshot DisplayName="Screenshot on Transaction Error" />
-                    </TryCatch.Try>
-                    <TryCatch.Catches>
-                      <Catch x:TypeArguments="s:Exception">
-                        <ActivityAction x:TypeArguments="s:Exception">
-                          <ActivityAction.Argument>
-                            <DelegateInArgument x:TypeArguments="s:Exception" Name="ssEx" />
-                          </ActivityAction.Argument>
-                          <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}ssEx.Message]" DisplayName="Log Screenshot Failure" />
-                        </ActivityAction>
-                      </Catch>
-                    </TryCatch.Catches>
-                  </TryCatch>
-                  <ui:AddLogFields DisplayName="Add Error Diagnostic Fields">
-                    <ui:AddLogFields.Fields>
-                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
-                        <x:String x:Key="TransactionNumber">[int_TransactionNumber.ToString]</x:String>
-                        <x:String x:Key="ErrorMessage">[exception.Message]</x:String>
-                        <x:String x:Key="ScreenshotCaptured">True</x:String>
-                      </scg:Dictionary>
-                    </ui:AddLogFields.Fields>
-                  </ui:AddLogFields>
-                  <ui:LogMessage Level="Error" Message="[&quot;Transaction #&quot;${concat}int_TransactionNumber.ToString${isCSharp ? "()" : ""}${concat}&quot; failed: &quot;${concat}exception.Message${concat}&quot; | Screenshot: &quot;${concat}str_ErrorScreenshotPath]" DisplayName="Log Error" />
+                  <ui:LogMessage Level="Error" Message="[&quot;Transaction failed: &quot; &amp; exception.Message]" DisplayName="Log Error" />
                   <ui:InvokeWorkflowFile DisplayName="Set Transaction Status - Failed" WorkflowFileName="SetTransactionStatus.xaml">
                     <ui:InvokeWorkflowFile.Arguments>
                       <InArgument x:TypeArguments="ui:QueueItem" x:Key="in_TransactionItem">[qi_TransactionItem]</InArgument>
@@ -3509,19 +1712,14 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
           </TryCatch.Catches>
         </TryCatch>
       </State.Entry>
-      <State.Transitions>
-        <Transition DisplayName="Process -&gt; Get Next Transaction">
-          <Transition.To><x:Reference>State_GetTransaction</x:Reference></Transition.To>
-          <Transition.Condition>[True]</Transition.Condition>
-        </Transition>
-      </State.Transitions>
+      <Transition DisplayName="Process -> Get Next Transaction" To="{x:Reference State_GetTransaction}" />
     </State>
 
     <State DisplayName="End Process" x:Name="State_End" IsFinal="True">
       <State.Entry>
         <Sequence DisplayName="Cleanup">
           <ui:InvokeWorkflowFile DisplayName="Close All Applications" WorkflowFileName="CloseAllApplications.xaml" />
-          <ui:LogMessage Level="Info" Message="[&quot;=== ${safeName} Complete. Transactions processed: &quot;${concat}int_TransactionNumber.ToString${isCSharp ? "()" : ""}]" DisplayName="Log End" />
+          <ui:LogMessage Level="Info" Message="[&quot;=== ${safeName} Complete. Transactions processed: &quot; &amp; int_TransactionNumber.ToString]" DisplayName="Log End" />
         </Sequence>
       </State.Entry>
     </State>
@@ -3533,9 +1731,7 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
 </Activity>`;
 }
 
-export function generateGetTransactionDataXaml(queueName: string, targetFramework?: TargetFramework): string {
-  const isCSharp = targetFramework === "Portable";
-  const concat = isCSharp ? " + " : " &amp; ";
+export function generateGetTransactionDataXaml(queueName: string): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- GetTransactionData.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Retrieves next queue item from "${escapeXml(queueName)}" -->
@@ -3543,52 +1739,38 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
 <Activity mc:Ignorable="sap sap2010" x:Class="GetTransactionData"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
-  <x:Members>
-    <x:Property Name="in_QueueName" Type="InArgument(x:String)" />
-    <x:Property Name="out_TransactionItem" Type="OutArgument(ui:QueueItem)" />
-    <x:Property Name="io_TransactionNumber" Type="InOutArgument(x:Int32)" />
-  </x:Members>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Get Transaction Data">
-    <ui:GetTransactionItem DisplayName="Get Queue Item" QueueName="${escapeXml(`[in_QueueName]`)}">
-      <ui:GetTransactionItem.TransactionItem>
-        <OutArgument x:TypeArguments="ui:QueueItem">[out_TransactionItem]</OutArgument>
-      </ui:GetTransactionItem.TransactionItem>
-    </ui:GetTransactionItem>
-    <If DisplayName="Check Transaction Item" Condition="[${isCSharp ? "out_TransactionItem != null" : "out_TransactionItem IsNot Nothing"}]">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="in_QueueName" Default="'${escapeXml(queueName)}'" />
+      <Variable x:TypeArguments="ui:QueueItem" Name="out_TransactionItem" />
+      <Variable x:TypeArguments="x:Int32" Name="io_TransactionNumber" Default="0" />
+    </Sequence.Variables>
+    <ui:GetTransactionItem DisplayName="Get Queue Item" QueueName="[in_QueueName]" TransactionItem="[out_TransactionItem]" />
+    <If DisplayName="Check Transaction Item" Condition="[out_TransactionItem IsNot Nothing]">
       <If.Then>
         <Sequence DisplayName="Transaction Found">
           <Assign DisplayName="Increment Transaction Counter">
             <Assign.To><OutArgument x:TypeArguments="x:Int32">[io_TransactionNumber]</OutArgument></Assign.To>
             <Assign.Value><InArgument x:TypeArguments="x:Int32">[io_TransactionNumber + 1]</InArgument></Assign.Value>
           </Assign>
-          <ui:LogMessage Level="Info" Message="[&quot;Processing transaction #&quot;${concat}io_TransactionNumber.ToString${isCSharp ? "()" : ""}${concat}&quot; - Ref: &quot;${concat}out_TransactionItem.Reference]" DisplayName="Log Transaction" />
+          <ui:LogMessage Level="Info" Message="[&quot;Processing transaction #&quot; &amp; io_TransactionNumber.ToString &amp; &quot; - Ref: &quot; &amp; out_TransactionItem.Reference]" DisplayName="Log Transaction" />
         </Sequence>
       </If.Then>
       <If.Else>
-        <ui:LogMessage Level="Info" Message="[&quot;No more transactions in queue&quot;]" DisplayName="Log Queue Empty" />
+        <ui:LogMessage Level="Info" Message="'No more transactions in queue'" DisplayName="Log Queue Empty" />
       </If.Else>
     </If>
   </Sequence>
 </Activity>`;
 }
 
-export function generateSetTransactionStatusXaml(targetFramework?: TargetFramework): string {
-  const isCSharp = targetFramework === "Portable";
-  const concat = isCSharp ? " + " : " &amp; ";
-  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
-  const screenshotDefault = isCSharp
-    ? `&quot;Screenshots/Error_&quot; + DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;) + &quot;.png&quot;`
-    : `&quot;Screenshots/Error_&quot; &amp; DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;) &amp; &quot;.png&quot;`;
+export function generateSetTransactionStatusXaml(): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- SetTransactionStatus.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Marks queue item as Successful or Failed with retry logic -->
@@ -3596,22 +1778,17 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
 <Activity mc:Ignorable="sap sap2010" x:Class="SetTransactionStatus"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=${nsS}"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
-  <x:Members>
-    <x:Property Name="in_TransactionItem" Type="InArgument(ui:QueueItem)" />
-    <x:Property Name="in_Status" Type="InArgument(x:String)" />
-    <x:Property Name="in_ErrorMessage" Type="InArgument(x:String)" />
-  </x:Members>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Set Transaction Status">
     <Sequence.Variables>
-      <Variable x:TypeArguments="x:String" Name="str_ScreenshotPath" Default="[${screenshotDefault}]" />
+      <Variable x:TypeArguments="ui:QueueItem" Name="in_TransactionItem" />
+      <Variable x:TypeArguments="x:String" Name="in_Status" Default="'Successful'" />
+      <Variable x:TypeArguments="x:String" Name="in_ErrorMessage" />
     </Sequence.Variables>
     <If DisplayName="Check Status" Condition="[in_Status = &quot;Successful&quot;]">
       <If.Then>
@@ -3619,26 +1796,8 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
       </If.Then>
       <If.Else>
         <Sequence DisplayName="Set Failed">
-          <TryCatch DisplayName="Safe Screenshot on Transaction Failure">
-            <TryCatch.Try>
-              <Sequence DisplayName="Capture Screenshot">
-                <ui:TakeScreenshot DisplayName="Screenshot on Transaction Failure" />
-                <ui:LogMessage Level="Info" Message="[&quot;Transaction failure screenshot: &quot;${concat}str_ScreenshotPath]" DisplayName="Log Failure Screenshot" />
-              </Sequence>
-            </TryCatch.Try>
-            <TryCatch.Catches>
-              <Catch x:TypeArguments="s:Exception">
-                <ActivityAction x:TypeArguments="s:Exception">
-                  <ActivityAction.Argument>
-                    <DelegateInArgument x:TypeArguments="s:Exception" Name="ssEx" />
-                  </ActivityAction.Argument>
-                  <ui:LogMessage Level="Warn" Message="[&quot;Screenshot capture failed: &quot;${concat}ssEx.Message]" DisplayName="Log Screenshot Failure" />
-                </ActivityAction>
-              </Catch>
-            </TryCatch.Catches>
-          </TryCatch>
           <ui:SetTransactionStatus DisplayName="Set Failed" TransactionItem="[in_TransactionItem]" Status="Failed" ErrorType="Application" Reason="[in_ErrorMessage]" />
-          <ui:LogMessage Level="Error" Message="[&quot;Transaction failed: &quot;${concat}in_ErrorMessage]" DisplayName="Log Failure" />
+          <ui:LogMessage Level="Error" Message="[&quot;Transaction failed: &quot; &amp; in_ErrorMessage]" DisplayName="Log Failure" />
         </Sequence>
       </If.Else>
     </If>
@@ -3646,65 +1805,33 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
 </Activity>`;
 }
 
-export function generateCloseAllApplicationsXaml(targetFramework: TargetFramework = "Windows"): string {
-  const isCrossPlatform = targetFramework === "Portable";
-  const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsSco = isCrossPlatform ? "System.Runtime" : "mscorlib";
-
-  const closeBody = isCrossPlatform
-    ? `<ui:LogMessage Level="Info" Message="[&quot;Closing all applications (Cross-Platform mode)...&quot;]" DisplayName="Log Cleanup Start" />
-          <ui:LogMessage Level="Info" Message="[&quot;Application cleanup completed&quot;]" DisplayName="Log Cleanup Complete" />`
-    : `<ui:LogMessage Level="Info" Message="[&quot;Closing all applications...&quot;]" DisplayName="Log Cleanup Start" />
-          <ui:CloseApplication DisplayName="Close Browser" />
-          <ui:LogMessage Level="Info" Message="[&quot;All applications closed&quot;]" DisplayName="Log Cleanup Complete" />`;
-
-  const concat = isCrossPlatform ? " + " : " &amp; ";
-
+export function generateCloseAllApplicationsXaml(): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- CloseAllApplications.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Gracefully closes all open applications before ending -->
-${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not available, using log-only cleanup -->" : ""}
 <Activity mc:Ignorable="sap sap2010" x:Class="CloseAllApplications"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=${nsS}"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Close All Applications">
     <TryCatch DisplayName="Safe Cleanup">
       <TryCatch.Try>
         <Sequence DisplayName="Close Applications">
-          ${closeBody}
+          <ui:LogMessage Level="Info" Message="'Closing all applications...'" DisplayName="Log Cleanup Start" />
+          <ui:CloseApplication DisplayName="Close Browser" />
+          <ui:LogMessage Level="Info" Message="'All applications closed'" DisplayName="Log Cleanup Complete" />
         </Sequence>
       </TryCatch.Try>
       <TryCatch.Catches>
         <Catch x:TypeArguments="s:Exception">
           <ActivityAction x:TypeArguments="s:Exception">
-            <ActivityAction.Argument>
-              <DelegateInArgument x:TypeArguments="s:Exception" Name="closeEx" />
-            </ActivityAction.Argument>
-            <ui:LogMessage Level="Warn" Message="[&quot;Error during cleanup: &quot;${concat}closeEx.Message]" DisplayName="Log Cleanup Error" />
-          </ActivityAction>
-        </Catch>
-      </TryCatch.Catches>
-    </TryCatch>
-    <TryCatch DisplayName="Safe Kill Processes">
-      <TryCatch.Try>
-        <ui:InvokeWorkflowFile DisplayName="Kill All Processes" WorkflowFileName="KillAllProcesses.xaml" />
-      </TryCatch.Try>
-      <TryCatch.Catches>
-        <Catch x:TypeArguments="s:Exception">
-          <ActivityAction x:TypeArguments="s:Exception">
-            <ActivityAction.Argument>
-              <DelegateInArgument x:TypeArguments="s:Exception" Name="killEx" />
-            </ActivityAction.Argument>
-            <ui:LogMessage Level="Warn" Message="[&quot;Kill processes failed: &quot;${concat}killEx.Message]" DisplayName="Log Kill Error" />
+            <Argument x:TypeArguments="s:Exception" x:Name="closeEx" />
+            <ui:LogMessage Level="Warn" Message="[&quot;Error during cleanup: &quot; &amp; closeEx.Message]" DisplayName="Log Cleanup Error" />
           </ActivityAction>
         </Catch>
       </TryCatch.Catches>
@@ -3713,53 +1840,33 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not ava
 </Activity>`;
 }
 
-export function generateKillAllProcessesXaml(targetFramework: TargetFramework = "Windows"): string {
-  const isCrossPlatform = targetFramework === "Portable";
-  const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsSco = isCrossPlatform ? "System.Runtime" : "mscorlib";
-
-  const killBody = isCrossPlatform
-    ? `<ui:LogMessage Level="Warn" Message="[&quot;Process cleanup requested (Cross-Platform mode — KillProcess not available on Serverless)&quot;]" DisplayName="Log Kill Start" />
-    <ui:LogMessage Level="Info" Message="[&quot;Process cleanup completed&quot;]" DisplayName="Log Kill Complete" />`
-    : `<ui:LogMessage Level="Warn" Message="[&quot;Force killing all application processes...&quot;]" DisplayName="Log Kill Start" />
-    <ui:KillProcess DisplayName="Kill Chrome" ProcessName="chrome" />
-    <ui:KillProcess DisplayName="Kill IE" ProcessName="iexplore" />
-    <ui:KillProcess DisplayName="Kill Excel" ProcessName="EXCEL" />
-    <ui:LogMessage Level="Info" Message="[&quot;All processes terminated&quot;]" DisplayName="Log Kill Complete" />`;
-
+export function generateKillAllProcessesXaml(): string {
   return `<?xml version="1.0" encoding="utf-8"?>
 <!-- KillAllProcesses.xaml — Auto-generated by CannonBall -->
 <!-- REFramework: Force-kills application processes on unrecoverable errors -->
-${isCrossPlatform ? "<!-- Cross-Platform (Portable) — KillProcess not available on Serverless, using log-only cleanup -->" : ""}
 <Activity mc:Ignorable="sap sap2010" x:Class="KillAllProcesses"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=${nsS}"
+  xmlns:s="clr-namespace:System;assembly=mscorlib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="Kill All Processes">
-    ${killBody}
+    <ui:LogMessage Level="Warn" Message="'Force killing all application processes...'" DisplayName="Log Kill Start" />
+    <ui:KillProcess DisplayName="Kill Chrome" ProcessName="chrome" />
+    <ui:KillProcess DisplayName="Kill IE" ProcessName="iexplore" />
+    <ui:KillProcess DisplayName="Kill Excel" ProcessName="EXCEL" />
+    <ui:LogMessage Level="Info" Message="'All processes terminated'" DisplayName="Log Kill Complete" />
   </Sequence>
 </Activity>`;
 }
 
 export function aggregateGaps(results: XamlGeneratorResult[]): XamlGap[] {
   const all: XamlGap[] = [];
-  const seen = new Set<string>();
   for (const r of results) {
-    for (const gap of r.gaps) {
-      const key = `${gap.category}::${gap.activity}::${gap.description}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        all.push(gap);
-      }
-    }
+    all.push(...r.gaps);
   }
   return all;
 }
@@ -3774,6 +1881,7 @@ export function aggregatePackages(results: XamlGeneratorResult[]): string[] {
   return Array.from(pkgs);
 }
 
+export type DhgDeploymentResult = DeploymentResult;
 
 export type DhgExtractedArtifacts = {
   queues?: Array<{ name: string; description?: string; jsonSchema?: string; outputSchema?: string; maxRetries?: number; uniqueReference?: boolean }>;
@@ -3790,14 +1898,6 @@ export type DhgExtractedArtifacts = {
   requirements?: Array<{ name: string; type?: string; priority?: string; acceptanceCriteria?: string[]; source?: string; description?: string }>;
 };
 
-export type DhgQualityIssue = {
-  severity: "blocking" | "warning";
-  file: string;
-  check: string;
-  detail: string;
-  stubbedWorkflow?: string;
-};
-
 export type DhgOptions = {
   projectName: string;
   description?: string;
@@ -3812,14 +1912,6 @@ export type DhgOptions = {
   extractedArtifacts?: DhgExtractedArtifacts;
   analysisReports?: Array<{ fileName: string; report: AnalysisReport }>;
   automationType?: "rpa" | "agent" | "hybrid";
-  targetFramework?: TargetFramework;
-  autopilotEnabled?: boolean;
-  generationMode?: GenerationMode;
-  generationModeReason?: string;
-  qualityIssues?: DhgQualityIssue[];
-  stubbedWorkflows?: string[];
-  outcomeReport?: PipelineOutcomeReport;
-  xamlContents?: string[];
 };
 
 export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
@@ -3837,9 +1929,6 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     extractedArtifacts,
     analysisReports,
     automationType,
-    targetFramework,
-    autopilotEnabled,
-    xamlContents,
   } = opts;
 
   const selectorGaps = gaps.filter((g) => g.category === "selector");
@@ -3857,25 +1946,11 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   if (description) md += `**Description:** ${description}\n`;
   md += `**Generated:** ${new Date().toISOString().split("T")[0]}\n`;
   md += `**Architecture:** ${useReFramework ? "REFramework (Queue-based transactional)" : "Sequential (Linear workflow)"}\n`;
-  if (targetFramework === "Portable") {
-    md += `**Target Framework:** Cross-Platform (Portable) — Serverless robot compatible\n`;
-    md += `**Expression Language:** C# (CSharp)\n`;
-    md += `**Runtime:** .NET 6.0 (lib/net6.0)\n`;
-  }
   if (automationType && automationType !== "rpa") {
     const atLabel = automationType === "agent" ? "UiPath Agent (AI-driven autonomous)" : "Hybrid (RPA + Agent)";
     md += `**Automation Type:** ${atLabel}\n`;
   }
-  if (autopilotEnabled) md += `**Autopilot:** Enabled — self-healing selectors and AI-assisted recovery active\n`;
   if (enrichment) md += `**AI Enrichment:** Applied — activities use system-specific selectors and real property values\n`;
-  if (opts.generationMode) {
-    const modeLabel = opts.generationMode === "baseline_openable" ? "Baseline Openable (minimal, deterministic)" : "Full Implementation";
-    md += `**Generation Mode:** ${modeLabel}\n`;
-    if (opts.generationModeReason) md += `**Mode Reason:** ${opts.generationModeReason}\n`;
-  }
-  if (opts.stubbedWorkflows?.length) {
-    md += `**Stubbed Workflows:** ${opts.stubbedWorkflows.length} workflow(s) replaced with Studio-openable stubs due to blocking issues\n`;
-  }
 
   const tier2Items = [...endpointGaps, ...configGaps];
   const totalAutoFixed = analysisReports?.reduce((s, r) => s + r.report.totalAutoFixed, 0) ?? 0;
@@ -3917,140 +1992,6 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   md += `\n**Readiness Score: ${readinessScore}%** | Estimated developer effort: **~${(estTotalMinutes / 60).toFixed(1)} hours** (${totalSelectorCount} selectors, ${totalCredentialCount} credentials, ${mandatoryBaseMinutes} min mandatory validation)\n`;
   md += `\n---\n\n`;
 
-  const blockingIssues = (opts.qualityIssues || []).filter(i => i.severity === "blocking");
-  const warningIssues = (opts.qualityIssues || []).filter(i => i.severity === "warning");
-  if (blockingIssues.length > 0 || warningIssues.length > 0) {
-    sectionNum++;
-    md += `## ${sectionNum}. Quality Gate Results\n\n`;
-
-    if (blockingIssues.length > 0) {
-      md += `### Blocking Issues (${blockingIssues.length})\n\n`;
-      md += `These issues caused specific workflows to fall back to Studio-openable stubs. The stubs are valid XAML and can be opened in Studio, but require manual implementation.\n\n`;
-      md += `| # | File | Check | Detail |\n`;
-      md += `|---|------|-------|---------|\n`;
-      blockingIssues.forEach((issue, i) => {
-        const detail = issue.detail.length > 120 ? issue.detail.slice(0, 117) + "..." : issue.detail;
-        md += `| ${i + 1} | \`${issue.file}\` | ${issue.check} | ${detail.replace(/\|/g, "\\|")} |\n`;
-      });
-      md += `\n`;
-      if (opts.stubbedWorkflows?.length) {
-        md += `**Stubbed Workflows:** ${opts.stubbedWorkflows.map(s => `\`${s}\``).join(", ")}\n\n`;
-        md += `> These stubs contain a LogMessage indicating manual implementation is needed. They are correctly wired into the project with valid InvokeWorkflowFile references.\n\n`;
-      }
-    }
-
-    if (warningIssues.length > 0) {
-      md += `### Warnings (${warningIssues.length})\n\n`;
-      md += `These are minor issues that do not prevent the package from being opened or used. They represent areas where a developer can improve the generated output.\n\n`;
-      md += `| # | File | Check | Detail |\n`;
-      md += `|---|------|-------|---------|\n`;
-      warningIssues.forEach((issue, i) => {
-        const detail = issue.detail.length > 120 ? issue.detail.slice(0, 117) + "..." : issue.detail;
-        md += `| ${i + 1} | \`${issue.file}\` | ${issue.check} | ${detail.replace(/\|/g, "\\|")} |\n`;
-      });
-      md += `\n`;
-    }
-    md += `---\n\n`;
-  }
-
-  if (opts.outcomeReport) {
-    const report = opts.outcomeReport;
-    sectionNum++;
-    md += `## ${sectionNum}. Pipeline Outcome Report\n\n`;
-
-    if (report.fullyGeneratedFiles.length > 0) {
-      md += `### Fully Generated (${report.fullyGeneratedFiles.length} file(s))\n\n`;
-      md += `These workflows were generated without any stub replacements or escalation.\n\n`;
-      for (const f of report.fullyGeneratedFiles) {
-        md += `- \`${f}\`\n`;
-      }
-      md += `\n`;
-    }
-
-    if (report.autoRepairs.length > 0) {
-      md += `### Auto-Repaired (${report.autoRepairs.length} fix(es))\n\n`;
-      md += `These issues were automatically corrected during the build pipeline. No developer action required.\n\n`;
-      md += `| # | Code | File | Description |\n`;
-      md += `|---|------|------|-------------|\n`;
-      report.autoRepairs.forEach((r, i) => {
-        const desc = (r.description || "").length > 100 ? (r.description || "").slice(0, 97) + "..." : (r.description || "—");
-        md += `| ${i + 1} | \`${r.repairCode}\` | \`${r.file}\` | ${desc.replace(/\|/g, "\\|")} |\n`;
-      });
-      md += `\n`;
-    }
-
-    if (report.propertyRemediations && report.propertyRemediations.length > 0) {
-      md += `### Remediated — Per-Property (${report.propertyRemediations.length})\n\n`;
-      md += `Individual properties were replaced with safe defaults or placeholders. The rest of the activity remains intact.\n\n`;
-      md += `| # | File | Activity | Property | Code | Developer Action | Est. Minutes |\n`;
-      md += `|---|------|----------|----------|------|-----------------|-------------|\n`;
-      report.propertyRemediations.forEach((r, i) => {
-        const actName = r.originalDisplayName || r.originalTag || "—";
-        const propName = r.propertyName || "—";
-        const action = (r.developerAction || "").length > 80 ? (r.developerAction || "").slice(0, 77) + "..." : (r.developerAction || "—");
-        md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${propName}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes || "—"} |\n`;
-      });
-      md += `\n`;
-    }
-
-    const activityRemediations = report.remediations.filter(r => r.level === "activity");
-    const sequenceRemediations = report.remediations.filter(r => r.level === "sequence");
-    const workflowRemediations = report.remediations.filter(r => r.level === "workflow");
-
-    if (activityRemediations.length > 0) {
-      md += `### Stubbed — Per-Activity (${activityRemediations.length})\n\n`;
-      md += `Individual activities were replaced with TODO stubs. The surrounding workflow structure is preserved.\n\n`;
-      md += `| # | File | Activity | Code | Developer Action | Est. Minutes |\n`;
-      md += `|---|------|----------|------|-----------------|-------------|\n`;
-      activityRemediations.forEach((r, i) => {
-        const actName = r.originalDisplayName || r.originalTag || "—";
-        const action = (r.developerAction || "").length > 80 ? (r.developerAction || "").slice(0, 77) + "..." : (r.developerAction || "—");
-        md += `| ${i + 1} | \`${r.file}\` | ${actName} | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes || "—"} |\n`;
-      });
-      md += `\n`;
-    }
-
-    if (sequenceRemediations.length > 0) {
-      md += `### Stubbed — Per-Sequence (${sequenceRemediations.length})\n\n`;
-      md += `Sequence children were replaced with a single TODO stub because multiple activities in the sequence had issues.\n\n`;
-      md += `| # | File | Sequence | Code | Developer Action | Est. Minutes |\n`;
-      md += `|---|------|----------|------|-----------------|-------------|\n`;
-      sequenceRemediations.forEach((r, i) => {
-        const seqName = r.originalDisplayName || "—";
-        const action = (r.developerAction || "").length > 80 ? (r.developerAction || "").slice(0, 77) + "..." : (r.developerAction || "—");
-        md += `| ${i + 1} | \`${r.file}\` | ${seqName} | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes || "—"} |\n`;
-      });
-      md += `\n`;
-    }
-
-    if (workflowRemediations.length > 0) {
-      md += `### Stubbed — Per-Workflow (${workflowRemediations.length})\n\n`;
-      md += `Entire workflows were replaced with Studio-openable stubs because per-activity and per-sequence remediation could not resolve the issues.\n\n`;
-      md += `| # | File | Code | Developer Action | Est. Minutes |\n`;
-      md += `|---|------|------|-----------------|-------------|\n`;
-      workflowRemediations.forEach((r, i) => {
-        const action = (r.developerAction || "").length > 80 ? (r.developerAction || "").slice(0, 77) + "..." : (r.developerAction || "—");
-        md += `| ${i + 1} | \`${r.file}\` | \`${r.remediationCode}\` | ${action.replace(/\|/g, "\\|")} | ${r.estimatedEffortMinutes || "—"} |\n`;
-      });
-      md += `\n`;
-    }
-
-    if (report.downgradeEvents.length > 0) {
-      md += `### Downgraded Components (${report.downgradeEvents.length})\n\n`;
-      md += `These components were simplified during generation due to complexity or compatibility constraints.\n\n`;
-      for (const d of report.downgradeEvents) {
-        md += `- ${d.file ? `**${d.file}**: ` : ""}${d.triggerReason} (from \`${d.fromMode}\` to \`${d.toMode}\`)\n`;
-      }
-      md += `\n`;
-    }
-
-    if (report.totalEstimatedEffortMinutes > 0) {
-      md += `**Total estimated developer effort for stubbed items: ~${report.totalEstimatedEffortMinutes} minutes (${(report.totalEstimatedEffortMinutes / 60).toFixed(1)} hours)**\n\n`;
-    }
-
-    md += `---\n\n`;
-  }
-
   const allSelectorHints: Array<{ activity: string; hint: string; nodeName: string }> = [];
   if (enrichment?.nodes) {
     for (const node of enrichment.nodes) {
@@ -4062,16 +2003,7 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     }
   }
 
-  let totalActivityCount = 0;
-  if (xamlContents && xamlContents.length > 0) {
-    const activityPattern = /<ui:\w+/g;
-    for (const content of xamlContents) {
-      const matches = content.match(activityPattern);
-      if (matches) totalActivityCount += matches.length;
-    }
-  } else {
-    totalActivityCount = enrichment?.nodes?.reduce((s, n) => s + (n.activities?.length || 0), 0) ?? 0;
-  }
+  const totalActivityCount = enrichment?.nodes?.reduce((s, n) => s + (n.activities?.length || 0), 0) ?? 0;
 
   sectionNum++;
   md += `## ${sectionNum}. Tier 1 — AI Completed (No Human Action Required)\n\n`;
@@ -4247,33 +2179,27 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
       md += `|-------|------|--------------|-----------------|\n`;
       for (const a of nonCredAssets) {
         const aResult = deploymentResults?.find(r => r.artifact === "Asset" && r.name === a.name);
-        const valStr = String(a.value ?? "");
-        const hasPlaceholder = valStr.includes("PLACEHOLDER_");
+        const hasPlaceholder = (a.value || "").includes("PLACEHOLDER_");
         const idNote = aResult?.id ? ` (ID: ${aResult.id})` : "";
-        md += `| \`${a.name}\`${idNote} | ${a.type} | \`${valStr || "(empty)"}\` | ${hasPlaceholder ? "**SET REAL VALUE** — placeholder needs replacement" : `Verify matches your environment. ${String(a.description ?? "")}`} |\n`;
+        md += `| \`${a.name}\`${idNote} | ${a.type} | \`${a.value || "(empty)"}\` | ${hasPlaceholder ? "**SET REAL VALUE** — placeholder needs replacement" : `Verify matches your environment. ${a.description || ""}`} |\n`;
       }
       md += `\n`;
     }
   } else if (assetResults.length > 0) {
-    const nonCredAssetResults = assetResults.filter(r => {
-      const msg = String(r.message ?? "").toLowerCase();
-      const nm = String(r.name ?? "").toLowerCase();
-      return !(
-        msg.includes("type: credential") ||
-        msg.includes("credential") ||
-        nm.includes("credential") ||
-        nm.includes("password")
-      );
-    });
+    const nonCredAssetResults = assetResults.filter(r => !(
+      r.message.includes("Type: Credential") ||
+      r.message.toLowerCase().includes("credential") ||
+      r.name.toLowerCase().includes("credential") ||
+      r.name.toLowerCase().includes("password")
+    ));
     if (nonCredAssetResults.length > 0) {
       md += `### Asset Values\n\n`;
       md += `| Asset | Status | ID | Action Required |\n`;
       md += `|-------|--------|----|-----------------|\n`;
       for (const ar of nonCredAssetResults) {
-        const msgStr = String(ar.message ?? "");
-        const typeMatch = msgStr.match(/Type:\s*(\w+)/);
+        const typeMatch = ar.message.match(/Type:\s*(\w+)/);
         const assetType = typeMatch ? typeMatch[1] : "Unknown";
-        md += `| \`${String(ar.name ?? "")}\` (${assetType}) | ${ar.status} | ${ar.id || "—"} | Verify value matches your environment in Orchestrator > Assets > \`${String(ar.name ?? "")}\` |\n`;
+        md += `| \`${ar.name}\` (${assetType}) | ${ar.status} | ${ar.id || "—"} | Verify value matches your environment in Orchestrator > Assets > \`${ar.name}\` |\n`;
       }
       md += `\n`;
     }
@@ -4444,12 +2370,11 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
     md += `- Agent config with recommended defaults (temperature, max iterations)\n`;
     md += `- Guardrail definitions from process analysis\n\n`;
 
-    md += `#### Requires Human Action (Last-Mile Items)\n\n`;
-    md += `- **Context grounding data population**: Upload actual business documents (SOPs, policies, FAQs, templates) into the referenced storage bucket(s). The agent config specifies which bucket to use — populate it with real data.\n`;
-    md += `- **Prompt tuning**: The system prompt was generated from the SDD. Test with real production data and refine tone, scope, and output format to match business expectations.\n`;
-    md += `- **Tool authorization**: Each agent tool maps to a deployed Orchestrator process. Verify the agent has permission to invoke each process in Agent Builder.\n`;
-    md += `- **Escalation rule validation**: Confirm escalation conditions and Action Center catalog mappings with business stakeholders.\n`;
-    md += `- **End-to-end testing**: Run the agent with representative inputs, verify tool invocations produce correct outputs, and confirm escalation triggers work as expected.\n\n`;
+    md += `#### Requires Human Action\n\n`;
+    md += `- Tool authorization in Agent Builder (security review required)\n`;
+    md += `- Knowledge base document upload (actual SOPs and reference materials)\n`;
+    md += `- Production prompt tuning after testing with real data\n`;
+    md += `- Escalation rule validation with stakeholders\n\n`;
   }
 
   md += `---\n\n`;
@@ -5006,26 +2931,53 @@ export function generateDeveloperHandoffGuide(opts: DhgOptions): string {
   md += `- [ ] Monitoring and alerting configured\n`;
   md += `- [ ] Runbook documentation completed\n`;
 
-  if (targetFramework === "Portable") {
-    sectionNum++;
-    md += `\n## ${sectionNum}. Serverless / Cross-Platform Notes\n\n`;
-    md += `This project targets **Cross-Platform (Portable)** and is designed to run on **Serverless robots**.\n\n`;
-    md += `**Key Differences from Windows:**\n`;
-    md += `- **Expression Language:** CSharp (not VB.NET) — all expressions use C# syntax\n`;
-    md += `- **Target Runtime:** .NET 6.0 (lib/net6.0 in the nupkg)\n`;
-    md += `- **Modern Design Activities:** Uses \`UseExcel\`, \`UseBrowser\`, \`SendMail\`, \`GetMail\` instead of legacy equivalents\n`;
-    md += `- **No Desktop Interaction:** \`CloseApplication\` and \`KillProcess\` are not available — cleanup uses log-only fallbacks\n`;
-    md += `- **Screenshot-on-Error:** All error handlers capture a screenshot before logging for diagnostic purposes\n`;
-    if (autopilotEnabled) {
-      md += `- **Autopilot/Self-Healing:** Enabled — selectors use AI-assisted recovery to adapt to UI changes automatically\n`;
-    }
-    md += `\n**Testing Considerations:**\n`;
-    md += `- Test in UiPath Studio with Cross-Platform profile selected\n`;
-    md += `- Verify all expressions compile under CSharp language\n`;
-    md += `- Ensure no Windows-only activities are referenced\n`;
-    md += `- Validate Serverless robot execution in Orchestrator test environment\n`;
-  }
-
   return md;
 }
 
+function extractSystemFromGap(gap: XamlGap): string {
+  const desc = (gap.description + " " + gap.placeholder).toLowerCase();
+  if (desc.includes("sap")) return "SAP";
+  if (desc.includes("salesforce") || desc.includes("sfdc")) return "Salesforce";
+  if (desc.includes("servicenow") || desc.includes("snow")) return "ServiceNow";
+  if (desc.includes("workday")) return "Workday";
+  if (desc.includes("oracle")) return "Oracle";
+  if (desc.includes("browser") || desc.includes("web") || desc.includes("chrome")) return "Web Browser";
+  return "General";
+}
+
+export function generateDhgSummary(gaps: XamlGap[], deploymentResults?: DhgDeploymentResult[]): string {
+  const selectorCount = gaps.filter((g) => g.category === "selector").length;
+  const credentialCount = gaps.filter((g) => g.category === "credential").length;
+  const endpointCount = gaps.filter((g) => g.category === "endpoint").length;
+  const configCount = gaps.filter((g) => g.category === "config").length;
+  const logicCount = gaps.filter((g) => g.category === "logic").length;
+  const manualCount = gaps.filter((g) => g.category === "manual").length;
+  const agentCount = gaps.filter((g) => g.category === "agent").length;
+  const totalMinutes = gaps.reduce((sum, g) => sum + g.estimatedMinutes, 0);
+  const totalHours = (totalMinutes / 60).toFixed(1);
+
+  const lines: string[] = [
+    `Enhanced Developer Handoff Summary (${gaps.length} XAML items, ~${totalHours}h XAML effort):`,
+  ];
+
+  if (selectorCount > 0) lines.push(`  - ${selectorCount} UI selector(s) to capture`);
+  if (credentialCount > 0) lines.push(`  - ${credentialCount} credential/asset(s) to configure`);
+  if (endpointCount > 0) lines.push(`  - ${endpointCount} integration endpoint(s) to set`);
+  if (configCount > 0) lines.push(`  - ${configCount} configuration value(s) to update`);
+  if (logicCount > 0) lines.push(`  - ${logicCount} business logic gap(s) to implement`);
+  if (manualCount > 0) lines.push(`  - ${manualCount} manual step(s) to complete`);
+  if (agentCount > 0) lines.push(`  - ${agentCount} agent invocation(s) to configure`);
+
+  if (deploymentResults?.length) {
+    const failed = deploymentResults.filter(r => r.status === "failed" || r.status === "manual");
+    const created = deploymentResults.filter(r => r.status === "created" || r.status === "exists" || r.status === "updated" || r.status === "in_package");
+    lines.push(`  Orchestrator: ${created.length}/${deploymentResults.length} artifacts provisioned`);
+    if (failed.length > 0) {
+      lines.push(`  ${failed.length} artifact(s) need manual setup — see DHG for details`);
+    }
+  }
+
+  lines.push(`See DeveloperHandoffGuide.md in the package for full details (covers all 14 artifact types).`);
+
+  return lines.join("\n");
+}

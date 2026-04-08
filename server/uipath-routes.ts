@@ -1,27 +1,16 @@
 import type { Express, Request, Response } from "express";
-import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache, discoverIntegrationService, clearIntegrationServiceCache, discoverGovernancePolicies, discoverAttendedRobots, discoverStudioProjects, QualityGateError } from "./uipath-integration";
+import { getUiPathConfig, getAccessToken, saveUiPathConfig, testUiPathConnection, pushToUiPath, getLastTestedAt, fetchUiPathFolders, saveUiPathFolder, createProcess, listMachines, listRobots, listProcesses, startJob, getJobStatus, verifyUiPathScopes, probeUiPathScopes, autoDetectUiPathScopes, clearProbeCache } from "./uipath-integration";
 import { parseArtifactsFromSDD, extractArtifactsWithLLM, deployAllArtifacts, formatDeploymentReport } from "./uipath-deploy";
-import { getPreviousManifest, reconcileArtifacts, saveManifest, formatReconciliationSummary } from "./artifact-reconciliation";
 import { documentStorage } from "./document-storage";
 import { chatStorage } from "./replit_integrations/chat/storage";
 import { storage } from "./storage";
-import { findUiPathMessage, parseUiPathPackage, generateUiPathPackage, computeVersion, getCachedPipelineResult, runBuildPipeline, type PipelineProgressEvent } from "./uipath-pipeline";
+import { processMapStorage } from "./process-map-storage";
 import * as auth from "./uipath-auth";
-import { metadataService, ORCHESTRATOR_DIAGNOSTIC_ENTITIES } from "./catalog/metadata-service";
 import * as orch from "./orchestrator-client";
 import * as prereqs from "./prerequisite-checker";
 import { db } from "./db";
 import { pipelineJobs, provisioningLog, actionTasks, testResults, uipathConnections, appSettings } from "@shared/schema";
 import { eq, desc, ne } from "drizzle-orm";
-import {
-  startUiPathGenerationRun, getActiveRunForIdea, getActiveRun, subscribeToRun, cancelActiveRun,
-  createObserverRun, getObserverRun, getLatestObserverRun,
-  emitObserverProgress, emitObserverPipelineEvent, emitObserverHeartbeat,
-  emitObserverMetaValidation, emitObserverDone, emitObserverError,
-  cancelObserverRun, isObserverRunCancelled, subscribeToObserverRun, isObserverTerminalStatus,
-  getObserverRunEvents,
-  type ObserverRunState,
-} from "./uipath-run-manager";
 
 function extractOrgSlug(input: string): string {
   let val = input.trim();
@@ -56,14 +45,14 @@ async function migrateExistingConfigToConnection(): Promise<void> {
     tenantName,
     clientId,
     clientSecret,
-    scopes: map.get("uipath_scopes") || metadataService.getScopesForServiceString("OR"),
+    scopes: map.get("uipath_scopes") || "OR.Default OR.Administration",
     folderId: map.get("uipath_folder_id") || null,
     folderName: map.get("uipath_folder_name") || null,
     isActive: true,
   });
   auth.invalidateAllTokens();
   auth.invalidateConfig();
-  clearProbeCache(); metadataService.clearReachability();
+  clearProbeCache();
   migrationDone = true;
   console.log("[UiPath] Migrated existing config to uipath_connections table");
 }
@@ -82,13 +71,6 @@ function requireAdmin(req: Request, res: Response): boolean {
 }
 
 export function registerUiPathRoutes(app: Express): void {
-  app.get("/api/settings/uipath/taxonomy", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    const taxonomy = metadataService.getServiceTaxonomy();
-    const hierarchy = metadataService.getTaxonomyHierarchy();
-    return res.json({ taxonomy, hierarchy });
-  });
-
   app.get("/api/settings/uipath", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const config = await getUiPathConfig();
@@ -119,7 +101,7 @@ export function registerUiPathRoutes(app: Express): void {
     if (!requireAdmin(req, res)) return;
     const { folderId, folderName } = req.body;
     await saveUiPathFolder(folderId || null, folderName || null);
-    clearProbeCache(); metadataService.clearReachability();
+    clearProbeCache();
     return res.json({ success: true });
   });
 
@@ -155,14 +137,14 @@ export function registerUiPathRoutes(app: Express): void {
           tenantName: tenantName.trim(),
           clientId: clientId.trim(),
           clientSecret: secret,
-          scopes: scopes?.trim() || metadataService.getScopesForServiceString("OR"),
+          scopes: scopes?.trim() || "OR.Default OR.Administration",
           isActive: true,
         });
       }
     }
     auth.invalidateAllTokens();
     auth.invalidateConfig();
-    clearProbeCache(); metadataService.clearReachability();
+    clearProbeCache();
 
     const testResult = await testUiPathConnection();
     return res.json({
@@ -186,8 +168,6 @@ export function registerUiPathRoutes(app: Express): void {
       const masked = rows.map(r => ({
         ...r,
         clientSecret: r.clientSecret ? "••••••••" : "",
-        automationHubToken: r.automationHubToken ? "••••••••" : "",
-        communicationsMiningToken: r.communicationsMiningToken ? "••••••••" : "",
       }));
       return res.json(masked);
     } catch (err: any) {
@@ -210,7 +190,7 @@ export function registerUiPathRoutes(app: Express): void {
         tenantName: tenantName.trim(),
         clientId: clientId.trim(),
         clientSecret: clientSecret.trim(),
-        scopes: scopes?.trim() || metadataService.getScopesForServiceString("OR"),
+        scopes: scopes?.trim() || "OR.Default OR.Administration",
         folderId: folderId || null,
         folderName: folderName || null,
         isActive: isFirst,
@@ -218,9 +198,9 @@ export function registerUiPathRoutes(app: Express): void {
       if (isFirst) {
         auth.invalidateAllTokens();
         auth.invalidateConfig();
-        clearProbeCache(); metadataService.clearReachability();
+        clearProbeCache();
       }
-      return res.json({ ...row, clientSecret: "••••••••", automationHubToken: row.automationHubToken ? "••••••••" : "", communicationsMiningToken: row.communicationsMiningToken ? "••••••••" : "" });
+      return res.json({ ...row, clientSecret: "••••••••" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -249,9 +229,9 @@ export function registerUiPathRoutes(app: Express): void {
       if (updated.isActive) {
         auth.invalidateAllTokens();
         auth.invalidateConfig();
-        clearProbeCache(); metadataService.clearReachability();
+        clearProbeCache();
       }
-      return res.json({ ...updated, clientSecret: "••••••••", automationHubToken: updated.automationHubToken ? "••••••••" : "", communicationsMiningToken: updated.communicationsMiningToken ? "••••••••" : "" });
+      return res.json({ ...updated, clientSecret: "••••••••" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -283,8 +263,8 @@ export function registerUiPathRoutes(app: Express): void {
       const [activated] = await db.update(uipathConnections).set({ isActive: true }).where(eq(uipathConnections.id, id)).returning();
       auth.invalidateAllTokens();
       auth.invalidateConfig();
-      clearProbeCache(); metadataService.clearReachability();
-      return res.json({ ...activated, clientSecret: "••••••••", automationHubToken: activated.automationHubToken ? "••••••••" : "", communicationsMiningToken: activated.communicationsMiningToken ? "••••••••" : "" });
+      clearProbeCache();
+      return res.json({ ...activated, clientSecret: "••••••••" });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -299,9 +279,7 @@ export function registerUiPathRoutes(app: Express): void {
       if (rows.length === 0) return res.status(404).json({ message: "Connection not found" });
       const conn = rows[0];
 
-      const orchEntry = metadataService.getCapabilityTaxonomyEntry("orchestrator");
-      const orchScopePrefix = orchEntry?.scopeFamily ? `${orchEntry.scopeFamily}.` : "OR.";
-      const orScopes = conn.scopes.split(/\s+/).filter(s => s.startsWith(orchScopePrefix));
+      const orScopes = conn.scopes.split(/\s+/).filter(s => s.startsWith("OR."));
       const tokenParams = new URLSearchParams({
         grant_type: "client_credentials",
         client_id: conn.clientId,
@@ -309,7 +287,7 @@ export function registerUiPathRoutes(app: Express): void {
         scope: orScopes.length > 0 ? orScopes.join(" ") : conn.scopes,
       });
 
-      const tokenRes = await fetch(metadataService.getTokenEndpoint(), {
+      const tokenRes = await fetch("https://cloud.uipath.com/identity_/connect/token", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: tokenParams.toString(),
@@ -322,10 +300,8 @@ export function registerUiPathRoutes(app: Express): void {
       }
 
       const tokenData = await tokenRes.json();
-      const baseUrl = metadataService.getServiceUrl("OR", { orgName: conn.orgName, tenantName: conn.tenantName });
-      const orchTaxEntry = metadataService.getCapabilityTaxonomyEntry("orchestrator");
-      const orchProbePath = orchTaxEntry?.probeConfig?.probePath ?? "";
-      const orchRes = await fetch(`${baseUrl}${orchProbePath}`, {
+      const baseUrl = `https://cloud.uipath.com/${conn.orgName}/${conn.tenantName}/orchestrator_`;
+      const orchRes = await fetch(`${baseUrl}/odata/Folders?$top=1`, {
         headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
       });
 
@@ -360,49 +336,6 @@ export function registerUiPathRoutes(app: Express): void {
     return res.json(result);
   });
 
-  app.get("/api/settings/uipath/oidc-diagnostics", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    const oidcStatus = metadataService.getOidcStatus();
-    const validScopes = metadataService.getOidcValidScopes();
-    const resourceTypes: Array<import("./catalog/metadata-schemas").ServiceResourceType> = ["OR", "TM", "DU", "DF", "PIMS", "IXP", "AI", "IDENTITY"];
-    const scopesByService: Record<string, string[]> = {};
-    for (const rt of resourceTypes) {
-      scopesByService[rt] = metadataService.getScopesForService(rt);
-    }
-    return res.json({
-      ...oidcStatus,
-      totalValidScopes: validScopes.length,
-      scopesByService,
-    });
-  });
-
-  app.post("/api/settings/uipath/oidc-refresh", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    const result = await metadataService.refreshFromOIDC();
-    return res.json(result);
-  });
-
-  app.get("/api/settings/uipath/du-scope-diagnostics", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { testDuScopeForms } = await import("./uipath-auth");
-      const results = await testDuScopeForms();
-      const validatedScopes = metadataService.getValidatedScopes("DU");
-      const scopeSource = metadataService.getScopeSource("DU");
-      const currentMinimalScopes = metadataService.getMinimalScopesForService("DU");
-      const candidates = metadataService.getScopeCandidatesForService("DU");
-      return res.json({
-        scopeTestResults: results,
-        validatedScopes,
-        scopeSource,
-        currentMinimalScopes,
-        candidates: candidates.map(c => ({ label: c.label, scopes: c.scopes })),
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
   app.get("/api/settings/uipath/status", async (_req: Request, res: Response) => {
     const config = await getUiPathConfig();
     return res.json({ configured: !!config });
@@ -414,17 +347,6 @@ export function registerUiPathRoutes(app: Express): void {
     return res.json(result);
   });
 
-  app.get("/api/settings/uipath/ai-center", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { getAICenterSkills } = await import("./uipath-integration");
-      const result = await getAICenterSkills();
-      return res.json(result);
-    } catch (err: any) {
-      return res.json({ available: false, skills: [], packages: [], error: err.message });
-    }
-  });
-
   app.get("/api/settings/uipath/robots", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const result = await listRobots();
@@ -434,24 +356,6 @@ export function registerUiPathRoutes(app: Express): void {
   app.get("/api/settings/uipath/processes", async (req: Request, res: Response) => {
     if (!requireAdmin(req, res)) return;
     const result = await listProcesses();
-    return res.json(result);
-  });
-
-  app.get("/api/settings/uipath/governance-policies", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    const result = await discoverGovernancePolicies();
-    return res.json(result);
-  });
-
-  app.get("/api/settings/uipath/attended-robots", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    const result = await discoverAttendedRobots();
-    return res.json(result);
-  });
-
-  app.get("/api/settings/uipath/studio-projects", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    const result = await discoverStudioProjects();
     return res.json(result);
   });
 
@@ -549,72 +453,30 @@ export function registerUiPathRoutes(app: Express): void {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    const sddApprovalCheck = await documentStorage.getApproval(ideaId, "SDD");
-    if (!sddApprovalCheck) {
-      return res.status(400).json({ message: "SDD must be approved first" });
-    }
-
-    /**
-     * Deploy gate: only `studio_stable` packages may be deployed to Orchestrator.
-     * Artifact availability (download/DHG) is intentionally decoupled from deployability.
-     * This gate uses the assessed status from the cached pipeline result when available,
-     * falling back to a conservative mapping of the DB-persisted status.
-     */
-    const { mapLegacyStatus: mapStatus } = await import("../shared/models/package-status");
-    const cachedForGate = getCachedPipelineResult(ideaId);
-    if (cachedForGate) {
-      const assessed = mapStatus(cachedForGate.status);
-      if (assessed !== "studio_stable") {
-        return res.status(400).json({
-          message: `Deployment blocked — package status is "${assessed}". Only studio_stable packages can be deployed to Orchestrator.`,
-        });
-      }
-    } else {
-      const latestRun = await storage.getLatestGenerationRunForIdea(ideaId);
-      if (!latestRun) {
-        return res.status(400).json({
-          message: "Deployment blocked — no generation run found. Generate a package first.",
-        });
-      }
-      let parsedOutcome: Record<string, unknown> | null = null;
-      try { if (latestRun.outcomeReport) parsedOutcome = JSON.parse(latestRun.outcomeReport); } catch {}
-      const { isAssessedTerminalStatus: isAssessedCheck } = await import("../shared/models/package-status");
-      let assessed: string;
-      if (parsedOutcome?.assessedStatus && isAssessedCheck(parsedOutcome.assessedStatus as string)) {
-        assessed = parsedOutcome.assessedStatus as string;
-      } else {
-        assessed = mapStatus(latestRun.status, parsedOutcome?.assessedStatus === "studio_stable");
-      }
-      if (assessed !== "studio_stable") {
-        return res.status(400).json({
-          message: `Deployment blocked — package status is "${assessed}". Only studio_stable packages can be deployed to Orchestrator.`,
-        });
-      }
-    }
-
     const messages = await chatStorage.getMessagesByIdeaId(ideaId);
-    const uipathMsg = findUiPathMessage(messages);
+    const uipathMsg = [...messages].reverse().find((m) => m.content.startsWith("[UIPATH:"));
     if (!uipathMsg) {
       return res.status(404).json({ message: "No UiPath package found. Generate it first." });
     }
 
     let pkg;
     try {
-      pkg = parseUiPathPackage(uipathMsg);
-    } catch (e: any) {
+      let jsonStr = uipathMsg.content.slice(8);
+      if (jsonStr.endsWith("]")) jsonStr = jsonStr.slice(0, -1);
+      const braceEnd = jsonStr.lastIndexOf("}");
+      if (braceEnd !== -1) jsonStr = jsonStr.slice(0, braceEnd + 1);
+      pkg = JSON.parse(jsonStr);
+    } catch {
       return res.status(500).json({ message: "Invalid package data" });
     }
 
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
-    res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-    if (typeof (res as any).flush === "function") (res as any).flush();
 
     const sendEvent = (data: Record<string, any>) => {
-      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch (e: any) { /* SSE write failed — client disconnected */ }
+      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {}
     };
 
     let clientDisconnected = false;
@@ -624,88 +486,37 @@ export function registerUiPathRoutes(app: Express): void {
     });
 
     const heartbeat = setInterval(() => {
-      try { res.write(`: heartbeat\n\n`); } catch (e: any) { /* SSE heartbeat write failed — client disconnected */ }
+      try { res.write(`: heartbeat\n\n`); } catch {}
     }, 5000);
 
     try {
       sendEvent({ deployStatus: "Preparing package for deployment..." });
 
-      let prebuiltResult;
-      const cachedPipeline = getCachedPipelineResult(ideaId);
-      if (cachedPipeline) {
-        console.log(`[UiPath Deploy] Using cached pipeline result for ${ideaId}`);
-        prebuiltResult = {
-          buffer: cachedPipeline.packageBuffer,
-          gaps: cachedPipeline.gaps,
-          usedPackages: cachedPipeline.usedPackages,
-          qualityGateResult: cachedPipeline.qualityGateResult,
-          xamlEntries: cachedPipeline.xamlEntries,
-          dependencyMap: cachedPipeline.dependencyMap,
-          archiveManifest: cachedPipeline.archiveManifest,
-          usedFallbackStubs: cachedPipeline.usedFallbackStubs,
-          generationMode: cachedPipeline.generationMode,
-          referencedMLSkillNames: cachedPipeline.referencedMLSkillNames || [],
-        };
-      } else {
-        try {
-          const pipelineResult = await runBuildPipeline(ideaId, pkg, {
-            version: computeVersion(),
-            onProgress: (msg) => sendEvent({ deployStatus: msg }),
-            onMetaValidation: (event) => sendEvent({ metaValidation: event }),
-            onPipelineProgress: (event: PipelineProgressEvent) => sendEvent({ pipelineEvent: event, deployStatus: event.message }),
-          });
-          prebuiltResult = {
-            buffer: pipelineResult.packageBuffer,
-            gaps: pipelineResult.gaps,
-            usedPackages: pipelineResult.usedPackages,
-            qualityGateResult: pipelineResult.qualityGateResult,
-            xamlEntries: pipelineResult.xamlEntries,
-            dependencyMap: pipelineResult.dependencyMap,
-            archiveManifest: pipelineResult.archiveManifest,
-            usedFallbackStubs: pipelineResult.usedFallbackStubs,
-            generationMode: pipelineResult.generationMode,
-            referencedMLSkillNames: pipelineResult.referencedMLSkillNames || [],
-          };
-        } catch (err: any) {
-          if (err instanceof QualityGateError) {
-            sendEvent({
-              deployComplete: true,
-              success: false,
-              result: {
-                success: false,
-                message: "Package failed quality gate validation",
-                qualityGateViolations: err.qualityGateResult.violations,
-                qualityGateSummary: err.qualityGateResult.summary,
-              },
-            });
-            clearInterval(heartbeat);
-            return res.end();
-          }
-          throw err;
+      let sdd: any = null;
+      try {
+        sdd = await documentStorage.getLatestDocument(ideaId, "SDD");
+        if (sdd?.content) pkg._sddContent = sdd.content;
+        if (idea.automationType) pkg._automationType = idea.automationType;
+        const toBeNodes = await processMapStorage.getNodesByIdeaId(ideaId, "to-be");
+        const asIsNodes = await processMapStorage.getNodesByIdeaId(ideaId, "as-is");
+        const mapNodes = toBeNodes.length > 0 ? toBeNodes : asIsNodes;
+        if (mapNodes.length > 0) {
+          pkg._processNodes = mapNodes;
+          const edges = await processMapStorage.getEdgesByIdeaId(ideaId, toBeNodes.length > 0 ? "to-be" : "as-is");
+          pkg._processEdges = edges;
         }
+        if (sdd?.content) {
+          const { parseArtifactsFromSDD: parseSdd, extractArtifactsWithLLM: extractLlm } = await import("./uipath-deploy");
+          let artifacts = parseSdd(sdd.content);
+          if (!artifacts) artifacts = await extractLlm(sdd.content);
+          if (artifacts) pkg._orchestratorArtifacts = artifacts;
+        }
+      } catch (err: any) {
+        console.log(`[UiPath Deploy] Could not enrich package with process data: ${err.message}`);
       }
 
-      sendEvent({ deployStatus: "Uploading to Orchestrator..." });
-      let result;
-      try {
-        result = await pushToUiPath(pkg, ideaId, prebuiltResult);
-      } catch (pushErr: any) {
-        if (pushErr instanceof QualityGateError) {
-          sendEvent({
-            deployComplete: true,
-            success: false,
-            result: {
-              success: false,
-              message: "Package failed quality gate validation",
-              qualityGateViolations: pushErr.qualityGateResult.violations,
-              qualityGateSummary: pushErr.qualityGateResult.summary,
-            },
-          });
-          clearInterval(heartbeat);
-          return res.end();
-        }
-        throw pushErr;
-      }
+      sendEvent({ deployStatus: "Uploading package to Orchestrator..." });
+      const result = await pushToUiPath(pkg, ideaId);
 
       if (!result.success) {
         sendEvent({ deployComplete: true, success: false, result });
@@ -736,22 +547,14 @@ export function registerUiPathRoutes(app: Express): void {
 
       sendEvent({ deployStatus: processResult.success ? `Process "${result.details?.processName}" created` : "Process creation skipped" });
 
-      const sdd = await documentStorage.getDocument(sddApprovalCheck.documentId);
       try {
         if (sdd?.content) {
           let artifacts = parseArtifactsFromSDD(sdd.content);
 
           if (!artifacts) {
-            console.warn("[UiPath] DOWNSTREAM RECOVERY: No artifacts block found in approved SDD — this should have been caught by upstream validation. Attempting LLM extraction as recovery...");
-            sendEvent({ deployStatus: "Extracting artifacts from SDD (recovery)..." });
+            console.log("[UiPath] No artifacts block in SDD, attempting LLM extraction...");
+            sendEvent({ deployStatus: "Extracting artifacts from SDD..." });
             artifacts = await extractArtifactsWithLLM(sdd.content);
-            if (!artifacts) {
-              console.error("[UiPath] DOWNSTREAM RECOVERY FAILED: LLM extraction could not produce valid artifacts. Halting deployment.");
-              sendEvent({ deployStatus: "ERROR: Failed to extract deployment artifacts from SDD. Deployment halted — please regenerate the SDD with valid artifacts." });
-              throw new Error("Artifact extraction failed: no valid deployment artifacts could be extracted from SDD. Regenerate the SDD with valid artifacts before retrying deployment.");
-            } else {
-              console.log("[UiPath] DOWNSTREAM RECOVERY SUCCEEDED: LLM extraction produced artifacts");
-            }
           }
 
           if (artifacts && (!artifacts.actionCenter || artifacts.actionCenter.length === 0)) {
@@ -764,7 +567,7 @@ export function registerUiPathRoutes(app: Express): void {
             }
           }
 
-          const hasDeployableArtifacts = artifacts && (
+          if (artifacts && (
             (artifacts.queues?.length || 0) > 0 ||
             (artifacts.assets?.length || 0) > 0 ||
             (artifacts.machines?.length || 0) > 0 ||
@@ -777,69 +580,22 @@ export function registerUiPathRoutes(app: Express): void {
             (artifacts.testDataQueues?.length || 0) > 0 ||
             (artifacts.robotAccounts?.length || 0) > 0 ||
             (artifacts.requirements?.length || 0) > 0 ||
-            (artifacts.testSets?.length || 0) > 0 ||
-            (artifacts.agents?.length || 0) > 0 ||
-            (artifacts.knowledgeBases?.length || 0) > 0 ||
-            (artifacts.promptTemplates?.length || 0) > 0 ||
-            (artifacts.maestroProcesses?.length || 0) > 0
-          );
-
-          if (artifacts && !hasDeployableArtifacts) {
-            console.error("[UiPath] Artifact block parsed but contains no deployable artifact arrays. No artifacts will be provisioned.");
-            sendEvent({ deployStatus: "WARNING: SDD artifact block is empty — no artifacts to provision. Consider regenerating the SDD." });
-          }
-
-          if (hasDeployableArtifacts) {
-            sendEvent({ deployStatus: "Reconciling artifacts with previous deployment..." });
-            const previousManifest = await getPreviousManifest(ideaId);
-            const reconciliation = reconcileArtifacts(artifacts, previousManifest);
-            const reconciledArtifacts = reconciliation.reconciledArtifacts;
-
-            if (previousManifest.length > 0) {
-              const reconciliationSummary = formatReconciliationSummary(reconciliation.actions);
-              if (reconciliationSummary) {
-                console.log(`[UiPath Deploy] ${reconciliationSummary}`);
-                sendEvent({ deployStatus: reconciliationSummary.split("\n")[0] });
-              }
-            }
-
+            (artifacts.testSets?.length || 0) > 0
+          )) {
             const releaseId = result.details?.processId || null;
             const releaseKey = result.details?.releaseKey || null;
             const releaseName = result.details?.processName || null;
 
             sendEvent({ deployStatus: "Provisioning Orchestrator artifacts..." });
 
-            const deployResult = await deployAllArtifacts(reconciledArtifacts, releaseId, releaseKey, releaseName, (step) => {
+            const deployResult = await deployAllArtifacts(artifacts, releaseId, releaseKey, releaseName, (step) => {
               sendEvent({ deployStatus: step });
-            }, prebuiltResult?.referencedMLSkillNames);
-
-            const reconciliationActions = reconciliation.actions;
-            const removedArtifacts = reconciliationActions
-              .filter((a) => a.action === "removed" && a.previousName)
-              .map((a) => ({ artifactType: a.artifactType, artifactName: a.previousName! }));
-
-            try {
-              await saveManifest(ideaId, deployResult.results, removedArtifacts);
-              console.log(`[UiPath Deploy] Saved deployment manifest for idea ${ideaId}`);
-            } catch (manifestErr: any) {
-              console.warn(`[UiPath Deploy] Failed to save deployment manifest: ${manifestErr.message}`);
-              deployResult.results.push({
-                artifact: "Deployment Manifest",
-                name: "Artifact Manifest",
-                status: "failed",
-                message: `Failed to save deployment manifest for future reconciliation: ${manifestErr.message}. Subsequent redeployments may not detect name drift correctly.`,
-              });
-            }
-            const reconSummaryText = previousManifest.length > 0
-              ? formatReconciliationSummary(reconciliationActions)
-              : "";
+            });
 
             result.details = {
               ...result.details,
               deploymentResults: deployResult.results,
-              deploymentSummary: deployResult.summary + (reconSummaryText ? "\n\n" + reconSummaryText : ""),
-              reconciliationActions: reconciliationActions.length > 0 ? reconciliationActions : undefined,
-              serviceLimitations: deployResult.serviceLimitations,
+              deploymentSummary: deployResult.summary,
             };
           }
         }
@@ -863,36 +619,7 @@ export function registerUiPathRoutes(app: Express): void {
         folderName: result.details?.folderName,
         results: deployResults,
         summary: result.details?.deploymentSummary || "",
-        serviceLimitations: result.details?.serviceLimitations,
       } : null;
-
-      let storePublishLine = "";
-      const deploySucceeded = result.success && processResult.success && !result.details?.artifactError;
-      if (deploySucceeded) {
-        try {
-          const { publishToAutomationStore } = await import("./automation-hub");
-          sendEvent({ deployStatus: "Publishing to Automation Store..." });
-          const storeResult = await publishToAutomationStore({
-            name: packageId,
-            description: idea.description || pkg.description || "",
-            version: packageVersion,
-            packageId,
-            processName: result.details?.processName || packageId,
-            deploymentResults: deployResults,
-            ideaId,
-          });
-          if (storeResult.success) {
-            storePublishLine = `\nPublished to Automation Store (ID: ${storeResult.storeId})`;
-            sendEvent({ deployStatus: `Published to Automation Store` });
-          } else {
-            console.log(`[Automation Store] Auto-publish skipped: ${storeResult.message}`);
-          }
-        } catch (storeErr: any) {
-          console.log(`[Automation Store] Auto-publish error: ${storeErr.message}`);
-        }
-      } else {
-        console.log(`[Automation Store] Skipping auto-publish — deployment not fully successful`);
-      }
 
       const processLine = processResult.success
         ? `Process "${result.details?.processName}" created — ready to run.`
@@ -903,8 +630,8 @@ export function registerUiPathRoutes(app: Express): void {
         : "";
 
       const chatContent = deployReportData
-        ? `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${storePublishLine}${artifactErrorLine}\n\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
-        : `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${storePublishLine}${artifactErrorLine}`;
+        ? `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${artifactErrorLine}\n\n[DEPLOY_REPORT:${JSON.stringify(deployReportData)}]`
+        : `Package deployed to UiPath Orchestrator.\n\n**${packageId}** v${packageVersion}\n${processLine}${artifactErrorLine}`;
 
       if (!clientDisconnected) {
         await chatStorage.createMessage(ideaId, "assistant", chatContent);
@@ -938,7 +665,7 @@ export function registerUiPathRoutes(app: Express): void {
         const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(15000) });
         const text = await r.text();
         let data = null;
-        try { data = JSON.parse(text); } catch (e: any) { /* Non-JSON response body — use raw text */ }
+        try { data = JSON.parse(text); } catch {}
         return { status: r.status, text: text.slice(0, 2000), data, ok: r.ok };
       } catch (e: any) {
         return { status: 0, text: e.message, data: null, ok: false };
@@ -947,23 +674,22 @@ export function registerUiPathRoutes(app: Express): void {
 
     try {
       const token = await getAccessToken(config);
-      const base = metadataService.getServiceUrl("OR", config);
+      const base = `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/orchestrator_`;
       const hdrs: Record<string, string> = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };
       if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
       results.tokenAcquired = true;
 
       // ── QUEUES ──
       {
-        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["QueueDefinitions"];
         const sec: any = { artifact: "Queue", steps: [] };
-        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/QueueDefinitions?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/QueueDefinitions?$top=3`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Queue_${ts}`, Description: "CannonBall diagnostic test", MaxNumberOfRetries: 1, EnforceUniqueReference: false };
-        const create = await safeCall("create", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}/odata/QueueDefinitions`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}/odata/QueueDefinitions`, method: "POST", requestBody: body, ...create });
         sec.overallStatus = create.ok ? "working" : `failed (${create.status})`;
         if (create.ok && create.data?.Id) {
-          const del = await safeCall("cleanup", `${base}${ent.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+          const del = await safeCall("cleanup", `${base}/odata/QueueDefinitions(${create.data.Id})`, { method: "DELETE", headers: hdrs });
           sec.steps.push({ step: "cleanup", method: "DELETE", ...del });
         }
         results.queues = sec;
@@ -971,16 +697,15 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── ASSETS ──
       {
-        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Assets"];
         const sec: any = { artifact: "Asset", steps: [] };
-        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/Assets?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/Assets?$top=3`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Asset_${ts}`, ValueType: "Text", StringValue: "diag_value", Description: "CannonBall diagnostic" };
-        const create = await safeCall("create", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}/odata/Assets`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}/odata/Assets`, method: "POST", requestBody: body, ...create });
         sec.overallStatus = create.ok ? "working" : `failed (${create.status})`;
         if (create.ok && create.data?.Id) {
-          const del = await safeCall("cleanup", `${base}${ent.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+          const del = await safeCall("cleanup", `${base}/odata/Assets(${create.data.Id})`, { method: "DELETE", headers: hdrs });
           sec.steps.push({ step: "cleanup", method: "DELETE", ...del });
         }
         results.assets = sec;
@@ -988,16 +713,15 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── MACHINES ──
       {
-        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Machines"];
         const sec: any = { artifact: "Machine", steps: [] };
-        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/Machines?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/Machines?$top=3`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Machine_${ts}`, Type: "Standard", Description: "CannonBall diagnostic" };
-        const create = await safeCall("create", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}/odata/Machines`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}/odata/Machines`, method: "POST", requestBody: body, ...create });
         if (!create.ok) {
           const bodyTpl = { Name: `CB_Diag_MachineTpl_${ts}`, Description: "CannonBall diagnostic", NonProductionSlots: 0, UnattendedSlots: 1 };
-          const createTpl = await safeCall("create_template", `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(bodyTpl) });
+          const createTpl = await safeCall("create_template", `${base}/odata/Machines`, { method: "POST", headers: hdrs, body: JSON.stringify(bodyTpl) });
           sec.steps.push({ step: "create_template", requestBody: bodyTpl, ...createTpl });
           sec.overallStatus = createTpl.ok ? "working (template)" : `failed (${create.status}, template ${createTpl.status})`;
         } else {
@@ -1008,10 +732,9 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── STORAGE BUCKETS ──
       {
-        const ent = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Buckets"];
         const sec: any = { artifact: "StorageBucket", steps: [] };
-        const list = await safeCall("list", `${base}${ent.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${ent.listPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/Buckets?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/Buckets?$top=3`, method: "GET", ...list });
 
         const diagUuid = () => {
           const h = "0123456789abcdef";
@@ -1030,13 +753,13 @@ export function registerUiPathRoutes(app: Express): void {
         let bucketCreated = false;
         for (const body of bucketVariants) {
           const provLabel = (body as any).StorageProvider || "none";
-          const create = await safeCall(`create_${provLabel}`, `${base}${ent.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-          sec.steps.push({ step: `create_${provLabel}`, url: `${base}${ent.createPath}`, method: "POST", requestBody: body, ...create });
+          const create = await safeCall(`create_${provLabel}`, `${base}/odata/Buckets`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+          sec.steps.push({ step: `create_${provLabel}`, url: `${base}/odata/Buckets`, method: "POST", requestBody: body, ...create });
           if (create.ok) {
             sec.overallStatus = `working (StorageProvider=${provLabel})`;
             bucketCreated = true;
             if (create.data?.Id) {
-              await safeCall("cleanup", `${base}${ent.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+              await safeCall("cleanup", `${base}/odata/Buckets(${create.data.Id})`, { method: "DELETE", headers: hdrs });
             }
             break;
           }
@@ -1048,12 +771,11 @@ export function registerUiPathRoutes(app: Express): void {
       // ── ENVIRONMENTS ──
       {
         const sec: any = { artifact: "Environment", steps: [] };
-        const envEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Environments"];
-        const list = await safeCall("list", `${base}${envEnt.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${envEnt.listPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/Environments?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/Environments?$top=3`, method: "GET", ...list });
         const body = { Name: `CB_Diag_Env_${ts}`, Description: "CannonBall diagnostic", Type: "Dev" };
-        const create = await safeCall("create", `${base}${envEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
-        sec.steps.push({ step: "create", url: `${base}${envEnt.createPath}`, method: "POST", requestBody: body, ...create });
+        const create = await safeCall("create", `${base}/odata/Environments`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+        sec.steps.push({ step: "create", url: `${base}/odata/Environments`, method: "POST", requestBody: body, ...create });
         sec.overallStatus = create.ok ? "working" : `failed (${create.status})`;
         results.environments = sec;
       }
@@ -1061,11 +783,8 @@ export function registerUiPathRoutes(app: Express): void {
       // ── TRIGGERS (probe only, needs process) ──
       {
         const sec: any = { artifact: "Trigger", steps: [] };
-        const trigTaxEntry = metadataService.getCapabilityTaxonomyEntry("triggers");
-        const trigDiagPath = trigTaxEntry?.secondaryProbePaths?.[0] ?? "";
-        const trigListPath = trigDiagPath.includes("$top") ? trigDiagPath : `${trigDiagPath}?$top=3`;
-        const list = await safeCall("list", `${base}${trigListPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${trigListPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/ProcessSchedules?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/ProcessSchedules?$top=3`, method: "GET", ...list });
         sec.overallStatus = list.ok ? "endpoint available (creation needs process)" : `endpoint unavailable (${list.status})`;
         results.triggers = sec;
       }
@@ -1073,9 +792,8 @@ export function registerUiPathRoutes(app: Express): void {
       // ── USERS / ROBOT ACCOUNTS ──
       {
         const sec: any = { artifact: "RobotAccount", steps: [] };
-        const userEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Users"];
-        const listUsers = await safeCall("list_users", `${base}${userEnt.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list_users", url: `${base}${userEnt.listPath}`, method: "GET", ...listUsers });
+        const listUsers = await safeCall("list_users", `${base}/odata/Users?$top=5`, { headers: hdrs });
+        sec.steps.push({ step: "list_users", url: `${base}/odata/Users?$top=5`, method: "GET", ...listUsers });
 
         let pmToken: string | null = null;
         try {
@@ -1088,11 +806,9 @@ export function registerUiPathRoutes(app: Express): void {
 
         if (pmToken) {
           const pmHdrs = { "Authorization": `Bearer ${pmToken}`, "Content-Type": "application/json" };
-          const identityGlobal = metadataService.getServiceUrl("IDENTITY", config);
-          const identityTenantScoped = `${metadataService.getCloudBaseUrl(config)}/identity_`;
           const identityUrls = [
-            `${identityTenantScoped}/api/RobotAccount`,
-            `${identityGlobal}/api/RobotAccount`,
+            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/identity_/api/RobotAccount`,
+            `https://cloud.uipath.com/${config.orgName}/identity_/api/RobotAccount`,
           ];
           const robotBody = { name: `CB_Diag_Robot_${ts}`, displayName: `CB_Diag_Robot_${ts}`, domain: "UiPath" };
           let robotCreated = false;
@@ -1110,8 +826,7 @@ export function registerUiPathRoutes(app: Express): void {
               robotId = create.data?.id || create.data?.Id;
               if (robotId && config.folderId) {
                 const assignBody = { assignments: { UserIds: [robotId], RolesPerFolder: [{ FolderId: parseInt(config.folderId, 10), Roles: [{ Name: "Executor" }] }] } };
-                const folderEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["Folders"];
-                const assign = await safeCall("assign_folder", `${base}${folderEnt.assignPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(assignBody) });
+                const assign = await safeCall("assign_folder", `${base}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers`, { method: "POST", headers: hdrs, body: JSON.stringify(assignBody) });
                 sec.steps.push({ step: "assign_folder", requestBody: assignBody, ...assign });
               }
               break;
@@ -1119,8 +834,8 @@ export function registerUiPathRoutes(app: Express): void {
           }
           if (!robotCreated) {
             const odataBody = { UserName: `CB_Diag_Robot_OData_${ts}`, Name: "CB_Diag", Surname: "Robot", RolesList: ["Robot"], Type: "Robot" };
-            const odataCreate = await safeCall("create_via_odata", `${base}${userEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
-            sec.steps.push({ step: "create_via_odata_with_pm", url: `${base}${userEnt.createPath}`, requestBody: odataBody, ...odataCreate });
+            const odataCreate = await safeCall("create_via_odata", `${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
+            sec.steps.push({ step: "create_via_odata_with_pm", url: `${base}/odata/Users`, requestBody: odataBody, ...odataCreate });
             if (odataCreate.ok) {
               robotCreated = true;
               robotId = odataCreate.data?.Id || odataCreate.data?.id;
@@ -1129,8 +844,8 @@ export function registerUiPathRoutes(app: Express): void {
           sec.overallStatus = robotCreated ? "working" : "pm_token_ok_but_all_approaches_failed";
         } else {
           const odataBody = { UserName: `CB_Diag_Robot_${ts}`, Name: "CB_Diag", Surname: "Robot", RolesList: ["Robot"], Type: "Robot" };
-          const odataCreate = await safeCall("create_via_odata", `${base}${userEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
-          sec.steps.push({ step: "create_via_odata", url: `${base}${userEnt.createPath}`, requestBody: odataBody, ...odataCreate });
+          const odataCreate = await safeCall("create_via_odata", `${base}/odata/Users`, { method: "POST", headers: hdrs, body: JSON.stringify(odataBody) });
+          sec.steps.push({ step: "create_via_odata", url: `${base}/odata/Users`, requestBody: odataBody, ...odataCreate });
           sec.overallStatus = odataCreate.ok ? "working (odata fallback)" : `no_pm_token_and_odata_failed (${odataCreate.status})`;
         }
         results.robotAccounts = sec;
@@ -1138,34 +853,33 @@ export function registerUiPathRoutes(app: Express): void {
 
       // ── ACTION CENTER ──
       {
-        const tcEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["TaskCatalogs"];
-        const gtEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["GenericTasks"];
         const sec: any = { artifact: "ActionCenter", steps: [] };
-        const probeCatalogs = await safeCall("probe_catalogs", `${base}${tcEnt.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "probe_catalogs", url: `${base}${tcEnt.listPath}`, ...probeCatalogs });
+        const catalogsUrl = `${base}/odata/TaskCatalogs`;
+        const probeCatalogs = await safeCall("probe_catalogs", `${catalogsUrl}?$top=1`, { headers: hdrs });
+        sec.steps.push({ step: "probe_catalogs", url: `${catalogsUrl}?$top=1`, ...probeCatalogs });
 
         const catalogBody = { Name: `CB_Diag_Catalog_${ts}`, Description: "CannonBall diagnostic" };
 
         let acCreated = false;
 
         if (probeCatalogs.ok) {
-          const create = await safeCall("create_catalog", `${base}${tcEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
-          sec.steps.push({ step: "create_catalog", url: `${base}${tcEnt.createPath}`, requestBody: catalogBody, ...create });
+          const create = await safeCall("create_catalog", catalogsUrl, { method: "POST", headers: hdrs, body: JSON.stringify(catalogBody) });
+          sec.steps.push({ step: "create_catalog", url: catalogsUrl, requestBody: catalogBody, ...create });
           if (create.ok || create.status === 201) {
             acCreated = true;
             sec.overallStatus = "working";
             if (create.data?.Id) {
-              await safeCall("cleanup", `${base}${tcEnt.createPath}(${create.data.Id})`, { method: "DELETE", headers: hdrs });
+              await safeCall("cleanup", `${base}/odata/TaskCatalogs(${create.data.Id})`, { method: "DELETE", headers: hdrs });
             }
           }
         }
 
         if (!acCreated) {
           const genericEndpoints = [
-            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog_${ts}`, Type: "ExternalTask" }, label: "create_generic_external" },
-            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task2_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog2_${ts}`, Type: "ExternalAction" }, label: "create_generic_externalaction" },
-            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task3_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog3_${ts}`, TaskType: "ExternalAction" }, label: "create_generic_tasktype" },
-            { url: `${base}${gtEnt.createPath}`, body: { Title: `CB_Diag_Task4_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog4_${ts}` }, label: "create_generic_notype" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog_${ts}`, Type: "ExternalTask" }, label: "create_generic_external" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task2_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog2_${ts}`, Type: "ExternalAction" }, label: "create_generic_externalaction" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task3_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog3_${ts}`, TaskType: "ExternalAction" }, label: "create_generic_tasktype" },
+            { url: `${base}/tasks/GenericTasks/CreateTask`, body: { Title: `CB_Diag_Task4_${ts}`, Priority: "Medium", TaskCatalogName: `CB_Diag_Catalog4_${ts}` }, label: "create_generic_notype" },
           ];
           for (const ep of genericEndpoints) {
             const result = await safeCall(ep.label, ep.url, { method: "POST", headers: hdrs, body: JSON.stringify(ep.body) });
@@ -1173,74 +887,9 @@ export function registerUiPathRoutes(app: Express): void {
             if (result.ok || result.status === 201) {
               acCreated = true;
               sec.overallStatus = `working (${ep.label})`;
-              const checkResult = await safeCall("verify_catalog", `${base}${tcEnt.listPath.replace("$top=1", "$top=5")}`, { headers: hdrs });
+              const checkResult = await safeCall("verify_catalog", `${base}/odata/TaskCatalogs?$top=5`, { headers: hdrs });
               sec.steps.push({ step: "verify_catalog_after_task", ...checkResult });
               break;
-            }
-          }
-        }
-
-        // ── Cloud AC Service Probe ──
-        if (!acCreated) {
-          const cloudBase = metadataService.getCloudBaseUrl(config);
-          const cloudAcUrl = `${cloudBase}/actions_/api/v1/task-catalogs`;
-          const cloudAcGet = await safeCall("cloud_ac_get", cloudAcUrl, { headers: hdrs });
-          sec.steps.push({ step: "cloud_ac_get", url: cloudAcUrl, method: "GET", ...cloudAcGet });
-
-          const cloudAcBody = { name: `CB_Diag_Catalog_CloudAC_${ts}`, description: "CannonBall diagnostic (Cloud AC)" };
-          const cloudAcPost = await safeCall("cloud_ac_post", cloudAcUrl, { method: "POST", headers: hdrs, body: JSON.stringify(cloudAcBody) });
-          sec.steps.push({ step: "cloud_ac_post", url: cloudAcUrl, method: "POST", requestBody: cloudAcBody, ...cloudAcPost });
-
-          if (cloudAcPost.ok || cloudAcPost.status === 201) {
-            acCreated = true;
-            sec.overallStatus = "working (cloud_ac_service)";
-            const createdId = cloudAcPost.data?.Id || cloudAcPost.data?.id;
-            if (createdId) {
-              const cleanup = await safeCall("cloud_ac_cleanup", `${cloudAcUrl}/${createdId}`, { method: "DELETE", headers: hdrs });
-              sec.steps.push({ step: "cloud_ac_cleanup", url: `${cloudAcUrl}/${createdId}`, method: "DELETE", ...cleanup });
-            } else {
-              sec.steps.push({ step: "cloud_ac_cleanup", ok: false, note: "Creation succeeded but no ID found in response for cleanup" });
-            }
-          }
-        }
-
-        // ── Maestro Task Catalog Probe ──
-        if (!acCreated) {
-          const cloudBase = metadataService.getCloudBaseUrl(config);
-          const maestroUrl = `${cloudBase}/maestro_/api/v1/task-catalogs`;
-
-          let pimsTokenOk = false;
-          let maestroHdrs = hdrs;
-          try {
-            const { tryAcquireResourceToken, getMaestroToken } = await import("./uipath-auth");
-            const pimsResult = await tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[], error: "Token request failed" }));
-            sec.steps.push({ step: "pims_token_acquisition", ok: pimsResult.ok, scopes: pimsResult.scopes, error: (pimsResult as any).error || null });
-            if (pimsResult.ok) {
-              const pimsToken = await getMaestroToken();
-              maestroHdrs = { "Authorization": `Bearer ${pimsToken}`, "Content-Type": "application/json" };
-              if (config.folderId) maestroHdrs["X-UIPATH-OrganizationUnitId"] = config.folderId;
-              pimsTokenOk = true;
-            }
-          } catch (pimsErr: any) {
-            sec.steps.push({ step: "pims_token_acquisition", ok: false, error: pimsErr.message });
-          }
-
-          const maestroGet = await safeCall("maestro_get", maestroUrl, { headers: maestroHdrs });
-          sec.steps.push({ step: "maestro_get", url: maestroUrl, method: "GET", pimsToken: pimsTokenOk, ...maestroGet });
-
-          const maestroBody = { name: `CB_Diag_Catalog_Maestro_${ts}`, description: "CannonBall diagnostic (Maestro)" };
-          const maestroPost = await safeCall("maestro_post", maestroUrl, { method: "POST", headers: maestroHdrs, body: JSON.stringify(maestroBody) });
-          sec.steps.push({ step: "maestro_post", url: maestroUrl, method: "POST", pimsToken: pimsTokenOk, requestBody: maestroBody, ...maestroPost });
-
-          if (maestroPost.ok || maestroPost.status === 201) {
-            acCreated = true;
-            sec.overallStatus = "working (maestro)";
-            const createdId = maestroPost.data?.Id || maestroPost.data?.id;
-            if (createdId) {
-              const cleanup = await safeCall("maestro_cleanup", `${maestroUrl}/${createdId}`, { method: "DELETE", headers: maestroHdrs });
-              sec.steps.push({ step: "maestro_cleanup", url: `${maestroUrl}/${createdId}`, method: "DELETE", ...cleanup });
-            } else {
-              sec.steps.push({ step: "maestro_cleanup", ok: false, note: "Creation succeeded but no ID found in response for cleanup" });
             }
           }
         }
@@ -1248,22 +897,14 @@ export function registerUiPathRoutes(app: Express): void {
         if (!acCreated) {
           sec.overallStatus = `all_approaches_failed`;
         }
-
-        // ── Summary of all endpoints tried ──
-        const endpointSummary = sec.steps
-          .filter((s: any) => s.url)
-          .map((s: any) => ({ step: s.step, url: s.url, method: s.method || "GET", status: s.status, ok: s.ok }));
-        sec.steps.push({ step: "endpoint_summary", endpoints: endpointSummary, overallStatus: sec.overallStatus });
-
         results.actionCenter = sec;
       }
 
       // ── TEST DATA QUEUES ──
       {
         const sec: any = { artifact: "TestDataQueue", steps: [] };
-        const tdqEnt = ORCHESTRATOR_DIAGNOSTIC_ENTITIES["TestDataQueues"];
-        const list = await safeCall("list", `${base}${tdqEnt.listPath}`, { headers: hdrs });
-        sec.steps.push({ step: "list", url: `${base}${tdqEnt.listPath}`, method: "GET", ...list });
+        const list = await safeCall("list", `${base}/odata/TestDataQueues?$top=3`, { headers: hdrs });
+        sec.steps.push({ step: "list", url: `${base}/odata/TestDataQueues?$top=3`, method: "GET", ...list });
 
         const defaultSchema = JSON.stringify({ type: "object", properties: { TestInput: { type: "string" }, ExpectedOutput: { type: "string" } } });
         const tdqVariants = [
@@ -1273,7 +914,7 @@ export function registerUiPathRoutes(app: Express): void {
         let tdqCreated = false;
         for (const body of tdqVariants) {
           const label = (body as any).ContentJsonSchema ? "with_schema" : "no_schema";
-          const create = await safeCall(`create_${label}`, `${base}${tdqEnt.createPath}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+          const create = await safeCall(`create_${label}`, `${base}/odata/TestDataQueues`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
           sec.steps.push({ step: `create_${label}`, requestBody: body, ...create });
           if (create.ok) {
             sec.overallStatus = `working (${label})`;
@@ -1288,15 +929,15 @@ export function registerUiPathRoutes(app: Express): void {
       // ── DOCUMENT UNDERSTANDING ──
       {
         const sec: any = { artifact: "DocumentUnderstanding", steps: [] };
-        const duAlternates = metadataService.getServiceUrlAlternates("DU", config);
-        const duBases = duAlternates.map(u => `${u}/api/framework/projects`);
+        const duBases = [
+          `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/du_/api/framework/projects`,
+          `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/documentunderstanding_/api/framework/projects`,
+        ];
         for (const duUrl of duBases) {
           const probe = await safeCall("probe", `${duUrl}?$top=1`, { headers: hdrs });
           sec.steps.push({ step: "probe", url: duUrl, ...probe });
           if (probe.ok) {
             sec.overallStatus = "available";
-            const resolvedDuBase = duAlternates[duBases.indexOf(duUrl)];
-            if (resolvedDuBase) metadataService.setResolvedServiceUrl("DU", resolvedDuBase);
             break;
           }
         }
@@ -1308,20 +949,24 @@ export function registerUiPathRoutes(app: Express): void {
       {
         const sec: any = { artifact: "TestManager", steps: [] };
         let tmToken: string | null = null;
-        const tmScopes = metadataService.getScopesForServiceString("TM");
+        const tmScopes = "TM.Projects TM.Projects.Read TM.Projects.Write TM.TestCases TM.TestCases.Read TM.TestCases.Write TM.TestSets TM.TestSets.Read TM.TestSets.Write";
         try {
           const tmParams = new URLSearchParams({ grant_type: "client_credentials", client_id: config.clientId, client_secret: config.clientSecret, scope: tmScopes });
-          const tmRes = await safeCall("tm_token", metadataService.getTokenEndpoint(), { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tmParams.toString() });
+          const tmRes = await safeCall("tm_token", "https://cloud.uipath.com/identity_/connect/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: tmParams.toString() });
           sec.steps.push({ step: "tm_token", scopesRequested: tmScopes, scopesGranted: tmRes.data?.scope || null, ...tmRes });
           if (tmRes.ok && tmRes.data?.access_token) tmToken = tmRes.data.access_token;
-        } catch (e: any) { console.warn(`[Diagnostics] TM token acquisition failed: ${e.message}`); }
+        } catch {}
 
         if (!tmToken) {
           sec.overallStatus = "no_tm_token";
           results.testManager = sec;
         } else {
           const tmHdrs: Record<string, string> = { "Authorization": `Bearer ${tmToken}`, "Content-Type": "application/json", "Accept": "application/json" };
-          const tmBases = metadataService.getServiceUrlAlternates("TM", config);
+          const tmBases = [
+            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager_`,
+            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/tmapi_`,
+            `https://cloud.uipath.com/${config.orgName}/${config.tenantName}/testmanager`,
+          ];
 
           let activeTmBase: string | null = null;
           for (const tmBase of tmBases) {
@@ -1329,7 +974,6 @@ export function registerUiPathRoutes(app: Express): void {
             sec.steps.push({ step: "probe", url: `${tmBase}/api/v2/Projects?$top=10`, ...probe });
             if (probe.ok && !probe.text.startsWith("<")) {
               activeTmBase = tmBase;
-              metadataService.setResolvedServiceUrl("TM", tmBase);
               break;
             }
           }
@@ -1456,11 +1100,11 @@ export function registerUiPathRoutes(app: Express): void {
         try {
           const robots = await orch.getRobots();
           robotCount = robots.length;
-        } catch (e: any) { console.warn(`[UiPath Health] Failed to count robots: ${e.message}`); }
+        } catch {}
         try {
           const tasks = await orch.getTasks("Pending");
           pendingTasks = tasks.length;
-        } catch (e: any) { console.warn(`[UiPath Health] Failed to count pending tasks: ${e.message}`); }
+        } catch {}
       }
 
       return res.json({
@@ -1581,7 +1225,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${processes.length} process(es) visible`,
           });
-        } catch (e: any) {
+        } catch {
           checks.push({
             name: "Package feed writable",
             status: "warning",
@@ -1599,7 +1243,7 @@ export function registerUiPathRoutes(app: Express): void {
               : "No machines registered",
             remediation: machines.length === 0 ? "Register machines in Orchestrator > Machines." : undefined,
           });
-        } catch (e: any) {
+        } catch {
           checks.push({ name: "Machines available", status: "warning", detail: "Could not check machines" });
         }
 
@@ -1613,7 +1257,7 @@ export function registerUiPathRoutes(app: Express): void {
               : "No robots found",
             remediation: robots.length === 0 ? "Ensure Unattended robots are configured in Orchestrator." : undefined,
           });
-        } catch (e: any) {
+        } catch {
           checks.push({ name: "Robots available", status: "warning", detail: "Could not check robots" });
         }
 
@@ -1624,7 +1268,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${catalogs.length} task catalog(s) available`,
           });
-        } catch (e: any) {
+        } catch {
           checks.push({
             name: "Action Center reachable",
             status: "warning",
@@ -1640,7 +1284,7 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${testSets.length} test set(s) available`,
           });
-        } catch (e: any) {
+        } catch {
           checks.push({
             name: "Test Manager reachable",
             status: "warning",
@@ -1656,54 +1300,14 @@ export function registerUiPathRoutes(app: Express): void {
             status: "pass",
             detail: `${queues.length} queue(s) visible in target folder`,
           });
-        } catch (e: any) {
+        } catch {
           checks.push({
             name: "Queue access",
             status: "warning",
             detail: "Could not list queues",
           });
         }
-
-        try {
-          const { getAICenterSkills } = await import("./uipath-integration");
-          const aiResult = await getAICenterSkills();
-          if (aiResult.available) {
-            const deployed = aiResult.skills.filter(s => s.status.toLowerCase() === "deployed" || s.status.toLowerCase() === "available");
-            const skillNames = deployed.map(s => s.name).join(", ");
-            checks.push({
-              name: "AI Center reachable",
-              status: "pass",
-              detail: deployed.length > 0
-                ? `${deployed.length} deployed ML skill(s): ${skillNames}. ${aiResult.packages.length} ML package(s) available.`
-                : `AI Center accessible. ${aiResult.packages.length} ML package(s) found, no skills deployed yet.`,
-            });
-          } else {
-            checks.push({
-              name: "AI Center reachable",
-              status: "warning",
-              detail: "AI Center not available on this tenant",
-              remediation: "AI Center enables custom ML models for classification, prediction, NLP, and anomaly detection. Enable it via UiPath Automation Cloud.",
-            });
-          }
-        } catch (e: any) {
-          checks.push({
-            name: "AI Center reachable",
-            status: "warning",
-            detail: "Could not probe AI Center",
-          });
-        }
       }
-
-      let serviceDetails: Record<string, any> | undefined;
-      try {
-        const { getProbeCache } = await import("./uipath-integration");
-        const cached = getProbeCache();
-        if (cached) {
-          const { probeServiceAvailability } = await import("./uipath-integration");
-          const svcAvail = await probeServiceAvailability();
-          serviceDetails = svcAvail.serviceDetails;
-        }
-      } catch (e: any) { console.warn(`[UiPath Diagnostics] Failed to attach service details: ${e.message}`); }
 
       return res.json({
         configured: true,
@@ -1711,7 +1315,6 @@ export function registerUiPathRoutes(app: Express): void {
         tenantName: config.tenantName,
         latencyMs: healthResult.latencyMs,
         checks,
-        serviceDetails,
       });
     } catch (err: any) {
       return res.json({
@@ -1751,7 +1354,7 @@ export function registerUiPathRoutes(app: Express): void {
       let activeJobs: orch.Job[] = [];
       try {
         activeJobs = await orch.getJobs(processName, "Running");
-      } catch (e: any) { console.warn(`[UiPath] Failed to fetch active jobs for ${processName}: ${e.message}`); }
+      } catch {}
 
       return res.json({
         processName,
@@ -1791,7 +1394,7 @@ export function registerUiPathRoutes(app: Express): void {
             await orch.disableTrigger(trigger.Id).catch(() => {});
           }
         }
-      } catch (e: any) { console.warn(`[UiPath] Emergency stop trigger disable failed: ${e.message}`); }
+      } catch {}
 
       await db.insert(provisioningLog).values({
         jobId: `emergency_${Date.now()}`,
@@ -1814,155 +1417,6 @@ export function registerUiPathRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/uipath/validate-action-center", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-
-    try {
-      const config = await auth.getConfig();
-      if (!config) {
-        return res.status(400).json({ error: "UiPath is not configured" });
-      }
-
-      const catalogName = (req.body.catalogName as string) || "BDAY-GenAI-GuardrailReview";
-      const { getAccessToken } = await import("./uipath-integration");
-      const token = await getAccessToken(config);
-      const base = metadataService.getServiceUrl("OR", config);
-      const cloudBase = metadataService.getCloudBaseUrl(config);
-      const hdrs: Record<string, string> = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Accept": "application/json" };
-      if (config.folderId) hdrs["X-UIPATH-OrganizationUnitId"] = String(config.folderId);
-
-      function redactHeaders(h: Record<string, string>): Record<string, string> {
-        const out: Record<string, string> = {};
-        for (const [k, v] of Object.entries(h)) {
-          out[k] = k.toLowerCase() === "authorization" ? v.slice(0, 15) + "...[REDACTED]" : v;
-        }
-        return out;
-      }
-
-      async function tryEndpoint(label: string, url: string, body: any, headers: Record<string, string>): Promise<any> {
-        const startMs = Date.now();
-        try {
-          const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
-          const text = await r.text();
-          let data = null;
-          try { data = JSON.parse(text); } catch {}
-          const httpOk = r.ok || r.status === 201;
-          let bodyValid = httpOk;
-          let bodyValidationNote: string | undefined;
-          if (httpOk && data) {
-            if (data.errorCode || data.ErrorCode || data["odata.error"]) {
-              bodyValid = false;
-              bodyValidationNote = `Response contains error payload: ${data.errorCode || data.ErrorCode || data["odata.error"]?.code || "unknown"}`;
-            } else if (typeof data.message === "string" && (data.message.includes("not onboarded") || data.message.includes("not available"))) {
-              bodyValid = false;
-              bodyValidationNote = `Service message: ${data.message}`;
-            } else if (data.error && typeof data.error === "string") {
-              bodyValid = false;
-              bodyValidationNote = `Error field: ${data.error}`;
-            }
-          }
-          return {
-            label, url, method: "POST",
-            requestHeaders: redactHeaders(headers),
-            requestBody: body,
-            status: r.status, ok: r.ok,
-            responseBody: text.slice(0, 1500),
-            parsedResponse: data,
-            latencyMs: Date.now() - startMs,
-            success: httpOk && bodyValid,
-            bodyValidationNote,
-          };
-        } catch (e: any) {
-          return {
-            label, url, method: "POST",
-            requestHeaders: redactHeaders(headers),
-            requestBody: body,
-            status: 0, ok: false,
-            responseBody: e.message,
-            parsedResponse: null,
-            latencyMs: Date.now() - startMs,
-            success: false,
-            error: e.message,
-          };
-        }
-      }
-
-      const odataBody = { Name: catalogName, Description: "Validation test catalog" };
-      const restBody = { name: catalogName, description: "Validation test catalog" };
-      const formTaskBody = {
-        task: {
-          Title: `Validate_${catalogName}_${Date.now()}`,
-          Priority: "Medium",
-          TaskCatalogName: catalogName,
-          Data: JSON.stringify({ source: "validation" }),
-        },
-      };
-
-      const attempts: any[] = [];
-
-      attempts.push(await tryEndpoint(
-        "OData TaskCatalogs", `${base}/odata/TaskCatalogs`, odataBody, hdrs
-      ));
-
-      attempts.push(await tryEndpoint(
-        "REST API TaskCatalogs", `${base}/api/TaskCatalogs`, restBody, hdrs
-      ));
-
-      const genericTypes = [
-        { label: "GenericTasks/CreateTask (ExternalTask)", body: { Title: `Validate_Task_${Date.now()}`, Priority: "Medium", TaskCatalogName: catalogName, Type: "ExternalTask" } },
-        { label: "GenericTasks/CreateTask (ExternalAction)", body: { Title: `Validate_Task2_${Date.now()}`, Priority: "Medium", TaskCatalogName: catalogName, Type: "ExternalAction" } },
-        { label: "GenericTasks/CreateTask (no Type)", body: { Title: `Validate_Task3_${Date.now()}`, Priority: "Medium", TaskCatalogName: catalogName } },
-      ];
-      for (const gt of genericTypes) {
-        attempts.push(await tryEndpoint(gt.label, `${base}/tasks/GenericTasks/CreateTask`, gt.body, hdrs));
-      }
-
-      attempts.push(await tryEndpoint(
-        "CreateFormTask OData",
-        `${base}/odata/Tasks/UiPath.Server.Configuration.OData.CreateFormTask`,
-        formTaskBody,
-        hdrs
-      ));
-
-      attempts.push(await tryEndpoint(
-        "Cloud AC Service", `${cloudBase}/actions_/api/v1/task-catalogs`, restBody, hdrs
-      ));
-
-      let maestroHdrs = { ...hdrs };
-      let pimsTokenOk = false;
-      try {
-        const pimsResult = await auth.tryAcquireResourceToken("PIMS").catch(() => ({ ok: false, scopes: [] as string[], error: "Token request failed" }));
-        if (pimsResult.ok) {
-          const pimsToken = await auth.getMaestroToken();
-          maestroHdrs = { "Authorization": `Bearer ${pimsToken}`, "Content-Type": "application/json", "Accept": "application/json" };
-          if (config.folderId) maestroHdrs["X-UIPATH-OrganizationUnitId"] = String(config.folderId);
-          pimsTokenOk = true;
-        }
-      } catch {}
-
-      attempts.push(await tryEndpoint(
-        "Maestro Service (PIMS token)", `${cloudBase}/maestro_/api/v1/task-catalogs`, restBody,
-        pimsTokenOk ? maestroHdrs : hdrs
-      ));
-
-      const successful = attempts.filter(a => a.success);
-      const failed = attempts.filter(a => !a.success);
-
-      return res.json({
-        catalogName,
-        pimsTokenAcquired: pimsTokenOk,
-        totalAttempts: attempts.length,
-        successCount: successful.length,
-        failCount: failed.length,
-        successfulEndpoints: successful.map(a => ({ label: a.label, url: a.url, status: a.status })),
-        failedEndpoints: failed.map(a => ({ label: a.label, url: a.url, status: a.status, error: a.responseBody?.slice(0, 300) })),
-        details: attempts,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
   app.get("/api/action-center/tasks", async (req: Request, res: Response) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
@@ -1977,7 +1431,7 @@ export function registerUiPathRoutes(app: Express): void {
       let orchestratorTasks: orch.ActionTask[] = [];
       try {
         orchestratorTasks = await orch.getTasks();
-      } catch (e: any) { console.warn(`[UiPath] Failed to fetch Action Center tasks: ${e.message}`); }
+      } catch {}
 
       return res.json({
         localTasks,
@@ -2042,27 +1496,6 @@ export function registerUiPathRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/uipath/integration-service", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const discovery = await discoverIntegrationService();
-      return res.json(discovery);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.post("/api/uipath/integration-service/refresh", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      clearIntegrationServiceCache();
-      const discovery = await discoverIntegrationService();
-      return res.json(discovery);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
   app.get("/api/tests/job/:jobId", async (req: Request, res: Response) => {
     if (!req.session.userId) {
       return res.status(401).json({ message: "Not authenticated" });
@@ -2084,659 +1517,5 @@ export function registerUiPathRoutes(app: Express): void {
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
-  });
-
-  app.get("/api/settings/automation-hub/status", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { getAutomationHubStatus } = await import("./automation-hub");
-      const status = await getAutomationHubStatus();
-      return res.json(status);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.post("/api/settings/automation-hub/token", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { token } = req.body;
-      if (!token || !String(token).trim()) {
-        return res.status(400).json({ message: "Token is required" });
-      }
-      const { saveAutomationHubToken, getAutomationHubStatus } = await import("./automation-hub");
-      await saveAutomationHubToken(token);
-      const status = await getAutomationHubStatus();
-      return res.json({ success: true, status });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.delete("/api/settings/automation-hub/token", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { clearAutomationHubToken } = await import("./automation-hub");
-      await clearAutomationHubToken();
-      return res.json({ success: true });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.get("/api/settings/communications-mining/status", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { getCommunicationsMiningStatus } = await import("./uipath-integration");
-      const status = await getCommunicationsMiningStatus();
-      return res.json(status);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.post("/api/settings/communications-mining/token", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { token } = req.body;
-      if (!token || !String(token).trim()) {
-        return res.status(400).json({ message: "Token is required" });
-      }
-      const { saveCommunicationsMiningToken, getCommunicationsMiningStatus } = await import("./uipath-integration");
-      await saveCommunicationsMiningToken(token);
-      clearProbeCache(); metadataService.clearReachability();
-      const status = await getCommunicationsMiningStatus();
-      return res.json({ success: true, status });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.delete("/api/settings/communications-mining/token", async (req: Request, res: Response) => {
-    if (!requireAdmin(req, res)) return;
-    try {
-      const { clearCommunicationsMiningToken } = await import("./uipath-integration");
-      await clearCommunicationsMiningToken();
-      clearProbeCache(); metadataService.clearReachability();
-      return res.json({ success: true });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.get("/api/automation-hub/ideas", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    try {
-      const limit = parseInt(req.query.limit as string) || 50;
-      const offset = parseInt(req.query.offset as string) || 0;
-      const status = req.query.status as string | undefined;
-      const { listAutomationHubIdeas } = await import("./automation-hub");
-      const result = await listAutomationHubIdeas(limit, offset, status);
-      return res.json(result);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.get("/api/automation-hub/ideas/:hubIdeaId", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    try {
-      const hubIdeaId = parseInt(req.params.hubIdeaId);
-      if (isNaN(hubIdeaId)) {
-        return res.status(400).json({ message: "Invalid Automation Hub idea ID" });
-      }
-      const { getAutomationHubIdeaDetails } = await import("./automation-hub");
-      const result = await getAutomationHubIdeaDetails(hubIdeaId);
-      return res.json(result);
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.post("/api/automation-hub/import/:hubIdeaId", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    try {
-      const hubIdeaId = parseInt(req.params.hubIdeaId);
-      if (isNaN(hubIdeaId)) {
-        return res.status(400).json({ message: "Invalid Automation Hub idea ID" });
-      }
-
-      const user = await storage.getUser(req.session.userId as string);
-      if (!user) {
-        return res.status(401).json({ message: "User not found" });
-      }
-
-      const { getAutomationHubIdeaDetails, formatHubIdeaAsContext } = await import("./automation-hub");
-      const hubResult = await getAutomationHubIdeaDetails(hubIdeaId);
-      if (!hubResult.success || !hubResult.idea) {
-        const msg = hubResult.message || "Hub idea not found";
-        const status = msg.includes("not configured") ? 400 : 502;
-        return res.status(status).json({ message: msg });
-      }
-
-      const hubIdea = hubResult.idea;
-      const idea = await storage.createIdea({
-        title: hubIdea.name,
-        description: hubIdea.description || `Imported from Automation Hub (ID: ${hubIdea.id})`,
-        owner: user.displayName,
-        ownerEmail: user.email,
-        stage: "Idea",
-        tag: hubIdea.category || null,
-      });
-
-      const contextMessage = formatHubIdeaAsContext(hubIdea);
-      await chatStorage.createMessage(
-        idea.id,
-        "user",
-        `I'm importing this automation idea from Automation Hub:\n\n${contextMessage}\n\nPlease analyze this idea and help me develop it into an automation.`
-      );
-
-      await storage.createAuditLog({
-        ideaId: idea.id,
-        userId: user.id,
-        userName: user.displayName,
-        userRole: req.session.activeRole || user.role,
-        action: "automation_hub_import",
-        details: `Imported from Automation Hub idea #${hubIdea.id}: ${hubIdea.name}`,
-      });
-
-      return res.json({
-        success: true,
-        idea,
-        hubIdea,
-        message: `Imported "${hubIdea.name}" from Automation Hub`,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  app.post("/api/ideas/:ideaId/uipath-runs", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    const ideaId = req.params.ideaId;
-    const idea = await storage.getIdea(ideaId);
-    if (!idea) return res.status(404).json({ message: "Idea not found" });
-    const user = await storage.getUser(req.session.userId);
-    if (!user) return res.status(401).json({ message: "User not found" });
-    const activeRole = (req.session.activeRole || user.role) as string;
-    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const source = (req.body.source as "chat" | "retry" | "approval" | "auto") || "auto";
-    const force = req.body.force === true;
-
-    try {
-      const triggerSource: "manual" | "chat" | "api" = source === "chat" ? "chat" : source === "retry" ? "manual" : "api";
-
-      let userMetaValidationMode: "Auto" | "Always" | "Off" = "Auto";
-      try {
-        const storedMode = await storage.getAppSetting(`meta_validation_mode_${req.session.userId}`);
-        if (storedMode === "Always" || storedMode === "Off" || storedMode === "Auto") {
-          userMetaValidationMode = storedMode;
-        }
-      } catch (e: any) { console.warn(`[UiPath] Failed to load meta validation mode: ${e.message}`); }
-
-      const observerRunId = crypto.randomUUID();
-      createObserverRun(observerRunId, ideaId, source);
-
-      let runId: string;
-      try {
-        const result = await startUiPathGenerationRun(ideaId, triggerSource, {
-          forceRegenerate: force,
-          metaValidationMode: userMetaValidationMode,
-          callbacks: {
-            onProgress: (message: string) => emitObserverProgress(observerRunId, message),
-            onPipelineEvent: (evt) => {
-              console.log(`[UiPathRoute] onPipelineEvent callback fired: stage=${evt.stage}, type=${evt.type}, observerRun=${observerRunId}`);
-              emitObserverPipelineEvent(observerRunId, evt);
-              emitObserverProgress(observerRunId, evt.message);
-            },
-            onMetaValidation: (event: Record<string, unknown>) => emitObserverMetaValidation(observerRunId, event),
-            onComplete: (result) => {
-              const pr = result.pipelineResult;
-              const buildOutcomeSummary = pr?.outcomeReport ? {
-                stubbedActivities: pr.outcomeReport.remediations.filter((r: { level: string }) => r.level === "activity").length,
-                stubbedSequences: pr.outcomeReport.remediations.filter((r: { level: string }) => r.level === "sequence").length,
-                stubbedWorkflows: pr.outcomeReport.remediations.filter((r: { level: string }) => r.level === "workflow").length,
-                autoRepairs: pr.outcomeReport.autoRepairs.length,
-                fullyGenerated: pr.outcomeReport.fullyGeneratedFiles.length,
-                totalEstimatedMinutes: pr.outcomeReport.totalEstimatedEffortMinutes,
-              } : undefined;
-              emitObserverDone(observerRunId, {
-                status: result.status,
-                warnings: pr?.warnings || [],
-                templateComplianceScore: pr?.templateComplianceScore,
-                completenessLevel: pr?.qualityGateResult?.completenessLevel,
-                outcomeSummary: buildOutcomeSummary,
-                dependencyMap: pr?.dependencyMap,
-                dependencyDiagnostics: pr?.dependencyDiagnostics,
-                dependencyGaps: pr?.dependencyGaps,
-                ambiguousResolutions: pr?.ambiguousResolutions,
-                orphanDependencies: pr?.orphanDependencies,
-              });
-            },
-            onFail: (error: string) => {
-              emitObserverError(observerRunId, error);
-            },
-          },
-        });
-        runId = result.runId;
-      } catch (startErr: unknown) {
-        emitObserverError(observerRunId, startErr instanceof Error ? startErr.message : String(startErr));
-        throw startErr;
-      }
-
-      return res.json({ runId: observerRunId, dbRunId: runId, status: "BUILDING" });
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes("already in progress")) {
-        return res.status(409).json({ message: errMsg });
-      }
-      return res.status(500).json({ message: errMsg });
-    }
-  });
-
-  app.get("/api/ideas/:ideaId/uipath-runs/latest", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    const ideaId = req.params.ideaId;
-    const idea = await storage.getIdea(ideaId);
-    if (!idea) return res.status(404).json({ message: "Idea not found" });
-    const user = await storage.getUser(req.session.userId);
-    if (!user) return res.status(401).json({ message: "User not found" });
-    const activeRole = (req.session.activeRole || user.role) as string;
-    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const observerRun = getLatestObserverRun(ideaId);
-    if (observerRun && !isObserverTerminalStatus(observerRun.status)) {
-      return res.json({
-        run: {
-          runId: observerRun.runId,
-          ideaId: observerRun.ideaId,
-          status: observerRun.status,
-          source: observerRun.source,
-          warnings: observerRun.warnings,
-          complianceScore: observerRun.complianceScore,
-          completenessLevel: observerRun.completenessLevel,
-          outcomeSummary: observerRun.outcomeSummary,
-          createdAt: observerRun.createdAt,
-        },
-      });
-    }
-
-    const activeRun = getActiveRunForIdea(ideaId);
-    const dbRun = await storage.getLatestGenerationRunForIdea(ideaId);
-    if (!dbRun) {
-      if (observerRun) {
-        return res.json({
-          run: {
-            runId: observerRun.runId,
-            ideaId: observerRun.ideaId,
-            status: observerRun.status,
-            source: observerRun.source,
-            warnings: observerRun.warnings,
-            complianceScore: observerRun.complianceScore,
-            completenessLevel: observerRun.completenessLevel,
-            outcomeSummary: observerRun.outcomeSummary,
-            dependencyMap: observerRun.dependencyMap,
-            dependencyDiagnostics: observerRun.dependencyDiagnostics,
-            dependencyGaps: observerRun.dependencyGaps,
-            ambiguousResolutions: observerRun.ambiguousResolutions,
-            orphanDependencies: observerRun.orphanDependencies,
-            createdAt: observerRun.createdAt,
-          },
-        });
-      }
-      return res.json({ run: null });
-    }
-
-    const isActive = activeRun && !activeRun.completed && activeRun.runId === dbRun.runId;
-    let parsedPhaseProgress = null;
-    let parsedOutcomeReport = null;
-    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch (e: any) { /* corrupt phaseProgress JSON */ }
-    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch (e: any) { /* corrupt outcomeReport JSON */ }
-
-    const { mapLegacyStatus: mapDbStatus, isAssessedTerminalStatus: isAssessedTerm } = await import("../shared/models/package-status");
-
-    const dbStatusToAssessed = (dbStatus: string, outcomeReport: any): string => {
-      const processMap: Record<string, string> = {
-        running: "BUILDING",
-        cancelled: "CANCELLED",
-      };
-      if (processMap[dbStatus]) return processMap[dbStatus];
-      if (outcomeReport?.assessedStatus && isAssessedTerm(outcomeReport.assessedStatus)) {
-        return outcomeReport.assessedStatus;
-      }
-      const hasPassingValidation = outcomeReport?.assessedStatus === "studio_stable";
-      return mapDbStatus(dbStatus, hasPassingValidation);
-    };
-
-    const sourceMap: Record<string, string> = {
-      manual: "retry",
-      chat: "chat",
-      api: "auto",
-    };
-
-    return res.json({
-      run: {
-        ...dbRun,
-        status: isActive ? "BUILDING" : dbStatusToAssessed(dbRun.status, parsedOutcomeReport),
-        source: sourceMap[dbRun.triggeredBy || ""] || "auto",
-        phaseProgress: parsedPhaseProgress,
-        outcomeReport: parsedOutcomeReport,
-        isActive: !!isActive,
-      },
-    });
-  });
-
-  app.get("/api/ideas/:ideaId/uipath-runs/:runId", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    const { ideaId, runId } = req.params;
-    const idea = await storage.getIdea(ideaId);
-    if (!idea) return res.status(404).json({ message: "Idea not found" });
-    const user = await storage.getUser(req.session.userId);
-    if (!user) return res.status(401).json({ message: "User not found" });
-    const activeRole = (req.session.activeRole || user.role) as string;
-    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const observerRun = getObserverRun(runId);
-    if (observerRun) {
-      return res.json({ run: observerRun });
-    }
-
-    const dbRun = await storage.getGenerationRun(runId);
-    if (!dbRun || dbRun.ideaId !== ideaId) {
-      return res.status(404).json({ message: "Run not found" });
-    }
-
-    const activeRun = getActiveRun(runId);
-    const isActive = activeRun && !activeRun.completed;
-
-    let parsedPhaseProgress = null;
-    let parsedOutcomeReport = null;
-    try { if (dbRun.phaseProgress) parsedPhaseProgress = JSON.parse(dbRun.phaseProgress); } catch (e: unknown) { /* corrupt phaseProgress JSON */ }
-    try { if (dbRun.outcomeReport) parsedOutcomeReport = JSON.parse(dbRun.outcomeReport); } catch (e: unknown) { /* corrupt outcomeReport JSON */ }
-
-    const { mapLegacyStatus: mapRunStatus, isAssessedTerminalStatus: isRunAssessed } = await import("../shared/models/package-status");
-    let mappedRunStatus = dbRun.status;
-    if (!isActive) {
-      const processRunMap: Record<string, string> = { running: "BUILDING", cancelled: "CANCELLED" };
-      if (processRunMap[dbRun.status]) {
-        mappedRunStatus = processRunMap[dbRun.status];
-      } else if (parsedOutcomeReport?.assessedStatus && isRunAssessed(parsedOutcomeReport.assessedStatus)) {
-        mappedRunStatus = parsedOutcomeReport.assessedStatus;
-      } else {
-        mappedRunStatus = mapRunStatus(dbRun.status, parsedOutcomeReport?.assessedStatus === "studio_stable");
-      }
-    }
-
-    return res.json({
-      run: {
-        ...dbRun,
-        status: mappedRunStatus,
-        phaseProgress: parsedPhaseProgress,
-        outcomeReport: parsedOutcomeReport,
-        isActive: !!isActive,
-      },
-    });
-  });
-
-  app.get("/api/ideas/:ideaId/uipath-runs/:runId/progress", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    const { ideaId, runId } = req.params;
-    const idea = await storage.getIdea(ideaId);
-    if (!idea) return res.status(404).json({ message: "Idea not found" });
-    const user = await storage.getUser(req.session.userId);
-    if (!user) return res.status(401).json({ message: "User not found" });
-    const activeRole = (req.session.activeRole || user.role) as string;
-    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const afterIndex = parseInt(req.query.afterIndex as string) || 0;
-    const result = getObserverRunEvents(runId, afterIndex);
-
-    if (!result) {
-      const dbRun = await storage.getGenerationRun(runId);
-      if (!dbRun || dbRun.ideaId !== ideaId) {
-        return res.status(404).json({ message: "Run not found" });
-      }
-      const { mapLegacyStatus: mapProgressStatus, isAssessedTerminalStatus: isProgressAssessed } = await import("../shared/models/package-status");
-      const processMap: Record<string, string> = { running: "BUILDING", cancelled: "CANCELLED" };
-      let parsedProgressOutcome: any = null;
-      try { if (dbRun.outcomeReport) parsedProgressOutcome = JSON.parse(dbRun.outcomeReport); } catch {}
-      let finalStatus: string;
-      if (processMap[dbRun.status]) {
-        finalStatus = processMap[dbRun.status];
-      } else if (parsedProgressOutcome?.assessedStatus && isProgressAssessed(parsedProgressOutcome.assessedStatus)) {
-        finalStatus = parsedProgressOutcome.assessedStatus;
-      } else {
-        finalStatus = mapProgressStatus(dbRun.status, parsedProgressOutcome?.assessedStatus === "studio_stable");
-      }
-      if (afterIndex > 0) {
-        return res.json({ events: [], totalStored: 1, status: finalStatus });
-      }
-      return res.json({
-        events: [{ type: "done", data: { done: true, status: finalStatus }, timestamp: Date.now() }],
-        totalStored: 1,
-        status: finalStatus,
-      });
-    }
-
-    return res.json(result);
-  });
-
-  app.get("/api/ideas/:ideaId/uipath-runs/:runId/stream", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    const { ideaId, runId } = req.params;
-    const idea = await storage.getIdea(ideaId);
-    if (!idea) return res.status(404).json({ message: "Idea not found" });
-    const user = await storage.getUser(req.session.userId);
-    if (!user) return res.status(401).json({ message: "User not found" });
-    const activeRole = (req.session.activeRole || user.role) as string;
-    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    const observerRun = getObserverRun(runId);
-    const dbActiveRun = !observerRun ? getActiveRun(runId) : null;
-
-    if (!observerRun && !dbActiveRun) {
-      const dbRun = await storage.getGenerationRun(runId);
-      if (!dbRun || dbRun.ideaId !== ideaId) {
-        return res.status(404).json({ message: "Run not found" });
-      }
-
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache, no-transform");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
-      res.flushHeaders();
-
-      const { mapLegacyStatus: mapStreamStatus, isAssessedTerminalStatus: isStreamAssessed } = await import("../shared/models/package-status");
-      const processStreamMap: Record<string, string> = { running: "BUILDING", cancelled: "CANCELLED" };
-      let parsedStreamOutcome: any = null;
-      try { if (dbRun.outcomeReport) parsedStreamOutcome = JSON.parse(dbRun.outcomeReport); } catch {}
-      let finalStatus: string;
-      if (processStreamMap[dbRun.status]) {
-        finalStatus = processStreamMap[dbRun.status];
-      } else if (parsedStreamOutcome?.assessedStatus && isStreamAssessed(parsedStreamOutcome.assessedStatus)) {
-        finalStatus = parsedStreamOutcome.assessedStatus;
-      } else {
-        finalStatus = mapStreamStatus(dbRun.status, parsedStreamOutcome?.assessedStatus === "studio_stable");
-      }
-      res.write(`data: ${JSON.stringify({ done: true, status: finalStatus })}\n\n`);
-      return res.end();
-    }
-
-    if (observerRun && observerRun.ideaId !== ideaId) {
-      return res.status(403).json({ message: "Run does not belong to this idea" });
-    }
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    const replay = req.query.replay === "true";
-
-    if (observerRun) {
-      console.log(`[Observer] SSE stream: connecting for runId=${runId}, replay=${replay}, currentStatus=${observerRun.status}`);
-
-      const heartbeatInterval = setInterval(() => {
-        try {
-          if (res.writableEnded) { clearInterval(heartbeatInterval); return; }
-          res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-          if (typeof (res as any).flush === "function") (res as any).flush();
-        } catch { clearInterval(heartbeatInterval); }
-      }, 15000);
-
-      res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-      if (typeof (res as any).flush === "function") (res as any).flush();
-
-      let unsubscribeFn: () => void = () => {};
-      unsubscribeFn = subscribeToObserverRun(runId, (event) => {
-        try {
-          if (res.writableEnded) {
-            console.log(`[Observer] SSE stream: res already ended, skipping event type=${event.type} for runId=${runId}`);
-            return;
-          }
-          const payload = JSON.stringify(event.data);
-          res.write(`data: ${payload}\n\n`);
-          if (typeof (res as any).flush === "function") (res as any).flush();
-          console.log(`[Observer] SSE stream: wrote event type=${event.type} for runId=${runId}`);
-
-          if (event.type === "done" || event.type === "error") {
-            console.log(`[Observer] SSE stream: ending stream for runId=${runId} due to event type=${event.type}`);
-            clearInterval(heartbeatInterval);
-            res.end();
-          }
-        } catch (e: any) {
-          console.error(`[Observer] SSE stream: error writing event for runId=${runId}:`, e.message);
-          clearInterval(heartbeatInterval);
-          unsubscribeFn();
-        }
-      }, replay);
-
-      if (isObserverTerminalStatus(observerRun.status) && !replay) {
-        console.log(`[Observer] SSE stream: run already terminal (${observerRun.status}), sending final status for runId=${runId}`);
-        clearInterval(heartbeatInterval);
-        res.write(`data: ${JSON.stringify({ done: true, status: observerRun.status, warnings: observerRun.warnings, templateComplianceScore: observerRun.complianceScore, completenessLevel: observerRun.completenessLevel, outcomeSummary: observerRun.outcomeSummary, dependencyMap: observerRun.dependencyMap, dependencyDiagnostics: observerRun.dependencyDiagnostics, dependencyGaps: observerRun.dependencyGaps, ambiguousResolutions: observerRun.ambiguousResolutions, orphanDependencies: observerRun.orphanDependencies })}\n\n`);
-        res.end();
-        unsubscribeFn();
-        return;
-      }
-
-      req.on("close", () => {
-        console.log(`[Observer] SSE stream: client disconnected for runId=${runId}`);
-        clearInterval(heartbeatInterval);
-        unsubscribeFn();
-      });
-    } else if (dbActiveRun) {
-      for (const event of dbActiveRun.events) {
-        res.write(`data: ${JSON.stringify({ pipelineEvent: event })}\n\n`);
-      }
-      if (typeof (res as any).flush === "function") (res as any).flush();
-
-      if (dbActiveRun.completed) {
-        const { mapLegacyStatus: mapCompletedStatus } = await import("../shared/models/package-status");
-        const resolvedStatus = dbActiveRun.finalStatus
-          ? mapCompletedStatus(dbActiveRun.finalStatus === "failed" ? "FAILED" : dbActiveRun.finalStatus)
-          : "handoff_only";
-        res.write(`data: ${JSON.stringify({ done: true, status: resolvedStatus })}\n\n`);
-        return res.end();
-      }
-
-      const unsubscribe = subscribeToRun(runId, (event) => {
-        try {
-          if (res.writableEnded) return;
-          res.write(`data: ${JSON.stringify({ pipelineEvent: event })}\n\n`);
-          if (typeof (res as any).flush === "function") (res as any).flush();
-          if (event.type === "failed" || (event.type === "completed" && event.stage === "run_manager")) {
-            let eventStatus = event.type === "failed" ? "FAILED" : "handoff_only";
-            if (event.type === "completed" && event.message) {
-              const statusMatch = event.message.match(/status:\s*(\S+)/);
-              if (statusMatch) eventStatus = statusMatch[1];
-            }
-            res.write(`data: ${JSON.stringify({ done: true, status: eventStatus })}\n\n`);
-            res.end();
-          }
-        } catch (e: any) {
-          unsubscribe();
-        }
-      });
-
-      const heartbeat = setInterval(() => {
-        try {
-          if (res.writableEnded) {
-            clearInterval(heartbeat);
-            unsubscribe();
-            return;
-          }
-          res.write(`data: ${JSON.stringify({ heartbeat: true })}\n\n`);
-        } catch (e: any) {
-          clearInterval(heartbeat);
-          unsubscribe();
-        }
-      }, 15000);
-
-      req.on("close", () => {
-        clearInterval(heartbeat);
-        unsubscribe();
-      });
-    }
-  });
-
-  app.post("/api/ideas/:ideaId/uipath-runs/:runId/cancel", async (req: Request, res: Response) => {
-    if (!req.session.userId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    const ideaId = req.params.ideaId;
-    const idea = await storage.getIdea(ideaId);
-    if (!idea) return res.status(404).json({ message: "Idea not found" });
-    const user = await storage.getUser(req.session.userId);
-    if (!user) return res.status(401).json({ message: "User not found" });
-    const activeRole = (req.session.activeRole || user.role) as string;
-    if (idea.ownerEmail !== user.email && activeRole !== "Admin" && activeRole !== "CoE") {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    const runId = req.params.runId;
-    const observerRun = getObserverRun(runId);
-    if (observerRun && observerRun.ideaId !== ideaId) {
-      return res.status(403).json({ message: "Run does not belong to this idea" });
-    }
-    const observerCancelled = cancelObserverRun(runId);
-
-    const activeRun = getActiveRunForIdea(ideaId);
-    let dbCancelled = false;
-    if (activeRun && !activeRun.completed) {
-      dbCancelled = await cancelActiveRun(activeRun.runId);
-    }
-
-    if (!observerCancelled && !dbCancelled) {
-      return res.status(400).json({ message: "Cannot cancel this run" });
-    }
-    return res.json({ success: true });
   });
 }

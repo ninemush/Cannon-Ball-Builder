@@ -14,7 +14,7 @@ import { formatTimestamp } from "@/lib/utils";
 
 function getStatusChip(stage: string): { label: string; className: string } {
   const approvalStages = ["CoE Approval", "Governance / Security Scan"];
-  const actionStages = ["Idea", "Design"];
+  const actionStages = ["Idea", "Feasibility Assessment"];
 
   if (approvalStages.includes(stage)) {
     return { label: "Pending Approval", className: "bg-cb-gold/15 text-cb-gold border border-cb-gold/25" };

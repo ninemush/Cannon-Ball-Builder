@@ -7,12 +7,6 @@ export type DeploymentResult = {
   manualSteps?: string[];
 };
 
-export type ServiceLimitation = {
-  service: string;
-  status: "limited" | "unavailable" | "unknown";
-  reason: string;
-};
-
 export type DeployReport = {
   packageId?: string;
   version?: string;
@@ -22,5 +16,4 @@ export type DeployReport = {
   folderName?: string;
   results: DeploymentResult[];
   summary?: string;
-  serviceLimitations?: ServiceLimitation[];
 };

@@ -261,21 +261,8 @@ export function isValidCreation(text: string): { valid: boolean; data: any; erro
     if (typeof data.code === "string" && data.code.toLowerCase() === "itemnotfound") {
       return { valid: false, data, error: `itemNotFound: ${data.message || "Unknown error"}` };
     }
-    const wrappedObj = data.data && typeof data.data === "object" && !Array.isArray(data.data) ? data.data
-      : data.value && typeof data.value === "object" && !Array.isArray(data.value) ? data.value
-      : null;
-    const unwrapped = wrappedObj || data;
-    if (!unwrapped.Id && !unwrapped.id && !unwrapped.projectId && !unwrapped.Name && !unwrapped.name && !unwrapped.Key) {
-      return { valid: false, data, error: "Response missing expected fields (Id, id, projectId, Name, Key)" };
-    }
-    if (unwrapped !== data) {
-      if (unwrapped.projectId && !unwrapped.Id && !unwrapped.id) {
-        unwrapped.id = unwrapped.projectId;
-      }
-      return { valid: true, data: unwrapped };
-    }
-    if (data.projectId && !data.Id && !data.id) {
-      data.id = data.projectId;
+    if (!data.Id && !data.id && !data.Name && !data.name && !data.Key) {
+      return { valid: false, data, error: "Response missing expected fields (Id, Name, Key)" };
     }
     return { valid: true, data };
   } catch {
