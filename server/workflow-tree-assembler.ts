@@ -32,6 +32,7 @@ import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
 import { DeclarationRegistry, scopeIdMatchesStackEntryExternal, type SymbolDiscoveryDiagnostic, type ExpressionContextEvidence } from "./declaration-registry";
 import { isExcludedSymbolToken } from "./shared/symbol-exclusions";
 import { dispatchGenerator, hasGenerator, resolveTemplateName } from "./xaml/generator-registry";
+import { normalizeWorkflowTreeForGenerators, getAndClearNormalizationDiagnostics } from "./spec-ir-normalizer";
 
 export interface PropertyRemediationRecord {
   propertyName: string;
@@ -5173,17 +5174,29 @@ export function assembleWorkflowFromSpec(
     }
   }
 
+  const normalizedRootSequence = normalizeWorkflowTreeForGenerators(spec.rootSequence, workflowName);
+  const irDiags = getAndClearNormalizationDiagnostics();
+  if (irDiags.length > 0) {
+    console.log(`[Spec-IR Normalizer] "${workflowName}": ${irDiags.length} normalization(s) applied before generator dispatch`);
+    for (const d of irDiags) {
+      if (d.blockedReason) {
+        console.warn(`[Spec-IR Normalizer]   BLOCKED ${d.propertyName}: ${d.blockedReason}`);
+      }
+    }
+  }
+  const normalizedSpec = { ...spec, rootSequence: normalizedRootSequence as typeof spec.rootSequence };
+
   const workflowFileName = workflowName.endsWith(".xaml") ? workflowName : `${workflowName}.xaml`;
-  for (const child of spec.rootSequence.children) {
+  for (const child of normalizedSpec.rootSequence.children) {
     normalizeSpecProperties(child, workflowFileName);
   }
 
   const renameMap = new Map<string, string>();
-  const sanitizedTopVars = sanitizeVariableDeclarations(spec.variables || [], renameMap);
-  const sanitizedRootVars = spec.rootSequence.variables
-    ? sanitizeVariableDeclarations(spec.rootSequence.variables, renameMap)
+  const sanitizedTopVars = sanitizeVariableDeclarations(normalizedSpec.variables || [], renameMap);
+  const sanitizedRootVars = normalizedSpec.rootSequence.variables
+    ? sanitizeVariableDeclarations(normalizedSpec.rootSequence.variables, renameMap)
     : undefined;
-  const sanitizedRootChildren = spec.rootSequence.children.map(c => sanitizeNodeVariableRefs(c, renameMap));
+  const sanitizedRootChildren = normalizedSpec.rootSequence.children.map(c => sanitizeNodeVariableRefs(c, renameMap));
 
   const registry = new DeclarationRegistry();
 
@@ -5219,7 +5232,7 @@ export function assembleWorkflowFromSpec(
     });
   }
 
-  for (const arg of (spec.arguments || [])) {
+  for (const arg of (normalizedSpec.arguments || [])) {
     registry.registerArgument({
       name: arg.name,
       direction: arg.direction as "InArgument" | "OutArgument" | "InOutArgument",
@@ -5230,7 +5243,7 @@ export function assembleWorkflowFromSpec(
   }
 
   const sanitizedRootSequence = {
-    ...spec.rootSequence,
+    ...normalizedSpec.rootSequence,
     variables: sanitizedRootVars,
     children: sanitizedRootChildren,
   };

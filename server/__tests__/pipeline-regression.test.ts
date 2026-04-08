@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { XMLValidator } from "fast-xml-parser";
 import { buildDeterministicScaffold } from "../deterministic-scaffold";
 import {
+  normalizeActivityNodeForGenerator,
+  normalizeWorkflowTreeForGenerators,
+  getAndClearNormalizationDiagnostics,
+} from "../spec-ir-normalizer";
+import {
   assembleWorkflowFromSpec,
   coercePropToString,
   getPropString,
@@ -4868,6 +4873,792 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
           expect(catalogPkg).toBe("UiPath.ComplexScenarios.Activities");
         }
       }
+    });
+  });
+});
+
+describe("Spec-to-IR Normalization Layer (Task #475)", () => {
+  beforeEach(() => {
+    getAndClearNormalizationDiagnostics();
+  });
+
+  describe("Invoke argument dictionary normalization to named bindings", () => {
+    it("normalizes Arguments dictionary object to explicit named bindings", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: {
+            in_TransactionId: { direction: "In", type: "x:String", value: "str_TxId" },
+            in_Config: { direction: "In", type: "scg:Dictionary(x:String, x:Object)", value: "dict_Config" },
+          },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      const args = normalized.properties.Arguments;
+      expect(args).toBeDefined();
+      expect(typeof args).toBe("object");
+      expect(args.in_TransactionId).toBeDefined();
+      expect(args.in_TransactionId.direction).toBe("InArgument");
+      expect(args.in_TransactionId.value).toBe("str_TxId");
+      expect(args.in_Config).toBeDefined();
+      expect(args.in_Config.direction).toBe("InArgument");
+    });
+
+    it("merges OutputArguments into Arguments with Out-direction bindings", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          OutputArguments: {
+            out_Result: { direction: "Out", type: "x:String", value: "str_Result" },
+            out_Status: { direction: "Out", type: "x:Boolean", value: "bool_Status" },
+          },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties.OutputArguments).toBeUndefined();
+
+      const args = normalized.properties.Arguments as any;
+      expect(args).toBeDefined();
+      expect(typeof args).toBe("object");
+      expect(args.out_Result).toBeDefined();
+      expect(args.out_Result.direction).toBe("OutArgument");
+      expect(args.out_Result.value).toBe("str_Result");
+      expect(args.out_Status).toBeDefined();
+      expect(args.out_Status.direction).toBe("OutArgument");
+    });
+
+    it("merges Arguments and OutputArguments into single unified Arguments map", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: {
+            in_Config: { direction: "In", type: "scg:Dictionary(x:String, x:Object)", value: "dict_Config" },
+          },
+          OutputArguments: {
+            out_Result: { direction: "Out", type: "x:String", value: "str_Result" },
+          },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties.OutputArguments).toBeUndefined();
+
+      const args = normalized.properties.Arguments as any;
+      expect(args).toBeDefined();
+      expect(args.in_Config).toBeDefined();
+      expect(args.in_Config.direction).toBe("InArgument");
+      expect(args.out_Result).toBeDefined();
+      expect(args.out_Result.direction).toBe("OutArgument");
+    });
+
+    it("does not re-process already-normalized invoke bindings (idempotence)", () => {
+      const alreadyNormalized = {
+        in_TransactionId: { direction: "InArgument", type: "x:String", value: "str_TxId" },
+      };
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: alreadyNormalized,
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = normalized.properties.Arguments;
+
+      expect(args).toBeDefined();
+      expect(args.in_TransactionId.direction).toBe("InArgument");
+      expect(args.in_TransactionId.value).toBe("str_TxId");
+      expect(args.in_TransactionId.type).toBe("x:String");
+    });
+
+    it("normalizes JSON string arguments to named bindings", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: JSON.stringify({
+            in_FilePath: { direction: "In", type: "x:String", value: "str_Path" },
+          }),
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = normalized.properties.Arguments;
+      expect(typeof args).toBe("object");
+      expect(args.in_FilePath).toBeDefined();
+      expect(args.in_FilePath.direction).toBe("InArgument");
+    });
+
+    it("bridges _convertedInputArgs VB Dictionary into Arguments bindings", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          _convertedInputArgs: 'New Dictionary(Of String, Object) From {{"in_Tx", str_Tx}}',
+          Arguments: {
+            in_Extra: { direction: "In", value: "str_Extra" },
+          },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties._convertedInputArgs).toBeUndefined();
+
+      const args = normalized.properties.Arguments as any;
+      expect(args).toBeDefined();
+      expect(args.in_Tx).toBeDefined();
+      expect(args.in_Tx.direction).toBe("InArgument");
+      expect(args.in_Tx.value).toBe("str_Tx");
+      expect(args.in_Extra).toBeDefined();
+      expect(args.in_Extra.direction).toBe("InArgument");
+    });
+
+    it("bridges _convertedOutputArgs VB Dictionary into Arguments as OutArgument bindings", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          _convertedOutputArgs: 'New Dictionary(Of String, Object) From {{"out_Result", str_Result}}',
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties._convertedOutputArgs).toBeUndefined();
+
+      const args = normalized.properties.Arguments as any;
+      expect(args).toBeDefined();
+      expect(args.out_Result).toBeDefined();
+      expect(args.out_Result.direction).toBe("OutArgument");
+      expect(args.out_Result.value).toBe("str_Result");
+    });
+  });
+
+  describe("Scalar ValueIntent normalization to plain strings", () => {
+    it("normalizes ValueIntent literal to plain string for WorkflowFileName", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Process",
+        properties: {
+          WorkflowFileName: { type: "literal", value: "Process.xaml" } as any,
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(typeof normalized.properties.WorkflowFileName).toBe("string");
+      expect(normalized.properties.WorkflowFileName).toBe("Process.xaml");
+    });
+
+    it("normalizes ValueIntent variable to plain string for Message", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "LogMessage",
+        displayName: "Log Info",
+        properties: {
+          Level: "Info",
+          Message: { type: "variable", name: "str_LogMsg" } as any,
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(typeof normalized.properties.Message).toBe("string");
+      expect(normalized.properties.Message).toBe("str_LogMsg");
+    });
+
+    it("blocks __STRUCTURED_OBJECT__ sentinel in scalar-required property", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "LogMessage",
+        displayName: "Log Info",
+        properties: {
+          Level: "Info",
+          Message: '__STRUCTURED_OBJECT__{"some":"complex"}',
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(normalized.properties.Message).toBe("");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.blockedReason && d.propertyName === "Message")).toBe(true);
+    });
+
+    it("normalizes AssetName from ValueIntent to string", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "GetAsset",
+        displayName: "Get Config Asset",
+        properties: {
+          AssetName: { type: "literal", value: "Config_MaxRetries" } as any,
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(typeof normalized.properties.AssetName).toBe("string");
+      expect(normalized.properties.AssetName).toBe("Config_MaxRetries");
+    });
+  });
+
+  describe("Type argument normalization rejecting structured contamination", () => {
+    it("blocks __STRUCTURED_OBJECT__ sentinel from TypeArgument", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "Assign",
+        displayName: "Assign Value",
+        properties: {
+          To: "str_Result",
+          Value: '"test"',
+          TypeArgument: '__STRUCTURED_OBJECT__{"complex":"type"}',
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(normalized.properties.TypeArgument).toBe("x:Object");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.blockedReason && d.propertyName === "TypeArgument")).toBe(true);
+    });
+
+    it("blocks OBJECT_SERIALIZED prefix from TypeArgument", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "Assign",
+        displayName: "Assign Value",
+        properties: {
+          To: "str_Result",
+          Value: '"test"',
+          TypeArgument: 'OBJECT_SERIALIZED:{"type":"System.String"}',
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(normalized.properties.TypeArgument).toBe("x:Object");
+    });
+
+    it("blocks structured contamination from ForEach.itemType", () => {
+      const forEachNode = {
+        kind: "forEach" as const,
+        displayName: "Process Items",
+        itemType: '__STRUCTURED_OBJECT__{"type":"String"}',
+        valuesExpression: "list_Items",
+        iteratorName: "item",
+        bodyChildren: [],
+      };
+
+      const normalized = normalizeWorkflowTreeForGenerators(forEachNode, "TestWorkflow");
+      expect(normalized.itemType).toBe("x:Object");
+    });
+
+    it("blocks OBJECT_SERIALIZED prefix from ForEach.itemType", () => {
+      const forEachNode = {
+        kind: "forEach" as const,
+        displayName: "Process Rows",
+        itemType: 'OBJECT_SERIALIZED:{"type":"System.Data.DataRow"}',
+        valuesExpression: "dt_Data.Rows",
+        iteratorName: "row",
+        bodyChildren: [],
+      };
+
+      const normalized = normalizeWorkflowTreeForGenerators(forEachNode, "TestWorkflow");
+      expect(normalized.itemType).toBe("x:Object");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.blockedReason)).toBe(true);
+    });
+
+    it("sanitizes contaminated type values in invoke argument bindings", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke With Bad Type",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: {
+            in_Data: { direction: "In", type: '__STRUCTURED_OBJECT__{"bad":1}', value: "str_Data" },
+            in_Config: { direction: "In", type: 'OBJECT_SERIALIZED:{"type":"System.String"}', value: "dict_Config" },
+            in_Normal: { direction: "In", type: "x:String", value: "str_Normal" },
+          },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = normalized.properties.Arguments as any;
+      expect(args.in_Data.type).toBe("x:Object");
+      expect(args.in_Config.type).toBe("x:Object");
+      expect(args.in_Normal.type).toBe("x:String");
+
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.filter((d: any) => d.blockedReason).length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("contaminated binding type produces well-formed XAML through assembler", () => {
+      const spec = {
+        name: "TestContaminatedTypeE2E",
+        description: "E2E test for contaminated binding type sanitization",
+        variables: [
+          { name: "str_Data", type: "String" },
+        ],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "TestContaminatedTypeE2E",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "InvokeWorkflowFile",
+              displayName: "Invoke With Bad Type",
+              properties: {
+                WorkflowFileName: "Process.xaml",
+                Arguments: {
+                  in_Data: { direction: "In", type: '__STRUCTURED_OBJECT__{"bad":1}', value: "str_Data" },
+                },
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+        useReFramework: false,
+        dhgNotes: [],
+        decomposition: [],
+      };
+
+      const { xaml } = assembleWorkflowFromSpec(spec, "general");
+
+      expect(xaml).toBeTruthy();
+      expect(xaml).toContain("InvokeWorkflowFile");
+      expect(xaml).not.toContain("__STRUCTURED_OBJECT__");
+      expect(xaml).not.toContain("OBJECT_SERIALIZED");
+
+      const xmlValid = XMLValidator.validate(xaml);
+      expect(xmlValid, `XAML should be well-formed XML: ${JSON.stringify(xmlValid)}`).toBe(true);
+    });
+
+    it("preserves valid type argument strings", () => {
+      const node = {
+        kind: "activity" as const,
+        template: "Assign",
+        displayName: "Assign Value",
+        properties: {
+          To: "str_Result",
+          Value: '"test"',
+          TypeArgument: "x:String",
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(normalized.properties.TypeArgument).toBe("x:String");
+    });
+  });
+
+  describe("Full-path spec → normalization → deterministic generator → XAML integration", () => {
+    it("InvokeWorkflowFile with dictionary Arguments emits InArgument bindings in XAML", () => {
+      const spec = {
+        name: "TestInvokeArgsE2E",
+        description: "E2E test for dictionary argument normalization",
+        variables: [
+          { name: "str_TxId", type: "String" },
+          { name: "dict_Config", type: "scg:Dictionary(x:String, x:Object)" },
+        ],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "TestInvokeArgsE2E",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "InvokeWorkflowFile",
+              displayName: "Invoke Sub Process",
+              properties: {
+                WorkflowFileName: "SubProcess.xaml",
+                Arguments: {
+                  in_TransactionId: { direction: "In", type: "x:String", value: "str_TxId" },
+                  in_Config: { direction: "In", type: "scg:Dictionary(x:String, x:Object)", value: "dict_Config" },
+                },
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+        useReFramework: false,
+        dhgNotes: [],
+        decomposition: [],
+      };
+
+      const { xaml } = assembleWorkflowFromSpec(spec, "general");
+
+      expect(xaml).toBeTruthy();
+      expect(xaml).toContain("InvokeWorkflowFile");
+      expect(xaml).toContain("SubProcess.xaml");
+      expect(xaml).toContain("InvokeWorkflowFile.Arguments");
+      expect(xaml).toContain("InArgument");
+      expect(xaml).toContain("in_TransactionId");
+      expect(xaml).toContain("in_Config");
+      expect(xaml).not.toContain("__STRUCTURED_OBJECT__");
+
+      const xmlValid = XMLValidator.validate(xaml);
+      expect(xmlValid, `XAML should be well-formed XML: ${JSON.stringify(xmlValid)}`).toBe(true);
+    });
+
+    it("InvokeWorkflowFile with OutputArguments emits OutArgument bindings in XAML", () => {
+      const spec = {
+        name: "TestInvokeOutArgsE2E",
+        description: "E2E test for output argument normalization",
+        variables: [
+          { name: "str_Result", type: "String" },
+          { name: "bool_Status", type: "Boolean" },
+        ],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "TestInvokeOutArgsE2E",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "InvokeWorkflowFile",
+              displayName: "Invoke And Get Results",
+              properties: {
+                WorkflowFileName: "GetResults.xaml",
+                Arguments: {
+                  in_Query: { direction: "In", type: "x:String", value: '"SELECT *"' },
+                },
+                OutputArguments: {
+                  out_Result: { direction: "Out", type: "x:String", value: "str_Result" },
+                  out_Status: { direction: "Out", type: "x:Boolean", value: "bool_Status" },
+                },
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+        useReFramework: false,
+        dhgNotes: [],
+        decomposition: [],
+      };
+
+      const { xaml } = assembleWorkflowFromSpec(spec, "general");
+
+      expect(xaml).toBeTruthy();
+      expect(xaml).toContain("InvokeWorkflowFile");
+      expect(xaml).toContain("InvokeWorkflowFile.Arguments");
+      expect(xaml).toContain("OutArgument");
+      expect(xaml).toContain("out_Result");
+      expect(xaml).toContain("out_Status");
+      expect(xaml).toContain("InArgument");
+      expect(xaml).toContain("in_Query");
+      expect(xaml).not.toContain("OutputArguments");
+      expect(xaml).not.toContain("__STRUCTURED_OBJECT__");
+
+      const xmlValid = XMLValidator.validate(xaml);
+      expect(xmlValid, `XAML should be well-formed XML: ${JSON.stringify(xmlValid)}`).toBe(true);
+    });
+
+    it("InvokeWorkflowFile with _convertedInputArgs VB Dictionary emits bindings in XAML", () => {
+      const spec = {
+        name: "TestConvertedE2E",
+        description: "E2E test for _convertedInputArgs bridging",
+        variables: [
+          { name: "str_Tx", type: "String" },
+        ],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "TestConvertedE2E",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "InvokeWorkflowFile",
+              displayName: "Invoke From Enricher",
+              properties: {
+                WorkflowFileName: "Enriched.xaml",
+                _convertedInputArgs: 'New Dictionary(Of String, Object) From {{"in_Tx", str_Tx}}',
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+        useReFramework: false,
+        dhgNotes: [],
+        decomposition: [],
+      };
+
+      const { xaml } = assembleWorkflowFromSpec(spec, "general");
+
+      expect(xaml).toBeTruthy();
+      expect(xaml).toContain("InvokeWorkflowFile");
+      expect(xaml).toContain("InvokeWorkflowFile.Arguments");
+      expect(xaml).toContain("in_Tx");
+      expect(xaml).not.toContain("_convertedInputArgs");
+      expect(xaml).not.toContain("__STRUCTURED_OBJECT__");
+
+      const xmlValid = XMLValidator.validate(xaml);
+      expect(xmlValid, `XAML should be well-formed XML: ${JSON.stringify(xmlValid)}`).toBe(true);
+    });
+
+    it("LogMessage with ValueIntent Message produces valid scalar in XAML", () => {
+      const spec = {
+        name: "TestScalarNorm",
+        description: "Test scalar normalization",
+        variables: [
+          { name: "str_Status", type: "String" },
+        ],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "TestScalarNorm",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "LogMessage",
+              displayName: "Log Status",
+              properties: {
+                Level: "Info",
+                Message: "str_Status",
+              },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+        useReFramework: false,
+        dhgNotes: [],
+        decomposition: [],
+      };
+
+      const { xaml } = assembleWorkflowFromSpec(spec, "general");
+
+      expect(xaml).toBeTruthy();
+      expect(xaml).toContain("LogMessage");
+      expect(xaml).not.toContain("__STRUCTURED_OBJECT__");
+
+      const xmlValid = XMLValidator.validate(xaml);
+      expect(xmlValid, `XAML should be well-formed XML: ${JSON.stringify(xmlValid)}`).toBe(true);
+    });
+  });
+
+  describe("Normalization diagnostics", () => {
+    it("emits diagnostics for normalization actions", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "LogMessage",
+        displayName: "Log Info",
+        properties: {
+          Level: "Info",
+          Message: '__STRUCTURED_OBJECT__{"msg":"test"}',
+        },
+        errorHandling: "none" as const,
+      };
+
+      normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const diags = getAndClearNormalizationDiagnostics();
+
+      expect(diags.length).toBeGreaterThan(0);
+      expect(diags[0].workflowName).toBe("TestWorkflow");
+      expect(diags[0].activityDisplayName).toBe("Log Info");
+      expect(diags[0].propertyName).toBe("Message");
+      expect(diags[0].blockedReason).toBeTruthy();
+    });
+
+    it("normalizes VB Dictionary expression arguments into bindings", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke VB Dict",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: 'New Dictionary(Of String, Object) From {{"in_Key", val}}',
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = normalized.properties.Arguments as any;
+      expect(args).toBeDefined();
+      expect(typeof args).toBe("object");
+      expect(args.in_Key).toBeDefined();
+      expect(args.in_Key.direction).toBe("InArgument");
+      expect(args.in_Key.value).toBe("val");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.propertyName === "Arguments")).toBe(true);
+    });
+
+    it("emits diagnostic for opaque string arguments (not silently dropped)", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Opaque",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          Arguments: "some_opaque_variable_name",
+        },
+        errorHandling: "none" as const,
+      };
+
+      normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.propertyName === "Arguments" && d.blockedReason)).toBe(true);
+    });
+  });
+
+  describe("_convertedInputArgs bridging with other normalizations", () => {
+    it("bridges _convertedInputArgs and still normalizes scalar properties", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke With Converted",
+        properties: {
+          WorkflowFileName: { type: "literal", value: "Sub.xaml" } as any,
+          _convertedInputArgs: 'New Dictionary(Of String, Object) From {{"in_A", str_A}}',
+          Arguments: { in_B: { direction: "In", value: "str_B" } },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties._convertedInputArgs).toBeUndefined();
+      expect(typeof normalized.properties.WorkflowFileName).toBe("string");
+      expect(normalized.properties.WorkflowFileName).toBe("Sub.xaml");
+
+      const args = normalized.properties.Arguments as any;
+      expect(args.in_A).toBeDefined();
+      expect(args.in_A.direction).toBe("InArgument");
+      expect(args.in_B).toBeDefined();
+      expect(args.in_B.direction).toBe("InArgument");
+    });
+
+    it("preserves OutputArguments when normalization fails (no silent loss)", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Failed Out",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          OutputArguments: "opaque_output_string",
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties.OutputArguments).toBe("opaque_output_string");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.propertyName === "OutputArguments")).toBe(true);
+    });
+
+    it("preserves _convertedInputArgs when parsing fails (no silent loss)", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Unparseable",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          _convertedInputArgs: "some_opaque_expression_not_vb_dict",
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties._convertedInputArgs).toBe("some_opaque_expression_not_vb_dict");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.propertyName === "_convertedInputArgs")).toBe(true);
+    });
+
+    it("preserves _convertedOutputArgs when parsing fails (no silent loss)", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Unparseable Out",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          _convertedOutputArgs: "opaque_output_expression",
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties._convertedOutputArgs).toBe("opaque_output_expression");
+      const diags = getAndClearNormalizationDiagnostics();
+      expect(diags.some((d: any) => d.propertyName === "_convertedOutputArgs")).toBe(true);
+    });
+
+    it("merges _convertedInputArgs and Arguments entries into unified Arguments", () => {
+      getAndClearNormalizationDiagnostics();
+
+      const node = {
+        kind: "activity" as const,
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Merged",
+        properties: {
+          WorkflowFileName: "Process.xaml",
+          _convertedInputArgs: 'New Dictionary(Of String, Object) From {{"in_A", str_A}}',
+          Arguments: { in_B: { direction: "In", value: "str_B" } },
+        },
+        errorHandling: "none" as const,
+      };
+
+      const normalized = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+
+      expect(normalized.properties._convertedInputArgs).toBeUndefined();
+      const args = normalized.properties.Arguments as any;
+      expect(args.in_A).toBeDefined();
+      expect(args.in_A.value).toBe("str_A");
+      expect(args.in_B).toBeDefined();
+      expect(args.in_B.value).toBe("str_B");
     });
   });
 });
