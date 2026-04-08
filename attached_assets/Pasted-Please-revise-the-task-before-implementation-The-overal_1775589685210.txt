@@ -1,0 +1,48 @@
+Please revise the task before implementation.
+
+The overall direction is good, but it is still too eager to implement before the benchmark evidence is pinned down. Tighten it with the following changes:
+
+1. Make benchmark evidence an explicit prerequisite
+State that this task depends on the completed Birthday required-property path isolation analysis and the latest Birthday benchmark artifacts.
+Reference the evidence document directly if it exists:
+- docs/architecture/birthday-required-property-path-isolation.md
+
+2. Do not hard-code the activity/property list beyond what the evidence proves
+Do not assume the target set is:
+- LogMessage.Message
+- If.Condition
+- QueryEntity.EntityType
+
+Instead say:
+- Start from the activity/property pairs confirmed by the latest Birthday evidence set and the isolation report.
+- If QueryEntity.EntityType is not actually confirmed by the benchmark evidence, remove it from scope.
+- Do not broaden beyond the confirmed repeated benchmark-hit pairs.
+
+3. Replace Task 1 with an evidence-confirmation gate
+The first task should not rediscover the whole problem. It should:
+- load the completed isolation report and latest benchmark artifacts
+- confirm the exact repeated failing activity/property pairs
+- freeze the implementation scope to only those pairs
+
+4. Acknowledge existing dedicated handling
+Add a constraint noting that some benchmark-hit activities may already have dedicated assembler/template handling.
+The task must determine whether the failure is due to:
+- missing upstream source value
+- enforcer rejection
+- fallback policy
+- or a later mutation
+Do not assume the assembler path is broken if the evidence does not show that.
+
+5. Make fallback policy explicit
+Do not leave "safe fallback" as an open-ended implementer choice.
+Require the task to define, per confirmed activity/property pair:
+- whether a structural fallback is allowed
+- what exact fallback is allowed
+- when block-with-diagnostic is required instead
+If no safe fallback policy can be justified from benchmark logic, the task must choose explicit block rather than guessed placeholder emission.
+
+6. Keep the scope narrow
+This task must only fix the confirmed repeated Birthday benchmark-hit required-property pairs.
+Do not broaden into a general required-property redesign.
+
+Output the corrected final task only.
