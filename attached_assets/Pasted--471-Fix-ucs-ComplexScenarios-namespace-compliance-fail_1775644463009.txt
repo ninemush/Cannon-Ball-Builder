@@ -1,0 +1,74 @@
+#471 - Fix ucs/ComplexScenarios namespace compliance failure
+What & Why
+Pipeline failure is caused by a chain of three interacting data inconsistencies involving UiPath.ComplexScenarios.Activities. The package is correctly defined in the activity catalog and generation-metadata, but the compliance validator and namespace prefix registry have conflicting/wrong entries that trigger a cascade ending in a FATAL build abort.
+
+Forensic findings (all substantiated from runtime logs and source)
+Finding 1 — Wrong approved URIs for ucs prefix (PRIMARY ROOT CAUSE)
+
+Source: server/xaml/xaml-compliance.ts line 1496
+Evidence: APPROVED_XMLNS_MAPPINGS["ucs"] maps to ["http://schemas.uipath.com/workflow/activities/collection", "clr-namespace:UiPath.Core.Activities;assembly=UiPath.System.Activities"]
+Correct value: Should include clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities (which matches PACKAGE_NAMESPACE_MAP at line 47 and the activity catalog)
+Runtime proof: 5 workflows (Main_Dispatcher, CoupaInvoiceQuery, InvoiceValidation, ActionCenterTaskManager, Main_ActionCenterCallback) all fail compliance with the identical error:
+Namespace prefix "ucs" is declared with URI "clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities" which does not match any approved CLR namespace mapping. Expected one of: http://schemas.uipath.com/workflow/activities/collection, clr-namespace:UiPath.Core.Activities;assembly=UiPath.System.Activities
+
+Finding 2 — Auto-populate loop doesn't merge into existing entries
+
+Source: server/xaml/xaml-compliance.ts lines 1507-1511
+Evidence: The loop only adds PACKAGE_NAMESPACE_MAP entries for prefixes NOT already in APPROVED_XMLNS_MAPPINGS. Since ucs IS already defined (with wrong values), the correct URI from PACKAGE_NAMESPACE_MAP is never applied.
+Runtime proof: The compliance validator rejects the catalog-correct URI because it was never merged into the approved list.
+Finding 3 — Prefix mismatch between namespace registries
+
+Source: server/uipath-activity-registry.ts line 445 vs server/xaml/xaml-compliance.ts line 47
+Evidence: NAMESPACE_PREFIX_TO_PACKAGE uses "ucomplex" → UiPath.ComplexScenarios.Activities, while PACKAGE_NAMESPACE_MAP/GUARANTEED_ACTIVITY_PREFIX_MAP/activity catalog all use "ucs". The XAML emission uses ucs: (from catalog), but the dependency alignment safe list scans for <ucomplex: patterns that don't exist.
+Runtime proof: No [Dependency Alignment] Dynamically added UiPath.ComplexScenarios.Activities to safe list log line appears — only Excel and Persistence are added. The safe-list pattern scan uses NAMESPACE_PREFIX_TO_PACKAGE which maps ucomplex, not ucs.
+Finding 4 — Compliance error text embedded in stub LogMessage poisons regex scanner
+
+Source: server/xaml/gap-analyzer.ts line 609 (stub template) and server/uipath-activity-registry.ts line 539 (xmlns regex scanner)
+Evidence: When compliance fails, the error message text (containing xmlns:ucs="clr-namespace:...;assembly=...") gets embedded in a stub ui:LogMessage via the gap-analyzer template: Message="[&quot;${stubLabel}: ${escapeXml(className)} — ${escapeXml(reason)}. Implement the actual logic here.&quot;]". The xmlns regex xmlns:\w+="clr-namespace:(UiPath\.[^;]+);assembly=([^"]+)" then matches on this embedded text. Because &quot; entities don't contain literal ", the [^"]+ capture group spans the entire error message string, producing a corrupted package name.
+Runtime proof: The FATAL error shows the exact corrupted name: UiPath.ComplexScenarios.Activities&quot; which does not match any approved CLR namespace mapping. Expected one of: http://schemas.uipath.com/workflow/activities/collection, clr-namespace:UiPath.Core.Activities;assembly=UiPath.System.Activities. Implement the actual logic here.&quot;] — containing &quot; entities, the compliance error text, AND the stub "Implement the actual logic here." text from the gap-analyzer template.
+Finding 5 — Misleading dependency alignment log message
+
+Source: server/package-assembler.ts line 5475-5476
+Evidence: Log says Removed 3 unused dependenc(ies): UiPath.ComplexScenarios.Activities, UiPath.WebAPI.Activities, UiPath.DataService.Activities but ComplexScenarios and WebAPI were actually PRESERVED by spec-prediction (continue at line 5459). Only DataService was truly removed. The summary counts all items in unusedDeps including preserved ones.
+Runtime proof: Both "Preserving spec-predicted dependency UiPath.ComplexScenarios.Activities" AND "Removed 3 unused" messages appear back-to-back in logs (lines 2077-2080 of the workflow log).
+Failure cascade (chronological)
+Spec generation correctly identifies ComplexScenarios.Activities via activity reference (MultipleAssign)
+XAML emission generates workflows with xmlns:ucs="clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities" — correct per catalog
+Compliance validation rejects this URI because APPROVED_XMLNS_MAPPINGS["ucs"] expects different URIs → compliance FAILS for 5 of 7 workflows
+Structural preservation succeeds but re-running compliance on preserved output ALSO fails (same root cause)
+Package mode blocks stub fallback → returns raw XAML, but the compliance error text gets embedded in LogMessage stubs via generateStubWorkflow
+Dependency alignment doesn't add ComplexScenarios to the safe list (prefix mismatch: looks for ucomplex: but XAML uses ucs:) — though spec-prediction preserves it in deps
+Dependency crosscheck scans all XAML content. The xmlns regex matches the compliance error embedded in a stub LogMessage, capturing a corrupted multi-hundred-character "package name" that includes &quot; entities and error text
+The corrupted name isn't in deps, catalog lookup fails (getPreferredVersion returns null for this garbage string), metadata fallback also fails → FATAL thrown, build aborted
+Done looks like
+Package generation succeeds for any process using ucs: activities (BuildDataTable, FilterDataTable, MultipleAssign, OutputDataTable, AddDataRow, LookupDataTable, etc.)
+All workflows pass compliance validation without falling back to structural preservation for the ucs namespace issue
+No more [Dependency CrossCheck] FATAL errors related to corrupted package names
+Namespace prefix ucs is consistently mapped across all registries
+Out of scope
+Full audit of all other prefix entries in APPROVED_XMLNS_MAPPINGS (though the auto-merge fix prevents this class of bug)
+Refactoring the gap-analyzer stub template to not embed error messages (defensive regex hardening covers this)
+Tasks
+Fix the ucs entry in APPROVED_XMLNS_MAPPINGS to include clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities as a valid URI (keep existing URIs for backward compatibility)
+Change the NAMESPACE_PREFIX_TO_PACKAGE entry from "ucomplex" to "ucs" to match the canonical prefix used by the activity catalog, PACKAGE_NAMESPACE_MAP, and GUARANTEED_ACTIVITY_PREFIX_MAP
+Change the auto-populate loop at lines 1507-1511 to MERGE valid URIs from PACKAGE_NAMESPACE_MAP into existing APPROVED_XMLNS_MAPPINGS entries rather than skipping entries that already exist
+Harden the xmlns regex in scanXamlForRequiredPackages (line 539) and extractXamlNamespaceAndAssemblyPackages (line 2405) to stop matching at &quot; XML entity boundaries — preventing corrupted package names from being extracted when error text is embedded in XAML attribute values
+Fix the dependency alignment summary log at line 5475-5476 to only count actually-removed entries, not preserved ones
+Add regression tests covering all three corrected behaviors:
+Compliance acceptance: normalizeXaml must not throw when given XAML with xmlns:ucs="clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities" and a ucs:MultipleAssign activity tag — verifying the APPROVED_XMLNS_MAPPINGS fix and auto-populate merge together
+Auto-populate merge: Construct a scenario where a prefix already exists in APPROVED_XMLNS_MAPPINGS but PACKAGE_NAMESPACE_MAP has an additional valid URI for that prefix. Run normalizeXaml with XAML declaring the additional URI — it must pass without error, proving the merge happened instead of a skip
+Regex entity boundary: Call scanXamlForRequiredPackages with XAML containing a ui:LogMessage whose Message attribute includes &quot;clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities&quot; (entity-encoded compliance error text). Assert that every package name in the returned set is a clean dotted identifier with no &quot; substrings and no whitespace
+Relevant files
+server/xaml/xaml-compliance.ts:1485-1511
+server/xaml/xaml-compliance.ts:47
+server/xaml/xaml-compliance.ts:251-256
+server/xaml/xaml-compliance.ts:1765
+server/uipath-activity-registry.ts:445
+server/uipath-activity-registry.ts:489-550
+server/package-assembler.ts:2401-2425
+server/package-assembler.ts:5399-5549
+server/package-assembler.ts:5449-5477
+server/xaml/gap-analyzer.ts:599-612
+server/__tests__/pipeline-regression.test.ts
+catalog/activity-catalog.json:3721-3727
+catalog/generation-metadata.json:82-85
