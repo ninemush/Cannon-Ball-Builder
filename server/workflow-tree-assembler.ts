@@ -31,6 +31,7 @@ import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
 import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
 import { DeclarationRegistry, scopeIdMatchesStackEntryExternal, type SymbolDiscoveryDiagnostic, type ExpressionContextEvidence } from "./declaration-registry";
 import { isExcludedSymbolToken } from "./shared/symbol-exclusions";
+import { dispatchGenerator, hasGenerator, resolveTemplateName } from "./xaml/generator-registry";
 
 export interface PropertyRemediationRecord {
   propertyName: string;
@@ -3561,13 +3562,136 @@ function sweepXmlForResidualJsonIntents(xml: string): string {
   return result;
 }
 
+const ACTIVITIES_REQUIRING_LEGACY_TEMPLATE = new Set([
+  "Assign",
+  "SendSmtpMailMessage",
+  "SendOutlookMailMessage",
+  "ExcelApplicationScope",
+  "UseExcel",
+  "NApplicationCard",
+  "UseApplicationBrowser",
+  "UseBrowser",
+  "UseApplication",
+  "OpenBrowser",
+  "AttachBrowser",
+  "AttachWindow",
+]);
+
+const STRUCTURED_PROPERTY_KEYS: Record<string, Set<string>> = {
+  "InvokeWorkflowFile": new Set(["Arguments", "arguments"]),
+};
+
+function resolveValueIntentToString(vi: { type: string; name?: string; value?: string; expression?: string; baseUrl?: string }): string {
+  switch (vi.type) {
+    case "variable":
+      return vi.name ? `[${vi.name}]` : "";
+    case "literal":
+      return vi.value !== undefined ? String(vi.value) : "";
+    case "expression":
+      return vi.expression ? `[${vi.expression}]` : "";
+    case "url_with_params":
+      return vi.baseUrl || "";
+    case "vb_expression":
+      return vi.value !== undefined ? String(vi.value) : "";
+    default:
+      return vi.value !== undefined ? String(vi.value) : "";
+  }
+}
+
+function isValueIntentShape(obj: Record<string, unknown>): boolean {
+  return typeof obj.type === "string" && (
+    obj.type === "literal" || obj.type === "variable" || obj.type === "expression" ||
+    obj.type === "url_with_params" || obj.type === "vb_expression"
+  );
+}
+
+function flattenNodeProperties(properties: Record<string, unknown> | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!properties) return result;
+
+  for (const [key, val] of Object.entries(properties)) {
+    if (typeof val === "string") {
+      let resolved = val;
+      try {
+        const parsed = JSON.parse(val);
+        if (parsed && typeof parsed === "object" && typeof parsed.type === "string") {
+          resolved = resolveValueIntentToString(parsed);
+        }
+      } catch (_jsonParseIgnored) { /* not JSON — use raw string */ }
+      result[key] = resolved;
+    } else if (val !== null && val !== undefined && typeof val === "object") {
+      const obj = val as Record<string, unknown>;
+      if (isValueIntentShape(obj)) {
+        result[key] = resolveValueIntentToString(obj as { type: string; name?: string; value?: string; expression?: string; baseUrl?: string });
+      } else if ("value" in obj && Object.keys(obj).length <= 3) {
+        result[key] = String(obj.value);
+      }
+    } else if (val !== null && val !== undefined) {
+      result[key] = String(val);
+    }
+  }
+  return result;
+}
+
+function safeDispatchGenerator(template: string, args: Record<string, unknown>, displayName: string): string | null {
+  try {
+    const xml = dispatchGenerator(template, args);
+    if (xml) {
+      console.log(`[Deterministic Generator] Used generator for "${resolveTemplateName(template)}" activity "${displayName}"`);
+    }
+    return xml;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Deterministic Generator] Dispatch failed for "${template}" ("${displayName}"), falling back to legacy template: ${msg}`);
+    return null;
+  }
+}
+
 function assembleActivityNode(
   node: ActivityNode,
   allVariables: VariableDeclaration[],
   processType: ProcessType,
   emissionContext: EmissionContext = "normal",
 ): string {
-  let xml = resolveActivityTemplate(node, allVariables, processType, emissionContext);
+  let xml: string | null = null;
+
+  const stripped = node.template.includes(":") ? node.template.split(":").pop()! : node.template;
+  if (hasGenerator(node.template) && !ACTIVITIES_REQUIRING_LEGACY_TEMPLATE.has(stripped)) {
+    let generatorArgs: Record<string, unknown>;
+    const structuredKeys = STRUCTURED_PROPERTY_KEYS[stripped];
+    if (structuredKeys) {
+      const raw = node.properties || {};
+      const scalarProps: Record<string, unknown> = {};
+      const structuredProps: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        if (structuredKeys.has(k)) {
+          structuredProps[k] = v;
+        } else {
+          scalarProps[k] = v;
+        }
+      }
+      const flatProps = flattenNodeProperties(scalarProps);
+      generatorArgs = {
+        displayName: node.displayName,
+        ...flatProps,
+        ...structuredProps,
+      };
+    } else {
+      const flatProps = flattenNodeProperties(node.properties);
+      generatorArgs = {
+        displayName: node.displayName,
+        ...flatProps,
+      };
+    }
+    if (node.outputVar) {
+      generatorArgs.outputVar = node.outputVar;
+    }
+    xml = safeDispatchGenerator(node.template, generatorArgs, node.displayName);
+  }
+
+  if (!xml) {
+    xml = resolveActivityTemplate(node, allVariables, processType, emissionContext);
+  }
 
   xml = sweepXmlForResidualJsonIntents(xml);
 
@@ -4629,6 +4753,14 @@ function normalizeSpecProperties(node: WorkflowNode, workflowFile?: string): voi
           finalValueHash: computeContentHash(normalizedOutput),
         });
       } else if (!isValueIntent(value) && typeof value === "object" && value !== null) {
+        const STRUCTURED_PROPERTY_ALLOWLIST: Record<string, Set<string>> = {
+          "InvokeWorkflowFile": new Set(["Arguments", "arguments"]),
+        };
+        const strippedTemplate = templateName.replace(/^[a-z]+:/, "");
+        const allowedProps = STRUCTURED_PROPERTY_ALLOWLIST[strippedTemplate];
+        if (allowedProps && allowedProps.has(key)) {
+          continue;
+        }
         const classification = classifyPropertyValue(value, key, templateName);
         if (classification.kind === "unsupported-structured") {
           console.warn(`[normalizeSpecProperties] Blocking unsupported structured property "${key}" on "${templateName}" — property removed from spec: ${classification.reason}`);
@@ -5064,8 +5196,9 @@ export function assembleWorkflowFromSpec(
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="${escapeXml(workflowName)}">
     <ui:Comment Text="[VB_EXPRESSION_BLOCKED] Workflow generation was blocked because an expression contained unconvertible C# syntax: ${escapeXml(e.message)}. The expression must be rewritten in VB.NET before this workflow can be generated." DisplayName="BLOCKED — C# Expression Not Convertible" />
@@ -5111,14 +5244,25 @@ export function assembleWorkflowFromSpec(
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
+  xmlns:ucs="http://schemas.uipath.com/workflow/activities/collection"
+  xmlns:udb="http://schemas.uipath.com/workflow/activities/database"
+  xmlns:umail="http://schemas.uipath.com/workflow/activities/mail"
+  xmlns:updf="http://schemas.uipath.com/workflow/activities/pdf"
+  xmlns:upers="http://schemas.uipath.com/workflow/activities/persistence"
+  xmlns:uweb="http://schemas.uipath.com/workflow/activities/web"
+  xmlns:ss="clr-namespace:System.Security;assembly=System.Private.CoreLib"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <mva:VisualBasic.Settings>
+    <x:Null />
+  </mva:VisualBasic.Settings>
   <TextExpression.NamespacesForImplementation>
     <sco:Collection x:TypeArguments="x:String">
       <x:String>System</x:String>
@@ -5144,7 +5288,7 @@ export function assembleWorkflowFromSpec(
       <AssemblyReference>System.Activities</AssemblyReference>
       <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
       <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
-      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
       <AssemblyReference>System.Data</AssemblyReference>
       <AssemblyReference>System</AssemblyReference>
       <AssemblyReference>System.Core</AssemblyReference>
@@ -5185,8 +5329,9 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="${escapeXml(workflowName)}">
     <ui:Comment Text="[CONTAINER_VALIDATION_FAILED] Irrecoverable container structure error(s): ${escapeXml(errorSummary)}. Manual implementation required." DisplayName="Container Validation Failed — ${escapeXml(workflowName)}" />
@@ -5220,8 +5365,9 @@ ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Sequence DisplayName="${escapeXml(workflowName)}">
     <ui:Comment Text="[ASSEMBLY_FAILED] Tree assembly produced malformed XML: ${escapeXml(err.msg)} at line ${err.line}, col ${err.col}. Manual implementation required." DisplayName="Assembly Failed — ${escapeXml(workflowName)}" />

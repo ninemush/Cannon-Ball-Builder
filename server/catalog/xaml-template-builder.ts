@@ -296,13 +296,14 @@ function buildWorkflowHeaderTemplate(): TemplateEntry {
       `  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"\n` +
       `  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"\n` +
       `  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"\n` +
-      `  xmlns:s="clr-namespace:System;assembly=mscorlib"\n` +
+      `  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"\n` +
       `  xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"\n` +
       `  xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"\n` +
-      `  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"\n` +
+      `  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"\n` +
       `  xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"\n` +
-      `  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"\n` +
+      `  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"\n` +
       `  xmlns:ui="http://schemas.uipath.com/workflow/activities"\n` +
+      `  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"\n` +
       `  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">\n` +
       `  <Sequence DisplayName="{{displayName:string}}">\n` +
       `    <Sequence.Variables>\n` +

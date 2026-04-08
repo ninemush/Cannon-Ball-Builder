@@ -260,6 +260,16 @@ VARIABLE PRE-DECLARATION: ALL variables MUST be listed in the top-level "variabl
 7. RetryScopeNode — retry on failure:
    { "kind": "retryScope", "displayName": "<name>", "numberOfRetries": 3, "retryInterval": "00:00:05", "bodyChildren": [<WorkflowNode>...] }
 
+=== MODERN DESIGN ACTIVITIES (preferred over legacy) ===
+Use Modern Design (N-prefix) activities instead of legacy ones:
+- NClick (replaces Click) — ui:NClick
+- NTypeInto (replaces TypeInto) — ui:NTypeInto
+- NGetText (replaces GetText) — ui:NGetText
+- NApplicationCard (replaces OpenBrowser, AttachBrowser, UseBrowser, UseApplicationBrowser) — ui:NApplicationCard
+- NSelectItem (replaces SelectItem) — ui:NSelectItem
+- NCheckState (replaces CheckState) — ui:NCheckState
+Legacy names (Click, TypeInto, GetText, OpenBrowser, AttachBrowser) are automatically mapped to their Modern Design equivalents.
+
 === NESTING RULES ===
 - Activities that make API calls, read files, or interact with external systems MUST be inside a tryCatch or retryScope node.
 - Decision points MUST use IfNode with activities in thenChildren/elseChildren — NEVER emit Then/Else as string property values.

@@ -2888,12 +2888,13 @@ function buildXaml(className: string, displayName: string, activities: string, v
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
   xmlns:scg="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <TextExpression.NamespacesForImplementation>
     <sco:Collection x:TypeArguments="x:String">
@@ -2920,7 +2921,7 @@ function buildXaml(className: string, displayName: string, activities: string, v
       <AssemblyReference>System.Activities</AssemblyReference>
       <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
       <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
-      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
       <AssemblyReference>System.Data</AssemblyReference>
       <AssemblyReference>System</AssemblyReference>
       <AssemblyReference>System.Core</AssemblyReference>

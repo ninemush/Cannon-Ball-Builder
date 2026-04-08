@@ -1242,7 +1242,7 @@ function buildTextExpressionBlocks(isCSharp: boolean): string {
       <AssemblyReference>System.Activities</AssemblyReference>
       <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
       <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
-      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
       <AssemblyReference>System.Data</AssemblyReference>
       <AssemblyReference>System</AssemblyReference>
       <AssemblyReference>System.Core</AssemblyReference>
@@ -2846,14 +2846,18 @@ export function generateRichXamlFromNodes(
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <mva:VisualBasic.Settings>
+    <x:Null />
+  </mva:VisualBasic.Settings>
 ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
     ${dictConfigVariable}${variablesBlock}${activities}
   </Sequence>
@@ -3050,14 +3054,18 @@ export function generateRichXamlFromSpec(
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <mva:VisualBasic.Settings>
+    <x:Null />
+  </mva:VisualBasic.Settings>
 ${xMembersBlockSpec}  <Sequence DisplayName="${escapeXml(wfName)}">
     ${specDictConfigVar}${variablesBlock}${activities}
   </Sequence>
@@ -3123,9 +3131,9 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
     }
   }
 
-  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsS = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
+  const nsScg = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
+  const nsSco = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
   const sq = `&quot;`;
 
   const excelBlock = isCSharp
@@ -3218,9 +3226,9 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
 
 export function generateInitXaml(targetFramework?: TargetFramework): string {
   const isCSharp = targetFramework === "Portable";
-  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsS = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
+  const nsScg = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
+  const nsSco = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
   const sq = `&quot;`;
   const concat = isCSharp ? " + " : " &amp; ";
 
@@ -3315,18 +3323,19 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:sads="clr-namespace:System.Activities.Statements;assembly=System.Activities"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${isCSharp ? "" : `
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <mva:VisualBasic.Settings>
     <x:Null />
-  </mva:VisualBasic.Settings>`}
+  </mva:VisualBasic.Settings>
   <sap2010:WorkflowViewState.IdRef>Main_1</sap2010:WorkflowViewState.IdRef>
   <TextExpression.NamespacesForImplementation>
     <sco:Collection x:TypeArguments="x:String">
@@ -3353,7 +3362,7 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
       <AssemblyReference>System.Activities</AssemblyReference>
       <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
       <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
-      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
       <AssemblyReference>System.Data</AssemblyReference>
       <AssemblyReference>System</AssemblyReference>
       <AssemblyReference>System.Core</AssemblyReference>
@@ -3544,13 +3553,17 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <mva:VisualBasic.Settings>
+    <x:Null />
+  </mva:VisualBasic.Settings>${buildTextExpressionBlocks(isCSharp)}
   <x:Members>
     <x:Property Name="in_QueueName" Type="InArgument(x:String)" />
     <x:Property Name="out_TransactionItem" Type="OutArgument(ui:QueueItem)" />
@@ -3583,9 +3596,9 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
 export function generateSetTransactionStatusXaml(targetFramework?: TargetFramework): string {
   const isCSharp = targetFramework === "Portable";
   const concat = isCSharp ? " + " : " &amp; ";
-  const nsS = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsScg = isCSharp ? "System.Runtime" : "mscorlib";
-  const nsSco = isCSharp ? "System.Runtime" : "mscorlib";
+  const nsS = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
+  const nsScg = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
+  const nsSco = isCSharp ? "System.Runtime" : "System.Private.CoreLib";
   const screenshotDefault = isCSharp
     ? `&quot;Screenshots/Error_&quot; + DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;) + &quot;.png&quot;`
     : `&quot;Screenshots/Error_&quot; &amp; DateTime.Now.ToString(&quot;yyyyMMdd_HHmmss&quot;) &amp; &quot;.png&quot;`;
@@ -3648,9 +3661,9 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
 
 export function generateCloseAllApplicationsXaml(targetFramework: TargetFramework = "Windows"): string {
   const isCrossPlatform = targetFramework === "Portable";
-  const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsSco = isCrossPlatform ? "System.Runtime" : "mscorlib";
+  const nsS = isCrossPlatform ? "System.Runtime" : "System.Private.CoreLib";
+  const nsScg = isCrossPlatform ? "System.Runtime" : "System.Private.CoreLib";
+  const nsSco = isCrossPlatform ? "System.Runtime" : "System.Private.CoreLib";
 
   const closeBody = isCrossPlatform
     ? `<ui:LogMessage Level="Info" Message="[&quot;Closing all applications (Cross-Platform mode)...&quot;]" DisplayName="Log Cleanup Start" />
@@ -3715,9 +3728,9 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not ava
 
 export function generateKillAllProcessesXaml(targetFramework: TargetFramework = "Windows"): string {
   const isCrossPlatform = targetFramework === "Portable";
-  const nsS = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsScg = isCrossPlatform ? "System.Runtime" : "mscorlib";
-  const nsSco = isCrossPlatform ? "System.Runtime" : "mscorlib";
+  const nsS = isCrossPlatform ? "System.Runtime" : "System.Private.CoreLib";
+  const nsScg = isCrossPlatform ? "System.Runtime" : "System.Private.CoreLib";
+  const nsSco = isCrossPlatform ? "System.Runtime" : "System.Private.CoreLib";
 
   const killBody = isCrossPlatform
     ? `<ui:LogMessage Level="Warn" Message="[&quot;Process cleanup requested (Cross-Platform mode — KillProcess not available on Serverless)&quot;]" DisplayName="Log Kill Start" />

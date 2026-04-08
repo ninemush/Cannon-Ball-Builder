@@ -31,6 +31,11 @@ export const ACTIVITIES_SUPPORTING_CONTINUE_ON_ERROR = new Set([
   "ui:Click",
   "ui:TypeInto",
   "ui:GetText",
+  "ui:NClick",
+  "ui:NTypeInto",
+  "ui:NGetText",
+  "ui:NSelectItem",
+  "ui:NCheckState",
   "ui:ElementExists",
   "ui:OpenBrowser",
   "ui:NavigateTo",
@@ -38,10 +43,33 @@ export const ACTIVITIES_SUPPORTING_CONTINUE_ON_ERROR = new Set([
   "ui:AttachWindow",
   "ui:UseBrowser",
   "ui:UseApplicationBrowser",
+  "ui:NApplicationCard",
 ]);
 
 export const ACTIVITY_NAME_ALIAS_MAP: Record<string, string> = {
   "ui:GetCredentials": "ui:GetCredential",
+  "ui:Click": "ui:NClick",
+  "Click": "NClick",
+  "ui:TypeInto": "ui:NTypeInto",
+  "TypeInto": "NTypeInto",
+  "ui:GetText": "ui:NGetText",
+  "GetText": "NGetText",
+  "ui:SelectItem": "ui:NSelectItem",
+  "SelectItem": "NSelectItem",
+  "ui:CheckState": "ui:NCheckState",
+  "CheckState": "NCheckState",
+  "ui:OpenBrowser": "ui:NApplicationCard",
+  "OpenBrowser": "NApplicationCard",
+  "ui:AttachBrowser": "ui:NApplicationCard",
+  "AttachBrowser": "NApplicationCard",
+  "ui:AttachWindow": "ui:NApplicationCard",
+  "AttachWindow": "NApplicationCard",
+  "ui:UseApplicationBrowser": "ui:NApplicationCard",
+  "UseApplicationBrowser": "NApplicationCard",
+  "ui:UseBrowser": "ui:NApplicationCard",
+  "UseBrowser": "NApplicationCard",
+  "ui:UseApplication": "ui:NApplicationCard",
+  "UseApplication": "NApplicationCard",
 };
 
 export function normalizeActivityName(name: string): string {
@@ -71,6 +99,12 @@ function buildFallbackRegistry(): Record<string, ActivityRegistryEntry> {
   });
 
   return {
+    "ui:NClick": { package: uiAuto, properties: { optional: ["ClickType", "MouseButton", "DelayAfter", "DelayBefore", "TimeoutMS", "ContinueOnError"] } },
+    "ui:NTypeInto": { package: uiAuto, properties: { optional: ["Text", "ClickBeforeTyping", "EmptyField", "DelayAfter", "DelayBefore", "TimeoutMS", "ContinueOnError"] } },
+    "ui:NGetText": { package: uiAuto, properties: { optional: ["Value", "DelayAfter", "DelayBefore", "TimeoutMS", "ContinueOnError"] } },
+    "ui:NApplicationCard": { package: uiAuto, properties: { optional: ["Url", "BrowserType", "Selector", "ContinueOnError"] } },
+    "ui:NSelectItem": { package: uiAuto, properties: { optional: ["Item", "TimeoutMS", "ContinueOnError"] } },
+    "ui:NCheckState": { package: uiAuto, properties: { optional: ["Result", "TimeoutMS", "ContinueOnError"] } },
     "ui:Click": { package: uiAuto, properties: { optional: ["ClickType", "MouseButton", "KeyModifiers", "CursorPosition", "DelayAfter", "DelayBefore", "TimeoutMS", "ContinueOnError", "InformativeScreenshot"] }, versionedProperties: [{ name: "InformativeScreenshot", addedInMajor: 23 }] },
     "ui:TypeInto": { package: uiAuto, properties: { optional: ["Text", "ClickBeforeTyping", "EmptyField", "DelayBetweenKeys", "DelayAfter", "DelayBefore", "TimeoutMS", "ContinueOnError", "InformativeScreenshot"] }, versionedProperties: [{ name: "InformativeScreenshot", addedInMajor: 23 }] },
     "ui:GetText": { package: uiAuto, properties: { optional: ["Value", "DelayAfter", "DelayBefore", "TimeoutMS", "ContinueOnError", "InformativeScreenshot"] }, versionedProperties: [{ name: "InformativeScreenshot", addedInMajor: 23 }] },

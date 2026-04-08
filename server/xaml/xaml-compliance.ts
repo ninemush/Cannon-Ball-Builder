@@ -789,13 +789,14 @@ export const CLR_NAMESPACE_TO_XAML_PREFIX: Record<string, string> = (() => {
 const UIPATH_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
   xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
-  xmlns:s="clr-namespace:System;assembly=mscorlib"
+  xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
   xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
-  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib"
+  xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
-  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"`;
 
 const UIPATH_CROSS_PLATFORM_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
@@ -1485,12 +1486,20 @@ const APPROVED_XMLNS_MAPPINGS: Record<string, { validUris: string[] }> = {
   "ui": { validUris: ["http://schemas.uipath.com/workflow/activities"] },
   "x": { validUris: ["http://schemas.microsoft.com/winfx/2006/xaml"] },
   "mc": { validUris: ["http://schemas.openxmlformats.org/markup-compatibility/2006"] },
-  "s": { validUris: ["clr-namespace:System;assembly=mscorlib", "clr-namespace:System;assembly=System.Runtime"] },
+  "s": { validUris: ["clr-namespace:System;assembly=System.Private.CoreLib", "clr-namespace:System;assembly=mscorlib", "clr-namespace:System;assembly=System.Runtime"] },
   "sap": { validUris: ["http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"] },
   "sap2010": { validUris: ["http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"] },
-  "scg": { validUris: ["clr-namespace:System.Collections.Generic;assembly=mscorlib", "clr-namespace:System.Collections.Generic;assembly=System.Runtime"] },
+  "scg": { validUris: ["clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib", "clr-namespace:System.Collections.Generic;assembly=mscorlib", "clr-namespace:System.Collections.Generic;assembly=System.Runtime"] },
   "scg2": { validUris: ["clr-namespace:System.Data;assembly=System.Data", "clr-namespace:System.Data;assembly=System.Data.Common"] },
-  "sco": { validUris: ["clr-namespace:System.Collections.ObjectModel;assembly=mscorlib", "clr-namespace:System.Collections.ObjectModel;assembly=System.Runtime"] },
+  "sco": { validUris: ["clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib", "clr-namespace:System.Collections.ObjectModel;assembly=mscorlib", "clr-namespace:System.Collections.ObjectModel;assembly=System.Runtime"] },
+  "uix": { validUris: ["http://schemas.uipath.com/workflow/activities/uix"] },
+  "ucs": { validUris: ["http://schemas.uipath.com/workflow/activities/collection", "clr-namespace:UiPath.Core.Activities;assembly=UiPath.System.Activities"] },
+  "udb": { validUris: ["http://schemas.uipath.com/workflow/activities/database", "clr-namespace:UiPath.Database.Activities;assembly=UiPath.Database.Activities"] },
+  "umail": { validUris: ["http://schemas.uipath.com/workflow/activities/mail", "clr-namespace:UiPath.Mail.Activities;assembly=UiPath.Mail.Activities"] },
+  "updf": { validUris: ["http://schemas.uipath.com/workflow/activities/pdf", "clr-namespace:UiPath.PDF.Activities;assembly=UiPath.PDF.Activities"] },
+  "upers": { validUris: ["http://schemas.uipath.com/workflow/activities/persistence", "clr-namespace:UiPath.Persistence.Activities;assembly=UiPath.Persistence.Activities"] },
+  "uweb": { validUris: ["http://schemas.uipath.com/workflow/activities/web", "clr-namespace:UiPath.Web.Activities;assembly=UiPath.Web.Activities", "clr-namespace:UiPath.WebAPI.Activities;assembly=UiPath.WebAPI.Activities"] },
+  "ss": { validUris: ["clr-namespace:System.Security;assembly=System.Private.CoreLib", "clr-namespace:System.Security;assembly=mscorlib"] },
   "mva": { validUris: ["clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"] },
   "sads": { validUris: ["clr-namespace:System.Activities.Statements;assembly=System.Activities"] },
 };

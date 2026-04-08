@@ -1330,7 +1330,7 @@ describe("Compiler-invariant regression tests", () => {
       it(`${name} contains required assembly references`, () => {
         const xaml = gen();
         expect(xaml).toContain("<AssemblyReference>System.Activities</AssemblyReference>");
-        expect(xaml).toContain("<AssemblyReference>mscorlib</AssemblyReference>");
+        expect(xaml).toContain("<AssemblyReference>System.Private.CoreLib</AssemblyReference>");
         expect(xaml).toContain("<AssemblyReference>UiPath.Core.Activities</AssemblyReference>");
       });
     }
