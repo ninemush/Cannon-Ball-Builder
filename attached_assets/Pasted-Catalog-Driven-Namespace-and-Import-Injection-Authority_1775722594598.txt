@@ -1,0 +1,106 @@
+Catalog-Driven Namespace and Import Injection Authority
+
+What & Why
+The DLL-backed migration established the catalog as the structural source of truth for package prefix, clrNamespace, and assembly metadata, but the runtime still has a major parallel authority source: the hardcoded PACKAGE_NAMESPACE_MAP in server/xaml/xaml-compliance.ts.
+
+The post-implementation DLL truth audit classifies the system as only partially aligned and identifies PACKAGE_NAMESPACE_MAP as one of the top remaining risks. The audit’s highest-leverage next implementation task is to unify PACKAGE_NAMESPACE_MAP with catalog prefix/assembly data. This is also consistent with the latest benchmark runs, where both Coupa and Birthday fail with:
+- failed to inject assembly references
+- failed to inject namespace imports
+
+This task must make namespace/import injection read from catalog truth when the catalog is loaded, while preserving the hardcoded map only as a fallback safety net. The goal is to eliminate namespace/import drift as a shared structural blocker.
+
+Done looks like
+- Namespace prefix resolution uses catalog package metadata when catalogService is loaded.
+- injectMissingNamespaceDeclarations uses catalog-derived package namespace info first, with the hardcoded map only as fallback.
+- CLR namespace to XAML prefix resolution is derived from catalog package metadata when available, with fallback to the existing hardcoded map.
+- Coupa and Birthday benchmark workflows no longer fail due to namespace-import or assembly-reference injection drift caused by stale PACKAGE_NAMESPACE_MAP entries.
+- Fallback usage is explicitly diagnosed so parallel truth does not remain silent.
+- Existing behavior remains safe when catalogService is unavailable.
+
+Out of scope
+- Broad catalog or generator rewrites
+- Required-property fallback policy changes
+- Deterministic generator redesign
+- Prompt engineering
+- Full elimination of PACKAGE_NAMESPACE_MAP if a safe fallback is still needed
+- Activity schema reconciliation work already completed in Tasks #476–#479
+
+Design rules
+Catalog first, fallback second
+When catalogService is loaded, namespace/import authority must come from catalog package metadata. The hardcoded PACKAGE_NAMESPACE_MAP may remain only as an explicit fallback for degraded mode or bootstrap cases.
+
+No silent dual truth
+If catalog-derived namespace info and hardcoded fallback data disagree, record a diagnostic rather than silently choosing one without traceability.
+
+No regression when catalog is unavailable
+If catalogService is not loaded, preserve current fallback behavior so the pipeline still works in degraded mode.
+
+Single authority per decision
+For each namespace/import decision, the runtime must not consult multiple inconsistent sources in parallel without precedence and diagnostics.
+
+Tasks
+Trace the current namespace/import injection path end to end.
+Identify all places where package prefix, clrNamespace, assembly, or xmlns declarations are resolved for emitted XAML and post-emission injection. At minimum trace:
+- getActivityPrefix
+- injectMissingNamespaceDeclarations
+- CLR_NAMESPACE_TO_XAML_PREFIX
+- any assembly reference injection path
+- any namespace import injection path
+- any helper that resolves package namespace info from hardcoded maps rather than catalog
+
+Add a catalog-backed package namespace accessor.
+In catalogService, add a focused accessor that returns package namespace metadata needed by runtime injection:
+- packageId
+- prefix
+- clrNamespace
+- assembly
+- xmlns URI if applicable
+This accessor must be safe for runtime use and return null/undefined cleanly when catalog is unavailable or the package is unknown.
+
+Rewire namespace prefix resolution to use catalog truth first.
+Update namespace/prefix resolution so that when catalogService is loaded, it uses catalog package namespace metadata first. Preserve PACKAGE_NAMESPACE_MAP only as fallback.
+
+Rewire injectMissingNamespaceDeclarations to use catalog truth first.
+When missing xmlns declarations must be injected, resolve them from catalog package namespace data first. Only use PACKAGE_NAMESPACE_MAP when catalog data is unavailable.
+
+Rewire CLR namespace to XAML prefix resolution to use catalog truth first.
+Replace or augment the static CLR_NAMESPACE_TO_XAML_PREFIX path so it derives from catalog package namespace metadata when available. Preserve fallback behavior for degraded mode.
+
+Harden assembly reference injection and namespace import injection.
+Audit the assembly reference / namespace import injection paths and ensure they use the same catalog-first authority model, not stale hardcoded package mapping assumptions.
+
+Add mismatch diagnostics.
+If catalog-derived namespace data and fallback PACKAGE_NAMESPACE_MAP disagree for the same package or prefix, emit a structured diagnostic with:
+- packageId
+- prefix
+- clrNamespace
+- assembly
+- source used (catalog or fallback)
+- reason fallback was needed if fallback wins
+
+Add focused regression tests.
+Cover:
+- catalog-loaded path resolves namespace info from catalog, not fallback map
+- fallback path still works when catalog is unavailable
+- disagreement between catalog and fallback emits a diagnostic
+- injectMissingNamespaceDeclarations correctly injects xmlns using catalog-derived info
+- CLR namespace to prefix resolution works for known packages from the catalog
+- benchmark-style namespace/assembly injection for packages used by Coupa and Birthday no longer fails due to hardcoded-map drift
+
+Primary files to modify
+- server/xaml/xaml-compliance.ts
+- server/catalog/catalog-service.ts
+- server/package-assembler.ts
+- server/__tests__/pipeline-regression.test.ts
+
+Reference files
+- catalog/activity-catalog.json
+- server/uipath-activity-registry.ts
+- server/post-emission-dependency-analyzer.ts
+- server/emission-gate.ts
+- server/workflow-tree-assembler.ts
+- server/xaml-generator.ts
+- dll-truth-audit-report.md
+
+Success measure
+The shared structural failure class “failed to inject assembly references / failed to inject namespace imports” is materially reduced or eliminated on the latest Coupa and Birthday benchmark runs, and runtime namespace authority no longer depends primarily on stale hardcoded PACKAGE_NAMESPACE_MAP entries when catalog truth is available.
