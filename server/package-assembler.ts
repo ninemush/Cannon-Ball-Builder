@@ -77,7 +77,8 @@ import archiver from "archiver";
   import { catalogService, type ProcessType, type ValidationCorrection } from "./catalog/catalog-service";
   import type { StudioProfile } from "./catalog/metadata-service";
   import { validateWorkflowSpec as validateSpec, type SpecValidationReport } from "./catalog/spec-validator";
-  import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, type UiPathConfig } from "./uipath-shared";
+  import { UIPATH_PACKAGE_ALIAS_MAP, QualityGateError, isFrameworkAssembly, normalizePackageName, type UiPathConfig } from "./uipath-shared";
+export { normalizePackageName } from "./uipath-shared";
   import { runEmissionGate, type EmissionGateResult } from "./emission-gate";
   import { buildWorkflowBusinessContextMap, type WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
@@ -2170,11 +2171,12 @@ function runPostAssemblyValidation(
   };
 }
 
-function buildAssemblyToPackageMap(): Map<string, string> {
+export function buildAssemblyToPackageMap(): Map<string, string> {
   const map = new Map<string, string>();
   for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
-    if (info.assembly && !isFrameworkAssembly(packageId)) {
-      map.set(info.assembly, packageId);
+    const basePackageName = packageId.includes("::") ? packageId.split("::")[0] : packageId;
+    if (info.assembly && !isFrameworkAssembly(basePackageName)) {
+      map.set(info.assembly, basePackageName);
     }
   }
   return map;
@@ -2478,9 +2480,6 @@ function sanitizeDeps(deps: Record<string, string>): void {
   }
 }
 
-export function normalizePackageName(name: string): string {
-  return UIPATH_PACKAGE_ALIAS_MAP[name] || name;
-}
 
 export interface DependencyResolutionResult {
   deps: Record<string, string>;

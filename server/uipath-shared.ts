@@ -40,7 +40,13 @@ export const UIPATH_PACKAGE_ALIAS_MAP: Record<string, string> = {
   "UiPath.Storage.Activities": "UiPath.Persistence.Activities",
   "UiPath.DB.Activities": "UiPath.Database.Activities",
   "UiPath.SQL.Activities": "UiPath.Database.Activities",
+  "UiPath.DataService.Activities.Core": "UiPath.DataService.Activities",
+  "UiPath.Agentic": "UiPath.Agentic.Activities",
 };
+
+export function normalizePackageName(name: string): string {
+  return UIPATH_PACKAGE_ALIAS_MAP[name] || name;
+}
 
 export const FRAMEWORK_ASSEMBLIES = new Set<string>([
   "System.Activities",
@@ -54,6 +60,10 @@ export const FRAMEWORK_ASSEMBLIES = new Set<string>([
   "PresentationFramework",
   "PresentationCore",
   "WindowsBase",
+  // UiPath.Platform is an infrastructure assembly providing CLR types (IResource, ILocalResource)
+  // used as argument types inside other packages' activities. It has no entry in generation-metadata.json
+  // and is not a standalone installable NuGet package. Excluded from required-package scanning.
+  "UiPath.Platform",
 ]);
 
 export function isFrameworkAssembly(pkgName: string): boolean {

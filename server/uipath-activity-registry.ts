@@ -1,5 +1,5 @@
 import { catalogService } from "./catalog/catalog-service";
-import { isFrameworkAssembly } from "./uipath-shared";
+import { isFrameworkAssembly, normalizePackageName } from "./uipath-shared";
 
 export type ActivityPropertyInfo = {
   required?: string[];
@@ -649,8 +649,8 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
 
     if (prefix !== "ui") {
       const nsPkg = NAMESPACE_PREFIX_TO_PACKAGE[prefix];
-      if (nsPkg) {
-        packages.add(nsPkg);
+      if (nsPkg && !isFrameworkAssembly(nsPkg)) {
+        packages.add(normalizePackageName(nsPkg));
         continue;
       }
     }
@@ -663,8 +663,8 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
 
   for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
     const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
-    if (prefixPattern.test(xamlContent)) {
-      packages.add(pkgName);
+    if (prefixPattern.test(xamlContent) && !isFrameworkAssembly(pkgName)) {
+      packages.add(normalizePackageName(pkgName));
     }
   }
 
@@ -673,7 +673,7 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     const ns = match[1].trim();
     const assemblyName = match[2].trim();
     if (assemblyName.startsWith("UiPath.") && !isFrameworkAssembly(assemblyName)) {
-      packages.add(assemblyName);
+      packages.add(normalizePackageName(assemblyName));
     }
     const inferred = inferPackageFromNamespace(ns);
     if (inferred && !isFrameworkAssembly(inferred)) {
@@ -710,7 +710,7 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
       packages.add("Newtonsoft.Json");
     }
     if (assemblyName.startsWith("UiPath.") && !isFrameworkAssembly(assemblyName)) {
-      packages.add(assemblyName);
+      packages.add(normalizePackageName(assemblyName));
     }
     if (ns.startsWith("UiPath.") && !assemblyName.startsWith("UiPath.")) {
       const inferred = inferPackageFromNamespace(ns);

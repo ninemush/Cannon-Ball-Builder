@@ -21,7 +21,7 @@ import {
 } from "../workflow-tree-assembler";
 import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue } from "../types/uipath-package";
 import type { PropertyValue } from "../workflow-spec-types";
-import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity } from "../package-assembler";
+import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity, buildAssemblyToPackageMap } from "../package-assembler";
 import { runFinalArtifactValidation, type PackageCompletenessViolation, type PackageCompletenessViolationsArtifact } from "../final-artifact-validation";
 import { validateWorkflowGraph } from "../xaml/workflow-graph-validator";
 import {
@@ -6582,6 +6582,52 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
         expect(refsResult.updated).toContain("<AssemblyReference>Injected.Assembly</AssemblyReference>");
         expect(nsResult.updated).toContain("<x:String>Injected.Namespace</x:String>");
       });
+    });
+  });
+
+  describe("Assembly-to-package name normalization (Task #490)", () => {
+    it("scanXamlForRequiredPackages normalizes UiPath.DataService.Activities.Core to UiPath.DataService.Activities", () => {
+      const xaml = `<Activity xmlns:uda="clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities.Core">
+        <uda:QueryEntity DisplayName="Query Entity" />
+      </Activity>`;
+      const result = scanXamlForRequiredPackages(xaml);
+      expect(result.has("UiPath.DataService.Activities")).toBe(true);
+      expect(result.has("UiPath.DataService.Activities.Core")).toBe(false);
+    });
+
+    it("scanXamlForRequiredPackages normalizes UiPath.Agentic to UiPath.Agentic.Activities", () => {
+      const xaml = `<Activity xmlns:uaasm="clr-namespace:UiPath.Agentic.Activities.Services.Models;assembly=UiPath.Agentic">
+        <uaasm:AgentModel DisplayName="Agent Model" />
+      </Activity>`;
+      const result = scanXamlForRequiredPackages(xaml);
+      expect(result.has("UiPath.Agentic.Activities")).toBe(true);
+      expect(result.has("UiPath.Agentic")).toBe(false);
+    });
+
+    it("scanXamlForRequiredPackages excludes UiPath.Platform as a framework assembly", () => {
+      const xaml = `<Activity xmlns:upr="clr-namespace:UiPath.Platform.ResourceHandling;assembly=UiPath.Platform">
+        <upr:GetResource DisplayName="Get Resource" />
+      </Activity>`;
+      const result = scanXamlForRequiredPackages(xaml);
+      expect(result.has("UiPath.Platform")).toBe(false);
+      expect(result.has("UiPath.Platform.ResourceHandling")).toBe(false);
+    });
+
+    it("buildAssemblyToPackageMap returns base NuGet names without :: suffixes", () => {
+      const map = buildAssemblyToPackageMap();
+      for (const [_assembly, packageName] of map) {
+        expect(packageName).not.toContain("::");
+      }
+      expect(map.get("UiPath.DataService.Activities.Core")).toBe("UiPath.DataService.Activities");
+      expect(map.get("UiPath.Agentic")).toBe("UiPath.Agentic.Activities");
+    });
+
+    it("unknown assembly names not in alias map or framework list are preserved (not silently dropped)", () => {
+      const xaml = `<Activity xmlns:ufake="clr-namespace:UiPath.FakePackage.Hypothetical;assembly=UiPath.FakePackage.Hypothetical">
+        <ufake:DoSomething DisplayName="Do Something" />
+      </Activity>`;
+      const result = scanXamlForRequiredPackages(xaml);
+      expect(result.has("UiPath.FakePackage.Hypothetical")).toBe(true);
     });
   });
 });
