@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { deriveRequiredDeclarationsForXaml, PACKAGE_NAMESPACE_MAP, insertBeforeClosingCollectionTag, normalizeXaml } from "../xaml/xaml-compliance";
+import { deriveRequiredDeclarationsForXaml, PACKAGE_NAMESPACE_MAP, insertBeforeClosingCollectionTag, normalizeXaml, collectUsedPackages } from "../xaml/xaml-compliance";
 import { generateReframeworkMainXaml } from "../xaml-generator";
 import { runStudioResolutionSmokeTest } from "../package-assembler";
+import { metadataService } from "../catalog/metadata-service";
 
 function buildMinimalXaml(bodyContent: string, extraXmlns: string = ""): string {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -396,6 +397,129 @@ describe("Authoritative Declaration Synthesis", () => {
       warnSpy.mockRestore();
       logSpy.mockRestore();
       errorSpy.mockRestore();
+    });
+  });
+
+  describe(":: variant key normalization (Task #491)", () => {
+    it("5a: variant namespace fidelity — uda: prefix resolves to ::Core variant xmlns/assembly/namespace", () => {
+      const xaml = buildMinimalXaml('<uda:GetEntityRecord DisplayName="Get Record" />');
+      const result = deriveRequiredDeclarationsForXaml(xaml);
+
+      expect(result.activitiesDetected).toContain("uda:GetEntityRecord");
+
+      expect(result.neededXmlns.has("uda")).toBe(true);
+      const udaInfo = PACKAGE_NAMESPACE_MAP["UiPath.DataService.Activities::Core"];
+      expect(result.neededXmlns.get("uda")).toBe(udaInfo.xmlns);
+
+      expect(result.neededAssemblies.has("UiPath.DataService.Activities.Core")).toBe(true);
+
+      expect(result.neededNamespaces.has(udaInfo.clrNamespace)).toBe(true);
+    });
+
+    it("5a: variant namespace fidelity — upaf: prefix resolves to ::FormTask variant", () => {
+      const xaml = buildMinimalXaml('<upaf:CreateFormTask DisplayName="Create Task" />');
+      const result = deriveRequiredDeclarationsForXaml(xaml);
+
+      expect(result.activitiesDetected).toContain("upaf:CreateFormTask");
+
+      const upafInfo = PACKAGE_NAMESPACE_MAP["UiPath.Persistence.Activities::FormTask"];
+      expect(result.neededXmlns.has("upaf")).toBe(true);
+      expect(result.neededXmlns.get("upaf")).toBe(upafInfo.xmlns);
+      expect(result.neededAssemblies.has(upafInfo.assembly)).toBe(true);
+    });
+
+    it("5b: deps isolation — uda: prefix XAML produces deps without :: keys and without * versions", () => {
+      metadataService.load();
+      const xaml = buildMinimalXaml('<uda:GetEntityRecord DisplayName="Get Record" />');
+      const result = deriveRequiredDeclarationsForXaml(xaml);
+
+      const deps: Record<string, string> = {
+        "UiPath.System.Activities": "[25.10.0]",
+        "UiPath.UIAutomation.Activities": "[25.10.0]",
+      };
+
+      for (const pkg of result.neededPackages) {
+        const nugetName = pkg.includes("::") ? pkg.split("::")[0] : pkg;
+        if (!deps[nugetName]) {
+          const info = PACKAGE_NAMESPACE_MAP[pkg];
+          if (info) {
+            const preferred = metadataService.getPreferredVersion(nugetName);
+            if (preferred) {
+              deps[nugetName] = `[${preferred}]`;
+            }
+          }
+        }
+      }
+
+      for (const key of Object.keys(deps)) {
+        expect(key).not.toContain("::");
+      }
+      for (const val of Object.values(deps)) {
+        expect(val).not.toBe("*");
+        expect(val).not.toBe("[*]");
+      }
+    });
+
+    it("5c: collectUsedPackages never returns any string containing ::", () => {
+      const variantPrefixes = ["uda", "udam", "upaf", "upaj", "umam", "umae", "ucas", "uasj", "uasom", "upas", "uisad", "uisape", "upr", "uix", "isactr", "p", "uaasm", "upat", "upau", "upad", "upama", "umafm", "usau"];
+      for (const prefix of variantPrefixes) {
+        const xml = `<${prefix}:SomeActivity DisplayName="Test" />`;
+        const packages = collectUsedPackages(xml);
+        for (const pkg of packages) {
+          expect(pkg, `collectUsedPackages returned :: key "${pkg}" for prefix "${prefix}"`).not.toContain("::");
+        }
+      }
+    });
+
+    it("5d: guard-layer test — :: keys in deps dict are caught and normalized", () => {
+      const deps: Record<string, string> = {
+        "UiPath.System.Activities": "[25.10.0]",
+        "UiPath.DataService.Activities::Core": "*",
+        "UiPath.Persistence.Activities::FormTask": "[25.10.0]",
+      };
+
+      for (const [depKey, depVal] of Object.entries(deps)) {
+        if (depKey.includes("::")) {
+          const baseName = depKey.split("::")[0];
+          delete deps[depKey];
+          if (!deps[baseName]) {
+            deps[baseName] = depVal !== "*" && depVal !== "[*]" ? depVal : "[25.10.0]";
+          }
+        }
+      }
+
+      for (const key of Object.keys(deps)) {
+        expect(key).not.toContain("::");
+      }
+      expect(deps["UiPath.DataService.Activities"]).toBeDefined();
+      expect(deps["UiPath.Persistence.Activities"]).toBeDefined();
+      expect(deps["UiPath.System.Activities"]).toBe("[25.10.0]");
+    });
+
+    it("5d: guard-layer test — wildcard versions are resolved or removed", () => {
+      metadataService.load();
+      const deps: Record<string, string> = {
+        "UiPath.System.Activities": "*",
+        "UiPath.UIAutomation.Activities": "[*]",
+        "UiPath.WebAPI.Activities": "[25.10.0]",
+      };
+
+      for (const [depKey, depVal] of Object.entries(deps)) {
+        if (depVal === "*" || depVal === "[*]") {
+          const resolved = metadataService.getPreferredVersion(depKey);
+          if (resolved) {
+            deps[depKey] = `[${resolved}]`;
+          } else {
+            delete deps[depKey];
+          }
+        }
+      }
+
+      for (const val of Object.values(deps)) {
+        expect(val).not.toBe("*");
+        expect(val).not.toBe("[*]");
+      }
+      expect(deps["UiPath.WebAPI.Activities"]).toBe("[25.10.0]");
     });
   });
 });

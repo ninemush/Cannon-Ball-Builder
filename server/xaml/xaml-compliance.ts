@@ -672,7 +672,8 @@ export function collectUsedPackages(xaml: string): Set<string> {
       }
       const prefixPattern = new RegExp(`<${entry.prefix}:`, "g");
       if (prefixPattern.test(xaml)) {
-        usedPackages.add(entry.packageId);
+        const normalizedId = entry.packageId.includes("::") ? entry.packageId.split("::")[0] : entry.packageId;
+        usedPackages.add(normalizedId);
       }
     }
   }
@@ -690,7 +691,8 @@ export function collectUsedPackages(xaml: string): Set<string> {
     }
     const prefixPattern = new RegExp(`<${info.prefix}:`, "g");
     if (prefixPattern.test(xaml)) {
-      usedPackages.add(packageId);
+      const normalizedId = packageId.includes("::") ? packageId.split("::")[0] : packageId;
+      usedPackages.add(normalizedId);
     }
   }
 
@@ -699,7 +701,8 @@ export function collectUsedPackages(xaml: string): Set<string> {
     if (aliasPattern.test(xaml)) {
       const packageId = canonicalPrefixToPackage.get(canonical);
       if (packageId) {
-        usedPackages.add(packageId);
+        const normalizedId = packageId.includes("::") ? packageId.split("::")[0] : packageId;
+        usedPackages.add(normalizedId);
       }
     }
   }

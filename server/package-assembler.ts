@@ -1857,6 +1857,20 @@ function runPostAssemblyValidation(
   applyPropertyNameCorrections(deferredWrites, xamlEntries, remediations);
 
   for (const [pkgName, version] of Object.entries(deps)) {
+    if (pkgName.includes("::")) {
+      const baseName = pkgName.split("::")[0];
+      console.warn(`[Post-Assembly Validation] Guard: stripping :: variant key from deps: ${pkgName} → ${baseName}`);
+      delete deps[pkgName];
+      if (!deps[baseName]) {
+        const resolved = _metadataService.getPreferredVersion(baseName);
+        if (resolved) {
+          deps[baseName] = `[${resolved}]`;
+        } else {
+          warnings.push(`Dependency "${baseName}" (from variant key "${pkgName}") has no validated version — removed`);
+        }
+      }
+      continue;
+    }
     const metaVersion = _metadataService.getPreferredVersion(pkgName);
     if (!metaVersion) {
       errors.push(`Dependency "${pkgName}" version "${version}" is not in the validated version registry`);
@@ -7751,11 +7765,17 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
 
         for (const pkg of neededPackages) {
-          if (!deps[pkg]) {
+          const nugetName = pkg.includes("::") ? pkg.split("::")[0] : pkg;
+          if (!deps[nugetName]) {
             const info = PACKAGE_NAMESPACE_MAP[pkg];
             if (info) {
-              deps[pkg] = "*";
-              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Added missing project dependency: ${pkg}`);
+              const resolvedVersion = getPreferredVersionFromMeta(nugetName);
+              if (resolvedVersion) {
+                deps[nugetName] = `[${resolvedVersion}]`;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Added missing project dependency: ${nugetName} = [${resolvedVersion}]`);
+              } else {
+                console.warn(`[Authoritative Declaration Synthesis] [${fileName}] Skipping dependency ${nugetName} — no validated version found`);
+              }
             }
           }
         }
@@ -7942,6 +7962,29 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         console.warn(`[Authoritative Declaration Synthesis] ${injectionFailures} injection(s) failed across ${filesInspected} XAML file(s), no declarations were successfully injected`);
       } else {
         console.log(`[Authoritative Declaration Synthesis] All declarations already present across ${filesInspected} XAML file(s)`);
+      }
+
+      for (const [depKey, depVal] of Object.entries(deps)) {
+        if (depKey.includes("::")) {
+          const baseName = depKey.split("::")[0];
+          console.warn(`[Authoritative Declaration Synthesis] Guard: removing :: variant key from deps: ${depKey} → ${baseName}`);
+          delete deps[depKey];
+          if (!deps[baseName]) {
+            const resolved = getPreferredVersionFromMeta(baseName);
+            if (resolved) {
+              deps[baseName] = `[${resolved}]`;
+            }
+          }
+        } else if (depVal === "*" || depVal === "[*]") {
+          const resolved = getPreferredVersionFromMeta(depKey);
+          if (resolved) {
+            deps[depKey] = `[${resolved}]`;
+            console.warn(`[Authoritative Declaration Synthesis] Guard: resolved wildcard version for ${depKey} → [${resolved}]`);
+          } else {
+            console.warn(`[Authoritative Declaration Synthesis] Guard: removing unresolvable wildcard dependency: ${depKey}=${depVal}`);
+            delete deps[depKey];
+          }
+        }
       }
 
       let postCheckFailures = 0;
