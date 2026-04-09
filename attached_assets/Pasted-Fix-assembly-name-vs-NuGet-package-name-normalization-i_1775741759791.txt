@@ -1,0 +1,59 @@
+Fix assembly-name vs NuGet-package-name normalization in required package scanning
+
+What & Why
+The latest CoupaInvoiceReconV2 build failed at Dependency CrossCheck because emitted XAML referenced assembly names that the scanner treated as NuGet package names. Example:
+- emitted assembly: UiPath.DataService.Activities.Core
+- actual NuGet package: UiPath.DataService.Activities
+
+The scanner currently extracts assembly names from xmlns declarations and adds them directly to the required package set, which only works when assembly name happens to equal package name. This is a systemic flaw and causes fatal build aborts for packages where assembly and NuGet package names diverge.
+
+This task must make required-package scanning normalize assembly names to package names using an authoritative translation path, not by accidental string equality.
+
+Done looks like
+- Required-package scanning no longer treats assembly names as NuGet package names directly.
+- UiPath.DataService.Activities.Core resolves to UiPath.DataService.Activities during package scanning.
+- Similar known mismatches such as UiPath.Agentic and UiPath.Platform are handled correctly.
+- Dependency CrossCheck no longer fatally fails because an emitted assembly name lacks a validated package version when the corresponding NuGet package is already known.
+- The fix is systemic, not a one-off patch for DataService only.
+
+Out of scope
+- Broad dependency analyzer redesign
+- Namespace model redesign
+- Generator changes
+- Prompt changes
+- Catalog approval policy changes
+
+Design rules
+Single translation authority
+Assembly-name to package-name translation must use one authoritative normalization path shared across required-package scanning.
+
+No direct assembly-to-package assumption
+The scanner must not assume assembly name == NuGet package name.
+
+Immediate safety plus systemic fix
+Add the missing known aliases, but also fix the extraction path so future mismatches do not recreate the same bug.
+
+Tasks
+1. Trace the required-package scanning path that extracts assembly names from emitted XAML and adds them to the required package set.
+2. Identify where assembly names are currently added directly without normalization.
+3. Route assembly names through the authoritative assembly-to-package normalization path before they enter the required package set.
+4. Add or complete aliases for known mismatches including at minimum:
+   - UiPath.DataService.Activities.Core -> UiPath.DataService.Activities
+   - UiPath.Agentic -> UiPath.Agentic.Activities
+   - any other mismatch discoverable from PACKAGE_NAMESPACE_MAP / namespace metadata
+5. Audit namespace compliance package/assembly mappings for other assembly != NuGet package cases and cover them.
+6. Add focused regression tests proving that emitted assembly names normalize to the correct package names during scanning and no longer cause fatal dependency crosscheck aborts.
+
+Primary files to modify
+- server/uipath-activity-registry.ts
+- server/uipath-shared.ts
+- server/xaml/xaml-compliance.ts
+- server/__tests__/pipeline-regression.test.ts
+
+Reference files
+- server/package-assembler.ts
+- catalog/activity-catalog.json
+- catalog/generation-metadata.json
+
+Success measure
+The next Coupa run does not abort at Dependency CrossCheck because of assembly-name vs package-name mismatches, and required-package scanning correctly resolves emitted assembly names to validated NuGet packages.
