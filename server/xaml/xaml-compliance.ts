@@ -65,6 +65,31 @@ export const PACKAGE_NAMESPACE_MAP: Record<string, PackageNamespaceInfo> = {
   "UiPath.IntegrationService.Activities": { prefix: "uis", xmlns: "clr-namespace:UiPath.IntegrationService.Activities;assembly=UiPath.IntegrationService.Activities", clrNamespace: "UiPath.IntegrationService.Activities", assembly: "UiPath.IntegrationService.Activities" },
   "UiPath.CommunicationsMining.Activities": { prefix: "ucm", xmlns: "clr-namespace:UiPath.CommunicationsMining.Activities;assembly=UiPath.CommunicationsMining.Activities", clrNamespace: "UiPath.CommunicationsMining.Activities", assembly: "UiPath.CommunicationsMining.Activities" },
   "UiPath.WorkflowEvents.Activities": { prefix: "uwfe", xmlns: "clr-namespace:UiPath.WorkflowEvents.Activities;assembly=UiPath.WorkflowEvents.Activities", clrNamespace: "UiPath.WorkflowEvents.Activities", assembly: "UiPath.WorkflowEvents.Activities" },
+  "UiPath.Persistence.Activities::FormTask": { prefix: "upaf", xmlns: "clr-namespace:UiPath.Persistence.Activities.FormTask;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.FormTask", assembly: "UiPath.Persistence.Activities" },
+  "UiPath.Persistence.Activities::Job": { prefix: "upaj", xmlns: "clr-namespace:UiPath.Persistence.Activities.Job;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Job", assembly: "UiPath.Persistence.Activities" },
+  "UiPath.Persistence.Activities::Tasks": { prefix: "upat", xmlns: "clr-namespace:UiPath.Persistence.Activities.Tasks;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Tasks", assembly: "UiPath.Persistence.Activities" },
+  "UiPath.Persistence.Activities::UserAction": { prefix: "upau", xmlns: "clr-namespace:UiPath.Persistence.Activities.UserAction;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.UserAction", assembly: "UiPath.Persistence.Activities" },
+  "UiPath.Persistence.Activities::Delay": { prefix: "upad", xmlns: "clr-namespace:UiPath.Persistence.Activities.Delay;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Delay", assembly: "UiPath.Persistence.Activities" },
+  "UiPath.Persistence.Activities::Model.Apps": { prefix: "upama", xmlns: "clr-namespace:UiPath.Persistence.Activities.Model.Apps;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Model.Apps", assembly: "UiPath.Persistence.Activities" },
+  "UiPath.MicrosoftOffice365.Activities::Mail": { prefix: "umam", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities.Mail;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities.Mail", assembly: "UiPath.MicrosoftOffice365.Activities" },
+  "UiPath.MicrosoftOffice365.Activities::Excel": { prefix: "umae", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities.Excel;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities.Excel", assembly: "UiPath.MicrosoftOffice365.Activities" },
+  "UiPath.MicrosoftOffice365.Activities::Files.Models": { prefix: "umafm", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities.Files.Models;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities.Files.Models", assembly: "UiPath.MicrosoftOffice365.Activities" },
+  "UiPath.MicrosoftOffice365.Activities::Shared.Utils": { prefix: "usau", xmlns: "clr-namespace:UiPath.Shared.Activities.Utils;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.Shared.Activities.Utils", assembly: "UiPath.MicrosoftOffice365.Activities" },
+  "UiPath.System.Activities::Storage": { prefix: "ucas", xmlns: "clr-namespace:UiPath.Core.Activities.Storage;assembly=UiPath.System.Activities", clrNamespace: "UiPath.Core.Activities.Storage", assembly: "UiPath.System.Activities" },
+  "UiPath.System.Activities::Jobs": { prefix: "uasj", xmlns: "clr-namespace:UiPath.Activities.System.Jobs;assembly=UiPath.System.Activities", clrNamespace: "UiPath.Activities.System.Jobs", assembly: "UiPath.System.Activities" },
+  "UiPath.System.Activities::Orchestrator.Mail": { prefix: "uasom", xmlns: "clr-namespace:UiPath.Activities.System.Orchestrator.Mail;assembly=UiPath.System.Activities", clrNamespace: "UiPath.Activities.System.Orchestrator.Mail", assembly: "UiPath.System.Activities" },
+  "UiPath.DataService.Activities::Core": { prefix: "uda", xmlns: "clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities.Core", clrNamespace: "UiPath.DataService.Activities", assembly: "UiPath.DataService.Activities.Core" },
+  "UiPath.DataService.Activities::Models": { prefix: "udam", xmlns: "clr-namespace:UiPath.DataService.Activities.Models;assembly=UiPath.DataService.Activities.Core", clrNamespace: "UiPath.DataService.Activities.Models", assembly: "UiPath.DataService.Activities.Core" },
+  "UiPath.Agentic.Activities": { prefix: "uaa", xmlns: "clr-namespace:UiPath.Agentic.Activities;assembly=UiPath.Agentic.Activities", clrNamespace: "UiPath.Agentic.Activities", assembly: "UiPath.Agentic.Activities" },
+  "UiPath.Agentic.Activities::Services.Models": { prefix: "uaasm", xmlns: "clr-namespace:UiPath.Agentic.Activities.Services.Models;assembly=UiPath.Agentic", clrNamespace: "UiPath.Agentic.Activities.Services.Models", assembly: "UiPath.Agentic" },
+  "UiPath.Process.Activities": { prefix: "upa", xmlns: "clr-namespace:UiPath.Process.Activities;assembly=UiPath.Process.Activities", clrNamespace: "UiPath.Process.Activities", assembly: "UiPath.Process.Activities" },
+  "UiPath.Process.Activities::Shared": { prefix: "upas", xmlns: "clr-namespace:UiPath.Process.Activities.Shared;assembly=UiPath.Process.Activities", clrNamespace: "UiPath.Process.Activities.Shared", assembly: "UiPath.Process.Activities" },
+  "UiPath.IntelligentOCR.StudioWeb.Activities::DataValidation": { prefix: "uisad", xmlns: "clr-namespace:UiPath.IntelligentOCR.StudioWeb.Activities.DataValidation;assembly=UiPath.IntelligentOCR.StudioWeb.Activities", clrNamespace: "UiPath.IntelligentOCR.StudioWeb.Activities.DataValidation", assembly: "UiPath.IntelligentOCR.StudioWeb.Activities" },
+  "UiPath.IntelligentOCR.StudioWeb.Activities::PDF.ExtractPDFText": { prefix: "uisape", xmlns: "clr-namespace:UiPath.IntelligentOCR.StudioWeb.Activities.PDF.ExtractPDFText;assembly=UiPath.IntelligentOCR.StudioWeb.Activities", clrNamespace: "UiPath.IntelligentOCR.StudioWeb.Activities.PDF.ExtractPDFText", assembly: "UiPath.IntelligentOCR.StudioWeb.Activities" },
+  "UiPath.Platform::ResourceHandling": { prefix: "upr", xmlns: "clr-namespace:UiPath.Platform.ResourceHandling;assembly=UiPath.Platform", clrNamespace: "UiPath.Platform.ResourceHandling", assembly: "UiPath.Platform" },
+  "UiPath.UIAutomation.Activities::uix": { prefix: "uix", xmlns: "http://schemas.uipath.com/workflow/activities/uix", clrNamespace: "", assembly: "" },
+  "UiPath.IntegrationService.Activities::isactr": { prefix: "isactr", xmlns: "http://schemas.uipath.com/workflow/integration-service-activities/isactr", clrNamespace: "", assembly: "" },
+  "UiPath.IntelligentOCR.Activities::schema": { prefix: "p", xmlns: "http://schemas.uipath.com/workflow/activities/intelligentocr", clrNamespace: "", assembly: "" },
   "System.Net.Mail": { prefix: "snetmail", xmlns: "clr-namespace:System.Net.Mail;assembly=System", clrNamespace: "System.Net.Mail", assembly: "System" },
   "UiPath.Box.Activities": { prefix: "ubox", xmlns: "clr-namespace:UiPath.Box.Activities;assembly=UiPath.Box.Activities", clrNamespace: "UiPath.Box.Activities", assembly: "UiPath.Box.Activities" },
   "UiPath.MicrosoftDynamics.Activities": { prefix: "udyn", xmlns: "clr-namespace:UiPath.MicrosoftDynamics.Activities;assembly=UiPath.MicrosoftDynamics.Activities", clrNamespace: "UiPath.MicrosoftDynamics.Activities", assembly: "UiPath.MicrosoftDynamics.Activities" },
@@ -264,9 +289,11 @@ export function getPrefixToXmlns(): Record<string, string> {
   const prefixMetadata: Record<string, { packageId: string; clrNamespace: string; assembly: string }> = {};
   for (const entry of catalogEntries) {
     if (entry.prefix && !map[entry.prefix]) {
-      const xmlns = entry.clrNamespace === "UiPath.Core.Activities" && entry.prefix === "ui"
-        ? "http://schemas.uipath.com/workflow/activities"
-        : `clr-namespace:${entry.clrNamespace};assembly=${entry.assembly}`;
+      const xmlns = entry.xmlns
+        ? entry.xmlns
+        : entry.clrNamespace === "UiPath.Core.Activities" && entry.prefix === "ui"
+          ? "http://schemas.uipath.com/workflow/activities"
+          : `clr-namespace:${entry.clrNamespace};assembly=${entry.assembly}`;
       map[entry.prefix] = xmlns;
       prefixMetadata[entry.prefix] = { packageId: entry.packageId, clrNamespace: entry.clrNamespace, assembly: entry.assembly };
     }
@@ -414,7 +441,7 @@ export const GUARANTEED_ACTIVITY_PREFIX_MAP: Record<string, string> = {
   "ExcelApplicationScope": "uexcel", "UseExcel": "uexcel", "ExcelReadRange": "uexcel",
   "ExcelWriteRange": "uexcel", "ExcelWriteCell": "uexcel", "ReadRange": "uexcel", "WriteRange": "uexcel",
   "ExecuteQuery": "udb", "ExecuteNonQuery": "udb", "ConnectToDatabase": "udb",
-  "CreateFormTask": "upers", "WaitForFormTaskAndResume": "upers",
+  "CreateFormTask": "upaf", "WaitForFormTaskAndResume": "upers",
   "CreateEntity": "uds", "CreateEntityRecord": "uds", "QueryEntity": "uds",
   "UpdateEntity": "uds", "DeleteEntity": "uds", "GetEntityById": "uds",
   "MLSkill": "uml", "Predict": "uml",
@@ -423,7 +450,7 @@ export const GUARANTEED_ACTIVITY_PREFIX_MAP: Record<string, string> = {
   "ReadDocument": "uword", "WriteDocument": "uword", "ReplaceText": "uword", "AppendText": "uword", "InsertPicture": "uword", "ReadTable": "uword",
   "GoogleSheetsApplicationScope": "ugs", "GoogleSheetsReadRange": "ugs", "GoogleSheetsWriteRange": "ugs", "GoogleSheetsAppendRange": "ugs",
   "GoogleDriveUploadFile": "ugs", "GoogleDriveDownloadFile": "ugs", "GmailSendMessage": "ugs", "GmailGetMessages": "ugs",
-  "MicrosoftOffice365Scope": "uo365", "SendMail365": "uo365", "GetMail365": "uo365", "CreateEvent365": "uo365",
+  "MicrosoftOffice365Scope": "uo365", "SendMail365": "umam", "GetMail365": "umam", "CreateEvent365": "uo365",
   "ExcelCreateSpreadsheet": "uo365", "ExcelReadRange365": "uo365", "ExcelWriteRange365": "uo365",
   "SharePointUploadFile": "uo365", "SharePointDownloadFile": "uo365",
   "VerifyExpression": "utest", "VerifyRange": "utest", "VerifyControlAttribute": "utest", "LogAssert": "utest",
@@ -521,6 +548,20 @@ export const GUARANTEED_ACTIVITY_PREFIX_MAP: Record<string, string> = {
   "WorkatoScopeActivity": "uworkato", "StartRecipe": "uworkato", "GetRecipeDetails": "uworkato", "InvokeEndpoint": "uworkato", "ListConnections": "uworkato", "StopRecipe": "uworkato", "ListRecipes": "uworkato",
   "TicketsMetrics": "uzendesk", "ShowFile": "uzendesk", "ListAllTicketComments": "uzendesk", "ReplaceTicket": "uzendesk", "ReplaceGroup": "uzendesk", "ReplaceUser": "uzendesk", "ListAllRecentTickets": "uzendesk", "CreateTicketComment": "uzendesk",
   "ScheduleRecurringDailyMeeting": "uzoom", "ScheduleOneTimeMeeting": "uzoom", "InviteMeetingRegistrant": "uzoom", "ScheduleRecurringWeeklyMeeting": "uzoom", "ScheduleRecurringMonthlyMeeting": "uzoom", "GetRecording": "uzoom", "CreateInvitationLink": "uzoom",
+  "FormTaskAction": "upaf", "ResumeFormTask": "upaf", "GetFormTaskData": "upaf",
+  "StartJob": "upaj", "ResumeJob": "upaj", "GetJobData": "upaj",
+  "CreateTask": "upat", "CompleteTask": "upat", "GetTaskData": "upat",
+  "WaitForUserAction": "upau",
+  "PersistenceDelay": "upad",
+  "ExcelReadRange365Activity": "umae", "ExcelWriteRange365Activity": "umae",
+  "StorageFileExists": "ucas", "StorageReadFile": "ucas", "StorageWriteFile": "ucas",
+  "StartJobActivity": "uasj",
+  "SendOrchestratorMail": "uasom",
+  "CreateEntityActivity": "uda", "QueryEntityActivity": "uda", "UpdateEntityActivity": "uda", "DeleteEntityActivity": "uda", "GetEntityByIdActivity": "uda",
+  "RunAgent": "uaa", "AgentScope": "uaa",
+  "ProcessDiagramActivity": "upa",
+  "ValidateDocumentDataActivity": "uisad",
+  "ExtractPDFTextActivity": "uisape",
 };
 
 export function resolveActivityToPackage(activityName: string): string | null {

@@ -108,8 +108,44 @@ export function validateCatalog(catalog: any): CatalogValidationResult {
       }
     }
 
-    if (!Array.isArray(pkg.activities) || pkg.activities.length === 0) {
-      errors.push(`${pkgLabel}: activities must be a non-empty array`);
+    if (pkg.additionalNamespaces !== undefined) {
+      if (!Array.isArray(pkg.additionalNamespaces)) {
+        errors.push(`${pkgLabel}: additionalNamespaces if present must be an array`);
+      } else {
+        for (let nsi = 0; nsi < pkg.additionalNamespaces.length; nsi++) {
+          const ns = pkg.additionalNamespaces[nsi];
+          const nsLabel = `${pkgLabel}.additionalNamespaces[${nsi}]`;
+          if (!ns.prefix || typeof ns.prefix !== "string") {
+            errors.push(`${nsLabel}: prefix is required and must be a non-empty string`);
+          }
+          if (ns.xmlns) {
+            if (typeof ns.xmlns !== "string" || ns.xmlns === "") {
+              errors.push(`${nsLabel}: xmlns if present must be a non-empty string`);
+            }
+          } else {
+            if (!ns.clrNamespace || typeof ns.clrNamespace !== "string") {
+              errors.push(`${nsLabel}: clrNamespace is required when xmlns is not provided`);
+            }
+            if (!ns.assembly || typeof ns.assembly !== "string") {
+              errors.push(`${nsLabel}: assembly is required when xmlns is not provided`);
+            }
+          }
+        }
+      }
+    }
+
+    if (!Array.isArray(pkg.activities)) {
+      errors.push(`${pkgLabel}: activities must be an array`);
+      continue;
+    }
+
+    if (pkg.activities.length === 0) {
+      if (!pkg.additionalNamespaces || pkg.additionalNamespaces.length === 0) {
+        if (!pkg.prefix || !pkg.clrNamespace) {
+          errors.push(`${pkgLabel}: activities must be a non-empty array (or package must provide namespace info)`);
+          continue;
+        }
+      }
       continue;
     }
 

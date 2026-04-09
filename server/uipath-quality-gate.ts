@@ -104,6 +104,14 @@ const VALID_XMLNS_PREFIXES = new Set([
   "mca", "clr", "local", "p", "mva", "sads", "sapv",
   "uweb", "uds", "upers", "uexcel", "umail", "udb", "uml", "uocr",
   "sco",
+  "upaf", "upaj", "upat", "upau", "upad", "upama",
+  "umam", "umae", "umafm", "usau",
+  "ucas", "uasj", "uasom",
+  "uda", "udam",
+  "uaa", "uaasm",
+  "upa", "upas",
+  "uisad", "uisape",
+  "upr", "uix", "isactr",
 ]);
 
 const VALID_EXCEPTION_TYPES = new Set([
@@ -140,6 +148,14 @@ const VALID_TYPE_ARGUMENTS = new Set([
   "System.DateTime", "System.TimeSpan",
   "System.Data.DataTable", "System.Data.DataRow",
   "System.Exception",
+  "upr:ILocalResource",
+  "p2:Document",
+  "upaf:FormTaskData",
+  "udam:DynamicEntityField",
+  "udam:RecordState",
+  "umafm:DriveItemArgument",
+  "uaasm:AgentParameter",
+  "upa:ProcessDiagram",
   ...XAML_INFRASTRUCTURE_TYPE_ARGUMENTS,
 ]);
 

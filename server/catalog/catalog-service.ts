@@ -59,6 +59,13 @@ export interface CatalogActivity {
   xamlExample?: string;
 }
 
+export interface AdditionalNamespace {
+  prefix: string;
+  clrNamespace: string;
+  assembly: string;
+  xmlns?: string;
+}
+
 export interface CatalogPackage {
   packageId: string;
   version?: string;
@@ -68,6 +75,7 @@ export interface CatalogPackage {
   prefix?: string;
   clrNamespace?: string;
   assembly?: string;
+  additionalNamespaces?: AdditionalNamespace[];
   activities: CatalogActivity[];
 }
 
@@ -495,6 +503,19 @@ class CatalogService {
     if (!schema) return null;
     const pkg = this.packageIndex.get(schema.packageId);
     if (!pkg) return null;
+
+    if (schema.activity.namespace && pkg.additionalNamespaces) {
+      let bestMatch: { prefix: string; matchLen: number } | null = null;
+      for (const ns of pkg.additionalNamespaces) {
+        if (ns.clrNamespace && (schema.activity.namespace === ns.clrNamespace || schema.activity.namespace.startsWith(ns.clrNamespace + "."))) {
+          if (!bestMatch || ns.clrNamespace.length > bestMatch.matchLen) {
+            bestMatch = { prefix: ns.prefix, matchLen: ns.clrNamespace.length };
+          }
+        }
+      }
+      if (bestMatch) return bestMatch.prefix;
+    }
+
     if (pkg.prefix !== undefined) return pkg.prefix;
     return null;
   }
@@ -522,12 +543,17 @@ class CatalogService {
     return names;
   }
 
-  getAllPackageNamespaceEntries(): Array<{ packageId: string; prefix: string; clrNamespace: string; assembly: string }> {
+  getAllPackageNamespaceEntries(): Array<{ packageId: string; prefix: string; clrNamespace: string; assembly: string; xmlns?: string }> {
     if (!this.loaded || !this.catalog) return [];
-    const entries: Array<{ packageId: string; prefix: string; clrNamespace: string; assembly: string }> = [];
+    const entries: Array<{ packageId: string; prefix: string; clrNamespace: string; assembly: string; xmlns?: string }> = [];
     for (const [packageId, pkg] of this.packageIndex) {
       if (pkg.prefix && pkg.clrNamespace && pkg.assembly) {
         entries.push({ packageId, prefix: pkg.prefix, clrNamespace: pkg.clrNamespace, assembly: pkg.assembly });
+      }
+      if (pkg.additionalNamespaces) {
+        for (const ns of pkg.additionalNamespaces) {
+          entries.push({ packageId, prefix: ns.prefix, clrNamespace: ns.clrNamespace, assembly: ns.assembly, xmlns: ns.xmlns });
+        }
       }
     }
     return entries;
@@ -546,6 +572,24 @@ class CatalogService {
   getNamespaceInfoForActivity(activityClassName: string): { prefix: string; clrNamespace: string; assembly: string; packageId: string } | null {
     const schema = this.getActivitySchema(activityClassName);
     if (!schema) return null;
+
+    const pkg = this.packageIndex.get(schema.packageId);
+    if (!pkg) return null;
+
+    if (schema.activity.namespace && pkg.additionalNamespaces) {
+      let bestMatch: { prefix: string; clrNamespace: string; assembly: string; matchLen: number } | null = null;
+      for (const ns of pkg.additionalNamespaces) {
+        if (ns.clrNamespace && (schema.activity.namespace === ns.clrNamespace || schema.activity.namespace.startsWith(ns.clrNamespace + "."))) {
+          if (!bestMatch || ns.clrNamespace.length > bestMatch.matchLen) {
+            bestMatch = { prefix: ns.prefix, clrNamespace: ns.clrNamespace, assembly: ns.assembly, matchLen: ns.clrNamespace.length };
+          }
+        }
+      }
+      if (bestMatch) {
+        return { prefix: bestMatch.prefix, clrNamespace: bestMatch.clrNamespace, assembly: bestMatch.assembly, packageId: schema.packageId };
+      }
+    }
+
     const nsInfo = this.getPackageNamespaceInfo(schema.packageId);
     if (!nsInfo) return null;
     return { ...nsInfo, packageId: schema.packageId };
