@@ -37,8 +37,8 @@ export interface PromptGuidanceResult {
   diagnostics: PromptGuidanceDiagnostics;
 }
 
-const DEFAULT_MAX_PACKAGES = 60;
-const DEFAULT_MAX_CHARACTERS = 4000;
+const DEFAULT_MAX_PACKAGES = 120;
+const DEFAULT_MAX_CHARACTERS = 8000;
 const MAX_ACTIVITIES_PER_PACKAGE = 8;
 
 const CONNECTOR_ONLY_PATTERNS = [
