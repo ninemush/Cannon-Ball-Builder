@@ -2503,7 +2503,7 @@ export function resolveActivityTemplate(
   }
 
   const UNSUPPORTED_ACTIVITIES = new Set([
-    "InvokeAgent", "DownloadFile", "UploadFile",
+    "InvokeAgent",
   ]);
 
   if (UNSUPPORTED_ACTIVITIES.has(dispatchKey)) {

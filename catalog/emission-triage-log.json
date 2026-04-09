@@ -1,0 +1,1885 @@
+{
+  "triageDate": "2026-04-09T11:46:14.814Z",
+  "summary": {
+    "alreadyApproved": 1195,
+    "newlyApproved": 1290,
+    "failedActivities": 227
+  },
+  "approvedByPackage": {
+    "UiPath.System.Activities": 143,
+    "UiPath.UIAutomation.Activities": 44,
+    "UiPath.Amazon.Comprehend.Activities": 6,
+    "UiPath.Amazon.Rekognition.Activities": 8,
+    "UiPath.Amazon.Textract.Activities": 6,
+    "UiPath.AmazonWebServices.Activities": 76,
+    "UiPath.Azure.Activities": 77,
+    "UiPath.AzureFormRecognizerV3.Activities": 5,
+    "UiPath.Box.Activities": 32,
+    "UiPath.CommunicationsMining.Activities": 16,
+    "UiPath.Coupa.IntegrationService.Activities": 17,
+    "UiPath.Credentials.Activities": 1,
+    "UiPath.Cryptography.Activities": 1,
+    "UiPath.Database.Activities": 6,
+    "UiPath.DocumentUnderstanding.Activities": 17,
+    "UiPath.Excel.Activities": 118,
+    "UiPath.Form.Activities": 8,
+    "UiPath.FTP.Activities": 8,
+    "UiPath.GoogleCloud.Activities": 34,
+    "UiPath.GoogleVision.Activities": 9,
+    "UiPath.GSuite.Activities": 175,
+    "UiPath.IntegrationService.Activities": 7,
+    "UiPath.IntelligentOCR.Activities": 15,
+    "UiPath.Jira.Activities": 44,
+    "UiPath.Mail.Activities": 46,
+    "UiPath.MicrosoftDynamics.Activities": 16,
+    "UiPath.MicrosoftOffice365.Activities": 164,
+    "UiPath.MicrosoftTeams.Activities": 25,
+    "UiPath.Persistence.Activities": 17,
+    "UiPath.Presentations.Activities": 31,
+    "UiPath.Salesforce.Activities": 26,
+    "UiPath.ServiceNow.Activities": 17,
+    "UiPath.Slack.Activities": 19,
+    "UiPath.Testing.Activities": 20,
+    "UiPath.WebAPI.Activities": 1,
+    "UiPath.Word.Activities": 24,
+    "UiPath.Workday.Activities": 7,
+    "UiPath.WorkflowEvents.Activities": 4
+  },
+  "failedByReason": {
+    "criterion-3": 123,
+    "criterion-2": 170,
+    "criterion-4": 170,
+    "criterion-1": 4
+  },
+  "failedActivities": [
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "ReadListItem`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "FilterCollection`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "ForEach`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "AppendItemToCollection`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "MergeCollections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "ExistsInCollection`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "CollectionToDataTable`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "RemoveFromCollection`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "UpdateListItem`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "BuildCollection`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "CreateList`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "ChangeType`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "AddDataColumn`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "AppendItemToList`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.System.Activities",
+      "activity": "InvokePowerShell`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.UIAutomation.Activities",
+      "activity": "NExtractFormDataGeneric`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.UIAutomation.Activities",
+      "activity": "NGetAttributeGeneric`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.UIAutomation.Activities",
+      "activity": "NExtractDataGeneric`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleMail.Activities",
+      "activity": "SendEmail",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleMail.Activities",
+      "activity": "ForEachEmail",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleNumbers.Activities",
+      "activity": "GetSheets",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleNumbers.Activities",
+      "activity": "ReadCell`1",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: unsupported generic backtick class",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleNumbers.Activities",
+      "activity": "ReadRange",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleNumbers.Activities",
+      "activity": "WriteCell",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleNumbers.Activities",
+      "activity": "WriteRange",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleScripting.Activities",
+      "activity": "InvokeAppleScript",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AppleScripting.Activities",
+      "activity": "InvokeAppleShortcut",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDGetHostPool",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDAddVMToHostPool",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDRemoveUsersGroupsFromApplicationGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDUpdateSessionHost",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDDeleteUserSession",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDForEachUserSession",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDGetApplicationGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDForEachWorkspace",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDCreateHostPool",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDUpdateHostPool",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDDeleteSessionHost",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDUpdateWorkspace",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDDeleteHostPool",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDCreateWorkspace",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDDeleteWorkspace",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDForEachApplicationGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDGetSessionHost",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDForEachHostPool",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDForEachSessionHost",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDDisconnectUserSession",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDGetWorkspace",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDSendMessageToUserSession",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.AzureWindowsVirtualDesktop.Activities",
+      "activity": "AzureWVDAssignUsersGroupsToApplicationGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Callout.Activities",
+      "activity": "ShowCalloutActivity",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixRemoveVMFromFolder",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixResumeVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixRemoveTagFromVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixRestartVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixPowerOnVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixGetServerList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixAddTagToVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixRevertVMToSnapshot",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixPowerOffVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixDeleteVMSnapshot",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixGetVMList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixAddVMToFolder",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixGetVMSnapshotList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixSuspendVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixGetStorageRepositories",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixRenameVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixDeleteVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixGetVMByUUID",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixGetTemplateList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixCreateVMFromTemplate",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixDeleteAllVMSnapshots",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Citrix.Activities",
+      "activity": "CitrixTakeVMSnapshot",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "UploadFileToRecordField`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "CreateEntityRecord`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "DeleteEntityRecord`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "GetEntityRecordById`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "DownloadFileFromRecordField`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "UpdateMultipleEntityRecords`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "QueryEntityRecords`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "DeleteMultipleEntityRecords`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "CreateMultipleEntityRecords`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "QueryEntityRecordsBuilder`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "UpdateEntityRecord`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DataService.Activities",
+      "activity": "DeleteFileFromRecordField`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DocumentUnderstanding.Activities",
+      "activity": "ValidateDocumentDataWithDocumentData`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DocumentUnderstanding.Activities",
+      "activity": "CreateDocumentValidationArtifacts`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DocumentUnderstanding.Activities",
+      "activity": "ValidateDocumentData`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DocumentUnderstanding.Activities",
+      "activity": "WaitForValidationAction`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DocumentUnderstanding.Activities",
+      "activity": "CreateValidationAction`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.DocumentUnderstanding.ML.Activities",
+      "activity": "MachineLearningSplitter",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.GenAI.Activities",
+      "activity": "UseGenAI",
+      "failures": [
+        "criterion-1: delisted package",
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.GenAI.Activities",
+      "activity": "ExtractData",
+      "failures": [
+        "criterion-1: delisted package",
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.GenAI.Activities",
+      "activity": "ClassifyText",
+      "failures": [
+        "criterion-1: delisted package",
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.GenAI.Activities",
+      "activity": "SummarizeText",
+      "failures": [
+        "criterion-1: delisted package",
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.GSuite.Activities",
+      "activity": "WaitForSheetRowAdded`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.GSuite.Activities",
+      "activity": "ReadCellConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.GSuite.Activities",
+      "activity": "ReadRangeConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.GSuite.Activities",
+      "activity": "ForEachRowConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.GSuite.Activities",
+      "activity": "RowAddedToSheetBottom`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVGetVMCheckpointList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVConfigureRobot",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVDeleteVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVDeleteAllVMCheckpoints",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVImportVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVExportVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVTurnOffVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVRevertVMCheckpoint",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVGetVMByID",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVDeleteVMCheckpoint",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVGetVMList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVCreateVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVPauseVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVStartVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVShutdownVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVRenameVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVResetVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVResumeVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.HyperV.Activities",
+      "activity": "HyperVTakeVMCheckpoint",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Java.Activities",
+      "activity": "InvokeJavaMethod",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Java.Activities",
+      "activity": "LoadJar",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Java.Activities",
+      "activity": "GetJavaField",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Java.Activities",
+      "activity": "ConvertJavaObject`1",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: unsupported generic backtick class",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Java.Activities",
+      "activity": "CreateJavaObject",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Java.Activities",
+      "activity": "JavaScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "RowAddedToTableBottom`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "WaitForRowAddedToTableBottom`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "DeleteSharepointListItemsConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "SharepointListItemAdded`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "GetListItemsConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "ReadCellConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "WaitForListItemAdded`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "GetFileFolderMetadataConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "ReadRangeConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "UpdateFileFolderMetadataConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "SharepointListItemUpdated`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "ForEachListItemConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "GetSingleSharepointListItemConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "WaitForListItemUpdated`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "AddListItemConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "UpdateListItemConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MicrosoftOffice365.Activities",
+      "activity": "ForEachRowConnections`1",
+      "failures": [
+        "criterion-3: unsupported generic backtick class"
+      ]
+    },
+    {
+      "pkg": "UiPath.MLServices.Activities",
+      "activity": "MLDataLabelling",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.MLServices.Activities",
+      "activity": "MLSkills",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.MLServices.Activities",
+      "activity": "MLStorageUpload",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "DeleteUser",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetUsersInGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetObjectDistinguishedName",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "RemoveObjectFromGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GroupExists",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "AddComputerToGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "AddUserToGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "SetUserExpirationDate",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetUserExpirationDate",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "MoveObject",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "ChangeUserPassword",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetPasswordExpirationDate",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "NetIQeDirectoryScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "AddGroupToGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "UpdateObjectProperties",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetObjectsByLDAPFilter",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "RemoveComputerFromGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "ValidateUserCredentials",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "DeleteComputer",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetComputersInGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "CreateGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "RemoveGroupFromGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "SetComputerStatus",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetObjectProperties",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "DeleteObject",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "DeleteOrganizationalUnit",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "CreateOrganizationalUnit",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "RemoveUserFromGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "CreateComputer",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetObjectsByFilter",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetUserGroups",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "UserExists",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "DeleteGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetComputerStatus",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "ComputerExists",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "AddObjectToGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "GetUserStatus",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "ForcePasswordChange",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "CreateUser",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "IsObjectMemberOfGroup",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "SetUserStatus",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.NetIQeDirectory.Activities",
+      "activity": "RenameObject",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Python.Activities",
+      "activity": "GetObject`1",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: unsupported generic backtick class",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Python.Activities",
+      "activity": "InvokeMethod",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Python.Activities",
+      "activity": "RunScript",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Python.Activities",
+      "activity": "PythonScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.Python.Activities",
+      "activity": "LoadScript",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterStartRunbook",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterOrchestratorScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterStopJob",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterForEachJob",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterForEachRunbook",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterStopRunbook",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterGetRunbookInstances",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterForEachEvent",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterGetRunbookByPath",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterGetRunbookServers",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterGetRunbookById",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.SystemCenter.Activities",
+      "activity": "SystemCenterGetJob",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "SuspendVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "CreateVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "UpgradeTools",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetFolder",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetDatastoreList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "PowerOffVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetHostList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "ConfigureRobot",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "VMwareScope",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetHost",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "PowerOnVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetVMList",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "CloneVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "UnmountToolsInstaller",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "RunProgramInVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "MountToolsInstaller",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "DeleteVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "GetDatastore",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    },
+    {
+      "pkg": "UiPath.VMware.Activities",
+      "activity": "UpdateVM",
+      "failures": [
+        "criterion-2: package not generation-approved",
+        "criterion-3: special-runtime-context (excluded)",
+        "criterion-4: no generation path (namespace or generation not approved)"
+      ]
+    }
+  ]
+}

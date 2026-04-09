@@ -103,6 +103,18 @@ const HIGH_RISK_ACTIVITIES = new Set([
   "ui:ReadRange", "ui:WriteRange",
   "ui:ReadTextFile", "ui:WriteTextFile",
   "ui:ReadCsvFile", "ui:WriteCsvFile",
+  "upers:CreateFormTask", "upers:AssignTasks", "upers:CompleteTask",
+  "upers:WaitForQueueItemAndResume", "upers:WaitForJobAndResume",
+  "upers:AddQueueItemAndGetReference",
+  "uds:CreateEntityRecord", "uds:DeleteEntityRecord", "uds:UpdateEntityRecord",
+  "udb:DatabaseConnect", "udb:InsertDataTable", "udb:BulkInsert", "udb:BulkUpdate", "udb:DatabaseTransaction",
+  "uwfe:RaiseAlert", "uwfe:TriggerJob", "uwfe:HandleAppRequest", "uwfe:SendInterimResult",
+  "ucm:UploadCommunications",
+  "ucrypt:KeyedHashFile",
+  "ui:UploadStorageFile", "ui:DownloadStorageFile", "ui:DeleteStorageFile", "ui:WriteStorageText",
+  "uaws:S3UploadFile", "uaws:S3DownloadFile", "uaws:AWSUploadSingleObject", "uaws:AWSDownloadSingleObject",
+  "uaz:AzureBlobUpload", "uaz:AzureBlobDownload", "uaz:AzureCreateStorageAccount", "uaz:AzureDeleteStorageAccount",
+  "umail:SendSmtpMailMessage", "umail:SendOutlookMailMessage",
 ]);
 
 const BROWSER_EXTENSION_INDICATORS: Array<{ pattern: RegExp; extension: string }> = [

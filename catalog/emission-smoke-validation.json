@@ -1,0 +1,359 @@
+{
+  "validationDate": "2026-04-09T11:51:35.232Z",
+  "totalFamilies": 39,
+  "passed": 39,
+  "failed": 0,
+  "results": [
+    {
+      "package": "UiPath.System.Activities",
+      "status": "PASS",
+      "approvedCount": 163,
+      "totalCount": 188,
+      "representative": "ReadTextFile",
+      "prefix": "ui",
+      "version": "26.2.4"
+    },
+    {
+      "package": "UiPath.UIAutomation.Activities",
+      "status": "PASS",
+      "approvedCount": 67,
+      "totalCount": 70,
+      "representative": "UseBrowser",
+      "prefix": "ui",
+      "version": "25.10.29"
+    },
+    {
+      "package": "UiPath.Persistence.Activities",
+      "status": "PASS",
+      "approvedCount": 21,
+      "totalCount": 26,
+      "representative": "WaitForFormTaskAndResume",
+      "prefix": "upers",
+      "version": "1.8.1"
+    },
+    {
+      "package": "UiPath.DataService.Activities",
+      "status": "PASS",
+      "approvedCount": 6,
+      "totalCount": 22,
+      "representative": "CreateEntity",
+      "prefix": "uds",
+      "version": "25.9.3"
+    },
+    {
+      "package": "UiPath.MicrosoftOffice365.Activities",
+      "status": "PASS",
+      "approvedCount": 173,
+      "totalCount": 200,
+      "representative": "MicrosoftOffice365Scope",
+      "prefix": "uo365",
+      "version": "3.7.10"
+    },
+    {
+      "package": "UiPath.Database.Activities",
+      "status": "PASS",
+      "approvedCount": 9,
+      "totalCount": 9,
+      "representative": "ExecuteQuery",
+      "prefix": "udb",
+      "version": "2.0.0"
+    },
+    {
+      "package": "UiPath.Mail.Activities",
+      "status": "PASS",
+      "approvedCount": 52,
+      "totalCount": 62,
+      "representative": "SendSmtpMailMessage",
+      "prefix": "umail",
+      "version": "2.7.12"
+    },
+    {
+      "package": "UiPath.Excel.Activities",
+      "status": "PASS",
+      "approvedCount": 125,
+      "totalCount": 138,
+      "representative": "UseExcel",
+      "prefix": "uexcel",
+      "version": "3.4.1"
+    },
+    {
+      "package": "UiPath.WorkflowEvents.Activities",
+      "status": "PASS",
+      "approvedCount": 4,
+      "totalCount": 4,
+      "representative": "RaiseAlert",
+      "prefix": "uwfe",
+      "version": "3.36.0"
+    },
+    {
+      "package": "UiPath.CommunicationsMining.Activities",
+      "status": "PASS",
+      "approvedCount": 16,
+      "totalCount": 16,
+      "representative": "CommunicationsMiningScope",
+      "prefix": "ucm",
+      "version": "1.6.0"
+    },
+    {
+      "package": "UiPath.AmazonWebServices.Activities",
+      "status": "PASS",
+      "approvedCount": 81,
+      "totalCount": 81,
+      "representative": "AmazonScope",
+      "prefix": "uaws",
+      "version": "2.9.1"
+    },
+    {
+      "package": "UiPath.Azure.Activities",
+      "status": "PASS",
+      "approvedCount": 82,
+      "totalCount": 82,
+      "representative": "AzureScope",
+      "prefix": "uaz",
+      "version": "1.7.2"
+    },
+    {
+      "package": "UiPath.Box.Activities",
+      "status": "PASS",
+      "approvedCount": 32,
+      "totalCount": 32,
+      "representative": "BoxScope",
+      "prefix": "ubox",
+      "version": "2.0.1"
+    },
+    {
+      "package": "UiPath.Salesforce.Activities",
+      "status": "PASS",
+      "approvedCount": 26,
+      "totalCount": 26,
+      "representative": "SalesforceApplicationScope",
+      "prefix": "usf",
+      "version": "1.9.8"
+    },
+    {
+      "package": "UiPath.ServiceNow.Activities",
+      "status": "PASS",
+      "approvedCount": 17,
+      "totalCount": 17,
+      "representative": "ServiceNowApplicationScope",
+      "prefix": "usnow",
+      "version": "2.0.5"
+    },
+    {
+      "package": "UiPath.Jira.Activities",
+      "status": "PASS",
+      "approvedCount": 44,
+      "totalCount": 46,
+      "representative": "JiraScope",
+      "prefix": "ujira",
+      "version": "2.4.7"
+    },
+    {
+      "package": "UiPath.Slack.Activities",
+      "status": "PASS",
+      "approvedCount": 19,
+      "totalCount": 19,
+      "representative": "SlackScope",
+      "prefix": "uslack",
+      "version": "2.0.4"
+    },
+    {
+      "package": "UiPath.MicrosoftTeams.Activities",
+      "status": "PASS",
+      "approvedCount": 29,
+      "totalCount": 29,
+      "representative": "TeamsScope",
+      "prefix": "uteams",
+      "version": "1.0.3"
+    },
+    {
+      "package": "UiPath.GSuite.Activities",
+      "status": "PASS",
+      "approvedCount": 187,
+      "totalCount": 203,
+      "representative": "GoogleSheetsApplicationScope",
+      "prefix": "ugs",
+      "version": "3.7.11"
+    },
+    {
+      "package": "UiPath.Word.Activities",
+      "status": "PASS",
+      "approvedCount": 30,
+      "totalCount": 30,
+      "representative": "ReadDocument",
+      "prefix": "uword",
+      "version": "2.4.1"
+    },
+    {
+      "package": "UiPath.Presentations.Activities",
+      "status": "PASS",
+      "approvedCount": 36,
+      "totalCount": 38,
+      "representative": "PresentationsApplicationScope",
+      "prefix": "upres",
+      "version": "2.4.1"
+    },
+    {
+      "package": "UiPath.DocumentUnderstanding.Activities",
+      "status": "PASS",
+      "approvedCount": 17,
+      "totalCount": 24,
+      "representative": "TaxonomyManager",
+      "prefix": "udu",
+      "version": "2.17.4"
+    },
+    {
+      "package": "UiPath.IntelligentOCR.Activities",
+      "status": "PASS",
+      "approvedCount": 19,
+      "totalCount": 22,
+      "representative": "DigitizeDocument",
+      "prefix": "uocr",
+      "version": "6.27.3"
+    },
+    {
+      "package": "UiPath.Form.Activities",
+      "status": "PASS",
+      "approvedCount": 11,
+      "totalCount": 13,
+      "representative": "CreateForm",
+      "prefix": "uform",
+      "version": "25.10.1"
+    },
+    {
+      "package": "UiPath.Testing.Activities",
+      "status": "PASS",
+      "approvedCount": 28,
+      "totalCount": 28,
+      "representative": "VerifyExpression",
+      "prefix": "utest",
+      "version": "25.10.2"
+    },
+    {
+      "package": "UiPath.Credentials.Activities",
+      "status": "PASS",
+      "approvedCount": 5,
+      "totalCount": 5,
+      "representative": "GetSecureCredential",
+      "prefix": "ucred",
+      "version": "3.0.0"
+    },
+    {
+      "package": "UiPath.Cryptography.Activities",
+      "status": "PASS",
+      "approvedCount": 8,
+      "totalCount": 8,
+      "representative": "EncryptText",
+      "prefix": "ucrypt",
+      "version": "2.0.0"
+    },
+    {
+      "package": "UiPath.FTP.Activities",
+      "status": "PASS",
+      "approvedCount": 14,
+      "totalCount": 20,
+      "representative": "FTPScope",
+      "prefix": "uftp",
+      "version": "3.0.0"
+    },
+    {
+      "package": "UiPath.GoogleCloud.Activities",
+      "status": "PASS",
+      "approvedCount": 39,
+      "totalCount": 43,
+      "representative": "GoogleCloudScope",
+      "prefix": "ugc",
+      "version": "2.5.0"
+    },
+    {
+      "package": "UiPath.GoogleVision.Activities",
+      "status": "PASS",
+      "approvedCount": 11,
+      "totalCount": 14,
+      "representative": "GoogleVisionOCR",
+      "prefix": "ugv",
+      "version": "1.4.2"
+    },
+    {
+      "package": "UiPath.AzureFormRecognizerV3.Activities",
+      "status": "PASS",
+      "approvedCount": 7,
+      "totalCount": 7,
+      "representative": "FormRecognizerAnalyze",
+      "prefix": "uafr",
+      "version": "1.0.1"
+    },
+    {
+      "package": "UiPath.Amazon.Comprehend.Activities",
+      "status": "PASS",
+      "approvedCount": 10,
+      "totalCount": 10,
+      "representative": "ComprehendDetectSentiment",
+      "prefix": "ucmp",
+      "version": "1.1.1"
+    },
+    {
+      "package": "UiPath.Amazon.Rekognition.Activities",
+      "status": "PASS",
+      "approvedCount": 11,
+      "totalCount": 11,
+      "representative": "RekognitionDetectLabels",
+      "prefix": "urek",
+      "version": "2.0.1"
+    },
+    {
+      "package": "UiPath.Amazon.Textract.Activities",
+      "status": "PASS",
+      "approvedCount": 8,
+      "totalCount": 8,
+      "representative": "TextractAnalyzeDocument",
+      "prefix": "utxt",
+      "version": "4.0.1"
+    },
+    {
+      "package": "UiPath.MicrosoftDynamics.Activities",
+      "status": "PASS",
+      "approvedCount": 16,
+      "totalCount": 17,
+      "representative": "DynamicsScope",
+      "prefix": "udyn",
+      "version": "1.0.5"
+    },
+    {
+      "package": "UiPath.Workday.Activities",
+      "status": "PASS",
+      "approvedCount": 7,
+      "totalCount": 7,
+      "representative": "WorkdayScope",
+      "prefix": "uwd",
+      "version": "2.0.6"
+    },
+    {
+      "package": "UiPath.Coupa.IntegrationService.Activities",
+      "status": "PASS",
+      "approvedCount": 17,
+      "totalCount": 17,
+      "representative": "CoupaScope",
+      "prefix": "ucoupa",
+      "version": "4.0.6"
+    },
+    {
+      "package": "UiPath.IntegrationService.Activities",
+      "status": "PASS",
+      "approvedCount": 7,
+      "totalCount": 8,
+      "representative": "IntegrationServiceScope",
+      "prefix": "uis",
+      "version": "1.24.0"
+    },
+    {
+      "package": "UiPath.WebAPI.Activities",
+      "status": "PASS",
+      "approvedCount": 7,
+      "totalCount": 7,
+      "representative": "HttpClientRequest",
+      "prefix": "uweb",
+      "version": "2.4.0"
+    }
+  ]
+}

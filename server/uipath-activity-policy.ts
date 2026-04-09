@@ -33,6 +33,43 @@ const MAIL_ACTIVITIES = [
   "ui:GetMail",
   "ui:SendExchangeMailMessage",
   "ui:GetExchangeMailMessages",
+  "umail:SendSmtpMailMessage",
+  "umail:SendOutlookMailMessage",
+  "umail:GetImapMailMessage",
+  "umail:GetOutlookMailMessages",
+  "umail:SendMail",
+  "umail:GetMail",
+  "umail:SendExchangeMailMessage",
+  "umail:GetExchangeMailMessages",
+  "umail:ForEachMailMessage",
+  "umail:SaveMailMessage",
+  "umail:MoveMailMessage",
+];
+
+const ORCHESTRATION_ACTIVITIES = [
+  "upers:CreateFormTask",
+  "upers:AssignTasks",
+  "upers:CompleteTask",
+  "upers:WaitForQueueItemAndResume",
+  "upers:WaitForJobAndResume",
+  "upers:AddQueueItemAndGetReference",
+  "upers:ResumeAfterDelay",
+  "upers:GetFormTasks",
+  "upers:GetAppTasks",
+  "upers:GetTaskData",
+  "uwfe:TriggerJob",
+  "uwfe:HandleAppRequest",
+  "uwfe:SendInterimResult",
+  "uwfe:RaiseAlert",
+];
+
+const DATABASE_ACTIVITIES = [
+  "udb:DatabaseConnect",
+  "udb:DatabaseDisconnect",
+  "udb:InsertDataTable",
+  "udb:DatabaseTransaction",
+  "udb:BulkInsert",
+  "udb:BulkUpdate",
 ];
 
 const ALWAYS_BLOCKED = [
@@ -48,11 +85,14 @@ const PATTERN_BLOCKED: Record<AutomationPattern, Set<string>> = {
   "simple-linear": new Set([
     ...UI_ACTIVITIES,
     ...MAIL_ACTIVITIES,
+    ...ORCHESTRATION_ACTIVITIES,
+    ...DATABASE_ACTIVITIES,
     ...ALWAYS_BLOCKED,
   ]),
   "api-data-driven": new Set([
     ...UI_ACTIVITIES,
     ...MAIL_ACTIVITIES,
+    ...ORCHESTRATION_ACTIVITIES,
     ...ALWAYS_BLOCKED,
   ]),
   "ui-automation": new Set(ALWAYS_BLOCKED),
