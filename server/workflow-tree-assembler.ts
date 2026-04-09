@@ -1882,7 +1882,7 @@ function applyCatalogConformance(xml: string): string {
         const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const escapedVal = currentVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const attrRegex = new RegExp(`${escapedPropName}="${escapedVal}"`);
-        corrected = corrected.replace(attrRegex, `${propName}="${correction.correctedValue}"`);
+        corrected = corrected.replace(attrRegex, `${propName}="${serializeSafeAttributeValue(correction.correctedValue)}"`);
         console.log(`[Catalog Conformance] Auto-corrected ${tag}.${propName} enum value: "${currentVal}" → "${correction.correctedValue}"`);
       }
     } else if (correction.type === "add-missing-required" && correction.correctedValue) {
@@ -1910,11 +1910,11 @@ function applyCatalogConformance(xml: string): string {
       } else {
         const selfClosingRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)\\s*\\/>`);
         if (selfClosingRegex.test(corrected)) {
-          corrected = corrected.replace(selfClosingRegex, `$1 ${propName}="${correction.correctedValue}" />`);
+          corrected = corrected.replace(selfClosingRegex, `$1 ${propName}="${serializeSafeAttributeValue(correction.correctedValue)}" />`);
         } else {
           const openRegex = new RegExp(`(<${escapedTag}\\s[^>]*?)(>)`);
           if (openRegex.test(corrected)) {
-            corrected = corrected.replace(openRegex, `$1 ${propName}="${correction.correctedValue}"$2`);
+            corrected = corrected.replace(openRegex, `$1 ${propName}="${serializeSafeAttributeValue(correction.correctedValue)}"$2`);
           }
         }
         console.log(`[Catalog Conformance] Injected required attribute property ${tag}.${propName}="${correction.correctedValue}"`);

@@ -1,4 +1,4 @@
-import { escapeXml } from "../lib/xml-utils";
+import { escapeXml, escapeXmlAttributeValue } from "../lib/xml-utils";
 import { randomBytes } from "crypto";
 
 export function _uuid(): string {
@@ -32,7 +32,7 @@ function resolveToScalarString(val: unknown): string {
 export function _escapeXmlAttr(val: unknown): string {
   if (val === null || val === undefined) return "";
   const s = resolveToScalarString(val);
-  return escapeXml(s);
+  return escapeXmlAttributeValue(s);
 }
 
 export function _hs(width: number = 250, height: number = 100): string {

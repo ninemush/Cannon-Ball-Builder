@@ -3631,23 +3631,24 @@ describe("Compiler-invariant regression tests", () => {
     });
 
     describe("sanitizePropertyValue — string preservation", () => {
-      it("preserves raw quotes in string values for downstream escaping", () => {
+      it("XML-escapes quotes in string values at the serialization boundary", () => {
         const result = sanitizePropertyValue("Message", 'Log "important" message');
-        expect(result).toBe('Log "important" message');
+        expect(result).toBe('Log &quot;important&quot; message');
       });
 
-      it("preserves VB expressions without stripping content", () => {
+      it("preserves VB expressions without stripping content and XML-escapes operators", () => {
         const result = sanitizePropertyValue("Value", '[str_Name & " - " & str_Id]');
         expect(result).toContain("str_Name");
         expect(result).toContain("str_Id");
+        expect(result).toContain("&amp;");
       });
     });
 
     describe("sanitizePropertyValue — array serialization", () => {
-      it("produces VB array expression with proper quote structure", () => {
+      it("produces VB array expression with XML-escaped quote structure", () => {
         const result = sanitizePropertyValue("Items", ["hello", 'say "hi"', "test"]);
         expect(result).toContain("New String()");
-        expect(result).toContain('"hello"');
+        expect(result).toContain("&quot;hello&quot;");
       });
 
       it("array values become XML-safe after serializer", () => {
@@ -3796,6 +3797,175 @@ describe("Compiler-invariant regression tests", () => {
       it("EntityObject with complex value is marked as structured object", () => {
         const result = sanitizePropertyValue("EntityObject", { type: "Invoice", id: "INV-001" });
         expect(result.startsWith("__STRUCTURED_OBJECT__")).toBe(true);
+      });
+    });
+
+    describe("XML-safe VB expression serialization (Task #483)", () => {
+      it("escapes VB concatenation operator & in bracket-wrapped expressions", () => {
+        const result = sanitizePropertyValue("Message", '["Error: " & ex.Message]');
+        expect(result).toContain("&amp;");
+        expect(result).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<Test Message="${safe}" />`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`)).toBe(true);
+      });
+
+      it("escapes < and > in VB comparison expressions", () => {
+        const result = sanitizePropertyValue("Condition", "[int_Count > 0]");
+        expect(result).toContain("&gt;");
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<If Condition="${safe}" />`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`)).toBe(true);
+      });
+
+      it("escapes double quotes in VB string literals", () => {
+        const result = sanitizePropertyValue("Value", '["Hello World"]');
+        expect(result).toContain("&quot;");
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<Assign Value="${safe}" />`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`)).toBe(true);
+      });
+
+      it("does not double-escape already-escaped XML entities", () => {
+        const result = sanitizePropertyValue("Message", "[str_A &amp; str_B]");
+        expect(result).toBe("[str_A &amp; str_B]");
+        expect(result).not.toContain("&amp;amp;");
+      });
+
+      it("idempotent: double application of serializeSafeAttributeValue produces same result", () => {
+        const result = sanitizePropertyValue("Value", '["Error: " & ex.Message & " at " & DateTime.Now.ToString()]');
+        const first = serializeSafeAttributeValue(result);
+        const second = serializeSafeAttributeValue(first);
+        expect(first).toBe(second);
+      });
+
+      it("plain strings with & are XML-escaped", () => {
+        const result = sanitizePropertyValue("EndPoint", "https://api.example.com?a=1&b=2");
+        expect(result).toContain("&amp;");
+        expect(result).not.toMatch(/\?a=1&b/);
+      });
+
+      it("complex VB expression with multiple operators produces valid XML", () => {
+        const expr = '[If(str_Status = "Active" And int_Count > 0, "Yes" & " - " & str_Name, "No")]';
+        const result = sanitizePropertyValue("Condition", expr);
+        const safe = serializeSafeAttributeValue(result);
+        const testXml = `<Test Attr="${safe}" />`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${testXml}`)).toBe(true);
+      });
+
+      it("sanitizePropertyValue + serializeSafeAttributeValue pipeline preserves VB semantics through XML round-trip", () => {
+        const original = '["Error: " & ex.Message]';
+        const sanitized = sanitizePropertyValue("Message", original);
+        const safe = serializeSafeAttributeValue(sanitized);
+        expect(safe).toContain("&amp;");
+        expect(safe).toContain("&quot;");
+        expect(safe).not.toContain("&amp;amp;");
+      });
+    });
+
+    describe("XML-safe integration regression (Task #483)", () => {
+      it("mini workflow with Log/Assign/If containing & emits well-formed XAML", () => {
+        const logXml = `<ui:LogMessage Level="Info" Message="${serializeSafeAttributeValue(sanitizePropertyValue("Message", '["Processing: " & str_ItemName]'))}" DisplayName="Log Processing" />`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${logXml}`)).toBe(true);
+
+        const assignValue = sanitizePropertyValue("Value", '["Result: " & str_Output & " done"]');
+        const assignXml = `<Assign DisplayName="Set Result"><Assign.Value><InArgument x:TypeArguments="x:String">${serializeSafeAttributeValue(assignValue)}</InArgument></Assign.Value></Assign>`;
+        const wrappedAssign = `<Activity xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${assignXml}</Activity>`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${wrappedAssign}`)).toBe(true);
+
+        const conditionValue = sanitizePropertyValue("Condition", "[str_Status <> Nothing And str_Status.Length > 0]");
+        const ifXml = `<If Condition="${serializeSafeAttributeValue(conditionValue)}" DisplayName="Check Status" />`;
+        expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${ifXml}`)).toBe(true);
+      });
+
+      it("VB expressions with all dangerous XML chars produce valid XML in both attribute and text contexts", () => {
+        const dangerousExprs = [
+          '["Error: " & ex.Message]',
+          '[int_A < int_B]',
+          '[int_A > int_B]',
+          '["He said ""hello"" & "" goodbye"""]',
+          "[str_Name & \" is 'ready'\"]",
+        ];
+        for (const expr of dangerousExprs) {
+          const sanitized = sanitizePropertyValue("TestProp", expr);
+          const attrXml = `<Test Attr="${serializeSafeAttributeValue(sanitized)}" />`;
+          expect(XMLValidator.validate(`<?xml version="1.0" encoding="utf-8"?>${attrXml}`)).toBe(true);
+        }
+      });
+
+      it("full pipeline: mini workflow spec with Log/Assign/If containing & produces well-formed XAML without stubbing", () => {
+        const spec = {
+          name: "XmlSafeExpressionTest",
+          description: "E2E test for XML-safe VB expression serialization",
+          variables: [
+            { name: "str_ErrorMessage", type: "String" },
+            { name: "str_ItemName", type: "String" },
+            { name: "str_Result", type: "String" },
+          ],
+          arguments: [],
+          rootSequence: {
+            kind: "sequence" as const,
+            displayName: "XML Safe Expression Test",
+            children: [
+              {
+                kind: "activity" as const,
+                template: "LogMessage",
+                displayName: "Log Error with Ampersand",
+                properties: {
+                  Level: "Error",
+                  Message: '["Error: " & str_ErrorMessage & " for item " & str_ItemName]',
+                },
+                errorHandling: "none" as const,
+              },
+              {
+                kind: "activity" as const,
+                template: "Assign",
+                displayName: "Set Result with Concat",
+                properties: {
+                  To: "str_Result",
+                  Value: '["Done: " & str_ItemName]',
+                  TypeArgument: "x:String",
+                },
+                errorHandling: "none" as const,
+              },
+              {
+                kind: "if" as const,
+                displayName: "Check Error Condition",
+                condition: '[str_ErrorMessage <> Nothing And str_ErrorMessage.Length > 0]',
+                thenChildren: [
+                  {
+                    kind: "activity" as const,
+                    template: "LogMessage",
+                    displayName: "Log Then Branch",
+                    properties: {
+                      Level: "Warn",
+                      Message: '["Warning: " & str_ErrorMessage]',
+                    },
+                    errorHandling: "none" as const,
+                  },
+                ],
+                elseChildren: [],
+              },
+            ],
+          },
+          useReFramework: false,
+          dhgNotes: [],
+          decomposition: [],
+        };
+
+        const { xaml } = assembleWorkflowFromSpec(spec, "general");
+
+        expect(xaml).toBeTruthy();
+        expect(xaml).toContain("LogMessage");
+        expect(xaml).toContain("Assign");
+        expect(xaml).toContain("If");
+
+        expect(xaml).not.toContain("[BLOCKED]");
+        expect(xaml).not.toContain("stub");
+        expect(xaml).not.toContain("__STRUCTURED_OBJECT__");
+
+        const xmlValid = XMLValidator.validate(xaml);
+        expect(xmlValid, `XAML should be well-formed XML after inserting VB expressions with &, <, > chars: ${JSON.stringify(xmlValid)}`).toBe(true);
       });
     });
   });

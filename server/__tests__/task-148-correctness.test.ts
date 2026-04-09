@@ -75,9 +75,9 @@ describe("Task 148 — UiPath Package Generator Correctness", () => {
       expect(result).toBe("[&quot;Hello World&quot;]");
     });
 
-    it("sanitizePropertyValue strips quotes from plain strings", () => {
+    it("sanitizePropertyValue XML-escapes quotes in plain strings", () => {
       const result = sanitizePropertyValue("Key", "some'quoted\"value");
-      expect(result).toBe("somequotedvalue");
+      expect(result).toBe("some&apos;quoted&quot;value");
     });
 
     it("makeUiPathCompliant preserves single-quoted Message without mutation (read-only)", () => {

@@ -7,7 +7,7 @@ import {
   enforceDisplayName,
   type AnalysisReport,
 } from "./workflow-analyzer";
-import { escapeXml, escapeXmlExpression, normalizeXmlExpression, serializeSafeAttributeValue, reportAttributeSerializerBypass } from "./lib/xml-utils";
+import { escapeXml, escapeXmlExpression, escapeXmlTextContent, escapeXmlAttributeValue, normalizeXmlExpression, serializeSafeAttributeValue, reportAttributeSerializerBypass } from "./lib/xml-utils";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { AICenterSkill } from "./uipath-integration";
 import { isActivityAllowed } from "./uipath-activity-policy";
@@ -1564,7 +1564,7 @@ export function renderChildElements(activityType: string, childElements: ChildEl
     const typeAttr = ce.typeArguments ? ` x:TypeArguments="${ce.typeArguments}"` : "";
     const propTag = `${activityType}.${ce.propertyName}`;
     xml += `\n              <${propTag}>`;
-    xml += `<${ce.argumentWrapper}${typeAttr}>${serializeSafeAttributeValue(ce.value)}</${ce.argumentWrapper}>`;
+    xml += `<${ce.argumentWrapper}${typeAttr}>${escapeXmlTextContent(ce.value)}</${ce.argumentWrapper}>`;
     xml += `</${propTag}>`;
   }
   return xml;
@@ -1595,9 +1595,9 @@ export function sanitizePropertyValue(key: string, value: any): string {
     const isVbExpression = /^\[.*\]$/.test(value.trim());
     if (isVbExpression) {
       const inner = value.trim().slice(1, -1);
-      return `[${inner}]`;
+      return `[${escapeXmlAttributeValue(inner)}]`;
     }
-    return value;
+    return escapeXmlAttributeValue(value);
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -1609,14 +1609,14 @@ export function sanitizePropertyValue(key: string, value: any): string {
       return String(item);
     });
     const vbItems = items.map(i => `"${i.replace(/"/g, '""')}"`);
-    return `New String() {${vbItems.join(", ")}}`;
+    return escapeXmlAttributeValue(`New String() {${vbItems.join(", ")}}`);
   }
   if (typeof value === "object") {
     if (key.toLowerCase().includes("header")) {
       const entries = Object.entries(value as Record<string, any>);
       if (entries.length === 0) return `New Dictionary(Of String, String)()`;
       const kvPairs = entries.map(([k, v]) => `{"${String(k)}", "${String(v)}"}`).join(", ");
-      return `New Dictionary(Of String, String) From {${kvPairs}}`;
+      return escapeXmlAttributeValue(`New Dictionary(Of String, String) From {${kvPairs}}`);
     }
     const timeSpanResult = trySerializeTimeSpan(key, value);
     if (timeSpanResult !== null) return timeSpanResult;
