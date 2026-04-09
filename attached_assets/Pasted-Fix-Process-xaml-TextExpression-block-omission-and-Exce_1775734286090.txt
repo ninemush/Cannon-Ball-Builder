@@ -1,0 +1,90 @@
+Fix Process.xaml TextExpression block omission and Excel ExistingWorkbook requirement mismatch
+
+What & Why
+The latest CoupaInvoiceReconV2 package failed structurally for two primary reasons:
+
+1. Process.xaml generation path omission
+The rich generation path in server/xaml-generator.ts emits VisualBasic.Settings but omits:
+- TextExpression.NamespacesForImplementation
+- TextExpression.ReferencesForImplementation
+
+The compliance/injection pipeline then assumes settings already exist and skips inserting the full TextExpression block, leaving Process.xaml without the namespaces/references containers needed for later import/reference injection. This directly causes:
+- Process.xaml: failed to inject assembly references
+- Process.xaml: failed to inject namespace imports
+
+2. Excel Application Scope required-property mismatch
+The imported catalog currently marks ExistingWorkbook as required for Excel Application Scope, but the generation/runtime stack does not model or emit it, and it does not appear to be universally required for normal usage. This creates repeated high-severity required-property failures that the generator cannot satisfy.
+
+This task fixes both issues together because they are the current narrow blockers in the latest run.
+
+Done looks like
+- Process.xaml emitted by generateRichXamlFromNodes includes the full TextExpression namespace/reference structure needed by downstream injection.
+- Process.xaml no longer fails with:
+  - failed to inject assembly references
+  - failed to inject namespace imports
+- The rich generation path is structurally aligned with the buildXaml / working template paths for text-expression support.
+- Excel Application Scope no longer fails validation solely because ExistingWorkbook is marked required when the current supported generation path does not use it.
+- Latest Coupa benchmark run materially reduces structural invalidity caused by these two issues.
+
+Out of scope
+- Broad generator redesign
+- Namespace map redesign
+- Prompt/enricher changes
+- REFramework invoke reconciliation
+- General required-property fallback policy changes beyond the specific Excel mismatch here
+- Broad catalog approval policy changes
+
+Design rules
+Template parity where required
+If rich XAML generation needs downstream namespace/reference injection, it must emit the same structural containers that the working template paths emit.
+
+No fake requiredness
+A property must not remain marked required in the effective runtime metadata if the supported generation paths do not emit it and normal valid usage does not require it.
+
+Minimal-delta fix
+Fix the narrow structural omission and the narrow Excel metadata mismatch without expanding into broader metadata policy work.
+
+Tasks
+1. Trace the Process.xaml generation path in server/xaml-generator.ts, specifically generateRichXamlFromNodes and any helpers it uses for header/settings emission.
+
+2. Compare its emitted header/settings structure with the buildXaml path and any working template paths that already include:
+- VisualBasic.Settings
+- TextExpression.NamespacesForImplementation
+- TextExpression.ReferencesForImplementation
+
+3. Update generateRichXamlFromNodes so it emits the required TextExpression blocks in the same structural shape expected by downstream namespace/reference injection.
+
+4. Verify the compliance/injection path then succeeds for Process.xaml without requiring fragile special-case insertion.
+
+5. Investigate the effective metadata path for Excel Application Scope ExistingWorkbook:
+- imported catalog truth
+- activity registry/runtime usage
+- generator support
+- validator behavior
+
+6. Correct the effective requirement for ExistingWorkbook in the supported runtime/generation path.
+This can be done by:
+- correcting the catalog metadata if the requirement is wrong, or
+- adding a runtime override if the DLL-imported required flag is not appropriate for current supported generation semantics.
+Choose the narrowest correct fix and document why.
+
+7. Add focused regression tests:
+- rich generation path emits TextExpression.NamespacesForImplementation and TextExpression.ReferencesForImplementation
+- Process.xaml-style output accepts downstream namespace/reference injection
+- Excel Application Scope does not fail solely because ExistingWorkbook is absent in the supported normal path
+- benchmark-style mini regression for the Coupa Process.xaml path
+
+Primary files to modify
+- server/xaml-generator.ts
+- server/xaml/xaml-compliance.ts
+- catalog/activity-catalog.json or the narrowest effective metadata override location
+- server/uipath-activity-registry.ts
+- server/__tests__/pipeline-regression.test.ts
+
+Reference files
+- latest Coupa verification bundle
+- server/package-assembler.ts
+- server/catalog/catalog-service.ts
+
+Success measure
+The next Coupa run no longer fails on Process.xaml namespace/reference injection, and the repeated Excel Application Scope ExistingWorkbook required-property error is eliminated or materially reduced.
