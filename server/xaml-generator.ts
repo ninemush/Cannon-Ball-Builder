@@ -2858,6 +2858,7 @@ export function generateRichXamlFromNodes(
   <mva:VisualBasic.Settings>
     <x:Null />
   </mva:VisualBasic.Settings>
+${buildTextExpressionBlocks(targetFramework === "Portable")}
 ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
     ${dictConfigVariable}${variablesBlock}${activities}
   </Sequence>

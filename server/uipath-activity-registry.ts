@@ -118,7 +118,7 @@ function buildFallbackRegistry(): Record<string, ActivityRegistryEntry> {
     "ui:TakeScreenshot": stub(uiAuto, ["Result", "TimeoutMS", "Timeout"]),
     "ui:UseApplication": stub(uiAuto, ["ApplicationPath", "Arguments"]),
     "ui:CloseApplication": stub(uiAuto, ["DisplayName"]),
-    "ui:ExcelApplicationScope": { package: excel, properties: { optional: ["WorkbookPath", "AutoSave", "Visible", "CreateNewFile", "ReadOnly", "Password", "EditPassword"] }, versionedProperties: [{ name: "EditPassword", addedInMajor: 2 }] },
+    "ui:ExcelApplicationScope": { package: excel, properties: { optional: ["WorkbookPath", "AutoSave", "Visible", "CreateNewFile", "ReadOnly", "Password", "EditPassword", "ExistingWorkbook"] }, versionedProperties: [{ name: "EditPassword", addedInMajor: 2 }] },
     "ui:UseExcel": stub(excel, ["WorkbookPath", "CreateNewFile", "ReadOnly", "Password"]),
     "ui:ExcelReadRange": stub(excel, ["SheetName", "Range", "DataTable", "AddHeaders", "UseFilter"]),
     "ui:ExcelWriteRange": stub(excel, ["SheetName", "StartingCell", "DataTable", "AddHeaders"]),
@@ -224,6 +224,26 @@ function buildRegistryFromCatalog(): Record<string, ActivityRegistryEntry> {
     }
 
     registry[tag] = entry;
+  }
+
+  // Runtime override (Task #489): ExistingWorkbook was marked required in the DLL-extracted
+  // catalog (activity-catalog.json) but is genuinely optional in all valid UiPath Studio usage
+  // — it is only needed when reusing an existing workbook instance. The catalog metadata has
+  // also been corrected (required: false), but this runtime guard ensures the registry stays
+  // correct even if a future catalog refresh re-introduces the flag.
+  const excelScopeEntry = registry["ui:ExcelApplicationScope"];
+  if (excelScopeEntry) {
+    if (excelScopeEntry.properties.required) {
+      excelScopeEntry.properties.required = excelScopeEntry.properties.required.filter(
+        (p: string) => p !== "ExistingWorkbook"
+      );
+      if (excelScopeEntry.properties.required.length === 0) {
+        delete excelScopeEntry.properties.required;
+      }
+    }
+    if (!excelScopeEntry.properties.optional.includes("ExistingWorkbook")) {
+      excelScopeEntry.properties.optional.push("ExistingWorkbook");
+    }
   }
 
   return registry;

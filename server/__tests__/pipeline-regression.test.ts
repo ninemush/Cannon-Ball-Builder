@@ -49,9 +49,9 @@ import {
 } from "../workflow-status-classifier";
 import AdmZip from "adm-zip";
 import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
-import { normalizeXaml, smartBracketWrap, ensureBracketWrapped, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP, injectMissingNamespaceDeclarations, getPrefixToXmlns, getClrNamespaceToXamlPrefix, getNamespaceMismatchDiagnostics, clearNamespaceMismatchDiagnostics, resetNamespaceCaches } from "../xaml/xaml-compliance";
+import { normalizeXaml, smartBracketWrap, ensureBracketWrapped, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP, injectMissingNamespaceDeclarations, getPrefixToXmlns, getClrNamespaceToXamlPrefix, getNamespaceMismatchDiagnostics, clearNamespaceMismatchDiagnostics, resetNamespaceCaches, insertBeforeClosingCollectionTag } from "../xaml/xaml-compliance";
 import { normalizePropertyToValueIntent } from "../xaml/expression-builder";
-import { scanXamlForRequiredPackages, NAMESPACE_PREFIX_TO_PACKAGE } from "../uipath-activity-registry";
+import { scanXamlForRequiredPackages, NAMESPACE_PREFIX_TO_PACKAGE, ACTIVITY_REGISTRY } from "../uipath-activity-registry";
 import { checkNormalizationInvariants } from "../emission-gate";
 import { metadataService } from "../catalog/metadata-service";
 import { catalogService as catalogServiceImport } from "../catalog/catalog-service";
@@ -92,6 +92,7 @@ import {
   generateKillAllProcessesXaml,
   sanitizePropertyValue,
   isChildElementProperty,
+  generateRichXamlFromNodes,
 } from "../xaml-generator";
 import {
   serializeSafeAttributeValue,
@@ -6382,6 +6383,204 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
           expect(policy.genericDefaultValues).toContain("");
           expect(policy.genericDefaultValues).toContain('""');
         }
+      });
+    });
+  });
+
+  describe("Task #489: TextExpression block emission and ExistingWorkbook fix", () => {
+    describe("generateRichXamlFromNodes emits TextExpression blocks", () => {
+      const minimalNodes: any[] = [
+        { id: 1, ideaId: "test", viewType: "as-is", name: "Start", role: "", system: "", nodeType: "start", description: "", isPainPoint: false, isGhost: false, positionX: 0, positionY: 0, orderIndex: 0, createdAt: new Date() },
+        { id: 2, ideaId: "test", viewType: "as-is", name: "Do Task", role: "User", system: "System", nodeType: "task", description: "A simple task", isPainPoint: false, isGhost: false, positionX: 100, positionY: 100, orderIndex: 1, createdAt: new Date() },
+        { id: 3, ideaId: "test", viewType: "as-is", name: "End", role: "", system: "", nodeType: "end", description: "", isPainPoint: false, isGhost: false, positionX: 200, positionY: 200, orderIndex: 2, createdAt: new Date() },
+      ];
+      const minimalEdges: any[] = [
+        { id: 1, ideaId: "test", viewType: "as-is", sourceNodeId: 1, targetNodeId: 2, label: "", createdAt: new Date() },
+        { id: 2, ideaId: "test", viewType: "as-is", sourceNodeId: 2, targetNodeId: 3, label: "", createdAt: new Date() },
+      ];
+
+      it("includes TextExpression.NamespacesForImplementation in rich path output", () => {
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        expect(result.xaml).toContain("<TextExpression.NamespacesForImplementation>");
+        expect(result.xaml).toContain("</TextExpression.NamespacesForImplementation>");
+      });
+
+      it("includes TextExpression.ReferencesForImplementation in rich path output", () => {
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        expect(result.xaml).toContain("<TextExpression.ReferencesForImplementation>");
+        expect(result.xaml).toContain("</TextExpression.ReferencesForImplementation>");
+      });
+
+      it("TextExpression blocks contain sco:Collection structure for downstream injection compatibility", () => {
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        expect(result.xaml).toContain('<sco:Collection x:TypeArguments="x:String">');
+        expect(result.xaml).toContain('<sco:Collection x:TypeArguments="AssemblyReference">');
+      });
+
+      it("structural parity: insertBeforeClosingCollectionTag succeeds on rich path output for both blocks", () => {
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        const xaml = result.xaml;
+
+        const refsResult = insertBeforeClosingCollectionTag(
+          xaml,
+          "</TextExpression.ReferencesForImplementation>",
+          "      <AssemblyReference>Test.Assembly</AssemblyReference>"
+        );
+        expect(refsResult.succeeded).toBe(true);
+
+        const nsResult = insertBeforeClosingCollectionTag(
+          xaml,
+          "</TextExpression.NamespacesForImplementation>",
+          "      <x:String>Test.Namespace</x:String>"
+        );
+        expect(nsResult.succeeded).toBe(true);
+      });
+
+      it("Process.xaml from rich path does not trigger 'no block found' fallback warnings", () => {
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        const xaml = result.xaml;
+
+        const refsResult = insertBeforeClosingCollectionTag(
+          xaml,
+          "</TextExpression.ReferencesForImplementation>",
+          "      <AssemblyReference>TestFallback.Assembly</AssemblyReference>"
+        );
+        expect(refsResult.succeeded).toBe(true);
+
+        const nsResult = insertBeforeClosingCollectionTag(
+          xaml,
+          "</TextExpression.NamespacesForImplementation>",
+          "      <x:String>TestFallback.Namespace</x:String>"
+        );
+        expect(nsResult.succeeded).toBe(true);
+      });
+
+      it("emits TextExpression blocks in correct structural position (after VisualBasic.Settings, before Sequence)", () => {
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        const xaml = result.xaml;
+
+        const vbSettingsEnd = xaml.indexOf("</mva:VisualBasic.Settings>");
+        const nsStart = xaml.indexOf("<TextExpression.NamespacesForImplementation>");
+        const refsStart = xaml.indexOf("<TextExpression.ReferencesForImplementation>");
+        const sequenceStart = xaml.indexOf("<Sequence ");
+
+        expect(vbSettingsEnd).toBeGreaterThan(-1);
+        expect(nsStart).toBeGreaterThan(-1);
+        expect(refsStart).toBeGreaterThan(-1);
+        expect(sequenceStart).toBeGreaterThan(-1);
+
+        expect(nsStart).toBeGreaterThan(vbSettingsEnd);
+        expect(refsStart).toBeGreaterThan(nsStart);
+        expect(sequenceStart).toBeGreaterThan(refsStart);
+      });
+    });
+
+    describe("Excel Application Scope ExistingWorkbook override", () => {
+      it("ExistingWorkbook is listed as optional in the activity registry", () => {
+        const entry = ACTIVITY_REGISTRY["ui:ExcelApplicationScope"];
+        expect(entry).toBeDefined();
+        expect(entry.properties.optional).toContain("ExistingWorkbook");
+      });
+
+      it("ExcelApplicationScope does not fail validation solely because ExistingWorkbook is absent", () => {
+        const entry = ACTIVITY_REGISTRY["ui:ExcelApplicationScope"];
+        const requiredProps = entry.properties.required;
+        if (requiredProps) {
+          expect(requiredProps).not.toContain("ExistingWorkbook");
+        }
+      });
+
+      it("override only affects ExcelApplicationScope — does not suppress ExistingWorkbook broadly", () => {
+        const allEntries = Object.entries(ACTIVITY_REGISTRY);
+        const entriesWithExistingWorkbook = allEntries.filter(([key, entry]) => {
+          return key !== "ui:ExcelApplicationScope" &&
+            (entry.properties.optional?.includes("ExistingWorkbook") ||
+             entry.properties.required?.includes("ExistingWorkbook"));
+        });
+        expect(entriesWithExistingWorkbook.length).toBe(0);
+      });
+
+      it("enforceRequiredProperties does not produce ExistingWorkbook defects for ExcelApplicationScope XAML", () => {
+        const excelXaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity mc:Ignorable="sap sap2010" x:Class="TestExcel"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
+  xmlns:ui="http://schemas.uipath.com/workflow/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence DisplayName="Test Excel">
+    <ui:ExcelApplicationScope DisplayName="Excel Application Scope" WorkbookPath="test.xlsx">
+      <ui:ExcelApplicationScope.Body>
+        <ActivityAction x:TypeArguments="ui:WorkbookApplication">
+          <Sequence DisplayName="Do" />
+        </ActivityAction>
+      </ui:ExcelApplicationScope.Body>
+    </ui:ExcelApplicationScope>
+  </Sequence>
+</Activity>`;
+
+        const result = enforceRequiredProperties(
+          [{ name: "TestExcel.xaml", content: excelXaml }],
+          true
+        );
+
+        const existingWorkbookDefects = result.unresolvedRequiredPropertyDefects.filter(
+          d => d.propertyName === "ExistingWorkbook"
+        );
+        expect(existingWorkbookDefects.length).toBe(0);
+      });
+    });
+
+    describe("Process.xaml injection path warning-free behavior", () => {
+      it("rich path output injection produces no fallback warnings for namespace/reference blocks", () => {
+        const minimalNodes: any[] = [
+          { id: 1, ideaId: "test", viewType: "as-is", name: "Start", role: "", system: "", nodeType: "start", description: "", isPainPoint: false, isGhost: false, positionX: 0, positionY: 0, orderIndex: 0, createdAt: new Date() },
+          { id: 2, ideaId: "test", viewType: "as-is", name: "Do Task", role: "User", system: "System", nodeType: "task", description: "A simple task", isPainPoint: false, isGhost: false, positionX: 100, positionY: 100, orderIndex: 1, createdAt: new Date() },
+          { id: 3, ideaId: "test", viewType: "as-is", name: "End", role: "", system: "", nodeType: "end", description: "", isPainPoint: false, isGhost: false, positionX: 200, positionY: 200, orderIndex: 2, createdAt: new Date() },
+        ];
+        const minimalEdges: any[] = [
+          { id: 1, ideaId: "test", viewType: "as-is", sourceNodeId: 1, targetNodeId: 2, label: "", createdAt: new Date() },
+          { id: 2, ideaId: "test", viewType: "as-is", sourceNodeId: 2, targetNodeId: 3, label: "", createdAt: new Date() },
+        ];
+
+        const result = generateRichXamlFromNodes(minimalNodes, minimalEdges, "Process", "Test process");
+        const xaml = result.xaml;
+
+        const warnings: string[] = [];
+
+        const refsResult = insertBeforeClosingCollectionTag(
+          xaml,
+          "</TextExpression.ReferencesForImplementation>",
+          "      <AssemblyReference>Injected.Assembly</AssemblyReference>"
+        );
+        if (!refsResult.succeeded) {
+          warnings.push("failed to inject assembly references");
+        }
+
+        const nsResult = insertBeforeClosingCollectionTag(
+          xaml,
+          "</TextExpression.NamespacesForImplementation>",
+          "      <x:String>Injected.Namespace</x:String>"
+        );
+        if (!nsResult.succeeded) {
+          warnings.push("failed to inject namespace imports");
+        }
+
+        expect(warnings).toEqual([]);
+
+        expect(refsResult.updated).toContain("<AssemblyReference>Injected.Assembly</AssemblyReference>");
+        expect(nsResult.updated).toContain("<x:String>Injected.Namespace</x:String>");
       });
     });
   });
