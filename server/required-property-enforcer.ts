@@ -99,12 +99,140 @@ export interface ExpressionLoweringFailure {
   packageModeOutcome: "structured_defect";
 }
 
+export type FallbackDecision = "source-bound" | "expression-lowered" | "fallback-applied" | "blocked";
+
+export interface FallbackResolutionDiagnostic {
+  file: string;
+  workflow: string;
+  activityType: string;
+  propertyName: string;
+  propertyClass: string;
+  decision: FallbackDecision;
+  sourceFound: boolean;
+  expressionLowered: boolean | null;
+  fallbackApplied: boolean;
+  blockReason: string | null;
+  originalValue: string;
+  resolvedValue: string | null;
+}
+
+export interface FallbackEligiblePolicy {
+  activityType: string;
+  propertyName: string;
+  propertyClass: string;
+  fallbackAllowed: boolean;
+  fallbackValue: string | null;
+  requireExpressionLowering: boolean;
+  blockOnGenericDefault: boolean;
+  genericDefaultValues: string[];
+}
+
+export const FALLBACK_ELIGIBLE_POLICIES: FallbackEligiblePolicy[] = [
+  {
+    activityType: "LogMessage",
+    propertyName: "Message",
+    propertyClass: "LogMessage.Message",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: false,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["", '""', "''"],
+  },
+  {
+    activityType: "If",
+    propertyName: "Condition",
+    propertyClass: "If.Condition",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: true,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["False"],
+  },
+  {
+    activityType: "While",
+    propertyName: "Condition",
+    propertyClass: "While.Condition",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: true,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["False"],
+  },
+  {
+    activityType: "DoWhile",
+    propertyName: "Condition",
+    propertyClass: "DoWhile.Condition",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: true,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["False"],
+  },
+  {
+    activityType: "QueryEntity",
+    propertyName: "EntityType",
+    propertyClass: "QueryEntity.EntityType",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: false,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["", '""', "''"],
+  },
+  {
+    activityType: "UpdateEntity",
+    propertyName: "EntityType",
+    propertyClass: "UpdateEntity.EntityType",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: false,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["", '""', "''"],
+  },
+  {
+    activityType: "CreateEntity",
+    propertyName: "EntityType",
+    propertyClass: "CreateEntity.EntityType",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: false,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["", '""', "''"],
+  },
+  {
+    activityType: "DeleteEntity",
+    propertyName: "EntityType",
+    propertyClass: "DeleteEntity.EntityType",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: false,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["", '""', "''"],
+  },
+  {
+    activityType: "GetEntityById",
+    propertyName: "EntityType",
+    propertyClass: "GetEntityById.EntityType",
+    fallbackAllowed: false,
+    fallbackValue: null,
+    requireExpressionLowering: false,
+    blockOnGenericDefault: true,
+    genericDefaultValues: ["", '""', "''"],
+  },
+];
+
+export function getFallbackPolicy(activityType: string, propertyName: string): FallbackEligiblePolicy | null {
+  return FALLBACK_ELIGIBLE_POLICIES.find(
+    p => p.activityType === activityType && p.propertyName === propertyName,
+  ) || null;
+}
+
 export interface RequiredPropertyEnforcementResult {
   requiredPropertyBindings: RequiredPropertyBinding[];
   unresolvedRequiredPropertyDefects: UnresolvedRequiredPropertyDefect[];
   expressionLoweringFixes: ExpressionLoweringFix[];
   expressionLoweringFailures: ExpressionLoweringFailure[];
   invalidRequiredPropertySubstitutions: InvalidRequiredPropertySubstitution[];
+  fallbackResolutionDiagnostics: FallbackResolutionDiagnostic[];
   totalEnforced: number;
   totalDefects: number;
   totalInvalidSubstitutionsBlocked: number;
@@ -536,6 +664,7 @@ export function enforceRequiredProperties(
   const exprFixes: ExpressionLoweringFix[] = [];
   const exprFailures: ExpressionLoweringFailure[] = [];
   const invalidSubstitutions: InvalidRequiredPropertySubstitution[] = [];
+  const fallbackDiagnostics: FallbackResolutionDiagnostic[] = [];
 
   if (!catalogService.isLoaded()) {
     if (isPackageMode) {
@@ -555,6 +684,7 @@ export function enforceRequiredProperties(
       expressionLoweringFixes: exprFixes,
       expressionLoweringFailures: exprFailures,
       invalidRequiredPropertySubstitutions: invalidSubstitutions,
+      fallbackResolutionDiagnostics: fallbackDiagnostics,
       totalEnforced: 0,
       totalDefects,
       totalInvalidSubstitutionsBlocked: 0,
@@ -567,7 +697,7 @@ export function enforceRequiredProperties(
     const fileName = entry.name.split("/").pop() || entry.name;
     const workflowName = fileName.replace(/\.xaml$/i, "");
     const upstreamSources = extractUpstreamSources(entry.content, workflowName);
-    enforceForFile(entry, fileName, workflowName, isPackageMode, bindings, defects, exprFixes, exprFailures, invalidSubstitutions, upstreamSources);
+    enforceForFile(entry, fileName, workflowName, isPackageMode, bindings, defects, exprFixes, exprFailures, invalidSubstitutions, upstreamSources, fallbackDiagnostics);
   }
 
   const totalDefects = defects.length + exprFailures.length;
@@ -580,6 +710,7 @@ export function enforceRequiredProperties(
   if (exprFixes.length > 0) summaryParts.push(`${exprFixes.length} structured expression(s) lowered`);
   if (exprFailures.length > 0) summaryParts.push(`${exprFailures.length} expression lowering failure(s)`);
   if (invalidSubstitutions.length > 0) summaryParts.push(`${invalidSubstitutions.length} invalid generic substitution(s) blocked`);
+  if (fallbackDiagnostics.length > 0) summaryParts.push(`${fallbackDiagnostics.length} fallback-eligible resolution(s) diagnosed`);
 
   return {
     requiredPropertyBindings: bindings,
@@ -587,6 +718,7 @@ export function enforceRequiredProperties(
     expressionLoweringFixes: exprFixes,
     expressionLoweringFailures: exprFailures,
     invalidRequiredPropertySubstitutions: invalidSubstitutions,
+    fallbackResolutionDiagnostics: fallbackDiagnostics,
     totalEnforced: bindings.length + exprFixes.length,
     totalDefects,
     totalInvalidSubstitutionsBlocked: invalidSubstitutions.length,
@@ -606,6 +738,7 @@ function enforceForFile(
   exprFailures: ExpressionLoweringFailure[],
   invalidSubstitutions: InvalidRequiredPropertySubstitution[],
   upstreamSources: UpstreamSourceCandidate[],
+  fallbackDiagnostics: FallbackResolutionDiagnostic[] = [],
 ): void {
   const activityTagPattern = /<((?:[a-z]+:)?[A-Z][A-Za-z]+)\s([^>]*?)(\/>|>)/g;
   let match;
@@ -639,7 +772,7 @@ function enforceForFile(
       if (!attrPresent && !childPresent) {
         handleMissingRequiredProperty(
           fileName, workflowName, strippedTag, propDef, isPackageMode,
-          bindings, defects, currentOccurrence, mergedSources,
+          bindings, defects, currentOccurrence, mergedSources, fallbackDiagnostics,
         );
         continue;
       }
@@ -650,7 +783,7 @@ function enforceForFile(
           const rawValue = valMatch[1];
           checkPropertyValue(
             fileName, workflowName, strippedTag, propDef, rawValue, isPackageMode,
-            bindings, defects, exprFixes, exprFailures, invalidSubstitutions, currentOccurrence, mergedSources,
+            bindings, defects, exprFixes, exprFailures, invalidSubstitutions, currentOccurrence, mergedSources, fallbackDiagnostics,
           );
         }
       } else if (childPresent) {
@@ -663,7 +796,7 @@ function enforceForFile(
           if (innerVal) {
             checkPropertyValue(
               fileName, workflowName, strippedTag, propDef, innerVal, isPackageMode,
-              bindings, defects, exprFixes, exprFailures, invalidSubstitutions, currentOccurrence, mergedSources,
+              bindings, defects, exprFixes, exprFailures, invalidSubstitutions, currentOccurrence, mergedSources, fallbackDiagnostics,
             );
           }
         }
@@ -727,7 +860,9 @@ function handleMissingRequiredProperty(
   defects: UnresolvedRequiredPropertyDefect[],
   occurrenceIndex: number,
   upstreamSources: UpstreamSourceCandidate[] = [],
+  fallbackDiagnostics: FallbackResolutionDiagnostic[] = [],
 ): void {
+  const policy = getFallbackPolicy(activityType, prop.name);
   const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
   if (sourceResolution.resolved) {
     const resolved = sourceResolution.resolved;
@@ -759,12 +894,47 @@ function handleMissingRequiredProperty(
       },
       rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
     });
+    if (policy) {
+      fallbackDiagnostics.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        propertyClass: policy.propertyClass, decision: "source-bound",
+        sourceFound: true, expressionLowered: null, fallbackApplied: false,
+        blockReason: null, originalValue: "", resolvedValue,
+      });
+    }
     console.log(`[RequiredPropertyEnforcer] SOURCE-RESOLVED: ${activityType}.${prop.name} in ${fileName} — bound to ${resolved.sourceKind}:${resolved.sourceName} (tier ${resolved.precedenceTier})`);
     return;
   }
 
   const fallback = hasContractValidFallback(prop);
   if (fallback.valid && fallback.fallbackValue) {
+    if (policy) {
+      const isDisallowedGeneric = policy.blockOnGenericDefault && policy.genericDefaultValues.includes(fallback.fallbackValue);
+      if (isDisallowedGeneric || !policy.fallbackAllowed) {
+        if (isPackageMode) {
+          const reason = isDisallowedGeneric
+            ? `Contract fallback "${fallback.fallbackValue}" is a disallowed generic default for ${policy.propertyClass}`
+            : `Fallback not allowed by policy for ${policy.propertyClass} — contract fallback "${fallback.fallbackValue}" rejected`;
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: `Required property "${prop.name}" on ${activityType} has no valid source — ${reason}`,
+            originalValue: "",
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+          });
+          fallbackDiagnostics.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            propertyClass: policy.propertyClass, decision: "blocked",
+            sourceFound: false, expressionLowered: null, fallbackApplied: false,
+            blockReason: reason,
+            originalValue: "", resolvedValue: null,
+          });
+          console.warn(`[RequiredPropertyEnforcer] FALLBACK-POLICY-BLOCKED: ${activityType}.${prop.name} in ${fileName} — ${reason}`);
+        }
+        return;
+      }
+    }
+
     bindings.push({
       file: fileName,
       workflow: workflowName,
@@ -783,21 +953,40 @@ function handleMissingRequiredProperty(
       },
       rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
     });
+    if (policy) {
+      fallbackDiagnostics.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        propertyClass: policy.propertyClass, decision: "fallback-applied",
+        sourceFound: false, expressionLowered: null, fallbackApplied: true,
+        blockReason: null, originalValue: "", resolvedValue: fallback.fallbackValue,
+      });
+    }
     return;
   }
 
   if (isPackageMode) {
+    const blockReason = policy
+      ? `Required property "${prop.name}" on ${activityType} has no valid source binding and no allowed fallback per policy for ${policy.propertyClass}`
+      : `Required property "${prop.name}" on ${activityType} has no valid source binding and no contract-valid fallback`;
     defects.push({
       file: fileName,
       workflow: workflowName,
       activityType,
       propertyName: prop.name,
-      failureReason: `Required property "${prop.name}" on ${activityType} has no valid source binding and no contract-valid fallback`,
+      failureReason: blockReason,
       originalValue: "",
       severity: "execution_blocking",
       packageModeOutcome: "structured_defect",
       rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
     });
+    if (policy) {
+      fallbackDiagnostics.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        propertyClass: policy.propertyClass, decision: "blocked",
+        sourceFound: false, expressionLowered: null, fallbackApplied: false,
+        blockReason, originalValue: "", resolvedValue: null,
+      });
+    }
     console.warn(`[RequiredPropertyEnforcer] DEFECT: ${activityType}.${prop.name} in ${fileName} — no contract-valid fallback, blocking`);
   }
 }
@@ -816,7 +1005,9 @@ function checkPropertyValue(
   invalidSubstitutions: InvalidRequiredPropertySubstitution[],
   occurrenceIndex: number,
   upstreamSources: UpstreamSourceCandidate[] = [],
+  fallbackDiagnostics: FallbackResolutionDiagnostic[] = [],
 ): void {
+  const policy = getFallbackPolicy(activityType, prop.name);
   const unwrappedValue = rawValue.replace(/^\[|\]$/g, "").trim();
   if (isSentinelValue(rawValue) || isSentinelValue(unwrappedValue)) {
     if (isPackageMode) {
@@ -830,6 +1021,15 @@ function checkPropertyValue(
         severity: "execution_blocking",
         packageModeOutcome: "structured_defect",
       });
+      if (policy) {
+        fallbackDiagnostics.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          propertyClass: policy.propertyClass, decision: "blocked",
+          sourceFound: false, expressionLowered: null, fallbackApplied: false,
+          blockReason: `Sentinel value "${rawValue}" in ${policy.propertyClass}`,
+          originalValue: rawValue, resolvedValue: null,
+        });
+      }
       console.warn(`[RequiredPropertyEnforcer] SENTINEL DEFECT: ${activityType}.${prop.name} = "${rawValue}" in ${fileName}`);
     }
     return;
@@ -838,6 +1038,66 @@ function checkPropertyValue(
   const isGenericRaw = isGenericTypeDefault(rawValue, prop.clrType);
   const isGenericUnwrapped = !isGenericRaw && isGenericTypeDefault(unwrappedValue, prop.clrType);
   if (isPackageMode && (isGenericRaw || isGenericUnwrapped)) {
+    if (policy && policy.blockOnGenericDefault) {
+      const genericValue = isGenericRaw ? rawValue : unwrappedValue;
+      if (policy.genericDefaultValues.includes(genericValue)) {
+        const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
+        if (sourceResolution.resolved) {
+          const resolved = sourceResolution.resolved;
+          const catalogCandidate = resolved as CatalogSourceCandidate;
+          let resolvedValue: string;
+          if (catalogCandidate.resolvedLiteralValue && resolved.sourceKind === "contractMapping") {
+            resolvedValue = catalogCandidate.resolvedLiteralValue;
+          } else {
+            resolvedValue = `[${resolved.sourceName}]`;
+          }
+          bindings.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            sourceBinding: resolved.sourceKind, originalValue: rawValue, resolvedValue,
+            severity: "info", packageModeOutcome: "bound", occurrenceIndex,
+            provenance: {
+              sourceKind: resolved.sourceKind, sourceName: resolved.sourceName,
+              sourceWorkflow: resolved.sourceWorkflow, sourceStep: resolved.sourceStep,
+              precedenceTier: resolved.precedenceTier,
+            },
+            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+          });
+          fallbackDiagnostics.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            propertyClass: policy.propertyClass, decision: "source-bound",
+            sourceFound: true, expressionLowered: null, fallbackApplied: false,
+            blockReason: null, originalValue: rawValue, resolvedValue,
+          });
+          console.log(`[RequiredPropertyEnforcer] FALLBACK-POLICY SOURCE-RESOLVED: ${activityType}.${prop.name} in ${fileName} — replaced disallowed generic default "${rawValue}" with ${resolved.sourceKind}:${resolved.sourceName}`);
+          return;
+        }
+
+        invalidSubstitutions.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          attemptedValue: rawValue,
+          reasonRejected: `Generic default "${rawValue}" is disallowed by fallback policy for ${policy.propertyClass} — no valid upstream source found`,
+          expectedSourceKinds: ["workflowArgument", "variable", "invokeOutput", "priorStepOutput", "contractMapping"],
+          packageModeOutcome: "blocked",
+        });
+        defects.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          failureReason: `Required property "${prop.name}" on ${activityType} contains disallowed generic default "${rawValue}" per fallback policy for ${policy.propertyClass} — no valid source found`,
+          originalValue: rawValue,
+          severity: "execution_blocking", packageModeOutcome: "structured_defect",
+          rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+        });
+        fallbackDiagnostics.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          propertyClass: policy.propertyClass, decision: "blocked",
+          sourceFound: false, expressionLowered: null, fallbackApplied: false,
+          blockReason: `Generic default "${rawValue}" disallowed by policy for ${policy.propertyClass} — no valid upstream source`,
+          originalValue: rawValue, resolvedValue: null,
+        });
+        console.warn(`[RequiredPropertyEnforcer] FALLBACK-POLICY BLOCKED: ${activityType}.${prop.name} = "${rawValue}" in ${fileName} — disallowed generic default, no source available`);
+        return;
+      }
+    }
+
     const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
     if (sourceResolution.resolved) {
       const resolved = sourceResolution.resolved;
@@ -921,6 +1181,63 @@ function checkPropertyValue(
     return;
   }
 
+  if (policy && policy.requireExpressionLowering) {
+    const lowerResult = tryLowerStructuredExpression(rawValue);
+    if (lowerResult.lowered && lowerResult.result !== rawValue) {
+      exprFixes.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        originalValue: rawValue, resolvedValue: lowerResult.result,
+        severity: "info", packageModeOutcome: "lowered", occurrenceIndex,
+      });
+      fallbackDiagnostics.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        propertyClass: policy.propertyClass, decision: "expression-lowered",
+        sourceFound: false, expressionLowered: true, fallbackApplied: false,
+        blockReason: null, originalValue: rawValue, resolvedValue: lowerResult.result,
+      });
+      console.log(`[RequiredPropertyEnforcer] CONDITION-LOWERED: ${activityType}.${prop.name} in ${fileName} — expression lowered from "${rawValue}" to "${lowerResult.result}"`);
+      const resolvedRef = unwrappedValue;
+      let provenance: ResolvedSourceProvenance | undefined;
+      if (/^[a-zA-Z_]\w*$/.test(resolvedRef)) {
+        const matchingSource = upstreamSources.find(s => s.sourceName === resolvedRef);
+        if (matchingSource) {
+          provenance = {
+            sourceKind: matchingSource.sourceKind, sourceName: matchingSource.sourceName,
+            sourceWorkflow: matchingSource.sourceWorkflow, sourceStep: matchingSource.sourceStep,
+            precedenceTier: matchingSource.precedenceTier,
+          };
+        }
+      }
+      if (!provenance) {
+        provenance = { sourceKind: "attribute-value", sourceName: rawValue.substring(0, 80), precedenceTier: 4 };
+      }
+      bindings.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        sourceBinding: provenance.sourceKind, originalValue: rawValue, resolvedValue: lowerResult.result,
+        severity: "info", packageModeOutcome: "bound", occurrenceIndex, provenance,
+      });
+      return;
+    } else if (!lowerResult.lowered) {
+      if (isPackageMode) {
+        exprFailures.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          originalValue: rawValue,
+          failureReason: `Expression lowering failed for ${policy.propertyClass}: ${lowerResult.reason || "structurally broken expression"} — blocked with diagnostic (not defaulted to generic value)`,
+          severity: "execution_blocking", packageModeOutcome: "structured_defect",
+        });
+        fallbackDiagnostics.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          propertyClass: policy.propertyClass, decision: "blocked",
+          sourceFound: false, expressionLowered: false, fallbackApplied: false,
+          blockReason: `Expression lowering failed for ${policy.propertyClass}: ${lowerResult.reason || "structurally broken"} — blocked, not silently defaulted`,
+          originalValue: rawValue, resolvedValue: null,
+        });
+        console.warn(`[RequiredPropertyEnforcer] CONDITION-LOWERING-BLOCKED: ${activityType}.${prop.name} in ${fileName} — expression lowering failed: ${lowerResult.reason}, blocking instead of defaulting to False`);
+      }
+      return;
+    }
+  }
+
   const lowerResult = tryLowerStructuredExpression(rawValue);
   if (!lowerResult.lowered) {
     if (isPackageMode) {
@@ -934,6 +1251,15 @@ function checkPropertyValue(
         severity: "execution_blocking",
         packageModeOutcome: "structured_defect",
       });
+      if (policy) {
+        fallbackDiagnostics.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          propertyClass: policy.propertyClass, decision: "blocked",
+          sourceFound: false, expressionLowered: false, fallbackApplied: false,
+          blockReason: `Expression lowering failed: ${lowerResult.reason}`,
+          originalValue: rawValue, resolvedValue: null,
+        });
+      }
       console.warn(`[RequiredPropertyEnforcer] EXPRESSION LOWERING FAILURE: ${activityType}.${prop.name} in ${fileName}: ${lowerResult.reason}`);
     }
     return;
@@ -951,6 +1277,14 @@ function checkPropertyValue(
       packageModeOutcome: "lowered",
       occurrenceIndex,
     });
+    if (policy) {
+      fallbackDiagnostics.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        propertyClass: policy.propertyClass, decision: "expression-lowered",
+        sourceFound: false, expressionLowered: true, fallbackApplied: false,
+        blockReason: null, originalValue: rawValue, resolvedValue: lowerResult.result,
+      });
+    }
   }
 
   const resolvedRef = unwrappedValue;

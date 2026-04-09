@@ -70,12 +70,17 @@ import {
   resolveSourceForProperty,
   extractCatalogSourceCandidates,
   isDocumentedContractGenericDefault,
+  getFallbackPolicy,
+  FALLBACK_ELIGIBLE_POLICIES,
   type ContractFallbackResult,
   type CatalogSourceCandidate,
   type UpstreamSourceCandidate,
   type InvalidRequiredPropertySubstitution,
   type ResolvedSourceProvenance,
   type RejectedCandidateRecord,
+  type FallbackEligiblePolicy,
+  type FallbackResolutionDiagnostic,
+  type FallbackDecision,
 } from "../required-property-enforcer";
 import {
   generateReframeworkMainXaml,
@@ -5978,6 +5983,235 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
           }
         }
         expect(missingCount).toBe(0);
+      });
+    });
+  });
+
+  describe("fallback-eligible required-property resolution (Task #465)", () => {
+    describe("policy registry", () => {
+      it("getFallbackPolicy returns policy for LogMessage.Message", () => {
+        const policy = getFallbackPolicy("LogMessage", "Message");
+        expect(policy).not.toBeNull();
+        expect(policy!.propertyClass).toBe("LogMessage.Message");
+        expect(policy!.blockOnGenericDefault).toBe(true);
+        expect(policy!.genericDefaultValues).toContain("");
+        expect(policy!.requireExpressionLowering).toBe(false);
+      });
+
+      it("getFallbackPolicy returns policy for If.Condition", () => {
+        const policy = getFallbackPolicy("If", "Condition");
+        expect(policy).not.toBeNull();
+        expect(policy!.propertyClass).toBe("If.Condition");
+        expect(policy!.blockOnGenericDefault).toBe(true);
+        expect(policy!.genericDefaultValues).toContain("False");
+        expect(policy!.requireExpressionLowering).toBe(true);
+      });
+
+      it("getFallbackPolicy returns policy for While.Condition", () => {
+        const policy = getFallbackPolicy("While", "Condition");
+        expect(policy).not.toBeNull();
+        expect(policy!.propertyClass).toBe("While.Condition");
+        expect(policy!.requireExpressionLowering).toBe(true);
+      });
+
+      it("getFallbackPolicy returns policy for DoWhile.Condition", () => {
+        const policy = getFallbackPolicy("DoWhile", "Condition");
+        expect(policy).not.toBeNull();
+        expect(policy!.propertyClass).toBe("DoWhile.Condition");
+        expect(policy!.requireExpressionLowering).toBe(true);
+      });
+
+      it("getFallbackPolicy returns policy for entity-type properties", () => {
+        for (const activity of ["QueryEntity", "UpdateEntity", "CreateEntity", "DeleteEntity", "GetEntityById"]) {
+          const policy = getFallbackPolicy(activity, "EntityType");
+          expect(policy).not.toBeNull();
+          expect(policy!.propertyClass).toBe(`${activity}.EntityType`);
+          expect(policy!.blockOnGenericDefault).toBe(true);
+          expect(policy!.genericDefaultValues).toContain("");
+          expect(policy!.requireExpressionLowering).toBe(false);
+        }
+      });
+
+      it("getFallbackPolicy returns null for non-covered activities", () => {
+        expect(getFallbackPolicy("Assign", "To")).toBeNull();
+        expect(getFallbackPolicy("SendMail", "Body")).toBeNull();
+        expect(getFallbackPolicy("Delay", "Duration")).toBeNull();
+      });
+
+      it("FALLBACK_ELIGIBLE_POLICIES covers all three property classes", () => {
+        const classes = FALLBACK_ELIGIBLE_POLICIES.map(p => p.propertyClass);
+        expect(classes).toContain("LogMessage.Message");
+        expect(classes).toContain("If.Condition");
+        expect(classes).toContain("While.Condition");
+        expect(classes).toContain("QueryEntity.EntityType");
+        expect(classes).toContain("UpdateEntity.EntityType");
+      });
+
+      it("all policies disallow fallback for their generic defaults", () => {
+        for (const policy of FALLBACK_ELIGIBLE_POLICIES) {
+          expect(policy.blockOnGenericDefault).toBe(true);
+          expect(policy.genericDefaultValues.length).toBeGreaterThan(0);
+        }
+      });
+    });
+
+    describe("generic default blocking per policy", () => {
+      it("empty string is a disallowed generic default for LogMessage.Message", () => {
+        const policy = getFallbackPolicy("LogMessage", "Message")!;
+        expect(policy.genericDefaultValues.includes("")).toBe(true);
+        expect(isGenericTypeDefault("", "System.String")).toBe(true);
+      });
+
+      it("False is a disallowed generic default for If.Condition", () => {
+        const policy = getFallbackPolicy("If", "Condition")!;
+        expect(policy.genericDefaultValues.includes("False")).toBe(true);
+        expect(isGenericTypeDefault("False", "System.Boolean")).toBe(true);
+      });
+
+      it("empty string is a disallowed generic default for QueryEntity.EntityType", () => {
+        const policy = getFallbackPolicy("QueryEntity", "EntityType")!;
+        expect(policy.genericDefaultValues.includes("")).toBe(true);
+      });
+    });
+
+    describe("expression lowering before fallback for condition properties", () => {
+      it("tryLowerStructuredExpression handles JSON-leaked condition expression", () => {
+        const jsonLeaked = '{"operator":"==","left":"variable1","right":"value1"}';
+        const result = tryLowerStructuredExpression(jsonLeaked);
+        expect(result.lowered).toBeDefined();
+        if (result.lowered) {
+          expect(result.result).toBeTruthy();
+        }
+      });
+
+      it("tryLowerStructuredExpression passes through valid VB.NET condition expressions", () => {
+        const vbExpr = "variable1 = True";
+        const result = tryLowerStructuredExpression(vbExpr);
+        expect(result.lowered).toBe(true);
+        expect(result.result).toBeTruthy();
+      });
+
+      it("condition policy requires expression lowering", () => {
+        const ifPolicy = getFallbackPolicy("If", "Condition")!;
+        expect(ifPolicy.requireExpressionLowering).toBe(true);
+        const whilePolicy = getFallbackPolicy("While", "Condition")!;
+        expect(whilePolicy.requireExpressionLowering).toBe(true);
+      });
+
+      it("non-condition policies do not require expression lowering", () => {
+        const msgPolicy = getFallbackPolicy("LogMessage", "Message")!;
+        expect(msgPolicy.requireExpressionLowering).toBe(false);
+        const entityPolicy = getFallbackPolicy("QueryEntity", "EntityType")!;
+        expect(entityPolicy.requireExpressionLowering).toBe(false);
+      });
+    });
+
+    describe("source resolution with fallback policy", () => {
+      it("source resolution is preferred over fallback for LogMessage.Message", () => {
+        const prop = { name: "Message", clrType: "System.String", required: true, direction: "In" } as any;
+        const sources: UpstreamSourceCandidate[] = [
+          { sourceKind: "variable", sourceName: "logMessage", sourceType: "System.String", sourceWorkflow: "Main", precedenceTier: 2 },
+        ];
+        const result = resolveSourceForProperty(prop, sources, "Main.xaml", "Main", "LogMessage");
+        expect(result.resolved).not.toBeNull();
+        expect(result.resolved!.sourceName).toBe("logMessage");
+      });
+
+      it("source resolution is preferred over fallback for entity-type properties", () => {
+        const prop = { name: "EntityType", clrType: "System.String", required: true, direction: "In" } as any;
+        const sources: UpstreamSourceCandidate[] = [
+          { sourceKind: "workflowArgument", sourceName: "in_EntityType", sourceType: "System.String", sourceWorkflow: "Main", precedenceTier: 1 },
+        ];
+        const result = resolveSourceForProperty(prop, sources, "Main.xaml", "Main", "QueryEntity");
+        expect(result.resolved).not.toBeNull();
+        expect(result.resolved!.sourceName).toBe("in_EntityType");
+      });
+    });
+
+    describe("enforcement result includes fallback diagnostics", () => {
+      it("enforceRequiredProperties result includes fallbackResolutionDiagnostics array", () => {
+        const entries = [{ name: "Main.xaml", content: "<Activity />" }];
+        const result = enforceRequiredProperties(entries, true);
+        expect(result).toHaveProperty("fallbackResolutionDiagnostics");
+        expect(Array.isArray(result.fallbackResolutionDiagnostics)).toBe(true);
+      });
+
+      it("summary includes fallback diagnostic count when present", () => {
+        const entries = [{ name: "Main.xaml", content: "<Activity />" }];
+        const result = enforceRequiredProperties(entries, true);
+        if (result.fallbackResolutionDiagnostics.length > 0) {
+          expect(result.summary).toContain("fallback-eligible resolution");
+        }
+      });
+    });
+
+    describe("fallbackAllowed enforcement", () => {
+      it("policy with fallbackAllowed=false blocks non-generic contract fallbacks", () => {
+        for (const policy of FALLBACK_ELIGIBLE_POLICIES) {
+          expect(policy.fallbackAllowed).toBe(false);
+        }
+      });
+
+      it("all covered property classes have fallbackAllowed=false", () => {
+        const coveredClasses = [
+          "LogMessage.Message", "If.Condition", "While.Condition", "DoWhile.Condition",
+          "QueryEntity.EntityType", "UpdateEntity.EntityType", "CreateEntity.EntityType",
+          "DeleteEntity.EntityType", "GetEntityById.EntityType",
+        ];
+        for (const cls of coveredClasses) {
+          const policy = FALLBACK_ELIGIBLE_POLICIES.find(p => p.propertyClass === cls);
+          expect(policy).toBeDefined();
+          expect(policy!.fallbackAllowed).toBe(false);
+        }
+      });
+    });
+
+    describe("decision framework integrity", () => {
+      it("FallbackDecision type covers all four outcomes", () => {
+        const decisions: FallbackDecision[] = ["source-bound", "expression-lowered", "fallback-applied", "blocked"];
+        expect(decisions.length).toBe(4);
+      });
+
+      it("FallbackResolutionDiagnostic has required fields", () => {
+        const diag: FallbackResolutionDiagnostic = {
+          file: "test.xaml",
+          workflow: "Test",
+          activityType: "LogMessage",
+          propertyName: "Message",
+          propertyClass: "LogMessage.Message",
+          decision: "blocked",
+          sourceFound: false,
+          expressionLowered: null,
+          fallbackApplied: false,
+          blockReason: "test block reason",
+          originalValue: "",
+          resolvedValue: null,
+        };
+        expect(diag.decision).toBe("blocked");
+        expect(diag.propertyClass).toBe("LogMessage.Message");
+        expect(diag.blockReason).toBeTruthy();
+      });
+
+      it("policy correctly identifies condition properties for expression lowering", () => {
+        const conditionActivities = ["If", "While", "DoWhile"];
+        for (const act of conditionActivities) {
+          const policy = getFallbackPolicy(act, "Condition")!;
+          expect(policy.requireExpressionLowering).toBe(true);
+          expect(policy.fallbackAllowed).toBe(false);
+          expect(policy.blockOnGenericDefault).toBe(true);
+        }
+      });
+
+      it("entity-type policies all have consistent configuration", () => {
+        const entityActivities = ["QueryEntity", "UpdateEntity", "CreateEntity", "DeleteEntity", "GetEntityById"];
+        for (const act of entityActivities) {
+          const policy = getFallbackPolicy(act, "EntityType")!;
+          expect(policy.fallbackAllowed).toBe(false);
+          expect(policy.blockOnGenericDefault).toBe(true);
+          expect(policy.requireExpressionLowering).toBe(false);
+          expect(policy.genericDefaultValues).toContain("");
+          expect(policy.genericDefaultValues).toContain('""');
+        }
       });
     });
   });
