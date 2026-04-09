@@ -1,0 +1,218 @@
+Deep Post-Implementation Audit: DLL Truth Adoption and Runtime Alignment
+
+What & Why
+The DLL-backed catalog migration work is now implemented:
+- DLL-extracted property catalog import
+- approved-activity reconciliation against DLL truth
+- activation of newly approved packages/activities
+- runtime hardcode synchronization
+
+Now we need one deep audit to verify that the new DLL-derived truth is being used correctly across the whole pipeline, especially upstream of emission, so we do not end up with a more accurate catalog but stale runtime behavior that still causes downstream blocking.
+
+This is not an implementation task. It is a forensic and architectural audit on the fully updated codebase and latest run behavior.
+
+The goal is to identify every remaining place where:
+- runtime still bypasses catalog truth
+- deterministic generators still assume old property shapes or names
+- shorthand-vs-child-element decisions are unsafe or inconsistent
+- enum/type changes from DLL truth are not fully supported
+- activation of new packages creates new prompt, namespace, or emission-gate risks
+- raw template or scaffold paths still bypass the reconciled metadata model
+
+What I need from this audit
+I need a concrete, evidence-based picture of whether the DLL-backed truth is now truly authoritative in practice, not just present in the catalog.
+
+Output requirements
+Produce a single structured audit with these sections:
+
+1. Executive summary
+Give a blunt assessment of whether the DLL-backed migration is now correctly wired through the pipeline.
+Classify the post-implementation state as one of:
+- largely aligned
+- partially aligned
+- still significantly bypassed
+
+State the top 3 remaining risks in rank order.
+
+2. Approved activity migration matrix
+For the 50 previously approved activities that were reconciled against DLL truth, produce a matrix with:
+- activity name
+- package
+- generator exists or not
+- old vs new xamlSyntax impact
+- old vs new clrType impact
+- old vs new required impact
+- alias/property rename involved or not
+- enum conversion involved or not
+- deterministic generator updated or not
+- runtime hardcoded consumer updated or not
+- benchmark relevance yes/no
+- current risk rating: low / medium / high
+
+The point is to identify which approved activities are still most likely to break generation after the DLL truth migration.
+
+3. Runtime bypass audit
+Identify every runtime path that still bypasses catalog truth after the migration.
+This includes any place that still relies on:
+- hardcoded property names
+- hardcoded required-property lists
+- hardcoded child-element lists
+- hardcoded clrType assumptions
+- hardcoded alias maps
+- raw template structures that do not consult catalog metadata
+
+For each bypass, state:
+- file and function
+- what truth it bypasses
+- whether it is still safe, risky, or broken
+- whether it is likely to cause silent failures or only visible validation failures
+
+4. Deterministic generator reconciliation audit
+Audit all deterministic generators affected by DLL-backed truth changes.
+For each affected generator, state:
+- generator name
+- activity name
+- property names emitted
+- whether they match reconciled catalog truth
+- whether syntax shape matches the intended shorthand/child-element policy
+- whether typeArguments and required properties align
+- whether there is any known drift remaining
+
+Call out any generator that is still likely to emit structurally valid but semantically stale XAML.
+
+5. Attribute shorthand safety matrix
+For approved activities now reconciled to DLL truth, classify changed properties into:
+- shorthand attribute is definitely safe
+- child-element is required
+- shorthand is tolerated but should be reviewed
+- unclear / needs empirical validation
+
+This section is critical. I want to know where we are deliberately preserving shorthand even though DLL metadata says child-element, and whether that is truly safe.
+
+6. Enum and type-conversion audit
+Build a matrix for all reconciled clrType changes involving enums or UiPath-specific types.
+For each one, state:
+- property
+- old clrType
+- new clrType
+- validValues available or not
+- current generator emission style
+- current validator behavior
+- whether a conversion rule exists
+- whether any remaining gap can cause generation or validation failures
+
+Flag every enum/type change that still has no safe runtime handling.
+
+7. Alias and renamed-property audit
+Audit all reconciled property renames and aliases.
+For each, classify as:
+- kept as supported runtime alias
+- handled only during normalization
+- removed from runtime expectations
+- still inconsistently referenced somewhere
+
+Examples include cases like QueueName vs QueueType, TimeoutMS vs Timeout, Value vs TextString, Content vs Text, Target vs InUiElement, or any other DLL-confirmed rename.
+
+I want a list of every rename that still has multi-truth risk.
+
+8. Required-property behavior audit
+Now that DLL truth is in place, analyze:
+- which required-property flags decreased
+- which increased
+- which currently drive required-property-enforcer behavior
+- where generators still do not emit newly required properties
+- where reduced required flags lowered false positives successfully
+- where required-property truth is still being discovered too late
+
+State clearly whether assembly-time required-property authority is now mostly correct or still weak.
+
+9. Activation and package-family smoke audit
+Audit the activities/packages enabled by activation.
+I want a package-family smoke assessment, not just a metadata check.
+
+For each newly approved package family or high-risk family, state:
+- package family
+- namespace/prefix registered everywhere needed or not
+- prompt exposure safe or risky
+- emission gate compatibility safe or risky
+- dependency resolution safe or risky
+- any generator support gaps
+- whether a minimal valid activity from that family is likely to pass end-to-end generation today
+
+If there are families that were approved but are still not generation-ready in practice, call them out explicitly.
+
+10. Prompt and schema-lookup impact audit
+Analyze whether activation and catalog growth changed what the LLM sees upstream:
+- package exposure order
+- prompt-guidance ranking
+- filtered-schema lookup behavior
+- context budget truncation
+- whether benchmark-relevant packages are more or less visible now
+- whether newly approved packages crowd out more important ones
+
+This matters because upstream prompt exposure changes can cause downstream generation drift even if the catalog itself is correct.
+
+11. Template and raw-XAML bypass audit
+Identify every remaining path that emits or patches raw XAML outside the normal reconciled property model.
+Especially include:
+- REFramework template/scaffold paths
+- hardcoded workflow templates
+- raw namespace/reference injection paths
+- fallback scaffold logic
+- any post-emission transforms that assume old property truth
+
+For each one, say whether it is:
+- already aligned with DLL truth
+- likely to create drift
+- known limitation
+- next-fix candidate
+
+12. Final gap list and ranked next steps
+End with:
+- the 10 highest-risk remaining gaps after 476 through 479
+- grouped by root cause, not by symptom
+- ranked in order of expected impact on package generation quality
+
+Then provide:
+- the single highest-leverage next implementation task
+- the single highest-leverage optional analysis task
+- what not to do next
+
+Important constraints
+- Do not assume the migration succeeded just because the catalog changed.
+- Use code evidence from the latest implemented state.
+- Cross-check against the latest benchmark runs if available.
+- Be explicit about where truth is still duplicated.
+- Prefer “safe / risky / broken” judgments over vague prose.
+- Do not recommend broad rewrites unless the evidence truly supports them.
+- Focus on runtime alignment, generator correctness, validator consistency, and activation safety.
+
+Files/surfaces that must be investigated
+At minimum inspect the latest versions of:
+- catalog/activity-catalog.json
+- server/catalog/catalog-generator.ts
+- server/catalog/catalog-service.ts
+- server/catalog/catalog-validator.ts
+- server/catalog/xaml-template-builder.ts
+- server/catalog/prompt-guidance-filter.ts
+- server/catalog/filtered-schema-lookup.ts
+- server/xaml/deterministic-generators.ts
+- server/workflow-tree-assembler.ts
+- server/xaml-generator.ts
+- server/required-property-enforcer.ts
+- server/xaml/type-compatibility-validator.ts
+- server/uipath-activity-registry.ts
+- server/emission-gate.ts
+- server/xaml/xaml-compliance.ts
+- server/post-emission-dependency-analyzer.ts
+- server/critical-activity-lowering.ts
+- server/xaml/executable-path-validator.ts
+- server/xaml/invoke-binding-canonicalizer.ts
+- server/xaml/workflow-contract-integrity.ts
+- server/workflow-analyzer.ts
+- server/required-property-diagnostics.ts
+- server/ai-xaml-enricher.ts
+- any benchmark verification bundles produced after the four tasks
+
+Final instruction
+This audit should tell us whether the DLL-backed migration has actually become the pipeline’s practical source of truth, and exactly where the remaining drift still lives.
