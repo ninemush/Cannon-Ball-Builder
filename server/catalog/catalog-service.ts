@@ -49,6 +49,7 @@ export interface CatalogActivity {
   processTypes: ProcessType[];
   properties: CatalogProperty[];
   propertiesComplete?: boolean;
+  source?: "dll-extract" | "hand-authored";
   emissionApproved: boolean;
   canonicalIdentity?: CanonicalIdentity;
   isDeprecated?: boolean;
