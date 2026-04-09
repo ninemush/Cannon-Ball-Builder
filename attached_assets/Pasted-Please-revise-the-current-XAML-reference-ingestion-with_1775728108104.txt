@@ -1,0 +1,83 @@
+Please revise the current “XAML reference ingestion with full pipeline alignment” work into a split task plan based on the following approval logic.
+
+Approval rubric
+An activity should be marked emissionApproved: true only when all of these are true:
+1. Schema truth is trusted
+   - source is trusted, ideally "dll-extract"
+   - propertiesComplete = true
+   - property schema is complete enough for strict validation
+   - the activity is not from a known failed/missing DLL package unless covered by another trusted source
+2. Namespace/package mapping exists
+   - prefix, xmlns, clrNamespace, and assembly are known
+   - runtime namespace maps, prefix-to-package maps, and quality-gate prefix allowlists are aligned
+   - if the package uses sub-namespaces, those are modeled too
+3. The activity is not policy-excluded
+   - not deprecated with a preferred replacement
+   - not internal framework plumbing
+   - not an unsupported generic backtick class
+   - not a special-runtime-context activity we are not ready to broadly support
+4. At least one minimal generation path exists
+   - deterministic generator exists and is aligned, or
+   - dynamic template path works, or
+   - another validated emission path exists
+5. A smoke validation passes
+   - namespace resolves
+   - dependency analyzer finds the package
+   - emission gate passes
+   - strict property validation does not falsely strip valid properties
+   - no obvious structured-object leakage or namespace/import failure occurs
+
+Now split the original task into the smallest sensible dependent tasks.
+
+Required split
+Task A: Metadata provenance and completeness correction
+Scope:
+- set source correctly for DLL-derived activities
+- set propertiesComplete correctly for DLL-derived activities where schema is truly complete
+- do not change emissionApproved here
+- do not add XAML-inferred activities here
+- do not change prompts here
+- do not change generation-metadata here
+
+Task B: Namespace and sub-namespace model expansion
+Scope:
+- parse the provided real XAMLs for verified namespace, prefix, clrNamespace, and assembly mappings
+- add support for multiple namespace entries per package or an equivalent sub-namespace model
+- synchronize mappings across xaml-compliance.ts, uipath-activity-registry.ts, uipath-quality-gate.ts, and any other runtime maps that must agree
+- do not mass-approve activities here
+- do not change prompts here
+
+Task C: Emission approval triage and activation
+Scope:
+- apply the approval rubric above
+- only activities that satisfy all criteria become emissionApproved: true
+- include a representative smoke validation requirement per newly approved package family or activity family
+- do not infer or approve lower-confidence XAML-only activities here unless they independently satisfy the rubric
+
+Task D: XAML-reference enrichment and lower-confidence additions
+Scope:
+- add XAML-inferred activities separately, with lower-confidence source tagging such as "xaml-reference"
+- keep propertiesComplete false unless completeness is truly proven
+- add XAML reference examples to the AI enricher only here
+- do not use this task to justify broad activation by itself
+
+Task E: Generation metadata and package-version alignment
+Scope:
+- update studioTarget and packageVersionRanges only if still needed
+- use official 2025.10.7 LTS package sources, not versions copied from the user XAMLs
+- keep this separate from approval logic
+
+Output requirements
+Return:
+1. a short explanation of why the original task was too broad
+2. the revised split into Task A through Task E
+3. explicit dependencies between those tasks
+4. exact “Done looks like” criteria for each task
+5. explicit out-of-scope sections for each task
+6. a recommendation for execution order
+
+Important constraints
+- Do not auto-cascade emissionApproved from propertiesComplete + namespace mapping alone
+- Do not mix metadata truth correction with prompt/enricher behavior changes
+- Do not mix XAML-inferred lower-confidence activities with DLL-truth activation policy
+- Keep the tasks as implementation-ready as possible, not just analysis notes

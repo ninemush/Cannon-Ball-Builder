@@ -1,0 +1,81 @@
+XML-Safe VB Expression Serialization Authority
+
+What & Why
+The latest package forensic shows the dominant failure is XML well-formedness breakage caused by unescaped VB.NET expression strings being inserted into XAML. Multiple custom workflows failed with:
+
+XAML XML well-formedness validation failed: char '&' is not expected
+
+The specific pattern is VB concatenation expressions like:
+"Error: " & ex.Message
+
+These are valid VB.NET expressions but invalid raw XML when inserted without escaping. When these workflows fail well-formedness validation, the pipeline stubs the entire workflow, which then cascades into unreachable workflows and a structurally invalid package.
+
+The pipeline already has XML escaping helpers such as serializeSafeAttributeValue() and escapeXml(), but some expression insertion paths are bypassing them. This task must make XML escaping authoritative for all VB expression insertion paths before final XAML assembly.
+
+Done looks like
+- VB.NET expressions containing &, <, >, quotes, or apostrophes no longer break XML well-formedness when inserted into XAML.
+- Custom workflows like Dispatcher, Performer, InvoiceValidator, ActionCenterTaskCreator, and ActionCenterCallbackHandler are no longer stubbed because of raw XML-invalid expression content.
+- XML escaping is applied consistently across all expression insertion paths, not only some template paths.
+- Existing valid expression behavior is preserved.
+- The package no longer fails because raw VB expression text was inserted into XML without escaping.
+
+Out of scope
+- Broad generator redesign
+- Namespace mapping changes
+- Emission approval policy changes
+- REFramework invoke reconciliation
+- Required-property fallback changes
+- Prompt engineering
+- Structured sentinel cleanup except where needed to prevent raw XML-invalid insertion
+
+Design rules
+Expression semantics preserved
+Escaping must preserve the intended VB expression semantics. This is XML escaping, not VB rewriting.
+
+Single escaping authority
+All expression insertion paths must converge on a single XML-safe serialization rule before final XAML output.
+
+No double escaping
+Already-safe XML entities must not be escaped a second time.
+
+No bypass paths
+If any template or generator path interpolates expression strings directly into XML, that path must be brought under the same escaping authority.
+
+Tasks
+Trace all paths where VB expressions enter final XAML.
+Specifically inspect deterministic generators, workflow-tree-assembler, xaml-generator, template interpolation helpers, and any property serialization helpers.
+
+Identify the paths that currently bypass serializeSafeAttributeValue(), escapeXml(), or equivalent XML-safe serializers.
+
+Create or enforce one authoritative XML-safe expression serializer for:
+- attribute contexts
+- child-element text contexts
+- type/property sub-elements where expression text is embedded
+
+Replace direct string interpolation of raw expression content with the authoritative serializer.
+
+Add regression tests covering:
+- `"Error: " & ex.Message`
+- expressions containing <
+- expressions containing >
+- expressions containing quotes
+- expressions already containing XML entities
+- benchmark-style expression insertion into the workflows that were previously stubbed
+
+Add one integration regression:
+a mini workflow spec containing Log Message / Assign / If expression content with `&` must emit well-formed XAML and pass XML validation without stubbing.
+
+Primary files to modify
+- server/workflow-tree-assembler.ts
+- server/xaml-generator.ts
+- server/xaml/deterministic-generators.ts
+- server/lib/xml-utils.ts
+- server/__tests__/pipeline-regression.test.ts
+
+Reference files
+- server/emission-gate.ts
+- server/final-artifact-validation.ts
+- latest Coupa verification bundle / forensic output
+
+Success measure
+The latest custom workflows no longer stub because of XML-invalid raw VB expression insertion, and the unreachable workflow count drops materially on the Coupa benchmark.
