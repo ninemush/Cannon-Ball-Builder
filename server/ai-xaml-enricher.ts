@@ -318,6 +318,81 @@ OUTPUT FORMAT RULES (strict):
 - Workflow names must not include ".xaml" extensions or surrounding quotes.
 - ForEach "iteratorName" must be a valid identifier that matches variables referenced in body expressions.`;
 
+const SECTION_6_XAML_REFERENCE_SNIPPETS = `=== SECTION 6: VERIFIED XAML REFERENCE SNIPPETS ===
+These snippets are from verified production UiPath projects. Use them as reference for correct namespace imports, assembly references, and activity usage patterns.
+
+--- Category: Document Understanding (Digitize → Classify → Extract flow) ---
+Snippet 1 — Namespace imports for DU activities:
+  xmlns:p="http://schemas.uipath.com/workflow/activities/intelligentocr"
+  xmlns:uisad="clr-namespace:UiPath.IntelligentOCR.StudioWeb.Activities.DataValidation;assembly=UiPath.IntelligentOCR.StudioWeb.Activities"
+  xmlns:uisad2="clr-namespace:UiPath.IntelligentOCR.StudioWeb.Activities.DataExtraction;assembly=UiPath.IntelligentOCR.StudioWeb.Activities"
+  xmlns:ucas="clr-namespace:UiPath.Core.Activities.Storage;assembly=UiPath.System.Activities"
+
+Snippet 2 — Extract Document Data activity pattern:
+  <p:ExtractDocumentDataWithDocumentData x:TypeArguments="..." ApplyAutoValidation="True" DisplayName="Extract Document Data" DocType="..." ExtractionResults="[documentData_1]" FileInput="[file]" GenerateData="True" TimeoutInSeconds="3600" />
+
+Snippet 3 — Validate Document Data (creates Action Center validation task):
+  <uisad:ValidateDocumentDataWithDocumentData x:TypeArguments="..." ActionCatalogue="default_du_actions" ActionPriority="Medium" ActionTitle="[title]" AutomaticExtractionResults="[documentData_1]" DisplayName="Create Validation Task and Wait" OrchestratorBucketName="du_storage_bucket" OrchestratorFolderName="Shared" ValidatedExtractionResults="[validated_results]" />
+
+--- Category: Agentic / AI Agent orchestration ---
+Snippet 1 — Namespace imports for Agentic activities:
+  xmlns:uaa="clr-namespace:UiPath.Agentic.Activities;assembly=UiPath.Agentic.Activities"
+  xmlns:uaasm="clr-namespace:UiPath.Agentic.Activities.Services.Models;assembly=UiPath.Agentic"
+
+Snippet 2 — RunAgent activity with parameters:
+  <uaa:RunAgent AgentId="..." DisplayName="Run Agent (Preview)" Timeout="[TimeSpan.MaxValue]">
+    <uaa:RunAgent.AgentOutput><OutArgument x:TypeArguments="...">[ output]</OutArgument></uaa:RunAgent.AgentOutput>
+    <uaa:RunAgent.AgentParameters>
+      <uaasm:AgentParameter IsRequired="True" Name="Arg_Input" ParameterType="System.String">
+        <uaasm:AgentParameter.Value><InArgument x:TypeArguments="x:String">[str_InputValue]</InArgument></uaasm:AgentParameter.Value>
+      </uaasm:AgentParameter>
+    </uaa:RunAgent.AgentParameters>
+  </uaa:RunAgent>
+
+--- Category: Business Process / Long-Running Workflows (ProcessDiagram) ---
+Snippet 1 — Namespace imports for Process activities:
+  xmlns:upa="clr-namespace:UiPath.Process.Activities;assembly=UiPath.Process.Activities"
+  xmlns:upas="clr-namespace:UiPath.Process.Activities.Shared;assembly=UiPath.Process.Activities"
+
+Snippet 2 — ProcessDiagram with EventNode → TaskNode → DecisionNode flow:
+  <upa:ProcessDiagram DisplayName="Diagram">
+    <upa:ProcessDiagram.StartNode><x:Reference>__ReferenceID0</x:Reference></upa:ProcessDiagram.StartNode>
+    <upa:EventNode x:Name="__ReferenceID0" DisplayName="Start Event">
+      <upa:EventNode.Behavior><upa:StartBehavior /></upa:EventNode.Behavior>
+      <upa:EventNode.Next>
+        <upa:TaskNode DisplayName="Service Task">
+          <upa:TaskNode.Behavior><upa:NodeBehavior /></upa:TaskNode.Behavior>
+          <!-- TaskNode body: InvokeWorkflowFile or other activities -->
+        </upa:TaskNode>
+      </upa:EventNode.Next>
+    </upa:EventNode>
+  </upa:ProcessDiagram>
+
+Snippet 3 — DecisionNode with True/False branches and SplitNode:
+  <upa:DecisionNode DisplayName="Decision">
+    <upa:DecisionNode.Condition><InArgument x:TypeArguments="x:Boolean">[bool_Condition]</InArgument></upa:DecisionNode.Condition>
+    <upa:DecisionNode.True><upa:TaskNode DisplayName="Approved" /></upa:DecisionNode.True>
+    <upa:DecisionNode.False><upa:TaskNode DisplayName="Rejected" /></upa:DecisionNode.False>
+  </upa:DecisionNode>
+  <upa:SplitNode DisplayName="Split"><upa:SplitNode.Branches><!-- parallel branches --></upa:SplitNode.Branches></upa:SplitNode>
+
+--- Category: Storage (bucket operations) ---
+Snippet 1 — Namespace import for Storage activities:
+  xmlns:ucas="clr-namespace:UiPath.Core.Activities.Storage;assembly=UiPath.System.Activities"
+
+Snippet 2 — Storage bucket upload pattern:
+  <ucas:UploadStorageFile BucketName="my_bucket" DisplayName="Upload to Storage Bucket" FilePath="[str_FilePath]" RemoteFilePath="[str_RemoteFileName]" />
+
+--- Category: O365 (mail, excel, files with sub-namespace prefixes) ---
+Snippet 1 — Namespace imports for O365 activities (note sub-namespace prefixes):
+  xmlns:umae="clr-namespace:UiPath.MicrosoftOffice365.Activities.Excel;assembly=UiPath.MicrosoftOffice365.Activities"
+  xmlns:umaee="clr-namespace:UiPath.MicrosoftOffice365.Activities.Excel.Enums;assembly=UiPath.MicrosoftOffice365.Activities"
+  xmlns:umafe="clr-namespace:UiPath.MicrosoftOffice365.Activities.Files.Enums;assembly=UiPath.MicrosoftOffice365.Activities"
+  xmlns:umafm="clr-namespace:UiPath.MicrosoftOffice365.Activities.Files.Models;assembly=UiPath.MicrosoftOffice365.Activities"
+
+Snippet 2 — O365 Excel write pattern with sub-namespace prefix:
+  <umae:WriteRange DisplayName="Write Range" InputDataTable="[dt_Result]" SheetName="Sheet1" SpreadsheetId="[str_SpreadsheetId]" StartCell="A1" />`;
+
 export async function enrichWithAI(
   nodes: ProcessNode[],
   edges: ProcessEdge[],
@@ -409,7 +484,7 @@ Generate the enriched workflow specification. For each node, provide the specifi
       console.warn(`[AI XAML Enricher] UI context extraction failed: ${err.message}`);
     }
 
-    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + uiContextBlock;
+    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + "\n\n" + SECTION_6_XAML_REFERENCE_SNIPPETS + uiContextBlock;
 
       console.log(`[AI XAML Enricher] Requesting enrichment for ${nodeDescriptions.length} nodes (streaming)...`);
       const enrichLlmOptions = {
