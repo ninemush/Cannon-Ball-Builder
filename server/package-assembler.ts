@@ -384,7 +384,7 @@ function sweepValueIntentFromXaml(xamlContent: string): { content: string; repai
 }
 
 export function isValidNuGetVersion(version: string): boolean {
-  return /^\[?\d+\.\d+(\.\d+){0,2}(,\s*\))?\]?$/.test(version);
+  return /^\[?\d+\.\d+(\.\d+){0,2}(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(,\s*\))?\]?$/.test(version);
 }
 
 function getPreferredVersionFromMeta(pkgName: string): string | null {
@@ -409,7 +409,7 @@ const KNOWN_TRANSITIVE_COLLISION_PAIRS: Array<{
 function extractExactVersion(versionStr: string): string {
   let v = versionStr.trim();
   v = v.replace(/^\[/, "").replace(/[,)\]]/g, "").trim();
-  const match = v.match(/^(\d+\.\d+(\.\d+){0,2})/);
+  const match = v.match(/^(\d+\.\d+(\.\d+){0,2}(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?)/);
   return match ? match[1] : v;
 }
 

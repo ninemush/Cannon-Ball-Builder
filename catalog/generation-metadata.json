@@ -120,6 +120,12 @@
       "verificationSource": "uipath-official-feed",
       "discoveredAt": "2026-03-25T19:07:01.899Z"
     },
+    "UiPath.Agentic.Activities": {
+      "preferred": "24.12.2-preview",
+      "lastVerifiedAt": "2026-04-09T11:14:00.000Z",
+      "verificationSource": "uipath-official-feed",
+      "discoveredAt": "2026-04-09T11:14:00.000Z"
+    },
     "UiPath.ActiveDirectoryDomainServices.Activities": {
       "preferred": "1.7.1",
       "lastVerifiedAt": "2026-03-25T19:07:01.899Z",
@@ -551,6 +557,12 @@
       "lastVerifiedAt": "2026-03-25T19:07:01.899Z",
       "verificationSource": "uipath-official-feed",
       "discoveredAt": "2026-03-25T19:07:01.899Z"
+    },
+    "UiPath.Process.Activities": {
+      "preferred": "0.9.1-preview",
+      "lastVerifiedAt": "2026-04-09T11:14:00.000Z",
+      "verificationSource": "uipath-official-feed",
+      "discoveredAt": "2026-04-09T11:14:00.000Z"
     },
     "UiPath.Python.Activities": {
       "preferred": "2.1.0",
