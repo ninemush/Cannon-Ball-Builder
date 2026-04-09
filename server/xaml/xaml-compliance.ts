@@ -202,7 +202,41 @@ const SYSTEM_ACTIVITIES_NO_PREFIX = new Set([
   "State", "StateMachine", "Transition",
 ]);
 
-const PREFIX_TO_XMLNS: Record<string, string> = (() => {
+export interface NamespaceMismatchDiagnostic {
+  type: "prefix-to-xmlns" | "clr-namespace-to-prefix";
+  key: string;
+  catalogValue: string;
+  fallbackValue: string;
+  sourceSelected: "catalog";
+  packageId?: string;
+  prefix?: string;
+  clrNamespace?: string;
+  assembly?: string;
+  fallbackReason?: string;
+}
+
+const _namespaceMismatchDiagnostics: NamespaceMismatchDiagnostic[] = [];
+
+export function getNamespaceMismatchDiagnostics(): NamespaceMismatchDiagnostic[] {
+  return [..._namespaceMismatchDiagnostics];
+}
+
+export function clearNamespaceMismatchDiagnostics(): void {
+  _namespaceMismatchDiagnostics.length = 0;
+}
+
+export function resetNamespaceCaches(): void {
+  _prefixToXmlnsCache = null;
+  _prefixToXmlnsCatalogLoaded = null;
+  _clrNamespaceToXamlPrefixCache = null;
+  _clrNamespaceToXamlPrefixCatalogLoaded = null;
+  _namespaceMismatchDiagnostics.length = 0;
+}
+
+let _prefixToXmlnsCache: Record<string, string> | null = null;
+let _prefixToXmlnsCatalogLoaded: boolean | null = null;
+
+function buildPrefixToXmlnsFallback(): Record<string, string> {
   const map: Record<string, string> = {};
   for (const info of Object.values(PACKAGE_NAMESPACE_MAP)) {
     if (info.prefix && !map[info.prefix]) {
@@ -210,7 +244,78 @@ const PREFIX_TO_XMLNS: Record<string, string> = (() => {
     }
   }
   return map;
-})();
+}
+
+export function getPrefixToXmlns(): Record<string, string> {
+  const catalogLoaded = catalogService.isLoaded();
+
+  if (_prefixToXmlnsCache && _prefixToXmlnsCatalogLoaded === catalogLoaded) {
+    return _prefixToXmlnsCache;
+  }
+
+  if (!catalogLoaded) {
+    _prefixToXmlnsCache = buildPrefixToXmlnsFallback();
+    _prefixToXmlnsCatalogLoaded = false;
+    return _prefixToXmlnsCache;
+  }
+
+  const map: Record<string, string> = {};
+  const catalogEntries = catalogService.getAllPackageNamespaceEntries();
+  const prefixMetadata: Record<string, { packageId: string; clrNamespace: string; assembly: string }> = {};
+  for (const entry of catalogEntries) {
+    if (entry.prefix && !map[entry.prefix]) {
+      const xmlns = entry.clrNamespace === "UiPath.Core.Activities" && entry.prefix === "ui"
+        ? "http://schemas.uipath.com/workflow/activities"
+        : `clr-namespace:${entry.clrNamespace};assembly=${entry.assembly}`;
+      map[entry.prefix] = xmlns;
+      prefixMetadata[entry.prefix] = { packageId: entry.packageId, clrNamespace: entry.clrNamespace, assembly: entry.assembly };
+    }
+  }
+
+  const fallbackMap = buildPrefixToXmlnsFallback();
+  for (const [prefix, xmlns] of Object.entries(fallbackMap)) {
+    if (!map[prefix]) {
+      map[prefix] = xmlns;
+    } else if (map[prefix] !== xmlns) {
+      const meta = prefixMetadata[prefix];
+      _namespaceMismatchDiagnostics.push({
+        type: "prefix-to-xmlns",
+        key: prefix,
+        catalogValue: map[prefix],
+        fallbackValue: xmlns,
+        sourceSelected: "catalog",
+        packageId: meta?.packageId,
+        prefix,
+        clrNamespace: meta?.clrNamespace,
+        assembly: meta?.assembly,
+        fallbackReason: "catalog xmlns differs from hardcoded PACKAGE_NAMESPACE_MAP xmlns for this prefix",
+      });
+    }
+  }
+
+  _prefixToXmlnsCache = map;
+  _prefixToXmlnsCatalogLoaded = true;
+  return map;
+}
+
+const PREFIX_TO_XMLNS: Record<string, string> = new Proxy({} as Record<string, string>, {
+  get(_target, prop: string) {
+    return getPrefixToXmlns()[prop];
+  },
+  has(_target, prop: string) {
+    return prop in getPrefixToXmlns();
+  },
+  ownKeys() {
+    return Object.keys(getPrefixToXmlns());
+  },
+  getOwnPropertyDescriptor(_target, prop: string) {
+    const map = getPrefixToXmlns();
+    if (prop in map) {
+      return { value: map[prop], writable: false, enumerable: true, configurable: true };
+    }
+    return undefined;
+  },
+});
 
 export function validateImplementationContainer(xaml: string): { valid: boolean; reason?: string } {
   if (!xaml || xaml.trim().length === 0) {
@@ -903,7 +1008,10 @@ export function looksLikePlainText(val: string, isDeclared?: (name: string) => b
   return false;
 }
 
-export const CLR_NAMESPACE_TO_XAML_PREFIX: Record<string, string> = (() => {
+let _clrNamespaceToXamlPrefixCache: Record<string, string> | null = null;
+let _clrNamespaceToXamlPrefixCatalogLoaded: boolean | null = null;
+
+function buildClrNamespaceToXamlPrefixFallback(): Record<string, string> {
   const map: Record<string, string> = {};
   for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
     if (info.prefix && info.clrNamespace) {
@@ -915,7 +1023,79 @@ export const CLR_NAMESPACE_TO_XAML_PREFIX: Record<string, string> = (() => {
   map["UiPath.Core"] = "ui";
   map["UiPath.Core.Activities"] = "ui";
   return map;
-})();
+}
+
+export function getClrNamespaceToXamlPrefix(): Record<string, string> {
+  const catalogLoaded = catalogService.isLoaded();
+
+  if (_clrNamespaceToXamlPrefixCache && _clrNamespaceToXamlPrefixCatalogLoaded === catalogLoaded) {
+    return _clrNamespaceToXamlPrefixCache;
+  }
+
+  if (!catalogLoaded) {
+    _clrNamespaceToXamlPrefixCache = buildClrNamespaceToXamlPrefixFallback();
+    _clrNamespaceToXamlPrefixCatalogLoaded = false;
+    return _clrNamespaceToXamlPrefixCache;
+  }
+
+  const map: Record<string, string> = {};
+  const catalogEntries = catalogService.getAllPackageNamespaceEntries();
+  const clrMetadata: Record<string, { packageId: string; prefix: string; assembly: string }> = {};
+  for (const entry of catalogEntries) {
+    if (entry.prefix && entry.clrNamespace) {
+      if (!map[entry.clrNamespace]) {
+        map[entry.clrNamespace] = entry.prefix;
+        clrMetadata[entry.clrNamespace] = { packageId: entry.packageId, prefix: entry.prefix, assembly: entry.assembly };
+      }
+    }
+  }
+  map["UiPath.Core"] = "ui";
+  map["UiPath.Core.Activities"] = "ui";
+
+  const fallbackMap = buildClrNamespaceToXamlPrefixFallback();
+  for (const [clrNs, prefix] of Object.entries(fallbackMap)) {
+    if (!map[clrNs]) {
+      map[clrNs] = prefix;
+    } else if (map[clrNs] !== prefix) {
+      const meta = clrMetadata[clrNs];
+      _namespaceMismatchDiagnostics.push({
+        type: "clr-namespace-to-prefix",
+        key: clrNs,
+        catalogValue: map[clrNs],
+        fallbackValue: prefix,
+        sourceSelected: "catalog",
+        packageId: meta?.packageId,
+        prefix: meta?.prefix,
+        clrNamespace: clrNs,
+        assembly: meta?.assembly,
+        fallbackReason: "catalog prefix differs from hardcoded PACKAGE_NAMESPACE_MAP prefix for this CLR namespace",
+      });
+    }
+  }
+
+  _clrNamespaceToXamlPrefixCache = map;
+  _clrNamespaceToXamlPrefixCatalogLoaded = true;
+  return map;
+}
+
+export const CLR_NAMESPACE_TO_XAML_PREFIX: Record<string, string> = new Proxy({} as Record<string, string>, {
+  get(_target, prop: string) {
+    return getClrNamespaceToXamlPrefix()[prop];
+  },
+  has(_target, prop: string) {
+    return prop in getClrNamespaceToXamlPrefix();
+  },
+  ownKeys() {
+    return Object.keys(getClrNamespaceToXamlPrefix());
+  },
+  getOwnPropertyDescriptor(_target, prop: string) {
+    const map = getClrNamespaceToXamlPrefix();
+    if (prop in map) {
+      return { value: map[prop], writable: false, enumerable: true, configurable: true };
+    }
+    return undefined;
+  },
+});
 
 const UIPATH_NAMESPACES = `xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"

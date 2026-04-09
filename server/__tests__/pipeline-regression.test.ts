@@ -49,7 +49,7 @@ import {
 } from "../workflow-status-classifier";
 import AdmZip from "adm-zip";
 import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
-import { normalizeXaml, smartBracketWrap, ensureBracketWrapped, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP, injectMissingNamespaceDeclarations } from "../xaml/xaml-compliance";
+import { normalizeXaml, smartBracketWrap, ensureBracketWrapped, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP, injectMissingNamespaceDeclarations, getPrefixToXmlns, getClrNamespaceToXamlPrefix, getNamespaceMismatchDiagnostics, clearNamespaceMismatchDiagnostics, resetNamespaceCaches } from "../xaml/xaml-compliance";
 import { normalizePropertyToValueIntent } from "../xaml/expression-builder";
 import { scanXamlForRequiredPackages, NAMESPACE_PREFIX_TO_PACKAGE } from "../uipath-activity-registry";
 import { checkNormalizationInvariants } from "../emission-gate";
@@ -5659,6 +5659,326 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       expect(args.in_A.value).toBe("str_A");
       expect(args.in_B).toBeDefined();
       expect(args.in_B.value).toBe("str_B");
+    });
+  });
+
+  describe("Catalog-driven namespace and import injection authority (Task #482)", () => {
+    beforeEach(() => {
+      catalogServiceImport.load();
+      resetNamespaceCaches();
+      clearNamespaceMismatchDiagnostics();
+    });
+
+    describe("PREFIX_TO_XMLNS catalog-first derivation", () => {
+      it("getPrefixToXmlns returns catalog-derived data when catalog is loaded", () => {
+        expect(catalogServiceImport.isLoaded()).toBe(true);
+        const map = getPrefixToXmlns();
+        expect(map["ui"]).toBe("http://schemas.uipath.com/workflow/activities");
+        expect(Object.keys(map).length).toBeGreaterThan(10);
+        expect(map["uweb"]).toBeDefined();
+        expect(map["uexcel"]).toBeDefined();
+      });
+
+      it("getPrefixToXmlns function returns consistent data on repeated calls", () => {
+        expect(catalogServiceImport.isLoaded()).toBe(true);
+        const map1 = getPrefixToXmlns();
+        const map2 = getPrefixToXmlns();
+        expect(map1["ui"]).toBe(map2["ui"]);
+        expect(map1["uweb"]).toBe(map2["uweb"]);
+      });
+
+      it("catalog-derived PREFIX_TO_XMLNS includes entries from catalog not in hardcoded map", () => {
+        const map = getPrefixToXmlns();
+        const catalogEntries = catalogServiceImport.getAllPackageNamespaceEntries();
+        for (const entry of catalogEntries) {
+          if (entry.prefix) {
+            expect(map[entry.prefix]).toBeDefined();
+          }
+        }
+      });
+    });
+
+    describe("CLR_NAMESPACE_TO_XAML_PREFIX catalog-first derivation", () => {
+      it("getClrNamespaceToXamlPrefix returns catalog-derived data when catalog is loaded", () => {
+        expect(catalogServiceImport.isLoaded()).toBe(true);
+        const map = getClrNamespaceToXamlPrefix();
+        expect(map["UiPath.Core"]).toBe("ui");
+        expect(map["UiPath.Core.Activities"]).toBe("ui");
+        expect(Object.keys(map).length).toBeGreaterThan(10);
+      });
+
+      it("getClrNamespaceToXamlPrefix function returns consistent data on repeated calls", () => {
+        expect(catalogServiceImport.isLoaded()).toBe(true);
+        const map1 = getClrNamespaceToXamlPrefix();
+        const map2 = getClrNamespaceToXamlPrefix();
+        expect(map1["UiPath.Core"]).toBe(map2["UiPath.Core"]);
+        expect(map1["UiPath.Core.Activities"]).toBe(map2["UiPath.Core.Activities"]);
+      });
+
+      it("catalog-derived CLR map includes entries from catalog packages", () => {
+        const map = getClrNamespaceToXamlPrefix();
+        const catalogEntries = catalogServiceImport.getAllPackageNamespaceEntries();
+        for (const entry of catalogEntries) {
+          if (entry.prefix && entry.clrNamespace) {
+            expect(map[entry.clrNamespace]).toBeDefined();
+          }
+        }
+      });
+    });
+
+    describe("Catalog-loaded maps include all hardcoded entries as superset", () => {
+      it("getPrefixToXmlns includes all hardcoded prefixes when catalog is loaded", () => {
+        expect(catalogServiceImport.isLoaded()).toBe(true);
+        const map = getPrefixToXmlns();
+        const hardcodedPrefixes = new Set<string>();
+        for (const info of Object.values(PACKAGE_NAMESPACE_MAP)) {
+          if (info.prefix) hardcodedPrefixes.add(info.prefix);
+        }
+        for (const prefix of hardcodedPrefixes) {
+          expect(map[prefix]).toBeDefined();
+        }
+      });
+
+      it("getClrNamespaceToXamlPrefix includes all hardcoded CLR namespaces when catalog is loaded", () => {
+        expect(catalogServiceImport.isLoaded()).toBe(true);
+        const map = getClrNamespaceToXamlPrefix();
+        for (const info of Object.values(PACKAGE_NAMESPACE_MAP)) {
+          if (info.prefix && info.clrNamespace) {
+            expect(map[info.clrNamespace]).toBeDefined();
+          }
+        }
+      });
+    });
+
+    describe("Mismatch diagnostics", () => {
+      it("emits structured diagnostics with full metadata when catalog and fallback disagree", () => {
+        resetNamespaceCaches();
+        clearNamespaceMismatchDiagnostics();
+        getPrefixToXmlns();
+        getClrNamespaceToXamlPrefix();
+        const diagnostics = getNamespaceMismatchDiagnostics();
+        for (const d of diagnostics) {
+          expect(d.sourceSelected).toBe("catalog");
+          expect(d.catalogValue).toBeDefined();
+          expect(d.fallbackValue).toBeDefined();
+          expect(d.catalogValue).not.toBe(d.fallbackValue);
+          expect(["prefix-to-xmlns", "clr-namespace-to-prefix"]).toContain(d.type);
+          expect(d.fallbackReason).toBeDefined();
+          expect(typeof d.fallbackReason).toBe("string");
+          if (d.type === "prefix-to-xmlns") {
+            expect(d.prefix).toBeDefined();
+          }
+          if (d.type === "clr-namespace-to-prefix") {
+            expect(d.clrNamespace).toBeDefined();
+          }
+        }
+      });
+
+      it("forced mismatch: mutating a hardcoded entry produces a diagnostic record", () => {
+        resetNamespaceCaches();
+        clearNamespaceMismatchDiagnostics();
+        const origInfo = PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"];
+        const origXmlns = origInfo.xmlns;
+        (PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"] as any).xmlns = "clr-namespace:FAKE.Namespace;assembly=FAKE.Assembly";
+        try {
+          resetNamespaceCaches();
+          clearNamespaceMismatchDiagnostics();
+          getPrefixToXmlns();
+          const diagnostics = getNamespaceMismatchDiagnostics();
+          const uwebDiag = diagnostics.find(d => d.key === "uweb" && d.type === "prefix-to-xmlns");
+          expect(uwebDiag).toBeDefined();
+          expect(uwebDiag!.sourceSelected).toBe("catalog");
+          expect(uwebDiag!.fallbackValue).toBe("clr-namespace:FAKE.Namespace;assembly=FAKE.Assembly");
+          expect(uwebDiag!.catalogValue).not.toBe(uwebDiag!.fallbackValue);
+          expect(uwebDiag!.fallbackReason).toBeDefined();
+          expect(uwebDiag!.prefix).toBe("uweb");
+        } finally {
+          (PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"] as any).xmlns = origXmlns;
+          resetNamespaceCaches();
+          clearNamespaceMismatchDiagnostics();
+        }
+      });
+
+      it("clearNamespaceMismatchDiagnostics clears accumulated diagnostics", () => {
+        getPrefixToXmlns();
+        getClrNamespaceToXamlPrefix();
+        clearNamespaceMismatchDiagnostics();
+        expect(getNamespaceMismatchDiagnostics().length).toBe(0);
+      });
+    });
+
+    describe("Catalog-unavailable degraded mode", () => {
+      it("getPrefixToXmlns produces valid fallback map even when catalog returns empty entries", () => {
+        resetNamespaceCaches();
+        const originalIsLoaded = catalogServiceImport.isLoaded;
+        (catalogServiceImport as any).isLoaded = () => false;
+        try {
+          const fallbackMap = getPrefixToXmlns();
+          expect(fallbackMap["ui"]).toBe("http://schemas.uipath.com/workflow/activities");
+          expect(fallbackMap["uweb"]).toBeDefined();
+          expect(fallbackMap["uexcel"]).toBeDefined();
+          expect(Object.keys(fallbackMap).length).toBeGreaterThan(10);
+        } finally {
+          (catalogServiceImport as any).isLoaded = originalIsLoaded;
+        }
+      });
+
+      it("getClrNamespaceToXamlPrefix produces valid fallback map when catalog is unavailable", () => {
+        resetNamespaceCaches();
+        const originalIsLoaded = catalogServiceImport.isLoaded;
+        (catalogServiceImport as any).isLoaded = () => false;
+        try {
+          const fallbackMap = getClrNamespaceToXamlPrefix();
+          expect(fallbackMap["UiPath.Core"]).toBe("ui");
+          expect(fallbackMap["UiPath.Core.Activities"]).toBe("ui");
+          expect(fallbackMap["UiPath.WebAPI.Activities"]).toBe("uweb");
+          expect(Object.keys(fallbackMap).length).toBeGreaterThan(10);
+        } finally {
+          (catalogServiceImport as any).isLoaded = originalIsLoaded;
+        }
+      });
+
+      it("after catalog becomes available, cache switches from fallback to catalog truth", () => {
+        resetNamespaceCaches();
+        const originalIsLoaded = catalogServiceImport.isLoaded;
+        (catalogServiceImport as any).isLoaded = () => false;
+        const fallbackMap = getPrefixToXmlns();
+        expect(fallbackMap["ui"]).toBeDefined();
+
+        resetNamespaceCaches();
+        (catalogServiceImport as any).isLoaded = originalIsLoaded;
+        catalogServiceImport.load();
+        const catalogMap = getPrefixToXmlns();
+        expect(catalogMap["ui"]).toBe("http://schemas.uipath.com/workflow/activities");
+        expect(Object.keys(catalogMap).length).toBeGreaterThanOrEqual(Object.keys(fallbackMap).length);
+      });
+    });
+
+    describe("injectMissingNamespaceDeclarations uses catalog-derived data", () => {
+      it("injects xmlns from catalog-derived PREFIX_TO_XMLNS for known prefixes", () => {
+        const xamlWithMissingPrefix = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence>
+    <uweb:HttpClient DisplayName="Test" />
+  </Sequence>
+</Activity>`;
+        const result = injectMissingNamespaceDeclarations(xamlWithMissingPrefix);
+        expect(result.injected).toContain("uweb");
+        expect(result.xml).toContain('xmlns:uweb=');
+        const uwebXmlns = getPrefixToXmlns()["uweb"];
+        expect(result.xml).toContain(uwebXmlns);
+      });
+
+      it("injects xmlns for Coupa prefix when used in XAML", () => {
+        const xamlWithCoupa = `<?xml version="1.0" encoding="utf-8"?>
+<Activity x:Class="Test"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Sequence>
+    <ucoupa:SomeActivity DisplayName="Test" />
+  </Sequence>
+</Activity>`;
+        const result = injectMissingNamespaceDeclarations(xamlWithCoupa);
+        expect(result.injected).toContain("ucoupa");
+        expect(result.xml).toContain('xmlns:ucoupa=');
+      });
+    });
+
+    describe("CLR namespace to prefix resolution for normalizeVariableTypeAttr", () => {
+      it("mapClrFullyQualifiedToXamlPrefix resolves UiPath CLR types using catalog data", () => {
+        const result = mapClrFullyQualifiedToXamlPrefix("UiPath.WebAPI.Activities.HttpClient");
+        expect(result).toBeDefined();
+        expect(result).toContain("uweb:");
+      });
+
+      it("mapClrFullyQualifiedToXamlPrefix resolves UiPath.Core.Activities types to ui prefix", () => {
+        const result = mapClrFullyQualifiedToXamlPrefix("UiPath.Core.Activities.LogMessage");
+        expect(result).toBeDefined();
+        expect(result).toContain("ui:");
+      });
+    });
+
+    describe("Cache safety — no stale fallback cache retention", () => {
+      it("resetNamespaceCaches clears both caches and diagnostics", () => {
+        getPrefixToXmlns();
+        getClrNamespaceToXamlPrefix();
+        resetNamespaceCaches();
+        clearNamespaceMismatchDiagnostics();
+        const freshPrefixMap = getPrefixToXmlns();
+        const freshClrMap = getClrNamespaceToXamlPrefix();
+        expect(Object.keys(freshPrefixMap).length).toBeGreaterThan(0);
+        expect(Object.keys(freshClrMap).length).toBeGreaterThan(0);
+      });
+
+      it("cache updates when catalog availability changes between calls", () => {
+        resetNamespaceCaches();
+        const map1 = getPrefixToXmlns();
+        expect(Object.keys(map1).length).toBeGreaterThan(0);
+        resetNamespaceCaches();
+        const map2 = getPrefixToXmlns();
+        expect(Object.keys(map2).length).toBeGreaterThan(0);
+        expect(map2["ui"]).toBe("http://schemas.uipath.com/workflow/activities");
+      });
+    });
+
+    describe("Assembly reference injection path documentation", () => {
+      it("assembly references in workflow-tree-assembler are static framework references, not namespace-map-derived", () => {
+        const { xamlEntries } = assemblePipeline(
+          simpleLinearNodes,
+          simpleLinearEdges,
+          "AssemblyRefTest",
+          simpleLinearSdd,
+        );
+        const mainXaml = xamlEntries.find(e => e.name === "Main.xaml");
+        expect(mainXaml).toBeTruthy();
+        expect(mainXaml!.content).toContain("<AssemblyReference>System.Activities</AssemblyReference>");
+        expect(mainXaml!.content).toContain("<AssemblyReference>UiPath.Core</AssemblyReference>");
+      });
+    });
+
+    describe("Benchmark-style namespace injection for Coupa and Birthday scenarios", () => {
+      it("Coupa package namespace resolves from catalog without stale hardcoded drift", () => {
+        const coupaInfo = catalogServiceImport.getPackageNamespaceInfo("UiPath.Coupa.IntegrationService.Activities");
+        if (coupaInfo) {
+          expect(coupaInfo.prefix).toBe("ucoupa");
+          const map = getPrefixToXmlns();
+          expect(map["ucoupa"]).toBeDefined();
+          expect(map["ucoupa"]).toContain("UiPath.Coupa.IntegrationService.Activities");
+        }
+      });
+
+      it("Birthday-scenario packages (Mail, Excel, Form, Persistence) all resolve from catalog namespace maps", () => {
+        const birthdayPackages = [
+          { pkg: "UiPath.Mail.Activities", prefix: "umail" },
+          { pkg: "UiPath.Excel.Activities", prefix: "uexcel" },
+          { pkg: "UiPath.Form.Activities", prefix: "uform" },
+          { pkg: "UiPath.Persistence.Activities", prefix: "upers" },
+        ];
+        const prefixMap = getPrefixToXmlns();
+        const clrMap = getClrNamespaceToXamlPrefix();
+        for (const { pkg, prefix } of birthdayPackages) {
+          expect(prefixMap[prefix]).toBeDefined();
+          const nsInfo = catalogServiceImport.getPackageNamespaceInfo(pkg);
+          if (nsInfo) {
+            expect(nsInfo.prefix).toBe(prefix);
+            expect(clrMap[nsInfo.clrNamespace]).toBe(prefix);
+          }
+        }
+      });
+
+      it("prefix-to-xmlns map includes all catalog packages with prefixes", () => {
+        const catalogEntries = catalogServiceImport.getAllPackageNamespaceEntries();
+        const map = getPrefixToXmlns();
+        let missingCount = 0;
+        for (const entry of catalogEntries) {
+          if (entry.prefix && !map[entry.prefix]) {
+            missingCount++;
+          }
+        }
+        expect(missingCount).toBe(0);
+      });
     });
   });
 });
