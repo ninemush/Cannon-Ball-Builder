@@ -1,6 +1,6 @@
 import { catalogService } from "./catalog/catalog-service";
 import { metadataService as _metadataService } from "./catalog/metadata-service";
-import { isFrameworkAssembly, UIPATH_PACKAGE_ALIAS_MAP } from "./uipath-shared";
+import { isFrameworkAssembly, normalizePackageName } from "./uipath-shared";
 import { getActivityPackage, NAMESPACE_PREFIX_TO_PACKAGE } from "./uipath-activity-registry";
 import { getFilteredSchema, registerStage } from "./catalog/filtered-schema-lookup";
 
@@ -88,9 +88,6 @@ function isViewStateOrDesignTimeContent(line: string): boolean {
   return VIEW_STATE_PATTERNS.some(p => p.test(line));
 }
 
-function normalizePackageName(name: string): string {
-  return UIPATH_PACKAGE_ALIAS_MAP[name] || name;
-}
 
 interface XamlEntry {
   name: string;

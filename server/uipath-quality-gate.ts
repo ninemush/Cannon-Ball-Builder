@@ -18,7 +18,7 @@ import { validateTypeCompatibility } from "./xaml/type-compatibility-validator";
 import { scoreSelectorQuality, generateSelectorWarnings, injectResilienceDefaults } from "./xaml/selector-quality-scorer";
 import { XAML_INFRASTRUCTURE_TYPE_ARGUMENTS } from "./xaml/xaml-compliance";
 import { recordTransform, getCurrentRunId } from "./llm-trace-collector";
-import { UIPATH_PACKAGE_ALIAS_MAP } from "./uipath-shared";
+import { normalizePackageName } from "./uipath-shared";
 import { getFilteredSchema, registerStage, rejectionDetailMessage, type ActivityRejectionReason } from "./catalog/filtered-schema-lookup";
 
 registerStage("quality-gate");
@@ -2121,7 +2121,7 @@ function checkTransitiveDependencies(input: QualityGateInput): QualityGateViolat
     const requiredPackages = scanXamlForRequiredPackages(entry.content);
 
     for (const rawPkg of requiredPackages) {
-      const pkg = UIPATH_PACKAGE_ALIAS_MAP[rawPkg] || rawPkg;
+      const pkg = normalizePackageName(rawPkg);
       if (pkg === "UiPath.System.Activities") continue;
       const exactMatch = declaredPackages.has(pkg);
       if (!exactMatch) {
@@ -2129,7 +2129,7 @@ function checkTransitiveDependencies(input: QualityGateInput): QualityGateViolat
           d.toLowerCase() === pkg.toLowerCase()
         );
         const aliasMatch = !fuzzyMatch && Array.from(declaredPackages).some(d =>
-          UIPATH_PACKAGE_ALIAS_MAP[d] === pkg || UIPATH_PACKAGE_ALIAS_MAP[pkg] === d
+          normalizePackageName(d) === pkg || normalizePackageName(pkg) === d
         );
         if (!fuzzyMatch && !aliasMatch) {
           violations.push({

@@ -107,6 +107,16 @@ describe("Task 366: Artifact Dependency Truth & Resolution Invariants", () => {
                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
           <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
           <x:String>clr-namespace:UiPath.Core.Activities</x:String>
+          <TextExpression.NamespacesForImplementation>
+            <sco:Collection x:TypeArguments="x:String">
+              <x:String>UiPath.Core.Activities</x:String>
+            </sco:Collection>
+          </TextExpression.NamespacesForImplementation>
+          <TextExpression.ReferencesForImplementation>
+            <sco:Collection x:TypeArguments="AssemblyReference">
+              <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
+            </sco:Collection>
+          </TextExpression.ReferencesForImplementation>
           <ui:TypeInto />
         </Activity>
       `);
@@ -141,6 +151,12 @@ describe("Task 366: Artifact Dependency Truth & Resolution Invariants", () => {
       deferredWrites.set("lib/Main.xaml", `
         <Activity xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                   xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation">
+          <TextExpression.NamespacesForImplementation>
+            <sco:Collection x:TypeArguments="x:String" />
+          </TextExpression.NamespacesForImplementation>
+          <TextExpression.ReferencesForImplementation>
+            <sco:Collection x:TypeArguments="AssemblyReference" />
+          </TextExpression.ReferencesForImplementation>
           <x:Property Name="test" />
           <sap:VirtualizedContainerService />
         </Activity>

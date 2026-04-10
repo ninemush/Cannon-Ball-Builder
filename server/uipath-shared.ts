@@ -44,8 +44,52 @@ export const UIPATH_PACKAGE_ALIAS_MAP: Record<string, string> = {
   "UiPath.Agentic": "UiPath.Agentic.Activities",
 };
 
+let _catalogAssemblyToPackageCache: Record<string, string> | null = null;
+let _catalogAssemblyCacheGeneration = -1;
+
+function getCatalogAssemblyMap(): Record<string, string> | null {
+  try {
+    const { catalogService } = require("./catalog/catalog-service");
+    if (!catalogService.isLoaded()) return null;
+    const currentGeneration = typeof catalogService.getLoadGeneration === "function"
+      ? catalogService.getLoadGeneration()
+      : 0;
+    if (_catalogAssemblyToPackageCache && _catalogAssemblyCacheGeneration === currentGeneration) {
+      return _catalogAssemblyToPackageCache;
+    }
+    const entries = catalogService.getAllPackageNamespaceEntries();
+    const map: Record<string, string> = {};
+    for (const entry of entries) {
+      if (entry.assembly && entry.packageId && !map[entry.assembly]) {
+        map[entry.assembly] = entry.packageId;
+      }
+    }
+    _catalogAssemblyToPackageCache = map;
+    _catalogAssemblyCacheGeneration = currentGeneration;
+    return map;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizePackageName(name: string): string {
-  return UIPATH_PACKAGE_ALIAS_MAP[name] || name;
+  const catalogMap = getCatalogAssemblyMap();
+  if (catalogMap) {
+    const catalogResolved = catalogMap[name];
+    if (catalogResolved) return catalogResolved;
+
+    try {
+      const { catalogService } = require("./catalog/catalog-service");
+      const typePkg = catalogService.resolveTypeToPackage(name);
+      if (typePkg) return typePkg;
+      const actPkg = catalogService.getPackageForActivity(name);
+      if (actPkg) return actPkg;
+    } catch {}
+  }
+
+  if (UIPATH_PACKAGE_ALIAS_MAP[name]) return UIPATH_PACKAGE_ALIAS_MAP[name];
+
+  return name;
 }
 
 export const FRAMEWORK_ASSEMBLIES = new Set<string>([

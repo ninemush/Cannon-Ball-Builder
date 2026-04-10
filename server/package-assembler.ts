@@ -272,6 +272,39 @@ function getBaselineFallbackVersion(pkgName: string, _framework: "Windows" | "Po
   }
   return null;
 }
+
+export interface PackageVersionResolution {
+  version: string;
+  source: "generation-metadata" | "catalog-confirmed" | "catalog-preferred" | "baseline-fallback";
+}
+
+export function resolvePackageVersion(
+  canonicalName: string,
+  framework: "Windows" | "Portable" = "Windows",
+): PackageVersionResolution | null {
+  if (catalogService.isLoaded()) {
+    const preferred = catalogService.getPreferredVersion(canonicalName);
+    if (preferred) {
+      return { version: preferred, source: "catalog-preferred" };
+    }
+    const confirmed = catalogService.getConfirmedVersion(canonicalName);
+    if (confirmed) {
+      return { version: confirmed, source: "catalog-confirmed" };
+    }
+  }
+
+  const metaPreferred = getPreferredVersionFromMeta(canonicalName);
+  if (metaPreferred) {
+    return { version: metaPreferred, source: "generation-metadata" };
+  }
+
+  const fallback = getBaselineFallbackVersion(canonicalName, framework);
+  if (fallback) {
+    return { version: fallback, source: "baseline-fallback" };
+  }
+
+  return null;
+}
   
 function resolveExpressionLanguage(
   profile: StudioProfile | null | undefined,
@@ -432,7 +465,8 @@ function validateAndEnforceDependencyCompatibility(
   warnings: DependencyResolutionResult["warnings"],
 ): void {
   for (const [pkgName, version] of Object.entries(deps)) {
-    const preferredVersion = getPreferredVersionFromMeta(pkgName);
+    const resolution = resolvePackageVersion(pkgName);
+    const preferredVersion = resolution?.version || null;
     if (!preferredVersion) continue;
 
     const cleanVersion = extractExactVersion(version);
@@ -458,8 +492,10 @@ function validateAndEnforceDependencyCompatibility(
         const systemPkg = collision.packages.find(p => p === "UiPath.System.Activities") || pkg2;
         const otherPkg = systemPkg === pkg1 ? pkg2 : pkg1;
 
-        const systemPreferred = getPreferredVersionFromMeta(systemPkg);
-        const otherPreferred = getPreferredVersionFromMeta(otherPkg);
+        const systemRes = resolvePackageVersion(systemPkg);
+        const systemPreferred = systemRes?.version || null;
+        const otherRes = resolvePackageVersion(otherPkg);
+        const otherPreferred = otherRes?.version || null;
 
         if (systemPreferred && deps[systemPkg]) {
           const currentSysVer = extractExactVersion(deps[systemPkg]);
@@ -2223,10 +2259,24 @@ function runPostAssemblyValidation(
 
 export function buildAssemblyToPackageMap(): Map<string, string> {
   const map = new Map<string, string>();
+
+  if (catalogService.isLoaded()) {
+    const catalogEntries = catalogService.getAllPackageNamespaceEntries();
+    for (const entry of catalogEntries) {
+      if (entry.assembly && entry.packageId && !isFrameworkAssembly(entry.packageId)) {
+        if (!map.has(entry.assembly)) {
+          map.set(entry.assembly, entry.packageId);
+        }
+      }
+    }
+  }
+
   for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
     const basePackageName = packageId.includes("::") ? packageId.split("::")[0] : packageId;
     if (info.assembly && !isFrameworkAssembly(basePackageName)) {
-      map.set(info.assembly, basePackageName);
+      if (!map.has(info.assembly)) {
+        map.set(info.assembly, basePackageName);
+      }
     }
   }
   return map;
@@ -2657,30 +2707,15 @@ export function resolveDependencies(
       console.log(`[Dependency Resolution] Excluded framework assembly (post-normalize) from dependencies: ${pkgName}`);
       continue;
     }
-    let version: string | null = null;
-    let source: string = "";
-
-    const preferred = getPreferredVersionFromMeta(pkgName);
-    if (preferred) {
-      version = preferred;
-      source = "generation-metadata";
-    }
-
-    if (!version && catalogService.isLoaded()) {
-      const catalogVersion = catalogService.getConfirmedVersion(pkgName);
-      if (catalogVersion) {
-        version = catalogVersion;
-        source = "catalog";
-      }
-    }
-
-    if (!version) {
+    const resolution = resolvePackageVersion(pkgName, tf as "Windows" | "Portable");
+    if (!resolution) {
       const prov = packageProvenance[pkgName];
       const activityInfo = prov?.activities.length ? ` Referenced by activities: [${prov.activities.join(", ")}].` : "";
       const workflowInfo = prov?.workflows.length ? ` Found in workflows: [${prov.workflows.join(", ")}].` : "";
       const layersChecked = [
         "generation-metadata (packageVersionRanges): no match",
-        catalogService.isLoaded() ? "activity-catalog (getConfirmedVersion): no match" : "activity-catalog: not loaded",
+        catalogService.isLoaded() ? "catalog (confirmed+preferred): no match" : "activity-catalog: not loaded",
+        "baseline-fallback: no match",
       ].join("; ");
       throw new Error(
         `[Dependency Resolution] FATAL: Package "${pkgName}" is referenced by activities but has no validated version.${activityInfo}${workflowInfo} ` +
@@ -2689,7 +2724,7 @@ export function resolveDependencies(
       );
     }
 
-    deps[pkgName] = version;
+    deps[pkgName] = resolution.version;
   }
 
   const basePackages = new Set<string>([
@@ -5483,21 +5518,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       const MANDATORY_BASELINE_PACKAGES: string[] = ["UiPath.System.Activities"];
       for (const baselinePkg of MANDATORY_BASELINE_PACKAGES) {
         if (!deps[baselinePkg]) {
-          let version: string | null = null;
-          const preferred = getPreferredVersionFromMeta(baselinePkg);
-          if (preferred) {
-            version = preferred;
-          } else if (catalogService.isLoaded()) {
-            const catalogVersion = catalogService.getPreferredVersion(baselinePkg);
-            if (catalogVersion) version = catalogVersion;
-          }
-          if (!version) {
-            const fallback = getBaselineFallbackVersion(baselinePkg, tf as "Windows" | "Portable");
-            if (fallback) version = fallback;
-          }
-          if (version) {
-            deps[baselinePkg] = version;
-            console.log(`[Dependency Enforcement] Re-added mandatory baseline package ${baselinePkg}@${version} after alignment pruned it`);
+          const resolution = resolvePackageVersion(baselinePkg, tf as "Windows" | "Portable");
+          if (resolution) {
+            deps[baselinePkg] = resolution.version;
+            console.log(`[Dependency Enforcement] Re-added mandatory baseline package ${baselinePkg}@${resolution.version} (${resolution.source}) after alignment pruned it`);
           }
         }
       }
@@ -5509,47 +5533,31 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         console.log(`[Dependency CrossCheck] Rejected framework assembly from XAML scan: ${pkgName}`);
         continue;
       }
-      let resolved = false;
-      if (catalogService.isLoaded()) {
-        const catalogVersion = catalogService.getPreferredVersion(pkgName);
-        if (catalogVersion) {
-          deps[pkgName] = catalogVersion;
-          dependencyWarnings.push({
-            code: "DEPENDENCY_DISCOVERED_IN_XAML",
-            message: `Package ${pkgName} was not resolved proactively but was discovered in emitted XAML — added from catalog preferred version (v${catalogVersion}). This indicates a gap in the activity catalog mapping.`,
-            stage: "dependency-crosscheck",
-            recoverable: true,
-          });
-          console.warn(`[Dependency CrossCheck] Gap detected: ${pkgName} found in XAML but not in proactive resolution — added from catalog preferred v${catalogVersion}`);
-          resolved = true;
-        }
-      }
-      if (!resolved) {
-        const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
-        if (fallback) {
-          deps[pkgName] = fallback;
-          dependencyWarnings.push({
-            code: "DEPENDENCY_DISCOVERED_IN_XAML",
-            message: `Package ${pkgName} was discovered in emitted XAML but not in catalog — using validated metadata service version ${fallback}`,
-            stage: "dependency-crosscheck",
-            recoverable: true,
-          });
-          console.warn(`[Dependency CrossCheck] Using validated metadata service version for ${pkgName}: ${fallback}`);
-        } else {
-          const xamlFiles = xamlEntries
-            ? xamlEntries.filter((e: { name: string; content: string }) => e.content.includes(pkgName)).map((e: { name: string; content: string }) => e.name)
-            : [];
-          const xamlContext = xamlFiles.length ? ` Found in XAML files: [${xamlFiles.join(", ")}].` : "";
-          const layersChecked = [
-            catalogService.isLoaded() ? "activity-catalog (getPreferredVersion): no match" : "activity-catalog: not loaded",
-            "generation-metadata (getBaselineFallbackVersion): no match",
-          ].join("; ");
-          throw new Error(
-            `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in emitted XAML but has no validated version.${xamlContext} ` +
-            `Authority layers checked: [${layersChecked}]. ` +
-            `Cannot emit a fabricated version — build aborted. Add this package to the generation-metadata.json packageVersionRanges or activity catalog to resolve.`
-          );
-        }
+      const resolution = resolvePackageVersion(pkgName, tf as "Windows" | "Portable");
+      if (resolution) {
+        deps[pkgName] = resolution.version;
+        dependencyWarnings.push({
+          code: "DEPENDENCY_DISCOVERED_IN_XAML",
+          message: `Package ${pkgName} was not resolved proactively but was discovered in emitted XAML — added via ${resolution.source} (v${resolution.version}). This indicates a gap in the activity catalog mapping.`,
+          stage: "dependency-crosscheck",
+          recoverable: true,
+        });
+        console.warn(`[Dependency CrossCheck] Gap detected: ${pkgName} found in XAML but not in proactive resolution — added via ${resolution.source} v${resolution.version}`);
+      } else {
+        const xamlFiles = xamlEntries
+          ? xamlEntries.filter((e: { name: string; content: string }) => e.content.includes(pkgName)).map((e: { name: string; content: string }) => e.name)
+          : [];
+        const xamlContext = xamlFiles.length ? ` Found in XAML files: [${xamlFiles.join(", ")}].` : "";
+        const layersChecked = [
+          "generation-metadata: no match",
+          catalogService.isLoaded() ? "catalog (confirmed+preferred): no match" : "activity-catalog: not loaded",
+          "baseline-fallback: no match",
+        ].join("; ");
+        throw new Error(
+          `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in emitted XAML but has no validated version.${xamlContext} ` +
+          `Authority layers checked: [${layersChecked}]. ` +
+          `Cannot emit a fabricated version — build aborted. Add this package to the generation-metadata.json packageVersionRanges or activity catalog to resolve.`
+        );
       }
     }
 
@@ -5588,7 +5596,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           console.warn(`[Dependency Feed Validation] VERSION MISMATCH: ${pkgName}@${version} vs preferred ${versionRange.preferred}`);
         }
         if (versionRange.verificationSource === "studio-bundled") {
-          const catalogVersion = catalogService.isLoaded() ? catalogService.getPreferredVersion(pkgName) : null;
+          const catalogRes = resolvePackageVersion(pkgName, tf as "Windows" | "Portable");
+          const catalogVersion = catalogRes?.source.startsWith("catalog") ? catalogRes.version : null;
           if (catalogVersion && catalogVersion !== versionRange.preferred) {
             dependencyWarnings.push({
               code: "DEPENDENCY_STUDIO_BUNDLED_STALE",
@@ -5792,14 +5801,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           deferredWrites.set(`${libPath}/Workflows_Misc/Configurations/ProcessConstants.cs`, processConstantsTemplate);
 
           if (!deps["UiPath.CodedWorkflows"]) {
-            const codedWfVersion = catalogService.isLoaded()
-              ? catalogService.getPreferredVersion("UiPath.CodedWorkflows")
-              : null;
-            if (codedWfVersion) {
-              deps["UiPath.CodedWorkflows"] = codedWfVersion;
-            } else {
-              deps["UiPath.CodedWorkflows"] = "[24.10.0]";
-            }
+            const codedWfRes = resolvePackageVersion("UiPath.CodedWorkflows", tf as "Windows" | "Portable");
+            deps["UiPath.CodedWorkflows"] = codedWfRes?.version || "[24.10.0]";
             console.log(`[UiPath] Added UiPath.CodedWorkflows dependency for Integration Service scaffolding`);
           }
 
@@ -5841,17 +5844,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (pkgMatch) {
           const missingPkg = pkgMatch[1];
           if (!deps[missingPkg] && !isFrameworkAssembly(missingPkg)) {
-            let version: string | null = null;
-            if (catalogService.isLoaded()) {
-              version = catalogService.getPreferredVersion(missingPkg);
-            }
-            if (!version) {
-              version = getBaselineFallbackVersion(missingPkg, tf as "Windows" | "Portable");
-            }
-            if (version) {
-              deps[missingPkg] = version;
+            const resolution = resolvePackageVersion(missingPkg, tf as "Windows" | "Portable");
+            if (resolution) {
+              deps[missingPkg] = resolution.version;
               autoAddedPackages.add(missingPkg);
-              console.log(`[Namespace Coverage] Auto-added missing dependency ${missingPkg}@${version} to satisfy namespace/assembly reference`);
+              console.log(`[Namespace Coverage] Auto-added missing dependency ${missingPkg}@${resolution.version} (${resolution.source}) to satisfy namespace/assembly reference`);
             }
           }
         }
@@ -6814,28 +6811,19 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (allXamlForProactive.includes(`<${prefix}`) || allXamlForProactive.includes(`</${prefix}`)) {
           if (pkgName === "System") continue;
           if (!deps[pkgName]) {
-            if (catalogService.isLoaded()) {
-              const catalogVersion = catalogService.getPreferredVersion(pkgName);
-              if (catalogVersion) {
-                deps[pkgName] = catalogVersion;
-                autoFixSummary.push(`Proactively added ${pkgName}@${catalogVersion} — ${prefix} activities detected in XAML`);
-                console.log(`[Dependency Proactive] Added ${pkgName}@${catalogVersion} — ${prefix} prefix detected in emitted XAML`);
-                continue;
-              }
-            }
-            const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
-            if (fallback) {
-              deps[pkgName] = fallback;
-              autoFixSummary.push(`Proactively added ${pkgName}@${fallback} — ${prefix} activities detected in XAML`);
-              console.log(`[Dependency Proactive] Added ${pkgName}@${fallback} — ${prefix} prefix detected in emitted XAML`);
+            const resolution = resolvePackageVersion(pkgName, tf as "Windows" | "Portable");
+            if (resolution) {
+              deps[pkgName] = resolution.version;
+              autoFixSummary.push(`Proactively added ${pkgName}@${resolution.version} (${resolution.source}) — ${prefix} activities detected in XAML`);
+              console.log(`[Dependency Proactive] Added ${pkgName}@${resolution.version} (${resolution.source}) — ${prefix} prefix detected in emitted XAML`);
             }
           }
         }
       }
       const hasNewtonsoftTypesProactive = /JObject|JToken|JArray|JsonConvert|Newtonsoft/i.test(allXamlForProactive);
       if (hasNewtonsoftTypesProactive && !deps["Newtonsoft.Json"]) {
-        const njtVersion = catalogService.isLoaded() ? catalogService.getPreferredVersion("Newtonsoft.Json") : null;
-        const resolvedNjt = njtVersion || "13.0.3";
+        const njtResolution = resolvePackageVersion("Newtonsoft.Json", tf as "Windows" | "Portable");
+        const resolvedNjt = njtResolution?.version || "13.0.3";
         deps["Newtonsoft.Json"] = resolvedNjt;
         autoFixSummary.push(`Proactively added Newtonsoft.Json@${resolvedNjt} — Newtonsoft types detected in XAML`);
         console.log(`[Dependency Proactive] Added Newtonsoft.Json@${resolvedNjt} — JSON types detected in emitted XAML`);
@@ -6851,28 +6839,20 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           console.log(`[Dependency CrossCheck] Rejected framework assembly from post-meta-validation scan: ${pkgName}`);
           continue;
         }
-        if (catalogService.isLoaded()) {
-          const catalogVersion = catalogService.getPreferredVersion(pkgName);
-          if (catalogVersion) {
-            deps[pkgName] = catalogVersion;
-            autoFixSummary.push(`Added dependency from catalog crosscheck: ${pkgName}@${catalogVersion}`);
-            console.warn(`[Dependency CrossCheck] Post-fix gap: ${pkgName} discovered in XAML after meta-validation — added from catalog preferred v${catalogVersion}`);
-            continue;
-          }
-        }
-        const fallback = getBaselineFallbackVersion(pkgName, tf as "Windows" | "Portable");
-        if (fallback) {
-          deps[pkgName] = fallback;
-          autoFixSummary.push(`Added dependency from validated metadata service: ${pkgName}@${fallback}`);
-          console.warn(`[Dependency CrossCheck] Post-fix: using validated metadata service version for ${pkgName}: ${fallback}`);
+        const resolution = resolvePackageVersion(pkgName, tf as "Windows" | "Portable");
+        if (resolution) {
+          deps[pkgName] = resolution.version;
+          autoFixSummary.push(`Added dependency from ${resolution.source}: ${pkgName}@${resolution.version}`);
+          console.warn(`[Dependency CrossCheck] Post-fix gap: ${pkgName} discovered in XAML after meta-validation — added via ${resolution.source} v${resolution.version}`);
         } else {
           const postRemXamlFiles = xamlEntries
             ? xamlEntries.filter((e: { name: string; content: string }) => e.content.includes(pkgName)).map((e: { name: string; content: string }) => e.name)
             : [];
           const postRemXamlContext = postRemXamlFiles.length ? ` Found in XAML files: [${postRemXamlFiles.join(", ")}].` : "";
           const postRemLayersChecked = [
-            catalogService.isLoaded() ? "activity-catalog (getPreferredVersion): no match" : "activity-catalog: not loaded",
-            "generation-metadata (getBaselineFallbackVersion): no match",
+            "generation-metadata: no match",
+            catalogService.isLoaded() ? "catalog (confirmed+preferred): no match" : "activity-catalog: not loaded",
+            "baseline-fallback: no match",
           ].join("; ");
           throw new Error(
             `[Dependency CrossCheck] FATAL: Package "${pkgName}" is referenced in post-remediation XAML but has no validated version.${postRemXamlContext} ` +
@@ -6886,10 +6866,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const allXamlForNewtonsoftCheck = xamlEntries.map(e => e.content).join("\n");
         const hasNewtonsoftTypes = /JObject|JToken|JArray|JsonConvert|Newtonsoft/i.test(allXamlForNewtonsoftCheck);
         if (hasNewtonsoftTypes && !deps["Newtonsoft.Json"]) {
-          const newtonsoftVersion = catalogService.isLoaded()
-            ? catalogService.getPreferredVersion("Newtonsoft.Json")
-            : null;
-          const resolvedVersion = newtonsoftVersion || "13.0.3";
+          const njtRes = resolvePackageVersion("Newtonsoft.Json", tf as "Windows" | "Portable");
+          const resolvedVersion = njtRes?.version || "13.0.3";
           deps["Newtonsoft.Json"] = resolvedVersion;
           autoFixSummary.push(`Proactively added Newtonsoft.Json@${resolvedVersion} — Newtonsoft types detected in XAML`);
           console.log(`[Dependency Proactive] Added Newtonsoft.Json@${resolvedVersion} — JObject/JToken/JArray/JsonConvert types detected in XAML`);
@@ -6898,17 +6876,14 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (deps["UiPath.Web.Activities"] && !deps["UiPath.WebAPI.Activities"]) {
           const webVersion = deps["UiPath.Web.Activities"];
           delete deps["UiPath.Web.Activities"];
-          deps["UiPath.WebAPI.Activities"] = catalogService.isLoaded()
-            ? (catalogService.getPreferredVersion("UiPath.WebAPI.Activities") || "2.4.0")
-            : "2.4.0";
+          const webApiRes = resolvePackageVersion("UiPath.WebAPI.Activities", tf as "Windows" | "Portable");
+          deps["UiPath.WebAPI.Activities"] = webApiRes?.version || "2.4.0";
           autoFixSummary.push(`Migrated legacy UiPath.Web.Activities@${webVersion} → UiPath.WebAPI.Activities@${deps["UiPath.WebAPI.Activities"]}`);
           console.log(`[Dependency Migration] Migrated UiPath.Web.Activities → UiPath.WebAPI.Activities`);
         }
         if (hasWebAPIPackage && !deps["Newtonsoft.Json"]) {
-          const newtonsoftVersion = catalogService.isLoaded()
-            ? catalogService.getPreferredVersion("Newtonsoft.Json")
-            : null;
-          const resolvedVersion = newtonsoftVersion || "13.0.3";
+          const njtRes = resolvePackageVersion("Newtonsoft.Json", tf as "Windows" | "Portable");
+          const resolvedVersion = njtRes?.version || "13.0.3";
           deps["Newtonsoft.Json"] = resolvedVersion;
           autoFixSummary.push(`Proactively added Newtonsoft.Json@${resolvedVersion} — required by UiPath.WebAPI.Activities`);
           console.log(`[Dependency Proactive] Added Newtonsoft.Json@${resolvedVersion} — required by UiPath.WebAPI.Activities dependency`);
@@ -7872,10 +7847,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (!deps[nugetName]) {
             const info = PACKAGE_NAMESPACE_MAP[pkg];
             if (info) {
-              const resolvedVersion = getPreferredVersionFromMeta(nugetName);
-              if (resolvedVersion) {
-                deps[nugetName] = `[${resolvedVersion}]`;
-                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Added missing project dependency: ${nugetName} = [${resolvedVersion}]`);
+              const resolution = resolvePackageVersion(nugetName, tf as "Windows" | "Portable");
+              if (resolution) {
+                deps[nugetName] = `[${resolution.version}]`;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Added missing project dependency: ${nugetName} = [${resolution.version}] (${resolution.source})`);
               } else {
                 console.warn(`[Authoritative Declaration Synthesis] [${fileName}] Skipping dependency ${nugetName} — no validated version found`);
               }
@@ -8103,16 +8078,16 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           console.warn(`[Authoritative Declaration Synthesis] Guard: removing :: variant key from deps: ${depKey} → ${baseName}`);
           delete deps[depKey];
           if (!deps[baseName]) {
-            const resolved = getPreferredVersionFromMeta(baseName);
-            if (resolved) {
-              deps[baseName] = `[${resolved}]`;
+            const resolution = resolvePackageVersion(baseName, tf as "Windows" | "Portable");
+            if (resolution) {
+              deps[baseName] = `[${resolution.version}]`;
             }
           }
         } else if (depVal === "*" || depVal === "[*]") {
-          const resolved = getPreferredVersionFromMeta(depKey);
-          if (resolved) {
-            deps[depKey] = `[${resolved}]`;
-            console.warn(`[Authoritative Declaration Synthesis] Guard: resolved wildcard version for ${depKey} → [${resolved}]`);
+          const resolution = resolvePackageVersion(depKey, tf as "Windows" | "Portable");
+          if (resolution) {
+            deps[depKey] = `[${resolution.version}]`;
+            console.warn(`[Authoritative Declaration Synthesis] Guard: resolved wildcard version for ${depKey} → [${resolution.version}] (${resolution.source})`);
           } else {
             console.warn(`[Authoritative Declaration Synthesis] Guard: removing unresolvable wildcard dependency: ${depKey}=${depVal}`);
             delete deps[depKey];
