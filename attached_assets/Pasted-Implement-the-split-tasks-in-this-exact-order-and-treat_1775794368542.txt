@@ -1,0 +1,60 @@
+Implement the split tasks in this exact order and treat them as isolated regression-attribution steps:
+
+Execution order
+1. Task 494 — deferredWrites and xamlEntries synchronization authority
+2. Task 495 — Namespace injection single-pass consolidation
+3. Task 493 — Catalog-first dependency resolution consolidation
+4. Task 496 — Required-property context-derived fallback tier
+
+Why this order
+- Task 494 is foundational. If deferredWrites and xamlEntries are out of sync, later validators, injectors, and package assembly paths can read stale content and produce false positives or wrong mutations.
+- Task 495 should come after 494 because single-pass namespace/reference injection must operate on consistent content sources.
+- Task 493 is important authority cleanup, but should follow the content/injection stabilization unless a current run is hard-failing specifically at dependency/version resolution.
+- Task 496 changes fallback behavior and can mask upstream defects if done too early, so it must be last.
+
+Implementation instructions
+- Implement one task at a time in the order above.
+- After each task:
+  1. run only the most relevant test files for that task first
+  2. summarize exactly what changed
+  3. report which failing tests improved, which did not, and any regressions
+  4. do not continue to the next task if the current task introduces regressions in the relevant test area without first explaining them
+- Keep regression attribution clean. Do not opportunistically mix pieces of later tasks into earlier tasks.
+- If a task needs a tiny compatibility adjustment in a neighboring module, keep it minimal and explicitly call it out.
+- Do not broaden scope beyond the split-task definitions unless a blocker makes it absolutely necessary, and if so, explain it before proceeding.
+
+Task-specific focus
+Task 494
+- Build one atomic sync helper for deferredWrites and xamlEntries
+- Replace all XAML mutation sites to use it
+- Ensure allXamlContent no longer concatenates stale and current content for the same file
+
+Task 495
+- Consolidate primary namespace/reference injection and declaration synthesis into one authoritative pass
+- Preserve block-creation behavior
+- Eliminate false “block not found” warnings and read-only side effects
+- Use the now-synchronized content surfaces from Task 494
+
+Task 493
+- Make normalizePackageName catalog-first
+- Make buildAssemblyToPackageMap catalog-aware if still necessary
+- Introduce one shared canonicalize-then-resolve package version path
+- Replace the current scattered resolution sites with that shared path
+
+Task 496
+- Add a narrowly scoped tier 7 context-derived fallback
+- Keep it limited to the explicitly approved properties only
+- Do not use it to mask genuine spec deficiencies
+- All fallback values must be valid VB.NET expressions and clearly distinguishable from real values
+
+Reporting format after each task
+Please return:
+- files changed
+- tests run
+- tests improved
+- tests still failing in that task’s scope
+- regressions introduced, if any
+- whether it is safe to proceed to the next task
+
+Important
+Do not implement all four together. I need clean stepwise attribution.
