@@ -70,9 +70,19 @@ export interface DecompositionMetrics {
   totalElapsedMs: number;
 }
 
+export interface SpecScaffoldMeta {
+  executionOrder: string[];
+  workflowContracts: Array<{
+    name: string;
+    invokes: string[];
+    sharedArguments: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
+  }>;
+}
+
 export interface DecomposedSpecResult {
   packageSpec: UiPathPackageSpec;
   metrics: DecompositionMetrics;
+  scaffoldMeta: SpecScaffoldMeta;
 }
 
 interface ScaffoldWorkflowEntry {
@@ -1254,5 +1264,18 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   console.log(`[SpecDecomposer] Run ${runId}: Decomposition complete — ${mergedSpec.workflows.length} workflows, ${metrics.stubCount} stubs, ${metrics.totalLlmCalls} LLM calls, ${metrics.totalElapsedMs}ms total`);
 
-  return { packageSpec: mergedSpec, metrics };
+  const scaffoldMeta: SpecScaffoldMeta = {
+    executionOrder,
+    workflowContracts: scaffold.workflows.map(w => ({
+      name: w.name,
+      invokes: w.invokes || [],
+      sharedArguments: (w.sharedArguments || []).map(a => ({
+        name: a.name,
+        direction: a.direction,
+        type: a.type,
+      })),
+    })),
+  };
+
+  return { packageSpec: mergedSpec, metrics, scaffoldMeta };
 }

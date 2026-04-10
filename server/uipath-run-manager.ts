@@ -415,6 +415,7 @@ async function executeRun(
         });
 
         packageJson = decomposedResult.packageSpec;
+        packageJson._specScaffoldMeta = decomposedResult.scaffoldMeta;
 
         const decompositionMetrics = decomposedResult.metrics;
         const actualWorkflowCount = packageJson.workflows.length;

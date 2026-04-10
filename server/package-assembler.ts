@@ -341,6 +341,316 @@ function clrToXamlType(clrType: string): string {
   return map[clrType] || "x:String";
 }
 
+function specTypeToXamlType(specType: string): string | null {
+  const map: Record<string, string> = {
+    "String": "x:String",
+    "Int32": "x:Int32",
+    "Int64": "x:Int64",
+    "Boolean": "x:Boolean",
+    "Double": "x:Double",
+    "Decimal": "x:Decimal",
+    "Object": "x:Object",
+    "DateTime": "s:DateTime",
+    "TimeSpan": "s:TimeSpan",
+    "DataTable": "scg2:DataTable",
+    "DataRow": "scg2:DataRow",
+    "SecureString": "s:Security.SecureString",
+    "Exception": "s:Exception",
+    "QueueItem": "ui:QueueItem",
+    "TransactionItem": "ui:TransactionItem",
+    "MailMessage": "s:Net.Mail.MailMessage",
+    "Dictionary<String,Object>": "scg:Dictionary(x:String, x:Object)",
+    "Dictionary<String, Object>": "scg:Dictionary(x:String, x:Object)",
+    "Array<String>": "scg:List(x:String)",
+    "List<String>": "scg:List(x:String)",
+    "List<Object>": "scg:List(x:Object)",
+  };
+  const directMatch = map[specType];
+  if (directMatch) return directMatch;
+  const lowerKey = Object.keys(map).find(k => k.toLowerCase() === specType.toLowerCase());
+  if (lowerKey) return map[lowerKey];
+  const clrResult = clrToXamlType(specType);
+  if (clrResult !== "x:String" || specType === "System.String" || specType === "String") return clrResult;
+  return null;
+}
+
+function stripDirectionalPrefix(argName: string): string {
+  if (argName.startsWith("in_out_")) return argName.slice(7);
+  if (argName.startsWith("in_")) return argName.slice(3);
+  if (argName.startsWith("out_")) return argName.slice(4);
+  if (argName.startsWith("io_")) return argName.slice(3);
+  return argName;
+}
+
+interface SpecScaffoldMetaLocal {
+  executionOrder: string[];
+  workflowContracts: Array<{
+    name: string;
+    invokes: string[];
+    sharedArguments: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
+  }>;
+}
+
+function buildSpecAwareInvocations(
+  scaffoldMeta: SpecScaffoldMetaLocal,
+  generatedWorkflowNames: Set<string>,
+  isReFrameworkMode: boolean,
+): {
+  invocationXaml: string;
+  variablesXaml: string;
+  wiredWorkflows: string[];
+  diagnostics: string[];
+  failures: string[];
+} {
+  const diagnostics: string[] = [];
+  const failures: string[] = [];
+  const wiredWorkflows: string[] = [];
+  const callerVariables = new Map<string, string>();
+
+  const contractMap = new Map<string, SpecScaffoldMetaLocal["workflowContracts"][number]>();
+  for (const c of scaffoldMeta.workflowContracts) {
+    contractMap.set(c.name, c);
+    contractMap.set(normalizeWorkflowName(c.name), c);
+  }
+
+  const invokedByOthers = new Set<string>();
+  for (const c of scaffoldMeta.workflowContracts) {
+    for (const inv of c.invokes) {
+      invokedByOthers.add(inv);
+      invokedByOthers.add(normalizeWorkflowName(inv));
+    }
+  }
+
+  const topLevelWorkflows: string[] = [];
+  for (const name of scaffoldMeta.executionOrder) {
+    const normalized = normalizeWorkflowName(name);
+    if (isCanonicalInfrastructureName(normalized)) continue;
+    if (invokedByOthers.has(name) || invokedByOthers.has(normalized)) continue;
+    if (!generatedWorkflowNames.has(normalized) && !generatedWorkflowNames.has(name)) {
+      diagnostics.push(`[Spec Wiring] Workflow "${name}" in executionOrder but not in generated files — skipping`);
+      continue;
+    }
+    topLevelWorkflows.push(name);
+  }
+
+  Array.from(generatedWorkflowNames).forEach(gwfName => {
+    if (isCanonicalInfrastructureName(gwfName)) return;
+    const alreadyTop = topLevelWorkflows.some(t => normalizeWorkflowName(t) === gwfName);
+    if (alreadyTop) return;
+    if (invokedByOthers.has(gwfName)) return;
+    if (!contractMap.has(gwfName)) {
+      topLevelWorkflows.push(gwfName);
+    }
+  });
+
+  let invocationXaml = "";
+
+  for (const wfName of topLevelWorkflows) {
+    const normalized = normalizeWorkflowName(wfName);
+    const contract = contractMap.get(wfName) || contractMap.get(normalized);
+    const args = contract?.sharedArguments || [];
+    let argBlock = "";
+    let argFailed = false;
+
+    for (const arg of args) {
+      const xamlType = specTypeToXamlType(arg.type);
+      if (!xamlType) {
+        diagnostics.push(`[Spec Wiring] Workflow "${wfName}" argument "${arg.name}" has unresolvable type "${arg.type}" — failing wiring for this workflow`);
+        argFailed = true;
+        break;
+      }
+
+      const callerVarName = stripDirectionalPrefix(arg.name);
+      const existingType = callerVariables.get(callerVarName);
+      if (existingType && existingType !== xamlType) {
+        diagnostics.push(`[Spec Wiring] Variable "${callerVarName}" type conflict: "${existingType}" vs "${xamlType}" for argument "${arg.name}" in workflow "${wfName}"`);
+        failures.push(`Variable "${callerVarName}" type conflict in workflow "${wfName}": existing type "${existingType}" vs required type "${xamlType}" for argument "${arg.name}"`);
+        argFailed = true;
+        break;
+      } else {
+        callerVariables.set(callerVarName, xamlType);
+      }
+
+      let wrapperTag: string;
+      if (arg.direction === "in") {
+        wrapperTag = "InArgument";
+      } else if (arg.direction === "out") {
+        wrapperTag = "OutArgument";
+      } else {
+        wrapperTag = "InOutArgument";
+      }
+
+      argBlock += `
+            <${wrapperTag} x:TypeArguments="${xamlType}" x:Key="${escapeXml(arg.name)}">[${callerVarName}]</${wrapperTag}>`;
+    }
+
+    if (argFailed) {
+      failures.push(`Workflow "${wfName}" wiring failed due to unresolvable argument types`);
+      continue;
+    }
+
+    const fileName = `${normalized}.xaml`;
+    if (args.length > 0) {
+      invocationXaml += `
+        <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(wfName)}" WorkflowFileName="${fileName}">
+          <ui:InvokeWorkflowFile.Arguments>${argBlock}
+          </ui:InvokeWorkflowFile.Arguments>
+        </ui:InvokeWorkflowFile>`;
+    } else {
+      invocationXaml += `
+        <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(wfName)}" WorkflowFileName="${fileName}" />`;
+    }
+    wiredWorkflows.push(normalized);
+  }
+
+  let variablesXaml = "";
+  Array.from(callerVariables.entries()).forEach(([varName, varType]) => {
+    variablesXaml += `
+      <Variable x:TypeArguments="${varType}" Name="${varName}" />`;
+  });
+
+  return { invocationXaml, variablesXaml, wiredWorkflows, diagnostics, failures };
+}
+
+function wireChildWorkflowInvocations(
+  scaffoldMeta: SpecScaffoldMetaLocal,
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  libPath: string,
+  generatedWorkflowNames: Set<string>,
+): { diagnostics: string[]; failures: string[]; wiredCount: number } {
+  const diagnostics: string[] = [];
+  const failures: string[] = [];
+  let wiredCount = 0;
+
+  const contractMap = new Map<string, SpecScaffoldMetaLocal["workflowContracts"][number]>();
+  for (const c of scaffoldMeta.workflowContracts) {
+    contractMap.set(normalizeWorkflowName(c.name), c);
+  }
+
+  for (const contract of scaffoldMeta.workflowContracts) {
+    const callerNormalized = normalizeWorkflowName(contract.name);
+    if (isCanonicalInfrastructureName(callerNormalized)) continue;
+    if (!contract.invokes || contract.invokes.length === 0) continue;
+
+    const callerKey = `${libPath}/${callerNormalized}.xaml`;
+    let callerContent = deferredWrites.get(callerKey) || "";
+    if (!callerContent) continue;
+
+    let modified = false;
+    const callerVars = new Map<string, string>();
+
+    for (const invokedName of contract.invokes) {
+      const invokedNormalized = normalizeWorkflowName(invokedName);
+      if (isCanonicalInfrastructureName(invokedNormalized)) continue;
+      const invokedFileName = `${invokedNormalized}.xaml`;
+
+      if (callerContent.includes(`WorkflowFileName="${invokedFileName}"`)) {
+        diagnostics.push(`[Child Wiring] ${callerNormalized} already invokes ${invokedNormalized} — skipping`);
+        continue;
+      }
+
+      if (!generatedWorkflowNames.has(invokedNormalized)) {
+        diagnostics.push(`[Child Wiring] ${callerNormalized} invokes ${invokedNormalized} but it was not generated — skipping`);
+        continue;
+      }
+
+      const calleeContract = contractMap.get(invokedNormalized);
+      const calleeArgs = calleeContract?.sharedArguments || [];
+      let argBlock = "";
+      let argFailed = false;
+
+      for (const arg of calleeArgs) {
+        const xamlType = specTypeToXamlType(arg.type);
+        if (!xamlType) {
+          diagnostics.push(`[Child Wiring] ${callerNormalized} → ${invokedNormalized}: argument "${arg.name}" has unresolvable type "${arg.type}"`);
+          failures.push(`Child wiring ${callerNormalized} → ${invokedNormalized}: unresolvable argument type "${arg.type}" for "${arg.name}"`);
+          argFailed = true;
+          break;
+        }
+
+        const varName = stripDirectionalPrefix(arg.name);
+        const existingType = callerVars.get(varName);
+        if (existingType && existingType !== xamlType) {
+          failures.push(`Child wiring ${callerNormalized}: variable "${varName}" type conflict "${existingType}" vs "${xamlType}" for argument "${arg.name}"`);
+          argFailed = true;
+          break;
+        }
+        callerVars.set(varName, xamlType);
+
+        let wrapperTag: string;
+        if (arg.direction === "in") wrapperTag = "InArgument";
+        else if (arg.direction === "out") wrapperTag = "OutArgument";
+        else wrapperTag = "InOutArgument";
+
+        argBlock += `
+            <${wrapperTag} x:TypeArguments="${xamlType}" x:Key="${escapeXml(arg.name)}">[${varName}]</${wrapperTag}>`;
+      }
+
+      if (argFailed) continue;
+
+      let invokeXml: string;
+      if (calleeArgs.length > 0) {
+        invokeXml = `
+        <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(invokedName)}" WorkflowFileName="${invokedFileName}">
+          <ui:InvokeWorkflowFile.Arguments>${argBlock}
+          </ui:InvokeWorkflowFile.Arguments>
+        </ui:InvokeWorkflowFile>`;
+      } else {
+        invokeXml = `
+        <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(invokedName)}" WorkflowFileName="${invokedFileName}" />`;
+      }
+
+      const lastSeqClose = callerContent.lastIndexOf("</Sequence>");
+      if (lastSeqClose === -1) {
+        diagnostics.push(`[Child Wiring] ${callerNormalized}: no </Sequence> found to insert invocation of ${invokedNormalized}`);
+        continue;
+      }
+      callerContent = callerContent.slice(0, lastSeqClose) + invokeXml + "\n      " + callerContent.slice(lastSeqClose);
+      modified = true;
+      wiredCount++;
+      diagnostics.push(`[Child Wiring] Injected ${callerNormalized} → ${invokedNormalized} with ${calleeArgs.length} typed argument(s)`);
+    }
+
+    if (modified) {
+      let variablesXml = "";
+      Array.from(callerVars.entries()).forEach(([varName, varType]) => {
+        if (!callerContent.includes(`Name="${varName}"`)) {
+          variablesXml += `
+        <Variable x:TypeArguments="${varType}" Name="${varName}" />`;
+        }
+      });
+
+      if (variablesXml) {
+        const seqVarsEnd = callerContent.indexOf("</Sequence.Variables>");
+        if (seqVarsEnd !== -1) {
+          callerContent = callerContent.slice(0, seqVarsEnd) + variablesXml + "\n      " + callerContent.slice(seqVarsEnd);
+        } else {
+          const seqOpenMatch = callerContent.match(/<Sequence\s[^>]*>/);
+          if (seqOpenMatch && seqOpenMatch.index !== undefined) {
+            const insertPos = seqOpenMatch.index + seqOpenMatch[0].length;
+            const varsBlock = `
+      <Sequence.Variables>${variablesXml}
+      </Sequence.Variables>`;
+            callerContent = callerContent.slice(0, insertPos) + varsBlock + callerContent.slice(insertPos);
+          }
+        }
+      }
+
+      deferredWrites.set(callerKey, callerContent);
+      const entryIdx = xamlEntries.findIndex(e => {
+        const bn = e.name.split("/").pop() || e.name;
+        return bn === `${callerNormalized}.xaml`;
+      });
+      if (entryIdx >= 0) {
+        xamlEntries[entryIdx] = { name: xamlEntries[entryIdx].name, content: callerContent };
+      }
+    }
+  }
+
+  return { diagnostics, failures, wiredCount };
+}
+
 function sanitizeClrTypeArguments(xamlContent: string): string {
   return xamlContent.replace(
     /x:TypeArguments="(\{[^"]+\})"/g,
@@ -2257,6 +2567,170 @@ function runPostAssemblyValidation(
   };
 }
 
+function runSpecGraphValidation(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  libPath: string,
+  specScaffoldMeta: SpecScaffoldMetaLocal | null,
+  generatedWorkflowNames: Set<string>,
+): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!specScaffoldMeta) {
+    return { errors, warnings };
+  }
+
+  const allFiles = new Map<string, string>();
+  const filenameToKey = new Map<string, string>();
+  const pfx = libPath + "/";
+  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+    if (path.endsWith(".xaml")) {
+      const relPath = path.startsWith(pfx) ? path.slice(pfx.length) : (path.split("/").pop() || path);
+      allFiles.set(relPath, content);
+      const basename = relPath.split("/").pop() || relPath;
+      if (!filenameToKey.has(basename)) filenameToKey.set(basename, relPath);
+    }
+  });
+  for (const entry of xamlEntries) {
+    const relPath = entry.name.startsWith(pfx) ? entry.name.slice(pfx.length) : (entry.name.split("/").pop() || entry.name);
+    if (relPath.endsWith(".xaml") && !allFiles.has(relPath)) {
+      allFiles.set(relPath, entry.content);
+      const basename = relPath.split("/").pop() || relPath;
+      if (!filenameToKey.has(basename)) filenameToKey.set(basename, relPath);
+    }
+  }
+
+  const graph = new Map<string, string[]>();
+  const canonicalToKey = new Map<string, string>();
+  Array.from(allFiles.keys()).forEach(file => {
+    const basename = (file.split("/").pop() || file).replace(/\.xaml$/i, "");
+    const canonical = normalizeWorkflowName(basename);
+    if (!canonicalToKey.has(canonical)) canonicalToKey.set(canonical, file);
+  });
+  Array.from(allFiles.entries()).forEach(([file, content]) => {
+    const refs: string[] = [];
+    const invokePattern = /WorkflowFileName="([^"]+)"/g;
+    let match;
+    while ((match = invokePattern.exec(content)) !== null) {
+      const rawValue = match[1];
+      const normalized = normalizeWorkflowName(rawValue);
+      const normalizedXaml = normalized + ".xaml";
+      if (allFiles.has(normalizedXaml)) {
+        refs.push(normalizedXaml);
+      } else {
+        const mapped = filenameToKey.get(normalizedXaml) || canonicalToKey.get(normalized.toLowerCase());
+        if (mapped) refs.push(mapped);
+        else refs.push(normalizedXaml);
+      }
+    }
+    graph.set(file, refs);
+  });
+
+  const reachable = new Set<string>();
+  const mainKey = allFiles.has("Main.xaml") ? "Main.xaml" : (filenameToKey.get("Main.xaml") || "Main.xaml");
+  const queue = [mainKey];
+  reachable.add(mainKey);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const refs = graph.get(current) || [];
+    for (const ref of refs) {
+      if (!reachable.has(ref)) {
+        reachable.add(ref);
+        queue.push(ref);
+      }
+    }
+  }
+
+  const specWorkflowNames = new Set<string>();
+  for (const contract of specScaffoldMeta.workflowContracts) {
+    const normalized = normalizeWorkflowName(contract.name);
+    if (!isCanonicalInfrastructureName(normalized)) {
+      specWorkflowNames.add(normalized);
+    }
+  }
+
+  const unreachableSpec: string[] = [];
+  Array.from(specWorkflowNames).forEach(specWf => {
+    const reachableAsFile = reachable.has(`${specWf}.xaml`) || reachable.has(specWf);
+    const existsInGenerated = generatedWorkflowNames.has(specWf);
+    if (existsInGenerated && !reachableAsFile) {
+      const found = Array.from(reachable).some(r => {
+        const rBase = (r.split("/").pop() || r).replace(/\.xaml$/i, "");
+        return normalizeWorkflowName(rBase) === specWf;
+      });
+      if (!found) {
+        unreachableSpec.push(specWf);
+      }
+    }
+  });
+
+  if (unreachableSpec.length > 0) {
+    errors.push(`${unreachableSpec.length} spec-generated workflow(s) unreachable from Main.xaml: ${unreachableSpec.join(", ")}`);
+  }
+
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+  const cycles: string[] = [];
+
+  function detectCycle(node: string, path: string[]): void {
+    if (inStack.has(node)) {
+      const cycleStart = path.indexOf(node);
+      const cycle = path.slice(cycleStart).concat(node);
+      cycles.push(cycle.join(" → "));
+      return;
+    }
+    if (visited.has(node)) return;
+    visited.add(node);
+    inStack.add(node);
+    const refs = graph.get(node) || [];
+    for (const ref of refs) {
+      detectCycle(ref, [...path, node]);
+    }
+    inStack.delete(node);
+  }
+
+  Array.from(graph.keys()).forEach(node => {
+    if (!visited.has(node)) {
+      detectCycle(node, []);
+    }
+  });
+
+  if (cycles.length > 0) {
+    for (const cycle of cycles) {
+      errors.push(`[Spec Graph Validation] Circular invocation detected: ${cycle}`);
+    }
+  }
+
+  const existingFileNames = new Set(Array.from(allFiles.keys()));
+
+  Array.from(allFiles.entries()).forEach(([file, content]) => {
+    const invokePattern = /WorkflowFileName="([^"]+)"/g;
+    let match;
+    while ((match = invokePattern.exec(content)) !== null) {
+      const refFile = match[1];
+      const refWithExt = refFile.endsWith(".xaml") ? refFile : `${refFile}.xaml`;
+      if (!existingFileNames.has(refWithExt)) {
+        const caseMismatch = Array.from(existingFileNames).find(f => f.toLowerCase() === refWithExt.toLowerCase());
+        const sourceBasename = file.split("/").pop() || file;
+        if (caseMismatch) {
+          errors.push(`WorkflowFileName="${refFile}" in ${sourceBasename} has case mismatch — expected "${caseMismatch}"`);
+        } else {
+          errors.push(`WorkflowFileName="${refFile}" in ${sourceBasename} references non-existent file`);
+        }
+      }
+    }
+  });
+
+  if (unreachableSpec.length === 0 && cycles.length === 0) {
+    console.log(`[Spec Graph Validation] PASSED: all ${specWorkflowNames.size} spec-generated workflow(s) reachable, no circular invocations`);
+  } else {
+    console.warn(`[Spec Graph Validation] Issues found: ${unreachableSpec.length} unreachable spec workflow(s), ${cycles.length} circular invocation(s)`);
+  }
+
+  return { errors, warnings };
+}
+
 export function buildAssemblyToPackageMap(): Map<string, string> {
   const map = new Map<string, string>();
 
@@ -3299,6 +3773,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     hasQueues,
     undefined,
   );
+
+  const specScaffoldMeta = pkg.internal?.specScaffoldMeta || null;
 
   let enrichment: EnrichmentResult | null = null;
   let treeEnrichment: TreeEnrichmentResult | null = null;
@@ -4763,33 +5239,62 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
         console.log(`[UiPath] Generated expanded REFramework file set (InitAllApplications, RetryCurrentTransaction, RetryInit + ${patternOptionalFiles.length} pattern-specific files)`);
 
-        if (!deferredWrites.has(`${libPath}/Process.xaml`)) {
+        {
           let processInvocations = "";
+          let processVariablesBlock: string | undefined;
           const invokedInProcess = new Set<string>();
-          if (enrichment?.decomposition?.length) {
-            for (const decomp of enrichment.decomposition) {
-              const wfName = normalizeWorkflowName(decomp.name);
-              if (isCanonicalInfrastructureName(wfName)) continue;
-              if (invokedInProcess.has(wfName)) continue;
-              invokedInProcess.add(wfName);
-              processInvocations += `
-        <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(decomp.name)}" WorkflowFileName="${wfName}.xaml" />`;
+          const processAlreadyExists = deferredWrites.has(`${libPath}/Process.xaml`);
+
+          if (specScaffoldMeta) {
+            const wiringResult = buildSpecAwareInvocations(specScaffoldMeta, generatedWorkflowNames, true);
+            for (const diag of wiringResult.diagnostics) {
+              console.log(diag);
+            }
+            if (wiringResult.failures.length > 0) {
+              throw new Error(`[Spec Wiring] BLOCKED: ${wiringResult.failures.length} workflow wiring failure(s) in Process.xaml: ${wiringResult.failures.join("; ")}`);
+            }
+            if (wiringResult.invocationXaml) {
+              processInvocations = wiringResult.invocationXaml;
+              for (const wired of wiringResult.wiredWorkflows) {
+                invokedInProcess.add(wired);
+              }
+              if (wiringResult.variablesXaml) {
+                processVariablesBlock = `<Sequence.Variables>${wiringResult.variablesXaml}
+    </Sequence.Variables>`;
+              }
+              console.log(`[UiPath] Spec-aware wiring: wired ${wiringResult.wiredWorkflows.length} workflow(s) into Process.xaml with typed arguments: ${wiringResult.wiredWorkflows.join(", ")}${processAlreadyExists ? " (replacing existing Process.xaml)" : ""}`);
             }
           }
-          Array.from(generatedWorkflowNames).forEach(gwfName => {
-            if (isCanonicalInfrastructureName(gwfName)) return;
-            if (invokedInProcess.has(gwfName)) return;
-            invokedInProcess.add(gwfName);
-            processInvocations += `
+
+          if (!processInvocations && !specScaffoldMeta) {
+            if (enrichment?.decomposition?.length) {
+              for (const decomp of enrichment.decomposition) {
+                const wfName = normalizeWorkflowName(decomp.name);
+                if (isCanonicalInfrastructureName(wfName)) continue;
+                if (invokedInProcess.has(wfName)) continue;
+                invokedInProcess.add(wfName);
+                processInvocations += `
+        <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(decomp.name)}" WorkflowFileName="${wfName}.xaml" />`;
+              }
+            }
+            Array.from(generatedWorkflowNames).forEach(gwfName => {
+              if (isCanonicalInfrastructureName(gwfName)) return;
+              if (invokedInProcess.has(gwfName)) return;
+              invokedInProcess.add(gwfName);
+              processInvocations += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(gwfName)}" WorkflowFileName="${gwfName}.xaml" />`;
-          });
+            });
+          } else if (!processInvocations && specScaffoldMeta) {
+            throw new Error(`[Spec Wiring] BLOCKED: spec scaffold metadata present but spec-aware wiring produced no invocations for Process.xaml — cannot fall back to untyped wiring`);
+          }
+
           if (!processInvocations) {
             processInvocations = `
         <ui:LogMessage DisplayName="Log Process Placeholder" Level="Info" Message="[&quot;Process transaction logic goes here&quot;]" />`;
           }
-          const processXaml = buildXaml("Process", `${projectName} - Process Transaction`, processInvocations);
+          const processXaml = buildXaml("Process", `${projectName} - Process Transaction`, processInvocations, processVariablesBlock);
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Process.xaml`, compliancePass(processXaml, "Process.xaml"));
-          console.log(`[UiPath] Generated Process.xaml wiring ${invokedInProcess.size} sub-workflow(s) for REFramework`);
+          console.log(`[UiPath] ${processAlreadyExists ? "Rebuilt" : "Generated"} Process.xaml wiring ${invokedInProcess.size} sub-workflow(s) for REFramework`);
         }
       } catch (reframeworkErr: any) {
         console.error(`[UiPath] REFramework compliance failed, falling back to simple linear Main.xaml: ${reframeworkErr.message}`);
@@ -4856,38 +5361,67 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       let mainActivities = `
         <ui:InvokeWorkflowFile DisplayName="Initialize Settings" WorkflowFileName="InitAllSettings.xaml" />`;
 
+      let mainVariablesBlock: string | undefined;
       const invokedNames = new Set<string>();
       const isMainVariant = (name: string): boolean => {
         const normalized = name.replace(/\.xaml$/i, "").replace(/[_\s.]+/g, "").toLowerCase();
         return normalized === "main";
       };
 
-      if (enrichment?.decomposition?.length) {
-        for (const decomp of enrichment.decomposition) {
-          const wfName = normalizeWorkflowName(decomp.name);
-          if (isMainVariant(wfName)) continue;
-          invokedNames.add(wfName);
-          mainActivities += `
+      let specWiringUsed = false;
+      if (specScaffoldMeta) {
+        const wiringResult = buildSpecAwareInvocations(specScaffoldMeta, generatedWorkflowNames, false);
+        for (const diag of wiringResult.diagnostics) {
+          console.log(diag);
+        }
+        if (wiringResult.failures.length > 0) {
+          throw new Error(`[Spec Wiring] BLOCKED: ${wiringResult.failures.length} workflow wiring failure(s) in Main.xaml: ${wiringResult.failures.join("; ")}`);
+        }
+        if (wiringResult.invocationXaml) {
+          mainActivities += wiringResult.invocationXaml;
+          for (const wired of wiringResult.wiredWorkflows) {
+            invokedNames.add(wired);
+          }
+          if (wiringResult.variablesXaml) {
+            mainVariablesBlock = `<Sequence.Variables>${wiringResult.variablesXaml}
+    </Sequence.Variables>`;
+          }
+          specWiringUsed = true;
+          console.log(`[UiPath] Spec-aware wiring: wired ${wiringResult.wiredWorkflows.length} workflow(s) into Main.xaml (simple-linear) with typed arguments: ${wiringResult.wiredWorkflows.join(", ")}`);
+        }
+      }
+
+      if (!specWiringUsed && specScaffoldMeta) {
+        throw new Error(`[Spec Wiring] BLOCKED: spec scaffold metadata present but spec-aware wiring produced no invocations for Main.xaml — cannot fall back to untyped wiring`);
+      }
+      if (!specWiringUsed) {
+        if (enrichment?.decomposition?.length) {
+          for (const decomp of enrichment.decomposition) {
+            const wfName = normalizeWorkflowName(decomp.name);
+            if (isMainVariant(wfName)) continue;
+            invokedNames.add(wfName);
+            mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(decomp.name)}" WorkflowFileName="${wfName}.xaml" />`;
+          }
         }
-      }
-      if (workflows.length > 0) {
-        for (const wf of workflows) {
-          const wfName = normalizeWorkflowName(wf.name || "Workflow");
-          if (isMainVariant(wfName)) continue;
-          if (invokedNames.has(wfName)) continue;
-          invokedNames.add(wfName);
-          mainActivities += `
+        if (workflows.length > 0) {
+          for (const wf of workflows) {
+            const wfName = normalizeWorkflowName(wf.name || "Workflow");
+            if (isMainVariant(wfName)) continue;
+            if (invokedNames.has(wfName)) continue;
+            invokedNames.add(wfName);
+            mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(wf.name || wfName)}" WorkflowFileName="${wfName}.xaml" />`;
+          }
         }
-      }
-      Array.from(generatedWorkflowNames).forEach(gwfName => {
-        if (isMainVariant(gwfName)) return;
-        if (invokedNames.has(gwfName)) return;
-        invokedNames.add(gwfName);
-        mainActivities += `
+        Array.from(generatedWorkflowNames).forEach(gwfName => {
+          if (isMainVariant(gwfName)) return;
+          if (invokedNames.has(gwfName)) return;
+          invokedNames.add(gwfName);
+          mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(gwfName)}" WorkflowFileName="${gwfName}.xaml" />`;
-      });
+        });
+      }
 
       if (invokedNames.size === 0 && processNodes.length > 0 && !isMainVariant(projectName)) {
         mainActivities += `
@@ -4898,25 +5432,27 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         <ui:Comment DisplayName="Auto-generated by CannonBall" Text="This automation package was generated from the CannonBall pipeline. Open this project in UiPath Studio to build out the workflow logic." />`;
       }
 
-      for (const gwfName of generatedWorkflowNames) {
-        if (invokedNames.has(gwfName)) continue;
-        if (gwfName.toLowerCase() === "main") continue;
-        invokedNames.add(gwfName);
-        mainActivities += `
+      if (!specWiringUsed) {
+        for (const gwfName of generatedWorkflowNames) {
+          if (invokedNames.has(gwfName)) continue;
+          if (gwfName.toLowerCase() === "main") continue;
+          invokedNames.add(gwfName);
+          mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(gwfName)}" WorkflowFileName="${gwfName}.xaml" />`;
-      }
+        }
 
-      const infrastructureFiles = CANONICAL_INFRASTRUCTURE_NAMES;
-      for (const deferredKey of deferredWrites.keys()) {
-        const deferredMatch = deferredKey.match(/([^/]+)\.xaml$/i);
-        if (!deferredMatch) continue;
-        const deferredBasename = deferredMatch[1];
-        const canonicalBasename = canonicalizeWorkflowName(deferredBasename);
-        if (infrastructureFiles.has(canonicalBasename)) continue;
-        if (invokedNames.has(deferredBasename)) continue;
-        invokedNames.add(deferredBasename);
-        mainActivities += `
+        const infrastructureFiles = CANONICAL_INFRASTRUCTURE_NAMES;
+        for (const deferredKey of deferredWrites.keys()) {
+          const deferredMatch = deferredKey.match(/([^/]+)\.xaml$/i);
+          if (!deferredMatch) continue;
+          const deferredBasename = deferredMatch[1];
+          const canonicalBasename = canonicalizeWorkflowName(deferredBasename);
+          if (infrastructureFiles.has(canonicalBasename)) continue;
+          if (invokedNames.has(deferredBasename)) continue;
+          invokedNames.add(deferredBasename);
+          mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Run ${escapeXml(deferredBasename)}" WorkflowFileName="${deferredBasename}.xaml" />`;
+        }
       }
 
       const closeAppsXaml = generateCloseAllApplicationsXaml(tf);
@@ -4927,7 +5463,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       mainActivities += `
         <ui:LogMessage Level="Info" Message="[&quot;Process completed successfully&quot;]" DisplayName="Log Completion" />`;
 
-      let mainXaml = buildXaml("Main", `${projectName} - Main Workflow`, mainActivities);
+      let mainXaml = buildXaml("Main", `${projectName} - Main Workflow`, mainActivities, mainVariablesBlock);
       const selfRefBefore = mainXaml;
       mainXaml = mainXaml.replace(/<ui:InvokeWorkflowFile[^>]*WorkflowFileName\s*=\s*"(?:[.\/\\]*(?:lib[.\/\\])?)?Main\.xaml"[^>]*\/>/gi, "");
       if (mainXaml !== selfRefBefore) {
@@ -5129,36 +5665,23 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       _wiringDiag_processHadFallback = processHadFallback;
       if ((mainIsFullStub || mainIsFunctionallyEmpty) && mainDeferredKey) {
         _wiringDiag_mainStubInjectionAttempted = true;
-        let stubbedMainXaml = deferredWrites.get(mainDeferredKey) || "";
+        const stubbedMainXaml = deferredWrites.get(mainDeferredKey) || "";
         const allWorkflowNames = new Set([...nonMainWorkflowNames, ...Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process")]);
-        const invokeRefsToInject: string[] = [];
-        if (!stubbedMainXaml.includes('WorkflowFileName="InitAllSettings.xaml"')) {
-          invokeRefsToInject.push(`      <ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`);
-        }
-        for (const subWfName of allWorkflowNames) {
+        const missingRefs: string[] = [];
+        Array.from(allWorkflowNames).forEach(subWfName => {
           const subFileName = `${subWfName}.xaml`;
           if (!stubbedMainXaml.includes(`WorkflowFileName="${subFileName}"`)) {
-            invokeRefsToInject.push(`      <ui:InvokeWorkflowFile DisplayName="${subWfName}" WorkflowFileName="${subFileName}" />`);
+            missingRefs.push(subWfName);
           }
-        }
-        if (invokeRefsToInject.length > 0) {
-          const seqVarsEndMatch = stubbedMainXaml.match(/<\/Sequence\.Variables>\s*\n/);
-          const rootSeqMatch = stubbedMainXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
-          const insertMatch = seqVarsEndMatch || rootSeqMatch;
-          if (insertMatch) {
-            const insertPos = insertMatch.index! + insertMatch[0].length;
-            stubbedMainXaml = stubbedMainXaml.slice(0, insertPos) + invokeRefsToInject.join("\n") + "\n" + stubbedMainXaml.slice(insertPos);
-            syncXamlWrite(deferredWrites, xamlEntries, mainDeferredKey, stubbedMainXaml);
-            const existingIdx = xamlEntries.findIndex(e => {
-              const bn = e.name.split("/").pop() || e.name;
-              return bn === "Main.xaml";
-            });
-            if (existingIdx >= 0) {
-              xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: stubbedMainXaml };
-            }
-            _wiringDiag_mainStubInjectionSucceeded = true;
-            console.log(`[UiPath] Injected ${invokeRefsToInject.length} InvokeWorkflowFile reference(s) into stubbed Main.xaml to preserve invocation graph`);
-          }
+        });
+        if (missingRefs.length > 0) {
+          console.warn(`[Structural Dedup] DIAGNOSTIC: Main.xaml is stub/empty and missing ${missingRefs.length} workflow reference(s): ${missingRefs.join(", ")}. Spec-aware wiring should have handled these at assembly time.`);
+          dependencyWarnings.push({
+            code: "SPEC_WORKFLOW_UNREACHABLE_POST_ASSEMBLY",
+            message: `Main.xaml stub missing ${missingRefs.length} workflow reference(s): ${missingRefs.join(", ")}`,
+            stage: "structural-dedup",
+            recoverable: false,
+          });
         } else {
           _wiringDiag_mainStubInjectionSucceeded = true;
         }
@@ -5167,33 +5690,23 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         _wiringDiag_processStubInjectionAttempted = true;
         const processDeferredKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Process.xaml");
         if (processDeferredKey) {
-          let stubbedProcessXaml = deferredWrites.get(processDeferredKey) || "";
+          const stubbedProcessXaml = deferredWrites.get(processDeferredKey) || "";
           const processWorkflowNames = Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process" && n !== "InitAllSettings");
-          const processInvokeRefs: string[] = [];
+          const missingProcessRefs: string[] = [];
           for (const subWfName of processWorkflowNames) {
             const subFileName = `${subWfName}.xaml`;
             if (!stubbedProcessXaml.includes(`WorkflowFileName="${subFileName}"`)) {
-              processInvokeRefs.push(`      <ui:InvokeWorkflowFile DisplayName="Run ${subWfName}" WorkflowFileName="${subFileName}" />`);
+              missingProcessRefs.push(subWfName);
             }
           }
-          if (processInvokeRefs.length > 0) {
-            const seqVarsEndMatch = stubbedProcessXaml.match(/<\/Sequence\.Variables>\s*\n/);
-            const rootSeqMatch = stubbedProcessXaml.match(/<Sequence\s[^>]*DisplayName="[^"]*"[^>]*>\s*\n/);
-            const insertMatch = seqVarsEndMatch || rootSeqMatch;
-            if (insertMatch) {
-              const insertPos = insertMatch.index! + insertMatch[0].length;
-              stubbedProcessXaml = stubbedProcessXaml.slice(0, insertPos) + processInvokeRefs.join("\n") + "\n" + stubbedProcessXaml.slice(insertPos);
-              syncXamlWrite(deferredWrites, xamlEntries, processDeferredKey, stubbedProcessXaml);
-              const existingIdx = xamlEntries.findIndex(e => {
-                const bn = e.name.split("/").pop() || e.name;
-                return bn === "Process.xaml";
-              });
-              if (existingIdx >= 0) {
-                xamlEntries[existingIdx] = { name: xamlEntries[existingIdx].name, content: stubbedProcessXaml };
-              }
-              _wiringDiag_processStubInjectionSucceeded = true;
-              console.log(`[UiPath] Injected ${processInvokeRefs.length} InvokeWorkflowFile reference(s) into stubbed Process.xaml to preserve invocation graph`);
-            }
+          if (missingProcessRefs.length > 0) {
+            console.warn(`[Structural Dedup] DIAGNOSTIC: Process.xaml is stub and missing ${missingProcessRefs.length} workflow reference(s): ${missingProcessRefs.join(", ")}. Spec-aware wiring should have handled these at assembly time.`);
+            dependencyWarnings.push({
+              code: "SPEC_WORKFLOW_UNREACHABLE_POST_ASSEMBLY",
+              message: `Process.xaml stub missing ${missingProcessRefs.length} workflow reference(s): ${missingProcessRefs.join(", ")}`,
+              stage: "structural-dedup",
+              recoverable: false,
+            });
           } else {
             _wiringDiag_processStubInjectionSucceeded = true;
           }
@@ -5226,91 +5739,30 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           _wiringDiag_trulyOrphaned = trulyOrphaned;
 
           if (specRetained.size > 0) {
-            console.log(`[Structural Dedup] Retained ${specRetained.size} spec-decomposed workflow(s) despite being unreachable from fallback Main.xaml: ${Array.from(specRetained).join(", ")}`);
-            const processPath = `${libPath}/Process.xaml`;
-            let processXaml = deferredWrites.get(processPath) || "";
-            let processSource: "deferred" | "entry" | "none" = "none";
-            if (processXaml) {
-              processSource = "deferred";
-            } else {
-              const processEntry = xamlEntries.find(e => e.name.endsWith("Process.xaml"));
-              if (processEntry) {
-                processXaml = processEntry.content;
-                processSource = "entry";
-              }
-            }
-            const injectedFiles: string[] = [];
-            if (processXaml) {
-              let closingSeqIdx = processXaml.lastIndexOf("</Sequence>");
-              if (closingSeqIdx < 0) {
-                const closingActivityIdx = processXaml.lastIndexOf("</Activity>");
-                if (closingActivityIdx >= 0) {
-                  const seqInsert = `  <Sequence DisplayName="Process Body">\n  </Sequence>\n`;
-                  processXaml = processXaml.substring(0, closingActivityIdx) + seqInsert + processXaml.substring(closingActivityIdx);
-                  closingSeqIdx = processXaml.lastIndexOf("</Sequence>");
-                }
-              }
-              if (closingSeqIdx >= 0) {
-                let invokeBlock = "";
-                Array.from(specRetained).forEach(retained => {
-                  const basename = retained.split("/").pop() || retained;
-                  const basenameNoExt = basename.replace(/\.xaml$/i, "");
-                  const alreadyReferenced = processXaml.includes(`WorkflowFileName="${basename}"`) ||
-                    processXaml.includes(`WorkflowFileName="${basenameNoExt}"`) ||
-                    processXaml.includes(`WorkflowFileName="${basenameNoExt}.xaml"`);
-                  if (!alreadyReferenced) {
-                    const displayBasename = basenameNoExt;
-                    invokeBlock += `    <ui:InvokeWorkflowFile WorkflowFileName="${basename}" DisplayName="Invoke ${displayBasename}">\n` +
-                      `      <ui:InvokeWorkflowFile.Arguments>\n` +
-                      `      </ui:InvokeWorkflowFile.Arguments>\n` +
-                      `    </ui:InvokeWorkflowFile>\n`;
-                    injectedFiles.push(basename);
-                  } else {
-                    _wiringDiag_perWorkflowRejections.set(basename, `already referenced in Process.xaml (matched WorkflowFileName="${basename}" or "${basenameNoExt}" or "${basenameNoExt}.xaml")`);
-                  }
-                });
-                if (invokeBlock) {
-                  processXaml = processXaml.substring(0, closingSeqIdx) + invokeBlock + processXaml.substring(closingSeqIdx);
-                  if (processSource === "deferred") {
-                    syncXamlWrite(deferredWrites, xamlEntries, processPath, processXaml);
-                  } else if (processSource === "entry") {
-                    const processEntry = xamlEntries.find(e => e.name.endsWith("Process.xaml"));
-                    if (processEntry) processEntry.content = processXaml;
-                  }
-                  console.log(`[Structural Dedup] Injected InvokeWorkflowFile calls into Process.xaml for: ${injectedFiles.join(", ")}`);
-                }
-              } else {
-                Array.from(specRetained).forEach(retained => {
-                  const rBasename = retained.split("/").pop() || retained;
-                  if (!_wiringDiag_perWorkflowRejections.has(rBasename)) {
-                    _wiringDiag_perWorkflowRejections.set(rBasename, "no valid </Sequence> or </Activity> insertion point found in Process.xaml");
-                  }
-                });
-              }
-            } else {
-              Array.from(specRetained).forEach(retained => {
-                const rBasename = retained.split("/").pop() || retained;
-                _wiringDiag_perWorkflowRejections.set(rBasename, "Process.xaml content is empty or not found — no wiring target available");
-              });
-            }
-            _wiringDiag_injectedFiles = injectedFiles;
+            console.warn(`[Structural Dedup] DIAGNOSTIC: ${specRetained.size} spec-decomposed workflow(s) still unreachable after assembly: ${Array.from(specRetained).join(", ")}`);
+            _wiringDiag_injectedFiles = [];
             Array.from(specRetained).forEach(retained => {
               const basename = retained.split("/").pop() || retained;
-              if (injectedFiles.includes(basename)) {
-                dependencyWarnings.push({
-                  code: "SPEC_WORKFLOW_WIRED",
-                  message: `"${retained}" was generated from spec decomposition and has been wired into Process.xaml via InvokeWorkflowFile`,
-                  stage: "structural-deduplication",
-                  recoverable: true,
-                });
-              } else {
-                dependencyWarnings.push({
-                  code: "SPEC_WORKFLOW_NOT_WIRED",
-                  message: `"${retained}" was generated from spec decomposition but could not be auto-wired — flagged as "generated but not wired"`,
-                  stage: "structural-deduplication",
-                  recoverable: true,
-                });
-              }
+              const processPath = `${libPath}/Process.xaml`;
+              const processXaml = deferredWrites.get(processPath) || "";
+              const alreadyReferenced = processXaml && (
+                processXaml.includes(`WorkflowFileName="${basename}"`) ||
+                processXaml.includes(`WorkflowFileName="${basename.replace(/\.xaml$/i, "")}"`) ||
+                processXaml.includes(`WorkflowFileName="${basename.replace(/\.xaml$/i, "")}.xaml"`)
+              );
+              const reason = alreadyReferenced
+                ? `already referenced in Process.xaml but reachability graph did not detect it`
+                : specScaffoldMeta
+                  ? `spec-aware wiring was active but did not wire this workflow — check if it is a helper invoked by another workflow or if it was excluded from executionOrder`
+                  : `no spec scaffold metadata available — assembly used fallback wiring which could not reach this workflow`;
+              console.warn(`[Structural Dedup] DIAGNOSTIC: "${retained}" unreachable — reason: ${reason}`);
+              _wiringDiag_perWorkflowRejections.set(basename, `DIAGNOSTIC-ONLY: ${reason}`);
+              dependencyWarnings.push({
+                code: "SPEC_WORKFLOW_UNREACHABLE_POST_ASSEMBLY",
+                message: `"${retained}" was generated from spec decomposition but is still unreachable after assembly — ${reason}`,
+                stage: "structural-deduplication",
+                recoverable: true,
+              });
             });
           }
 
@@ -8201,6 +8653,56 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
 
       console.log(`[Post-Assembly Validation] PASSED — all dependency versions validated, entry point verified, studio version confirmed`);
+    }
+
+    if (specScaffoldMeta) {
+      console.log(`[Child Workflow Wiring] Running spec-driven child-to-helper invocation wiring...`);
+      const childWiring = wireChildWorkflowInvocations(specScaffoldMeta, deferredWrites, xamlEntries, libPath, generatedWorkflowNames);
+      for (const diag of childWiring.diagnostics) {
+        console.log(diag);
+      }
+      if (childWiring.failures.length > 0) {
+        const failSummary = childWiring.failures.join("; ");
+        throw new Error(`[Child Workflow Wiring] BLOCKED: ${childWiring.failures.length} child wiring failure(s): ${failSummary}`);
+      }
+      if (childWiring.wiredCount > 0) {
+        console.log(`[Child Workflow Wiring] Injected ${childWiring.wiredCount} child-to-helper invocation(s) with typed arguments`);
+      } else {
+        console.log(`[Child Workflow Wiring] No additional child-to-helper invocations needed (all already present)`);
+      }
+    }
+
+    {
+      console.log(`[Spec Graph Validation] Running spec-aware graph validation pass...`);
+      const graphValidation = runSpecGraphValidation(
+        deferredWrites,
+        xamlEntries,
+        libPath,
+        specScaffoldMeta,
+        generatedWorkflowNames,
+      );
+      for (const warning of graphValidation.warnings) {
+        console.warn(`[Spec Graph Validation] ${warning}`);
+        dependencyWarnings.push({
+          code: "SPEC_GRAPH_VALIDATION_WARNING",
+          message: warning,
+          stage: "spec-graph-validation",
+          recoverable: true,
+        });
+      }
+      for (const error of graphValidation.errors) {
+        console.error(`[Spec Graph Validation] BLOCKING: ${error}`);
+        dependencyWarnings.push({
+          code: "SPEC_GRAPH_VALIDATION_ERROR",
+          message: error,
+          stage: "spec-graph-validation",
+          recoverable: false,
+        });
+      }
+      if (graphValidation.errors.length > 0) {
+        const errorSummary = graphValidation.errors.join("; ");
+        throw new Error(`[Spec Graph Validation] BLOCKED: ${graphValidation.errors.length} graph validation error(s) prevent emission: ${errorSummary}`);
+      }
     }
 
     let postGateXamlEntries: Array<{ name: string; content: string }> = [];

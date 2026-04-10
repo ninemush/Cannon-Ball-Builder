@@ -141,6 +141,15 @@ export const uipathPackageSchema = z.object({
 
 export type UiPathPackageSpec = z.infer<typeof uipathPackageSchema>;
 
+export interface SpecScaffoldMeta {
+  executionOrder: string[];
+  workflowContracts: Array<{
+    name: string;
+    invokes: string[];
+    sharedArguments: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
+  }>;
+}
+
 export interface UiPathPackageInternal {
   sddContent?: string;
   automationType?: "rpa" | "agent" | "hybrid";
@@ -160,6 +169,7 @@ export interface UiPathPackageInternal {
   complexityTier?: string;
   priorCompliantWorkflows?: Array<{ name: string; content: string }>;
   integrationServiceConnectors?: Array<{ connectorName: string; connectionName?: string; connectionId?: string }>;
+  specScaffoldMeta?: SpecScaffoldMeta;
 }
 
 export interface AgentSpec {

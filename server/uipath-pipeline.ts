@@ -672,6 +672,11 @@ function enrichPackageWithContext(
   }
   if (orchestratorArtifacts) internal.orchestratorArtifacts = orchestratorArtifacts;
   if (aiCenterSkills) internal.aiCenterSkills = aiCenterSkills;
+  const pkgRecord = pkg as Record<string, unknown>;
+  if (pkgRecord._specScaffoldMeta) {
+    internal.specScaffoldMeta = pkgRecord._specScaffoldMeta as UiPathPackageInternal["specScaffoldMeta"];
+    delete pkgRecord._specScaffoldMeta;
+  }
   return { ...pkg, internal };
 }
 
