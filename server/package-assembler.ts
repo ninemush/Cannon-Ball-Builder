@@ -15,6 +15,12 @@ import archiver from "archiver";
     generateSetTransactionStatusXaml,
     generateCloseAllApplicationsXaml,
     generateKillAllProcessesXaml,
+    generateInitAllApplicationsXaml,
+    generateRetryCurrentTransactionXaml,
+    generateRetryInitXaml,
+    generateBuildTransactionDataXaml,
+    generateCleanupAndPrepXaml,
+    generateSendNotificationsXaml,
     aggregateGaps,
     normalizeXaml as makeUiPathCompliant,
     ensureBracketWrapped,
@@ -34,6 +40,13 @@ import archiver from "archiver";
     type XamlValidationViolation,
     type DhgQualityIssue,
   } from "./xaml-generator";
+  import {
+    detectSystems,
+    inferAutomationSubPattern,
+    getCodedWorkflowsScaffold,
+    getReferenceFrameworkFile,
+  } from "./xaml-reference-service";
+  import { REFRAMEWORK_PATTERN_OPTIONAL_FILES } from "./shared/reframework-constants";
   import type { XamlGenerationContext, UiPathPackage } from "./types/uipath-package";
   import { enrichWithAITree, type EnrichmentResult, type TreeEnrichmentResult } from "./ai-xaml-enricher";
   import { assembleWorkflowFromSpec, buildPreEmissionContractMap, setActiveWorkflowContractMap, clearActiveWorkflowContractMap, setActiveCallerWorkflowName, getAndClearContractDiagnostics, getAndClearTypedPropertyDiagnostics } from "./workflow-tree-assembler";
@@ -515,6 +528,8 @@ const CANONICAL_INFRASTRUCTURE_NAMES = new Set([
   "main", "init", "initallsettings", "dispatcher", "performer",
   "finalise", "finalize", "process", "closeallapplications",
   "gettransactiondata", "settransactionstatus", "killallprocesses",
+  "initallapplications", "retrycurrenttransaction", "retryinit",
+  "buildtransactiondata", "cleanupandprep", "sendnotifications",
 ]);
 
 import { normalizeWorkflowName, canonicalizeWorkflowName } from "./workflow-name-utils";
@@ -3631,6 +3646,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
   <Default Extension="json" ContentType="application/json" />
   <Default Extension="csv" ContentType="text/csv" />
   <Default Extension="xlsx" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+  <Default Extension="cs" ContentType="application/octet" />
 </Types>`;
     archive.append(contentTypesXml, { name: "[Content_Types].xml" });
 
@@ -4744,6 +4760,12 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         `${libPath}/CloseAllApplications.xaml`,
         `${libPath}/KillAllProcesses.xaml`,
         `${libPath}/Init.xaml`,
+        `${libPath}/InitAllApplications.xaml`,
+        `${libPath}/RetryCurrentTransaction.xaml`,
+        `${libPath}/RetryInit.xaml`,
+        `${libPath}/BuildTransactionData.xaml`,
+        `${libPath}/CleanupAndPrep.xaml`,
+        `${libPath}/SendNotifications.xaml`,
       ];
       try {
         console.log(`[UiPath] Generating REFramework structure (queue: ${queueName})`);
@@ -4766,6 +4788,45 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const initXaml = generateInitXaml(tf);
         deferredWrites.set(`${libPath}/Init.xaml`, compliancePass(initXaml, "Init.xaml"));
         console.log(`[UiPath] Generated deterministic Init.xaml template`);
+
+        const subPattern = inferAutomationSubPattern(pkg.description || "", enrichment);
+
+        const refHasInitAllApps = !!getReferenceFrameworkFile("InitAllApplications.xaml", subPattern);
+        const initAllAppsXaml = generateInitAllApplicationsXaml(tf);
+        deferredWrites.set(`${libPath}/InitAllApplications.xaml`, compliancePass(initAllAppsXaml, "InitAllApplications.xaml"));
+        if (refHasInitAllApps) console.log(`[UiPath] Reference corpus confirms InitAllApplications.xaml for ${subPattern} pattern`);
+
+        const refHasRetryTrans = !!getReferenceFrameworkFile("RetryCurrentTransaction.xaml", subPattern);
+        const retryTransXaml = generateRetryCurrentTransactionXaml(tf);
+        deferredWrites.set(`${libPath}/RetryCurrentTransaction.xaml`, compliancePass(retryTransXaml, "RetryCurrentTransaction.xaml"));
+        if (refHasRetryTrans) console.log(`[UiPath] Reference corpus confirms RetryCurrentTransaction.xaml for ${subPattern} pattern`);
+
+        const refHasRetryInit = !!getReferenceFrameworkFile("RetryInit.xaml", subPattern);
+        const retryInitXaml = generateRetryInitXaml(tf);
+        deferredWrites.set(`${libPath}/RetryInit.xaml`, compliancePass(retryInitXaml, "RetryInit.xaml"));
+        if (refHasRetryInit) console.log(`[UiPath] Reference corpus confirms RetryInit.xaml for ${subPattern} pattern`);
+
+        const patternOptionalFiles = REFRAMEWORK_PATTERN_OPTIONAL_FILES[subPattern] || [];
+        for (const optFile of patternOptionalFiles) {
+          const optKey = `${libPath}/${optFile}`;
+          if (!deferredWrites.has(optKey)) {
+            const refConfirms = !!getReferenceFrameworkFile(optFile, subPattern);
+            let optXaml: string | null = null;
+            if (optFile === "BuildTransactionData.xaml") {
+              optXaml = generateBuildTransactionDataXaml(tf);
+            } else if (optFile === "CleanupAndPrep.xaml") {
+              optXaml = generateCleanupAndPrepXaml(tf);
+            } else if (optFile === "SendNotifications.xaml") {
+              optXaml = generateSendNotificationsXaml(tf);
+            }
+            if (optXaml) {
+              deferredWrites.set(optKey, compliancePass(optXaml, optFile));
+              console.log(`[UiPath] Generated pattern-specific ${optFile} for ${subPattern} pattern${refConfirms ? " (confirmed by reference)" : ""}`);
+            }
+          }
+        }
+
+        console.log(`[UiPath] Generated expanded REFramework file set (InitAllApplications, RetryCurrentTransaction, RetryInit + ${patternOptionalFiles.length} pattern-specific files)`);
 
         if (!deferredWrites.has(`${libPath}/Process.xaml`)) {
           let processInvocations = "";
@@ -4825,11 +4886,34 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         { key: `${libPath}/SetTransactionStatus.xaml`, gen: () => generateSetTransactionStatusXaml(tf), label: "SetTransactionStatus.xaml" },
         { key: `${libPath}/CloseAllApplications.xaml`, gen: () => generateCloseAllApplicationsXaml(tf), label: "CloseAllApplications.xaml" },
         { key: `${libPath}/KillAllProcesses.xaml`, gen: () => generateKillAllProcessesXaml(tf), label: "KillAllProcesses.xaml" },
+        { key: `${libPath}/InitAllApplications.xaml`, gen: () => generateInitAllApplicationsXaml(tf), label: "InitAllApplications.xaml" },
+        { key: `${libPath}/RetryCurrentTransaction.xaml`, gen: () => generateRetryCurrentTransactionXaml(tf), label: "RetryCurrentTransaction.xaml" },
+        { key: `${libPath}/RetryInit.xaml`, gen: () => generateRetryInitXaml(tf), label: "RetryInit.xaml" },
       ];
       for (const sf of reframeworkSupportFiles) {
         if (!deferredWrites.has(sf.key)) {
           deferredWrites.set(sf.key, compliancePass(sf.gen(), sf.label));
           console.log(`[UiPath] Generated ${sf.label} for REFramework wiring`);
+        }
+      }
+
+      const hasMainSubPattern = inferAutomationSubPattern(pkg.description || "", enrichment);
+      const hasMainPatternOptFiles = REFRAMEWORK_PATTERN_OPTIONAL_FILES[hasMainSubPattern] || [];
+      for (const optFile of hasMainPatternOptFiles) {
+        const optKey = `${libPath}/${optFile}`;
+        if (!deferredWrites.has(optKey)) {
+          let optXaml: string | null = null;
+          if (optFile === "BuildTransactionData.xaml") {
+            optXaml = generateBuildTransactionDataXaml(tf);
+          } else if (optFile === "CleanupAndPrep.xaml") {
+            optXaml = generateCleanupAndPrepXaml(tf);
+          } else if (optFile === "SendNotifications.xaml") {
+            optXaml = generateSendNotificationsXaml(tf);
+          }
+          if (optXaml) {
+            deferredWrites.set(optKey, compliancePass(optXaml, optFile));
+            console.log(`[UiPath] Generated pattern-specific ${optFile} for ${hasMainSubPattern} pattern (hasMain path)`);
+          }
         }
       }
     }
@@ -5663,10 +5747,16 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         isAttended: false,
         requiresUserInteraction: false,
         supportsPersistence: false,
+        workflowSerialization: "DataContract",
+        excludedLoggedData: [
+          "Private:*",
+          "*password*",
+        ],
         executionType: "Workflow",
         readyForPiP: false,
         startsInPiP: false,
         mustRestoreAllDependencies: true,
+        pipType: "ChildSession",
       },
       designOptions: {
         projectProfile: "Development",
@@ -5675,6 +5765,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         processOptions: { ignoredFiles: [] },
         fileInfoCollection: [],
         modernBehavior: true,
+        saveToCloud: false,
       },
       expressionLanguage: resolveExpressionLanguage(_studioProfile, _metaTarget),
       entryPoints: [
@@ -5703,6 +5794,130 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       projectJson.designOptions.autopilotEnabled = true;
       projectJson.designOptions.selfHealingSelectors = true;
     }
+
+    if (useReFramework) {
+      const detectedSystems = detectSystems(processNodes, pkg.description || null);
+      const hasMultipleSystems = detectedSystems.length >= 2;
+
+      if (hasMultipleSystems) {
+        const newDeferredWrites = new Map<string, string>();
+        const pathRewrites = new Map<string, string>();
+        for (const [key, value] of deferredWrites.entries()) {
+          const fileName = key.split("/").pop() || key;
+          const baseName = fileName.replace(/\.xaml$/i, "");
+          const isFrameworkFile = [
+            "Main.xaml", "Init.xaml", "InitAllSettings.xaml", "InitAllApplications.xaml",
+            "GetTransactionData.xaml", "SetTransactionStatus.xaml", "CloseAllApplications.xaml",
+            "KillAllProcesses.xaml", "RetryCurrentTransaction.xaml", "RetryInit.xaml",
+            "BuildTransactionData.xaml", "CleanupAndPrep.xaml", "SendNotifications.xaml",
+            "Process.xaml",
+          ].includes(fileName);
+          const isInfrastructure = isFrameworkFile || CANONICAL_INFRASTRUCTURE_NAMES.has(baseName.toLowerCase());
+
+          if (!fileName.endsWith(".xaml") || isInfrastructure) {
+            newDeferredWrites.set(key, value);
+            continue;
+          }
+
+          let matchedSystem: string | null = null;
+          const fileNameLower = baseName.toLowerCase();
+          for (const sys of detectedSystems) {
+            if (fileNameLower.includes(sys.toLowerCase())) {
+              matchedSystem = sys;
+              break;
+            }
+          }
+
+          if (matchedSystem) {
+            const newRelPath = `Workflows_Apps/${matchedSystem}/${fileName}`;
+            const newPath = key.replace(fileName, newRelPath);
+            newDeferredWrites.set(newPath, value);
+            pathRewrites.set(fileName, newRelPath);
+          } else {
+            const newRelPath = `Workflows_Misc/${fileName}`;
+            const newPath = key.replace(fileName, newRelPath);
+            newDeferredWrites.set(newPath, value);
+            pathRewrites.set(fileName, newRelPath);
+          }
+        }
+
+        if (pathRewrites.size > 0) {
+          for (const [path, content] of newDeferredWrites.entries()) {
+            if (!path.endsWith(".xaml")) continue;
+            let updated = content;
+            for (const [oldName, newRelPath] of pathRewrites.entries()) {
+              const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              updated = updated.replace(
+                new RegExp(`WorkflowFileName="${escaped}"`, "g"),
+                `WorkflowFileName="${newRelPath}"`,
+              );
+            }
+            if (updated !== content) {
+              newDeferredWrites.set(path, updated);
+            }
+          }
+        }
+
+        deferredWrites = newDeferredWrites;
+        console.log(`[UiPath] Applied multi-system folder structure: ${detectedSystems.join(", ")} (${detectedSystems.length} systems detected, ${pathRewrites.size} invoke paths rewritten)`);
+      }
+
+      const hasIntegrationService = Object.keys(deps).some(d =>
+        d.includes("IntegrationService") || d === "UiPath.CodedWorkflows"
+      );
+
+      if (hasIntegrationService) {
+        const scaffold = getCodedWorkflowsScaffold();
+        if (scaffold) {
+          const namespace = projectName.replace(/[^a-zA-Z0-9_]/g, "_");
+          const factoryContent = scaffold.connectionsFactory.replace(
+            /namespace\s+\w+/,
+            `namespace ${namespace}`,
+          );
+          const managerContent = scaffold.connectionsManager.replace(
+            /namespace\s+\w+/,
+            `namespace ${namespace}`,
+          );
+
+          deferredWrites.set(`${libPath}/.codedworkflows/ConnectionsFactory.cs`, factoryContent);
+          deferredWrites.set(`${libPath}/.codedworkflows/ConnectionsManager.cs`, managerContent);
+
+          const processConstantsTemplate = `using System;\n\nnamespace ProcessConstants\n{\n    public class ProcessOrchestrationConstants\n    {\n        public string transaction_name { get; set; } = "${escapeXml(projectName)}";\n    }\n}\n`;
+          deferredWrites.set(`${libPath}/Workflows_Misc/Configurations/ProcessConstants.cs`, processConstantsTemplate);
+
+          if (!deps["UiPath.CodedWorkflows"]) {
+            const codedWfVersion = catalogService.isLoaded()
+              ? catalogService.getPreferredVersion("UiPath.CodedWorkflows")
+              : null;
+            if (codedWfVersion) {
+              deps["UiPath.CodedWorkflows"] = codedWfVersion;
+            } else {
+              deps["UiPath.CodedWorkflows"] = "[24.10.0]";
+            }
+            console.log(`[UiPath] Added UiPath.CodedWorkflows dependency for Integration Service scaffolding`);
+          }
+
+          const csEntryPoints: Array<{ filePath: string; uniqueId: string; input: never[]; output: never[] }> = [];
+          for (const [path] of deferredWrites.entries()) {
+            if (path.endsWith(".cs") && !path.includes(".codedworkflows/")) {
+              const relPath = path.replace(`${libPath}/`, "").replace(/\//g, "\\");
+              csEntryPoints.push({
+                filePath: relPath,
+                uniqueId: generateUuid(),
+                input: [],
+                output: [],
+              });
+            }
+          }
+          if (csEntryPoints.length > 0) {
+            projectJson.entryPoints.push(...csEntryPoints);
+          }
+
+          console.log(`[UiPath] Generated coded workflows scaffolding (ConnectionsFactory.cs, ConnectionsManager.cs, ProcessConstants.cs)`);
+        }
+      }
+    }
+
     sanitizeDeps(deps);
 
     for (const [key, val] of Object.entries(deps)) {
@@ -5765,7 +5980,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
     const workflowNames: string[] = [];
     if (useReFramework) {
-      workflowNames.push("Main", "GetTransactionData", "Process", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses");
+      workflowNames.push("Main", "GetTransactionData", "Process", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses",
+        "InitAllApplications", "RetryCurrentTransaction", "RetryInit");
     }
     if (enrichment?.decomposition?.length) {
       for (const d of enrichment.decomposition) {

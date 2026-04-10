@@ -1,0 +1,15 @@
+﻿{
+  "Version": "1.0",
+  "Metadata": [
+    {
+      "ApplicationType": "API",
+      "ExecutablePath": null,
+      "Url": {
+        "Value": "SlackEndpoint",
+        "IsExpression": true
+      },
+      "Arguments": null,
+      "Version": null
+    }
+  ]
+}

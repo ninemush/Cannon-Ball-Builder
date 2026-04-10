@@ -1,0 +1,45 @@
+{
+  "DisplayName": "Main",
+  "Tooltip": null,
+  "HelpLink": null,
+  "Color": null,
+  "OriginalIconFileName": null,
+  "Arguments": [
+    {
+      "Name": "in_PostInfoToQueues",
+      "DisplayName": "in_PostInfoToQueues",
+      "Category": null,
+      "Tooltip": null,
+      "Placeholder": null,
+      "Widget": null,
+      "IsRequired": false,
+      "IsPrincipal": true,
+      "ArgumentType": 0,
+      "DataSourceItems": null
+    },
+    {
+      "Name": "Workflows_Misc_Logic_ErrorNotifications_xaml__Workflows_Apps_O365_O365_SendEmail_Unattended_xaml__SendMailConnections_1_Connection0",
+      "DisplayName": "SendMailConnections_1_Connection",
+      "Category": null,
+      "Tooltip": "Send Mail - With Attachments",
+      "Placeholder": null,
+      "Widget": "Connection",
+      "IsRequired": true,
+      "IsPrincipal": true,
+      "ArgumentType": 1,
+      "DataSourceItems": null
+    },
+    {
+      "Name": "in_CoupaInvoiceFilters",
+      "DisplayName": "in_CoupaInvoiceFilters",
+      "Category": null,
+      "Tooltip": null,
+      "Placeholder": "exported=false&status=approved&invoice-lines[account][account-type][enterprise][code]=SAP",
+      "Widget": null,
+      "IsRequired": false,
+      "IsPrincipal": true,
+      "ArgumentType": 0,
+      "DataSourceItems": null
+    }
+  ]
+}

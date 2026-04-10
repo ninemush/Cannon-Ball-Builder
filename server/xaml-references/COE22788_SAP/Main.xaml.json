@@ -1,0 +1,21 @@
+{
+  "DisplayName": "Main",
+  "Tooltip": null,
+  "HelpLink": null,
+  "Color": null,
+  "OriginalIconFileName": null,
+  "Arguments": [
+    {
+      "Name": "Workflows_Apps_O365_O365_SendEmail_Unattended_xaml__SendMailConnections_1_Connection0",
+      "DisplayName": "SendMailConnections_1_Connection",
+      "Category": null,
+      "Tooltip": "Send Mail - With Attachments",
+      "Placeholder": null,
+      "Widget": "Connection",
+      "IsRequired": true,
+      "IsPrincipal": true,
+      "ArgumentType": 1,
+      "DataSourceItems": null
+    }
+  ]
+}

@@ -1,0 +1,1597 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Logic_TransformInvoiceLineFields" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:c="clr-namespace:Coupa_Invoice_Model;assembly=COE21024_Invoices_SAP_Transform.Core" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:p="clr-namespace:ProcessConstants;assembly=COE21024_Invoices_SAP_Transform.Core" xmlns:s="clr-namespace:SAP_Invoice_Model;assembly=COE21024_Invoices_SAP_Transform.Core" xmlns:s1="clr-namespace:System;assembly=System.Private.CoreLib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib" xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib" xmlns:sd="clr-namespace:System.Data;assembly=System.Data.Common" xmlns:uasb="clr-namespace:UiPath.Activities.System.BPO;assembly=UiPath.System.Activities" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_CoupaInvoiceLine" Type="InArgument(c:CoupaInvoiceLine)" />
+    <x:Property Name="in_CoupaInvoiceTaxCode" Type="InArgument(x:String)" />
+    <x:Property Name="in_CoupaInvoiceTaxPercentage" Type="InArgument(x:String)" />
+    <x:Property Name="out_SAPInvoiceItem" Type="OutArgument(s:SAPInvoiceItem)" />
+    <x:Property Name="in_LineLevelTaxation" Type="InArgument(x:Boolean)" />
+    <x:Property Name="in_CompanyCode" Type="InArgument(x:String)" />
+    <x:Property Name="in_dt_WHTCode" Type="InArgument(sd:DataTable)" />
+    <x:Property Name="in_LinesTotal" Type="InArgument(x:Double)" />
+  </x:Members>
+  <VisualBasic.Settings>
+    <x:Null />
+  </VisualBasic.Settings>
+  <sap:VirtualizedContainerService.HintSize>958,2034</sap:VirtualizedContainerService.HintSize>
+  <sap2010:WorkflowViewState.IdRef>Logic_TransformInvoiceLineFields_1</sap2010:WorkflowViewState.IdRef>
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System.Activities</x:String>
+      <x:String>System.Activities.Statements</x:String>
+      <x:String>System.Activities.Expressions</x:String>
+      <x:String>System.Activities.Validation</x:String>
+      <x:String>System.Activities.XamlIntegration</x:String>
+      <x:String>Microsoft.VisualBasic</x:String>
+      <x:String>Microsoft.VisualBasic.Activities</x:String>
+      <x:String>System</x:String>
+      <x:String>System.Collections</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Collections.ObjectModel</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>System.Diagnostics</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>System.Net.Mail</x:String>
+      <x:String>System.Xml</x:String>
+      <x:String>System.Xml.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+      <x:String>System.Windows.Markup</x:String>
+      <x:String>GlobalVariablesNamespace</x:String>
+      <x:String>GlobalConstantsNamespace</x:String>
+      <x:String>System.Reflection</x:String>
+      <x:String>SAP_Invoice_Model</x:String>
+      <x:String>Coupa_Invoice_Model</x:String>
+      <x:String>System.Linq.Expressions</x:String>
+      <x:String>System.Runtime.Serialization</x:String>
+      <x:String>System.Numerics</x:String>
+      <x:String>UiPath.Activities.System.BPO</x:String>
+      <x:String>ProcessConstants</x:String>
+      <x:String>System.ComponentModel</x:String>
+      <x:String>System.Xml.Serialization</x:String>
+      <x:String>System.Activities.Runtime.Collections</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
+      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>System</AssemblyReference>
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.TypeConverter</AssemblyReference>
+      <AssemblyReference>System.Core</AssemblyReference>
+      <AssemblyReference>System.Data</AssemblyReference>
+      <AssemblyReference>System.Data.Common</AssemblyReference>
+      <AssemblyReference>System.Data.DataSetExtensions</AssemblyReference>
+      <AssemblyReference>System.Drawing</AssemblyReference>
+      <AssemblyReference>System.Drawing.Common</AssemblyReference>
+      <AssemblyReference>System.Drawing.Primitives</AssemblyReference>
+      <AssemblyReference>System.Linq</AssemblyReference>
+      <AssemblyReference>System.Net.Mail</AssemblyReference>
+      <AssemblyReference>System.ObjectModel</AssemblyReference>
+      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
+      <AssemblyReference>System.Xaml</AssemblyReference>
+      <AssemblyReference>System.Xml</AssemblyReference>
+      <AssemblyReference>System.Xml.Linq</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.UiAutomation.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.Studio.Constants</AssemblyReference>
+      <AssemblyReference>System.Reflection.DispatchProxy</AssemblyReference>
+      <AssemblyReference>System.Reflection.TypeExtensions</AssemblyReference>
+      <AssemblyReference>System.Reflection.Metadata</AssemblyReference>
+      <AssemblyReference>System.Memory.Data</AssemblyReference>
+      <AssemblyReference>System.Security.Permissions</AssemblyReference>
+      <AssemblyReference>System.Configuration.ConfigurationManager</AssemblyReference>
+      <AssemblyReference>NPOI</AssemblyReference>
+      <AssemblyReference>System.Console</AssemblyReference>
+      <AssemblyReference>System.ComponentModel</AssemblyReference>
+      <AssemblyReference>System.Memory</AssemblyReference>
+      <AssemblyReference>System.Private.Uri</AssemblyReference>
+      <AssemblyReference>System.Linq.Async</AssemblyReference>
+      <AssemblyReference>System.Collections</AssemblyReference>
+      <AssemblyReference>System.Collections.NonGeneric</AssemblyReference>
+      <AssemblyReference>System.Linq.Expressions</AssemblyReference>
+      <AssemblyReference>System.Runtime.Serialization.Formatters</AssemblyReference>
+      <AssemblyReference>System.Private.DataContractSerialization</AssemblyReference>
+      <AssemblyReference>System.Runtime.Serialization.Primitives</AssemblyReference>
+      <AssemblyReference>Microsoft.VisualBasic.Core</AssemblyReference>
+      <AssemblyReference>System.Runtime.Numerics</AssemblyReference>
+      <AssemblyReference>System.Linq.Async.Queryable</AssemblyReference>
+      <AssemblyReference>System.Linq.Parallel</AssemblyReference>
+      <AssemblyReference>System.Collections.Immutable</AssemblyReference>
+      <AssemblyReference>System.Linq.Queryable</AssemblyReference>
+      <AssemblyReference>COE21024_Invoices_SAP_Transform.Core</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.EventBasedAsync</AssemblyReference>
+      <AssemblyReference>WindowsBase</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.Primitives</AssemblyReference>
+      <AssemblyReference>System.Private.Xml</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence sap2010:Annotation.AnnotationText="Description = invoice-lines &gt; description&#xA;ItemText = invoice-lines &gt; description&#xA;AssetQuan = invoice-lines &gt; quantity&#xA;Quantity = invoice-lines &gt; quantity&#xA;BaseUnitMeasure = EA&#xA;GLAmtDocCurrency = invoice-lines &gt; total&#xA;StructureQrCode = invoice-lines &gt; po-number - invoice-lines &gt; order-line-num&#xA;&#xA;FirstNoteTextLine = invoice-lines &gt; commodity &gt; name&#xA;&#xA;CostCenter = invoice-lines &gt; account &gt; segment-2&#xA;Location = invoice-lines &gt; account &gt; segment-4&#xA;&#xA;ProjectName = invoice-lines &gt; custom-fields&gt; project&#xA;Leases = invoice-lines &gt; custom-fields&gt; leases &gt; name&#xA;PeriodStartDate = invoice-lines &gt; custom-fields&gt; start-date&#xA;PeriodEndDate = invoice-lines &gt; custom-fields&gt; end-date&#xA;&#xA;SplGlIndicator&#xA;GeneralLedger&#xA;UnstructureQrCode&#xA;&#xA;_item.TaxCode = invoice-lines &gt; tax-code&gt; code OrElse tax-code &gt; code &#xA;_item.TaxAmtDoc = invoice-lines &gt; tax-amount OrElse tax-code &gt; percentage * invoice-lines &gt; total" DisplayName="Logic_TransformInvoiceLineFields" sap:VirtualizedContainerService.HintSize="1002,1589" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="ConfigDefaultUOM" />
+      <Variable x:TypeArguments="x:String" Name="ConfigSAPAPIDateFormat" />
+      <Variable x:TypeArguments="x:String" Name="CoupaGLAccount" />
+      <Variable x:TypeArguments="x:String" Name="CoupaPrepaymentTypeName" />
+      <Variable x:TypeArguments="p:ProcessOrchestrationConstants" Name="POConstants" />
+    </Sequence.Variables>
+    <sap:WorkflowViewStateService.ViewState>
+      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+      </scg:Dictionary>
+    </sap:WorkflowViewStateService.ViewState>
+    <Assign DisplayName="Assign - Initialize Process Orchestration Constants" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_77">
+      <Assign.To>
+        <OutArgument x:TypeArguments="p:ProcessOrchestrationConstants">[POConstants]</OutArgument>
+      </Assign.To>
+      <Assign.Value>
+        <InArgument x:TypeArguments="p:ProcessOrchestrationConstants">[New ProcessOrchestrationConstants()]</InArgument>
+      </Assign.Value>
+    </Assign>
+    <Assign DisplayName="Assign - Initialize SAP Invoice Item" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_18">
+      <Assign.To>
+        <OutArgument x:TypeArguments="s:SAPInvoiceItem">[out_SAPInvoiceItem]</OutArgument>
+      </Assign.To>
+      <Assign.Value>
+        <InArgument x:TypeArguments="s:SAPInvoiceItem">[New SAPInvoiceItem()]</InArgument>
+      </Assign.Value>
+    </Assign>
+    <Sequence sap2010:Annotation.AnnotationText="sap_default_uom&#xA;sap_api_date_format" DisplayName="Get Base Config Values" sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="Sequence_3">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <Assign DisplayName="Assign - ConfigDefaultUOM" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_1">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[ConfigDefaultUOM]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[Config("sap_default_uom").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="Assign - ConfigSAPAPIDateFormat" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_6">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[ConfigSAPAPIDateFormat]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[Config("sap_api_date_format").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+    </Sequence>
+    <ui:LogMessage DisplayName="Log Message - Transform Invoice Lines Fields" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="LogMessage_1" Level="Info" Message="[&quot;Transforming invoice lines fields...&quot;]">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+    </ui:LogMessage>
+    <Sequence sap2010:Annotation.AnnotationText="Description = invoice-lines &gt; description&#xA;ItemText = invoice-lines &gt; description&#xA;AssetQuan = invoice-lines &gt; quantity&#xA;Quantity = invoice-lines &gt; quantity&#xA;BaseUnitMeasure = EA&#xA;GLAmtDocCurrency = invoice-lines &gt; total&#xA;StructureQrCode = invoice-lines &gt; po-number - invoice-lines &gt; order-line-num" DisplayName="Transform Simple Invoice Line Fields (Direct Properties)" sap:VirtualizedContainerService.HintSize="450,189" sap2010:WorkflowViewState.IdRef="Sequence_2">
+      <Sequence.Variables>
+        <Variable x:TypeArguments="x:Double" Name="SAPQuantity" />
+        <Variable x:TypeArguments="x:String" Name="SAPStructureQrCode" />
+        <Variable x:TypeArguments="x:String" Name="SAPItemDescription" />
+      </Sequence.Variables>
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <If Condition="[in_CoupaInvoiceLine.Description.Length &gt; 50]" DisplayName="If - Determine SAP Description" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="If_23">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,364" sap2010:WorkflowViewState.IdRef="Sequence_56">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Truncate Line Item Description" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_2" OperationName="[POConstants.op_name_li_truncate_description]" TransactionOptions="Current">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </uasb:StartBusinessOperation>
+            <Assign sap2010:Annotation.AnnotationText="SAP has a limitation of 50 characters on the item desciption. Until other solution is found, we are truncating the description that comes from Coupa to 50 characters. Business decision communicated on email." DisplayName="Assign - SAPItemDescription Truncated" sap:VirtualizedContainerService.HintSize="450,171" sap2010:WorkflowViewState.IdRef="Assign_69">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[SAPItemDescription]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Description.Substring(0,50)]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+            <uasb:EndBusinessOperation DisplayName="End Business Operation= - Truncate Line Item Description" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_2" />
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_57">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign sap2010:Annotation.AnnotationText="SAP has a limitation of 50 characters on the item desciption. Until other solution is found, we are truncating the description that comes from Coupa to 50 characters. Business decision communicated on email." DisplayName="Assign - SAPItemDescription" sap:VirtualizedContainerService.HintSize="450,162" sap2010:WorkflowViewState.IdRef="Assign_68">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[SAPItemDescription]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Description]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+          </Sequence>
+        </If.Else>
+      </If>
+      <Assign sap2010:Annotation.AnnotationText="Description = invoice-lines &gt; description" DisplayName="Assign - Description" sap:VirtualizedContainerService.HintSize="450,145" sap2010:WorkflowViewState.IdRef="Assign_7">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.Description]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[SAPItemDescription]</InArgument>
+        </Assign.Value>
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </Assign>
+      <Assign sap2010:Annotation.AnnotationText="ItemText = invoice-lines &gt; description" DisplayName="Assign - ItemText " sap:VirtualizedContainerService.HintSize="450,88" sap2010:WorkflowViewState.IdRef="Assign_8">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.ItemText]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[SAPItemDescription]</InArgument>
+        </Assign.Value>
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </Assign>
+      <If sap2010:Annotation.AnnotationText="If the invoice line is an amount type line, the quantity fields returned from Coupa will be null. Checking, to avoid object not set exception." Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.Quantity)]" DisplayName="If - Determine SAP Quantity" sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="If_1">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_4">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - SAP Quantity Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_14">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:Double">[SAPQuantity]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:Double">[Nothing]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_5">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - SAP Quantity" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_15">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:Double">[SAPQuantity]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:Double">[Cdbl(in_CoupaInvoiceLine.Quantity)]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Else>
+      </If>
+      <Assign sap2010:Annotation.AnnotationText="AssetQuan = invoice-lines &gt; quantity" DisplayName="Assign - AssetQuan" sap:VirtualizedContainerService.HintSize="450,88" sap2010:WorkflowViewState.IdRef="Assign_9">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.AssetQuan]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:Double">[SAPQuantity]</InArgument>
+        </Assign.Value>
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </Assign>
+      <Assign sap2010:Annotation.AnnotationText="Quantity = invoice-lines &gt; quantity" DisplayName="Assign - Quantity " sap:VirtualizedContainerService.HintSize="450,88" sap2010:WorkflowViewState.IdRef="Assign_12">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.Quantity]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:Double">[SAPQuantity]</InArgument>
+        </Assign.Value>
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </Assign>
+      <Assign sap2010:Annotation.AnnotationText="BaseUnitMeasure = EA" DisplayName="Assign - BaseUnitMeasure " sap:VirtualizedContainerService.HintSize="450,88" sap2010:WorkflowViewState.IdRef="Assign_10">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.BaseUnitMeasure]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[ConfigDefaultUOM]</InArgument>
+        </Assign.Value>
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </Assign>
+      <If Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.Total.ToString)]" DisplayName="If - Set GLAmtDocCurrency " sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="If_20">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_50">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - GLAmtDocCurrency Nothing" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_67">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.GLAmtDocCurrency]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:Double">[Nothing]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_51">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign sap2010:Annotation.AnnotationText="GLAmtDocCurrency = invoice-lines &gt; total" DisplayName="Assign - GLAmtDocCurrency " sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_11">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.GLAmtDocCurrency]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:Double">[CDbl(in_CoupaInvoiceLine.Total)]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+          </Sequence>
+        </If.Else>
+      </If>
+      <If sap2010:Annotation.AnnotationText="If the invoice will not have a corresponding PO, the PO number and order line number fields returned will be null. Performing the check in order to avoid the object not set exception. &#xA;If no PO available on the invoice, evidently, no PO lines, therefore, no order line number." Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.PONumber)]" DisplayName="If - No PO" sap:VirtualizedContainerService.HintSize="450,144" sap2010:WorkflowViewState.IdRef="If_2">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_6">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - SAPStructureQrCode Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_16">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[SAPStructureQrCode]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_7">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - SAPStructureQrCode Based On Coupa Data" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_17">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[SAPStructureQrCode]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.PONumber + "-" + in_CoupaInvoiceLine.LineNum]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Else>
+      </If>
+      <Assign sap2010:Annotation.AnnotationText="StructureQrCode = invoice-lines &gt; po-number - invoice-lines &gt; order-line-num" DisplayName="Assign - StructureQrCode " sap:VirtualizedContainerService.HintSize="450,90" sap2010:WorkflowViewState.IdRef="Assign_13">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.StructureQrCode]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[SAPStructureQrCode]</InArgument>
+        </Assign.Value>
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+      </Assign>
+    </Sequence>
+    <Sequence sap2010:Annotation.AnnotationText="FirstNoteTextLine = invoice-lines &gt; commodity &gt; name&#xA;&#xA;CostCenter = invoice-lines &gt; account &gt; segment-2&#xA;Location = invoice-lines &gt; account &gt; segment-4&#xA;&#xA;CURRENCY = invoice-lines &gt; currency &gt; code (mandatory, so treated as simple)" DisplayName="Transform Commodity &amp; Account" sap:VirtualizedContainerService.HintSize="450,174" sap2010:WorkflowViewState.IdRef="Sequence_8">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <Assign DisplayName="Assign - Set Currency" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_66">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.Currency]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Currency.Code]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <If sap2010:Annotation.AnnotationText="Checking if the commodity is set before assigning in order to prevent object not set exception" Condition="[IsNothing(in_CoupaInvoiceLine.Commodity)]" DisplayName="If - Set SAP FirstNoteTextLine " sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="If_3">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_11">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - SAP FirstNoteTextLine Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_20">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.FirstNoteTextLine]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,208" sap2010:WorkflowViewState.IdRef="Sequence_12">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If sap2010:Annotation.AnnotationText="FirstNoteTextLine = invoice-lines &gt; commodity &gt; name&#xA;IACO-8938: Number should be truncated to 50 characters, as this is the SAP character limit for this field and the business decision was to only take the first 50 characters into account in this case." Condition="[in_CoupaInvoiceLine.Commodity.Name.Length &gt; 50]" DisplayName="If - Truncate &amp; Set FirstNoteTextLine " sap:VirtualizedContainerService.HintSize="450,120" sap2010:WorkflowViewState.IdRef="If_29">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+              <If.Then>
+                <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,338" sap2010:WorkflowViewState.IdRef="Sequence_68">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Truncate Note Text" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_3" OperationName="[POConstants.op_name_li_truncate_note]" TransactionOptions="Current">
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </uasb:StartBusinessOperation>
+                  <Assign sap2010:Annotation.AnnotationText="FirstNoteTextLine = invoice-lines &gt; commodity &gt; name (trimmed to 50)" DisplayName="Assign - FirstNoteTextLine Trimmed" sap:VirtualizedContainerService.HintSize="450,145" sap2010:WorkflowViewState.IdRef="Assign_76">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.FirstNoteTextLine]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Commodity.Name.Substring(0,50)]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                  <uasb:EndBusinessOperation DisplayName="End Business Operation - Truncate Note Text" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_3" />
+                </Sequence>
+              </If.Then>
+              <If.Else>
+                <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_69">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <Assign sap2010:Annotation.AnnotationText="FirstNoteTextLine = invoice-lines &gt; commodity &gt; name" DisplayName="Assign - FirstNoteTextLine " sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_19">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.FirstNoteTextLine]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Commodity.Name]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                </Sequence>
+              </If.Else>
+            </If>
+          </Sequence>
+        </If.Else>
+      </If>
+      <If sap2010:Annotation.AnnotationText="Checking if the acount is set before assigning in order to prevent object not set exception." Condition="[IsNothing(in_CoupaInvoiceLine.Account)]" DisplayName="If - Set SAP CostCenter &amp; Location" sap:VirtualizedContainerService.HintSize="450,340" sap2010:WorkflowViewState.IdRef="If_4">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence sap2010:Annotation.AnnotationText="We should extract the cost center, the location and the GL account from the account. If the account object is missing, none of these objects can be extracted. &#xA;The cost center and the GL account are required fields, so their values not being available in Coupa transleates in a business exception." DisplayName="Then - Handle Empty Account" sap:VirtualizedContainerService.HintSize="416,112" sap2010:WorkflowViewState.IdRef="Sequence_13">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Account Details Missing" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_4" OperationName="[POConstants.op_name_error_li_missing_coupa_account]" TransactionOptions="Current">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </uasb:StartBusinessOperation>
+            <Throw DisplayName="Throw - Account Missing" Exception="[New BusinessRuleException(&quot;Account is missing on invoice line number &quot; + in_CoupaInvoiceLine.LineNum.ToString + &quot;, therefore, the cost center, location and GL account cannot be extracted. The cost center and the GL account are required fields for creating the invoice in SAP. Please make sure all required information is filled in in Coupa before sending the invoice for processing again.&quot;)]" sap:VirtualizedContainerService.HintSize="450,113" sap2010:WorkflowViewState.IdRef="Throw_1" />
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else - Set CostCenter &amp; Location" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_14">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.Account.Segment2)]" DisplayName="If - Handle Cost Center" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="If_21">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+              <If.Then>
+                <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,258" sap2010:WorkflowViewState.IdRef="Sequence_52">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Coupa Line Cost Center Mising" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_8" OperationName="[POConstants.op_name_error_li_missing_coupa_cost_center]" TransactionOptions="Current">
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </uasb:StartBusinessOperation>
+                  <Throw DisplayName="Throw - Coupa Cost Center Missing" Exception="[New BusinessRuleException(&quot;Cost center is missing on invoice line number &quot; + in_CoupaInvoiceLine.LineNum.ToString + &quot;. The cost center is a required field for creating the invoice in SAP. Please make sure all required information is filled in in Coupa before sending the invoice for processing again.&quot;)]" sap:VirtualizedContainerService.HintSize="450,113" sap2010:WorkflowViewState.IdRef="Throw_2" />
+                </Sequence>
+              </If.Then>
+              <If.Else>
+                <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_53">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <Assign sap2010:Annotation.AnnotationText="CostCenter = invoice-lines &gt; account &gt; segment-2" DisplayName="Assign - CostCenter" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_25">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.CostCenter]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Account.Segment2]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                </Sequence>
+              </If.Else>
+            </If>
+            <Assign sap2010:Annotation.AnnotationText="Location = invoice-lines &gt; account &gt; segment-4" DisplayName="Assign - Location" sap:VirtualizedContainerService.HintSize="450,145" sap2010:WorkflowViewState.IdRef="Assign_23">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.Location]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Account.Segment4]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                  <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+            <If Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.Account.Segment3)]" DisplayName="If - Handle Coupa GL Account" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="If_22">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+              <If.Then>
+                <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,258" sap2010:WorkflowViewState.IdRef="Sequence_54">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Coupa Line GL Mising" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_9" OperationName="[POConstants.op_name_error_li_missing_coupa_gl]" TransactionOptions="Current">
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </uasb:StartBusinessOperation>
+                  <Throw DisplayName="Throw - Coupa GL Account Missing" Exception="[New BusinessRuleException(&quot;GL account is missing on invoice line number &quot; + in_CoupaInvoiceLine.LineNum.ToString + &quot;. The GL account is a required field for creating the invoice in SAP. Please make sure all required information is filled in in Coupa before sending the invoice for processing again.&quot;)]" sap:VirtualizedContainerService.HintSize="450,113" sap2010:WorkflowViewState.IdRef="Throw_4" />
+                </Sequence>
+              </If.Then>
+              <If.Else>
+                <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_55">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <Assign sap2010:Annotation.AnnotationText="Will be used in transform logic for determining the SplGlIndicator and GeneralLedger values.&#xA;&#xA;GeneralLedger = invoice-lines &gt; account &gt; segment-3" DisplayName="Assign - CoupaGLAccount" sap:VirtualizedContainerService.HintSize="450,177" sap2010:WorkflowViewState.IdRef="Assign_43">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[CoupaGLAccount]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.Account.Segment3]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                </Sequence>
+              </If.Else>
+            </If>
+          </Sequence>
+        </If.Else>
+      </If>
+    </Sequence>
+    <If sap2010:Annotation.AnnotationText="ProjectName = invoice-lines &gt; custom-fields&gt; project &gt; name&#xA;     CR1 (COE-24159): ProjectName = invoice-lines &gt; custom-fields&gt; project &gt; external-ref-num&#xA;&#xA;Leases = invoice-lines &gt; custom-fields&gt; leases &gt; name&#xA;PeriodStartDate = invoice-lines &gt; custom-fields&gt; start-date&#xA;PeriodEndDate = invoice-lines &gt; custom-fields&gt; end-date&#xA;&#xA;Checking if the custom fields are set before assigning in order to prevent object not set exception." Condition="[IsNothing(in_CoupaInvoiceLine.CustomFields)]" DisplayName="If - Transform Custom Fields" sap:VirtualizedContainerService.HintSize="450,219" sap2010:WorkflowViewState.IdRef="If_5">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <If.Then>
+        <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_15">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+          <Assign DisplayName="Assign - SAP ProjectName Empty" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_27">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.ProjectName]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+            </Assign.Value>
+          </Assign>
+          <Assign DisplayName="Assign - SAP Leases Empty" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_28">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.Leases]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+            </Assign.Value>
+          </Assign>
+          <Assign DisplayName="Assign - SAP PeriodStartDate Empty" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_29">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.PeriodStartDate]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+            </Assign.Value>
+          </Assign>
+          <Assign DisplayName="Assign - SAP PeriodEndDate Empty" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_30">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.PeriodEndDate]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+            </Assign.Value>
+          </Assign>
+          <Assign sap2010:Annotation.AnnotationText="Will be used in transform logic for determining the SplGlIndicator value." DisplayName="Assign - CoupaPrepaymentType Empty (Custom Fields Empty)" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_39">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:String">[CoupaPrepaymentTypeName]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+            </Assign.Value>
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+          </Assign>
+        </Sequence>
+      </If.Then>
+      <If.Else>
+        <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="484,561" sap2010:WorkflowViewState.IdRef="Sequence_16">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+          <If sap2010:Annotation.AnnotationText="ProjectName = invoice-lines &gt; custom-fields&gt; project &gt; name&#xA;Checking if the leases object is set before assigning in order to prevent object not set exception." Condition="[IsNothing(in_CoupaInvoiceLine.CustomFields.Project)]" DisplayName="If - Set Project Name" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="If_8">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If.Then>
+              <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_21">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign DisplayName="Assign - Project Name Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_35">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.ProjectName]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Then>
+            <If.Else>
+              <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,250" sap2010:WorkflowViewState.IdRef="Sequence_22">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign sap2010:Annotation.AnnotationText="ProjectName = invoice-lines &gt; custom-fields&gt; project &gt; name&#xA;     CR1 (COE-24159): ProjectName = invoice-lines &gt; custom-fields&gt; project &gt; external-ref-num" DisplayName="Assign - ProjectName " sap:VirtualizedContainerService.HintSize="450,162" sap2010:WorkflowViewState.IdRef="Assign_31">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.ProjectName]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.CustomFields.Project.ExternalRefNum]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Else>
+          </If>
+          <If sap2010:Annotation.AnnotationText="Checking if the leases object is set before assigning in order to prevent object not set exception." Condition="[IsNothing(in_CoupaInvoiceLine.CustomFields.Leases)]" DisplayName="If - Set Leases" sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="If_24">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If.Then>
+              <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_58">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign DisplayName="Assign - Leases  Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_70">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.Leases]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Then>
+            <If.Else>
+              <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_59">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign sap2010:Annotation.AnnotationText="Leases = invoice-lines &gt; custom-fields&gt; leases &gt; name" DisplayName="Assign - Leases " sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_71">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.Leases]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.CustomFields.Leases.Name]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Else>
+          </If>
+          <If sap2010:Annotation.AnnotationText="Checking if start date set to avoid excepton when trying to cast value to date." Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.CustomFields.StartDate)]" DisplayName="If - Set PeriodStartDate " sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="If_9">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If.Then>
+              <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_23">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign DisplayName="Assign - PeriodStartDate Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_36">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.PeriodStartDate]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Then>
+            <If.Else>
+              <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_24">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign sap2010:Annotation.AnnotationText="PeriodStartDate = invoice-lines &gt; custom-fields&gt; start-date" DisplayName="Assign - PeriodStartDate " sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_33">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.PeriodStartDate]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[DateTimeOffset.Parse(in_CoupaInvoiceLine.CustomFields.StartDate).ToString(ConfigSAPAPIDateFormat)]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Else>
+          </If>
+          <If sap2010:Annotation.AnnotationText="Checking if start date set to avoid excepton when trying to cast value to date." Condition="[String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.CustomFields.EndDate)]" DisplayName="If - Set PeriodEndDate " sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="If_10">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If.Then>
+              <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_25">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign DisplayName="Assign - PeriodEndDate Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_37">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.PeriodEndDate]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Then>
+            <If.Else>
+              <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_26">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign sap2010:Annotation.AnnotationText="PeriodEndDate = invoice-lines &gt; custom-fields&gt; end-date" DisplayName="Assign - PeriodEndDate " sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_34">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.PeriodEndDate]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[DateTimeOffset.Parse(in_CoupaInvoiceLine.CustomFields.EndDate).ToString(ConfigSAPAPIDateFormat)]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Else>
+          </If>
+          <If sap2010:Annotation.AnnotationText="Checking if the prepayment object is set before assigning teh name in order to prevent object not set exception." Condition="[IsNothing(in_CoupaInvoiceLine.CustomFields.PrepaymentType)]" DisplayName="If - Set Prepayment Type" sap:VirtualizedContainerService.HintSize="450,90" sap2010:WorkflowViewState.IdRef="If_11">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If.Then>
+              <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="484,196" sap2010:WorkflowViewState.IdRef="Sequence_27">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign sap2010:Annotation.AnnotationText="Will be used in transform logic for determining the SplGlIndicator value." DisplayName="Assign - CoupaPrepaymentType Empty" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_40">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[CoupaPrepaymentTypeName]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Then>
+            <If.Else>
+              <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="484,196" sap2010:WorkflowViewState.IdRef="Sequence_28">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <Assign sap2010:Annotation.AnnotationText="Will be used in transform logic for determining the SplGlIndicator value." DisplayName="Assign - CoupaPrepaymentType" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_41">
+                  <Assign.To>
+                    <OutArgument x:TypeArguments="x:String">[CoupaPrepaymentTypeName]</OutArgument>
+                  </Assign.To>
+                  <Assign.Value>
+                    <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.CustomFields.PrepaymentType.ExternalRefNum]</InArgument>
+                  </Assign.Value>
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                </Assign>
+              </Sequence>
+            </If.Else>
+          </If>
+        </Sequence>
+      </If.Else>
+    </If>
+    <Sequence sap2010:Annotation.AnnotationText="SplGlIndicator = A/O/V/String.Empty, based on logic&#xA;GeneralLedger = IF SplGlIndicator = O/V/A --&gt; leave blank, ELSE Coupa GL Account&#xA;UnstructureQrCode =  IFSplGlIndicator = O/V' --&gt; Coupa GL Account, ELSE leave blank" DisplayName="Transform GL Fields" sap:VirtualizedContainerService.HintSize="450,144" sap2010:WorkflowViewState.IdRef="Sequence_10">
+      <Sequence.Variables>
+        <Variable x:TypeArguments="x:String" Name="SAPSpGlIndicator" />
+      </Sequence.Variables>
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <Sequence DisplayName="Business Operation - Determine Special GL Indicator" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="Sequence_71">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Determine Special GL Indicator" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_5" OperationName="[POConstants.op_name_li_determine_sp_gl_ind]" TransactionOptions="Current">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+        </uasb:StartBusinessOperation>
+        <ui:InvokeWorkflowFile ArgumentsVariable="{x:Null}" ContinueOnError="{x:Null}" DisplayName="Logic_DetermineSpGlIndicator.xaml - Invoke Workflow File" sap:VirtualizedContainerService.HintSize="450,204" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_1" UnSafe="False" WorkflowFileName="Workflows_Misc\Transform_Fields\Logic_DetermineSpGlIndicator.xaml">
+          <ui:InvokeWorkflowFile.Arguments>
+            <InArgument x:TypeArguments="x:String" x:Key="in_CoupaGLAccount">[CoupaGLAccount]</InArgument>
+            <InArgument x:TypeArguments="x:String" x:Key="in_CoupaPrepaymentTypeName">[CoupaPrepaymentTypeName]</InArgument>
+            <OutArgument x:TypeArguments="x:String" x:Key="out_SAPSpGlIndicator">[SAPSpGlIndicator]</OutArgument>
+            <InArgument x:TypeArguments="x:Double" x:Key="in_LinesTotal">[in_LinesTotal]</InArgument>
+          </ui:InvokeWorkflowFile.Arguments>
+        </ui:InvokeWorkflowFile>
+        <uasb:EndBusinessOperation DisplayName="End Business Operation - Determine Special GL Indicator" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_5" />
+      </Sequence>
+      <Assign DisplayName="Assign - SplGlIndicator" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_44">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.SplGlIndicator]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[SAPSpGlIndicator]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <If sap2010:Annotation.AnnotationText="_GeneralLedger= &#xA; IF_item.SplGlIndicator= 'O', 'V' or 'A' --&gt; leave blank&#xA;ELSE: Pass Coupa GL Account" Condition="[(SAPSpGlIndicator.ToUpper() = &quot;O&quot;) OrElse (SAPSpGlIndicator.ToUpper() = &quot;V&quot;) OrElse (SAPSpGlIndicator.ToUpper() = &quot;A&quot;)]" DisplayName="If - Set GeneralLedger  Based On SplGlIndicator" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="If_12">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_29">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - GeneralLedger Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_45">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.GeneralLedger]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_30">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign sap2010:Annotation.AnnotationText="GeneralLedge r= Coupa GL Account" DisplayName="Assign - GeneralLedger = CoupaGLAccount" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_46">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.GeneralLedger]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[CoupaGLAccount]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+          </Sequence>
+        </If.Else>
+      </If>
+      <If sap2010:Annotation.AnnotationText="_item.UnstructureQrCode = &#xA; IF_item.SplGlIndicator= 'O' or 'V' --&gt; Coupa GL Account&#xA;ELSE: leave blank" Condition="[(SAPSpGlIndicator.ToUpper() = &quot;O&quot;) OrElse (SAPSpGlIndicator.ToUpper() = &quot;V&quot;)]" DisplayName="If - Set UnstructureQrCode Based On SplGlIndicator" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="If_14">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_33">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign sap2010:Annotation.AnnotationText="GeneralLedger= Coupa GL Account" DisplayName="Assign - UnstructureQrCode = CoupaGLAccount" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_48">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.UnstructureQrCode]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[CoupaGLAccount]</InArgument>
+              </Assign.Value>
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Assign>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="512,193" sap2010:WorkflowViewState.IdRef="Sequence_34">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="Assign - UnstructureQrCode Empty" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_47">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.UnstructureQrCode]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[String.Empty]</InArgument>
+              </Assign.Value>
+            </Assign>
+          </Sequence>
+        </If.Else>
+      </If>
+    </Sequence>
+    <If sap2010:Annotation.AnnotationText="CR4&#xA;WithHoldTaxCode = invoice-lines &gt; withholding-tax-lines&gt; code&#xA;WithHoldBaseAmt = invoice-lines &gt; withholding-tax-lines&gt; Base&#xA;WithHoldTaxAmt = invoice-lines &gt; withholding-tax-lines&gt; withholding-amount" Condition="[in_CoupaInvoiceLine.WithholdingTaxLines.Count &gt; 0]" DisplayName="CR4If - Transform With holding tax" sap:VirtualizedContainerService.HintSize="450,144" sap2010:WorkflowViewState.IdRef="If_31">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <If.Then>
+        <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="484,523" sap2010:WorkflowViewState.IdRef="Sequence_76">
+          <Sequence.Variables>
+            <Variable x:TypeArguments="c:CoupaInvoiceLineWithholdingTax" Name="objWithholdingTaxLine" />
+          </Sequence.Variables>
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+          <Assign DisplayName="Assign - Withholding tax line" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_81">
+            <Assign.To>
+              <OutArgument x:TypeArguments="c:CoupaInvoiceLineWithholdingTax">[objWithholdingTaxLine]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="c:CoupaInvoiceLineWithholdingTax">[in_CoupaInvoiceLine.WithholdingTaxLines(0)]</InArgument>
+            </Assign.Value>
+          </Assign>
+          <TryCatch DisplayName="Try Catch - Withholding code" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="TryCatch_1">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <TryCatch.Try>
+              <Assign sap2010:Annotation.AnnotationText="WithHoldTaxCode = invoice-lines &gt; withholding-tax-lines&gt; code" DisplayName="Assign - WithHoldTaxCode" sap:VirtualizedContainerService.HintSize="450,113" sap2010:WorkflowViewState.IdRef="Assign_78">
+                <Assign.To>
+                  <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.WithHoldTaxCode]</OutArgument>
+                </Assign.To>
+                <Assign.Value>
+                  <InArgument x:TypeArguments="x:String">[in_dt_WHTCode.AsEnumerable().Where(Function(row) row("WHT Code from Coupa").ToString.Equals(objWithholdingTaxLine.Code)).First.Item("WHT Code to SAP").ToString]</InArgument>
+                </Assign.Value>
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+              </Assign>
+            </TryCatch.Try>
+            <TryCatch.Catches>
+              <Catch x:TypeArguments="s1:Exception" sap2010:WorkflowViewState.IdRef="Catch`1_1">
+                <ActivityAction x:TypeArguments="s1:Exception">
+                  <ActivityAction.Argument>
+                    <DelegateInArgument x:TypeArguments="s1:Exception" Name="exception" />
+                  </ActivityAction.Argument>
+                  <Sequence DisplayName="Body" sap:VirtualizedContainerService.HintSize="512,224" sap2010:WorkflowViewState.IdRef="Sequence_78">
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                    <Assign sap2010:Annotation.AnnotationText="WithHoldTaxCode = invoice-lines &gt; withholding-tax-lines&gt; code" DisplayName="Assign - WithHoldTaxCode after exception" sap:VirtualizedContainerService.HintSize="450,136" sap2010:WorkflowViewState.IdRef="Assign_83">
+                      <Assign.To>
+                        <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.WithHoldTaxCode]</OutArgument>
+                      </Assign.To>
+                      <Assign.Value>
+                        <InArgument x:TypeArguments="x:String">[objWithholdingTaxLine.Code]</InArgument>
+                      </Assign.Value>
+                      <sap:WorkflowViewStateService.ViewState>
+                        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                          <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                        </scg:Dictionary>
+                      </sap:WorkflowViewStateService.ViewState>
+                    </Assign>
+                  </Sequence>
+                </ActivityAction>
+              </Catch>
+            </TryCatch.Catches>
+            <TryCatch.Finally>
+              <Sequence DisplayName="Finally" sap:VirtualizedContainerService.HintSize="512,205" sap2010:WorkflowViewState.IdRef="Sequence_79">
+                <sap:WorkflowViewStateService.ViewState>
+                  <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                    <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                    <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                  </scg:Dictionary>
+                </sap:WorkflowViewStateService.ViewState>
+                <ui:Comment sap:VirtualizedContainerService.HintSize="450,117" sap2010:WorkflowViewState.IdRef="Comment_1" Text="// Write your comments in the Text property" />
+              </Sequence>
+            </TryCatch.Finally>
+          </TryCatch>
+          <Assign sap2010:Annotation.AnnotationText="WithHoldBaseAmt = invoice-lines &gt; withholding-tax-lines&gt; Base" DisplayName="Assign - WithHoldBaseAmt " sap:VirtualizedContainerService.HintSize="450,145" sap2010:WorkflowViewState.IdRef="Assign_79">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.WithHoldBaseAmt]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:Double">[objWithholdingTaxLine.Base]</InArgument>
+            </Assign.Value>
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+          </Assign>
+          <Assign sap2010:Annotation.AnnotationText="WithHoldTaxAmt = invoice-lines &gt; withholding-tax-lines&gt; withholding-amount" DisplayName="Assign - WithHoldTaxAmt" sap:VirtualizedContainerService.HintSize="450,147" sap2010:WorkflowViewState.IdRef="Assign_80">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.WithHoldTaxAmt]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:Double">[objWithholdingTaxLine.WithholdingAmount]</InArgument>
+            </Assign.Value>
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+          </Assign>
+        </Sequence>
+      </If.Then>
+      <If.Else>
+        <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_77">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+        </Sequence>
+      </If.Else>
+    </If>
+    <Sequence sap2010:Annotation.AnnotationText="CR5&#xA;Tax Logic:&#xA;1.  Line level tax:&#xA;     - TaxCode = invoice-lines &gt; tax-code &gt; code&#xA;     - TaxAmtDoc = invoice-lines &gt; tax-amount (rounded to 2 decimals)&#xA;2.  Invoice level tax:&#xA;     - TaxCode = invoice header &gt; tax-code &gt; code&#xA;     - TaxAmtDoc = tax-code &gt; percentage * invoice-lines &gt; total  (rounded to 2 decimals)&#xA;3.  No tax:&#xA;     - TaxCode = String.Empty&#xA;     - TaxAmtDoc = String.Empty" DisplayName="CR5 Transform Tax Fields" sap:VirtualizedContainerService.HintSize="450,240" sap2010:WorkflowViewState.IdRef="Sequence_35">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <Sequence DisplayName="Business Operation - Check Invoice Tax Details" sap:VirtualizedContainerService.HintSize="512,438" sap2010:WorkflowViewState.IdRef="Sequence_72">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Check Invoice Tax Details" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_6" OperationName="[POConstants.op_name_li_check_tax_details]" TransactionOptions="Current">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+        </uasb:StartBusinessOperation>
+        <If sap2010:Annotation.AnnotationText="If the invoice does not have line level taxation, it means that it has header level taxation, so we should have tax details at header level. Tax details are mandatory, so we are throwing a BRE if the info is missing." Condition="[Not Config(&quot;NonTaxableCompany&quot;).ToString.Split(&quot;,&quot;c).Contains(in_CompanyCode) AndAlso Not(in_LineLevelTaxation) AndAlso (String.IsNullOrWhiteSpace(in_CoupaInvoiceTaxCode))]" DisplayName="If - Header Level Taxation But No Tax " sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="If_27">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+          <If.Then>
+            <Sequence DisplayName="Then - Header Level Taxation But No Tax " sap:VirtualizedContainerService.HintSize="512,201" sap2010:WorkflowViewState.IdRef="Sequence_62">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+              <Throw DisplayName="Throw - Header Level Taxation But No Tax " Exception="[New BusinessRuleException(&quot;The invoice should have the tax information set at header level, but the tax code is not set. The tax code is mandatory. Please make sure the tax code is set either at header level or at line level before sending the invoice for processing again.&quot;)]" sap:VirtualizedContainerService.HintSize="450,113" sap2010:WorkflowViewState.IdRef="Throw_7" />
+            </Sequence>
+          </If.Then>
+          <If.Else>
+            <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_63">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Sequence>
+          </If.Else>
+        </If>
+        <If sap2010:Annotation.AnnotationText="If the invoice has line level taxation, we should have tax details at line level. Tax details are mandatory, so we are throwing a BRE if the info is missing." Condition="[Not Config(&quot;NonTaxableCompany&quot;).ToString.Split(&quot;,&quot;c).Contains(in_CompanyCode) AndAlso (in_LineLevelTaxation) AndAlso (IsNothing(in_CoupaInvoiceLine.TaxCode) OrElse String.IsNullOrWhiteSpace(in_CoupaInvoiceLine.TaxCode.Code))]" DisplayName="If - Line Level Taxation But No Tax " sap:VirtualizedContainerService.HintSize="450,99" sap2010:WorkflowViewState.IdRef="If_25">
+          <sap:WorkflowViewStateService.ViewState>
+            <scg:Dictionary x:TypeArguments="x:String, x:Object">
+              <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+              <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+            </scg:Dictionary>
+          </sap:WorkflowViewStateService.ViewState>
+          <If.Then>
+            <Sequence DisplayName="Then - Line Level Taxation But No Tax " sap:VirtualizedContainerService.HintSize="512,201" sap2010:WorkflowViewState.IdRef="Sequence_60">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+              <Throw DisplayName="Throw - Line Level Taxation But No Tax " Exception="[New BusinessRuleException(&quot;The invoice should have the tax information set at line level, but the tax code is not set. The tax code is mandatory. Please make sure the tax code is set either at header level or at line level before sending the invoice for processing again.&quot;)]" sap:VirtualizedContainerService.HintSize="450,113" sap2010:WorkflowViewState.IdRef="Throw_6" />
+            </Sequence>
+          </If.Then>
+          <If.Else>
+            <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_61">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+            </Sequence>
+          </If.Else>
+        </If>
+        <uasb:EndBusinessOperation DisplayName="End Business Operation - Check Invoice Tax Details" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_6" />
+      </Sequence>
+      <If Condition="[Not Config(&quot;NonTaxableCompany&quot;).ToString.Split(&quot;,&quot;c).Contains(in_CompanyCode)]" DisplayName="If - Check tax needed" sap:VirtualizedContainerService.HintSize="512,48" sap2010:WorkflowViewState.IdRef="If_30">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then - Caculate Tax" sap:VirtualizedContainerService.HintSize="512,268" sap2010:WorkflowViewState.IdRef="Sequence_73">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <If sap2010:Annotation.AnnotationText="Tax Logic:&#xA;1.  Line level tax:&#xA;     - TaxCode = invoice-lines &gt; tax-code &gt; code&#xA;     - TaxAmtDoc = invoice-lines &gt; tax-amount (rounded to 2 decimals)&#xA;2.  Invoice level tax:&#xA;     - TaxCode = invoice header &gt; tax-code &gt; code&#xA;     - TaxAmtDoc = tax-code &gt; percentage * invoice-lines &gt; total  (rounded to 2 decimals)" Condition="[in_LineLevelTaxation]" DisplayName="If - Calculate From Header Or From Line" sap:VirtualizedContainerService.HintSize="450,180" sap2010:WorkflowViewState.IdRef="If_28">
+              <sap:WorkflowViewStateService.ViewState>
+                <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                  <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                  <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                  <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                </scg:Dictionary>
+              </sap:WorkflowViewStateService.ViewState>
+              <If.Then>
+                <Sequence DisplayName="Then - Line Level Tax Details" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_66">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Line Level Tax details" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_10" OperationName="[POConstants.op_name_li_tax_amt_line]" TransactionOptions="Current">
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </uasb:StartBusinessOperation>
+                  <Assign sap2010:Annotation.AnnotationText="TaxCode = invoice lines &gt; tax-code &gt; code" DisplayName="Assign - TaxCode From Invoice Line" sap:VirtualizedContainerService.HintSize="450,145" sap2010:WorkflowViewState.IdRef="Assign_72">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.TaxCode]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceLine.TaxCode.Code]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                  <Assign sap2010:Annotation.AnnotationText="TaxAmtDoc= invoice-lines &gt; tax-amount" DisplayName="Assign - TaxAmtDoc From Invoice Line" sap:VirtualizedContainerService.HintSize="450,145" sap2010:WorkflowViewState.IdRef="Assign_73">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.TaxAmtDoc]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:Double">[Math.Round(CDbl(in_CoupaInvoiceLine.TaxAmount), 2)]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                  <uasb:EndBusinessOperation DisplayName="End Business Operation - Line Level Tax details" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_8" />
+                </Sequence>
+              </If.Then>
+              <If.Else>
+                <Sequence DisplayName="Else - Header Level Tax Details" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_67">
+                  <sap:WorkflowViewStateService.ViewState>
+                    <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                      <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                      <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                    </scg:Dictionary>
+                  </sap:WorkflowViewStateService.ViewState>
+                  <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Header Level Tax Amount" sap:VirtualizedContainerService.HintSize="450,223" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_7" OperationName="[POConstants.op_name_li_tax_amt_header]" TransactionOptions="Current">
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </uasb:StartBusinessOperation>
+                  <Assign sap2010:Annotation.AnnotationText="TaxCode = invoice header &gt; tax-code &gt; code (extracted outside this workflow and passed as an argument)" DisplayName="Assign - TaxCode From Invoice Header" sap:VirtualizedContainerService.HintSize="450,156" sap2010:WorkflowViewState.IdRef="Assign_74">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:String">[out_SAPInvoiceItem.TaxCode]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:String">[in_CoupaInvoiceTaxCode]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                  <Assign sap2010:Annotation.AnnotationText="TaxAmtDoc = invoice-lines &gt; total * tax-code &gt; percentage (extracted outside this workflow and passed as an argument)&#xA;&#xA;tax-code &gt; percentage comes as a value between 0 and 100, so we have to divide by 100 to get the actual percentage." DisplayName="Assign - TaxAmtDoc From Invoice Header" sap:VirtualizedContainerService.HintSize="450,201" sap2010:WorkflowViewState.IdRef="Assign_75">
+                    <Assign.To>
+                      <OutArgument x:TypeArguments="x:Double">[out_SAPInvoiceItem.TaxAmtDoc]</OutArgument>
+                    </Assign.To>
+                    <Assign.Value>
+                      <InArgument x:TypeArguments="x:Double">[Math.Round((CDbl(in_CoupaInvoiceLine.Total) * CDbl(in_CoupaInvoiceTaxPercentage)/100), 2)]</InArgument>
+                    </Assign.Value>
+                    <sap:WorkflowViewStateService.ViewState>
+                      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+                        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+                        <x:Boolean x:Key="IsPinned">False</x:Boolean>
+                      </scg:Dictionary>
+                    </sap:WorkflowViewStateService.ViewState>
+                  </Assign>
+                  <uasb:EndBusinessOperation DisplayName="End Business Operation - Header Level Tax Amount" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_7" />
+                </Sequence>
+              </If.Else>
+            </If>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_74">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+          </Sequence>
+        </If.Else>
+      </If>
+    </Sequence>
+  </Sequence>
+</Activity>

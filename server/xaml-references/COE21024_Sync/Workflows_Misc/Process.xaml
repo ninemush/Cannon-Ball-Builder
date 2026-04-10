@@ -1,0 +1,334 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Process" VisualBasic.Settings="{x:Null}" sap:VirtualizedContainerService.HintSize="943,872" sap2010:WorkflowViewState.IdRef="ProcessTransaction_1" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:c="clr-namespace:Coupa_Invoice_Model;assembly=COE21024_Invoices_Coupa_Sync.Core" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:p="clr-namespace:ProcessConstants;assembly=COE21024_Invoices_Coupa_Sync.Core" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib" xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib" xmlns:uasb="clr-namespace:UiPath.Activities.System.BPO;assembly=UiPath.System.Activities" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>Microsoft.VisualBasic</x:String>
+      <x:String>Microsoft.VisualBasic.Activities</x:String>
+      <x:String>System</x:String>
+      <x:String>System.Activities</x:String>
+      <x:String>System.Activities.Expressions</x:String>
+      <x:String>System.Activities.Statements</x:String>
+      <x:String>System.Activities.Validation</x:String>
+      <x:String>System.Activities.XamlIntegration</x:String>
+      <x:String>System.Collections</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Collections.ObjectModel</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>System.Diagnostics</x:String>
+      <x:String>System.Drawing</x:String>
+      <x:String>System.IO</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>System.Net.Mail</x:String>
+      <x:String>System.Runtime.InteropServices</x:String>
+      <x:String>System.Runtime.Serialization</x:String>
+      <x:String>System.Windows.Markup</x:String>
+      <x:String>System.Xml</x:String>
+      <x:String>System.Xml.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+      <x:String>GlobalVariablesNamespace</x:String>
+      <x:String>GlobalConstantsNamespace</x:String>
+      <x:String>System.Linq.Expressions</x:String>
+      <x:String>System.Reflection</x:String>
+      <x:String>Newtonsoft.Json</x:String>
+      <x:String>System.Numerics</x:String>
+      <x:String>ProcessConstants</x:String>
+      <x:String>UiPath.Activities.System.BPO</x:String>
+      <x:String>UiPath.Shared.Activities</x:String>
+      <x:String>Coupa_Invoice_Model</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>Microsoft.Bcl.AsyncInterfaces</AssemblyReference>
+      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
+      <AssemblyReference>mscorlib</AssemblyReference>
+      <AssemblyReference>PresentationCore</AssemblyReference>
+      <AssemblyReference>PresentationFramework</AssemblyReference>
+      <AssemblyReference>System</AssemblyReference>
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>System.Collections</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
+      <AssemblyReference>System.ComponentModel.TypeConverter</AssemblyReference>
+      <AssemblyReference>System.Core</AssemblyReference>
+      <AssemblyReference>System.Data</AssemblyReference>
+      <AssemblyReference>System.Drawing</AssemblyReference>
+      <AssemblyReference>System.Linq</AssemblyReference>
+      <AssemblyReference>System.Memory</AssemblyReference>
+      <AssemblyReference>System.ObjectModel</AssemblyReference>
+      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
+      <AssemblyReference>System.Runtime.Serialization</AssemblyReference>
+      <AssemblyReference>System.ServiceModel</AssemblyReference>
+      <AssemblyReference>System.ValueTuple</AssemblyReference>
+      <AssemblyReference>System.Xaml</AssemblyReference>
+      <AssemblyReference>System.Xml</AssemblyReference>
+      <AssemblyReference>System.Xml.Linq</AssemblyReference>
+      <AssemblyReference>UiPath.Excel</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.UiAutomation.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.Workflow</AssemblyReference>
+      <AssemblyReference>WindowsBase</AssemblyReference>
+      <AssemblyReference>UiPath.Studio.Constants</AssemblyReference>
+      <AssemblyReference>System.Configuration.ConfigurationManager</AssemblyReference>
+      <AssemblyReference>System.Memory.Data</AssemblyReference>
+      <AssemblyReference>System.Security.Permissions</AssemblyReference>
+      <AssemblyReference>NPOI</AssemblyReference>
+      <AssemblyReference>System.Console</AssemblyReference>
+      <AssemblyReference>System.ComponentModel</AssemblyReference>
+      <AssemblyReference>System.Private.Uri</AssemblyReference>
+      <AssemblyReference>System.Runtime.Serialization.Formatters</AssemblyReference>
+      <AssemblyReference>System.Private.DataContractSerialization</AssemblyReference>
+      <AssemblyReference>System.Runtime.Serialization.Primitives</AssemblyReference>
+      <AssemblyReference>System.Linq.Expressions</AssemblyReference>
+      <AssemblyReference>COE21043_PaymentInfo_Coupa_Transform.Core</AssemblyReference>
+      <AssemblyReference>System.Private.ServiceModel</AssemblyReference>
+      <AssemblyReference>System.Linq.Async</AssemblyReference>
+      <AssemblyReference>Microsoft.Extensions.DependencyModel</AssemblyReference>
+      <AssemblyReference>System.Collections.NonGeneric</AssemblyReference>
+      <AssemblyReference>System.Reflection.DispatchProxy</AssemblyReference>
+      <AssemblyReference>System.Reflection.TypeExtensions</AssemblyReference>
+      <AssemblyReference>System.Reflection.Metadata</AssemblyReference>
+      <AssemblyReference>System.Reflection.MetadataLoadContext</AssemblyReference>
+      <AssemblyReference>Newtonsoft.Json</AssemblyReference>
+      <AssemblyReference>System.Runtime.Numerics</AssemblyReference>
+      <AssemblyReference>System.Linq.Async.Queryable</AssemblyReference>
+      <AssemblyReference>System.Linq.Parallel</AssemblyReference>
+      <AssemblyReference>System.Collections.Immutable</AssemblyReference>
+      <AssemblyReference>System.Linq.Queryable</AssemblyReference>
+      <AssemblyReference>COE21043_PaymentInfo_Coupa_Perform.Core</AssemblyReference>
+      <AssemblyReference>COE21346_VendorActivation_Coupa_Perform.Core</AssemblyReference>
+      <AssemblyReference>COE21005_Vendors_Coupa_Sync.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Excel.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.MicrosoftOffice365.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.Web.Activities</AssemblyReference>
+      <AssemblyReference>COE21024_Invoices_Coupa_Sync.Core</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence sap2010:Annotation.AnnotationText="Invoke major steps of the business process, which are usually implemented by multiple subworkflows.&#xA;If a BusinessRuleException is thrown, the transaction is skipped. &#xA;If another kind of exception occurs, the current transaction can be retried.&#xA;&#xA;Transaction Item Reference: Coupa Invoice ID&#xA;Specfic content will contain 3 items:&#xA; - coupa_invoice_id&#xA; - sap_invoice_id&#xA; - coupa_invoice_json_string" DisplayName="Process" sap:VirtualizedContainerService.HintSize="512,807" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="CoupaInvoiceJsonString" />
+      <Variable x:TypeArguments="x:String" Name="CoupaInvoiceID" />
+      <Variable x:TypeArguments="p:ProcessOrchestrationConstants" Name="POConstants" />
+      <Variable x:TypeArguments="c:CoupaInvoice" Name="CoupaInvoiceObject" />
+      <Variable x:TypeArguments="c:CoupaInvoice" Name="newCoupaInvoiceObject" />
+    </Sequence.Variables>
+    <sap:WorkflowViewStateService.ViewState>
+      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+        <x:Boolean x:Key="IsAnnotationDocked">True</x:Boolean>
+      </scg:Dictionary>
+    </sap:WorkflowViewStateService.ViewState>
+    <Assign DisplayName="Assign - Initialize Process Orchestration Constants" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_21">
+      <Assign.To>
+        <OutArgument x:TypeArguments="p:ProcessOrchestrationConstants">[POConstants]</OutArgument>
+      </Assign.To>
+      <Assign.Value>
+        <InArgument x:TypeArguments="p:ProcessOrchestrationConstants">[New ProcessOrchestrationConstants()]</InArgument>
+      </Assign.Value>
+    </Assign>
+    <Sequence DisplayName="Extract Transaction Item Details" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="Sequence_5">
+      <Sequence.Variables>
+        <Variable x:TypeArguments="x:String" Name="SAPInvoiceID" />
+      </Sequence.Variables>
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <Assign DisplayName="Assign - CoupaInvoiceID" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_1">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaInvoiceID]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[TransactionItem.SpecificContent("coupa_invoice_id").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="Assign - SAPInvoiceID" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_20">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[SAPInvoiceID]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[TransactionItem.SpecificContent("sap_invoice_id").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="Assign - CoupaInvoiceJsonString" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_19">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaInvoiceJsonString]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[TransactionItem.SpecificContent("coupa_invoice_json_string").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="Assign - Transaction Details" sap:VirtualizedContainerService.HintSize="450,114" sap2010:WorkflowViewState.IdRef="Assign_18">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:Object">[Config("transaction_details")]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">["Coupa invoice ID: " + CoupaInvoiceID + ", SAP invoice ID: " + SAPInvoiceID]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="CR2 Assign - Deserialize Coupa Invoice Object" sap:VirtualizedContainerService.HintSize="450,105" sap2010:WorkflowViewState.IdRef="Assign_22">
+        <Assign.To>
+          <OutArgument x:TypeArguments="c:CoupaInvoice">[CoupaInvoiceObject]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="c:CoupaInvoice">[Newtonsoft.Json.JsonConvert.DeserializeObject(Of Coupa_Invoice_Model.CoupaInvoice)(CoupaInvoiceJsonString)]</InArgument>
+        </Assign.Value>
+      </Assign>
+    </Sequence>
+    <uasb:StartBusinessOperation ObjectId="{x:Null}" ObjectType="{x:Null}" TransactionName="{x:Null}" DisplayName="Start Business Operation - Sync SAP Invoice Details To Coupa" sap:VirtualizedContainerService.HintSize="450,224" sap2010:WorkflowViewState.IdRef="StartBusinessOperation_1" OperationName="[POConstants.op_name_sync_coupa_invoice]" TransactionOptions="Current" />
+    <ui:LogMessage DisplayName="Log Message - Processing Transaction" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="LogMessage_1" Level="Info" Message="[&quot;Sending the following invoice details back to Coupa: {&quot; + Config(&quot;transaction_details&quot;).ToString + &quot;}&quot;]">
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+    </ui:LogMessage>
+    <Sequence DisplayName="PATCH Coupa Invoice (Update SAP Details)" sap:VirtualizedContainerService.HintSize="450,57" sap2010:WorkflowViewState.IdRef="Sequence_2">
+      <Sequence.Variables>
+        <Variable x:TypeArguments="x:String" Name="CoupaBaseURL" />
+        <Variable x:TypeArguments="x:String" Name="CoupaToken" />
+        <Variable x:TypeArguments="c:CoupaInvoiceCustomFields" Name="CoupaCustomFieldsInvoiceObject" />
+      </Sequence.Variables>
+      <sap:WorkflowViewStateService.ViewState>
+        <scg:Dictionary x:TypeArguments="x:String, x:Object">
+          <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+          <x:Boolean x:Key="IsPinned">False</x:Boolean>
+        </scg:Dictionary>
+      </sap:WorkflowViewStateService.ViewState>
+      <Assign DisplayName="Assign - CoupaBaseURL" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_5">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaBaseURL]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[Config("coupa_base_url").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="Assign - CoupaToken" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_4">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaToken]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[Config("coupa_access_token").ToString]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <If Condition="[Not String.IsNullOrEmpty(CoupaInvoiceObject.Exported)]" DisplayName="CR2 If - Exported found?" sap:VirtualizedContainerService.HintSize="467,57" sap2010:WorkflowViewState.IdRef="If_1">
+        <sap:WorkflowViewStateService.ViewState>
+          <scg:Dictionary x:TypeArguments="x:String, x:Object">
+            <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+            <x:Boolean x:Key="IsPinned">False</x:Boolean>
+          </scg:Dictionary>
+        </sap:WorkflowViewStateService.ViewState>
+        <If.Then>
+          <Sequence DisplayName="Then" sap:VirtualizedContainerService.HintSize="529,625" sap2010:WorkflowViewState.IdRef="Sequence_6">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+            <Assign DisplayName="CR2 Assign - Initialize new Coupa invoice object for exported" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_28">
+              <Assign.To>
+                <OutArgument x:TypeArguments="c:CoupaInvoice">[newCoupaInvoiceObject]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="c:CoupaInvoice">[New Coupa_Invoice_Model.CoupaInvoice()]</InArgument>
+              </Assign.Value>
+            </Assign>
+            <Assign DisplayName="Assign - create Exported json" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_23">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[newCoupaInvoiceObject.Exported]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[CoupaInvoiceObject.Exported]</InArgument>
+              </Assign.Value>
+            </Assign>
+            <Assign DisplayName="Assign - Serialize Exported " sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_24">
+              <Assign.To>
+                <OutArgument x:TypeArguments="x:String">[CoupaInvoiceJsonString]</OutArgument>
+              </Assign.To>
+              <Assign.Value>
+                <InArgument x:TypeArguments="x:String">[newCoupaInvoiceObject.SerializeToJSON(true)]</InArgument>
+              </Assign.Value>
+            </Assign>
+            <ui:InvokeWorkflowFile ArgumentsVariable="{x:Null}" ContinueOnError="{x:Null}" DisplayName="Workflows_Apps\Coupa\Coupa_PATCH_Invoice.xaml - Invoke Workflow File - Update exported" sap:VirtualizedContainerService.HintSize="467,195" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_5" UnSafe="False" WorkflowFileName="Workflows_Apps\Coupa\Coupa_PATCH_Invoice.xaml">
+              <ui:InvokeWorkflowFile.Arguments>
+                <InArgument x:TypeArguments="x:String" x:Key="in_BaseURL">[CoupaBaseURL]</InArgument>
+                <InArgument x:TypeArguments="x:String" x:Key="in_Token">[CoupaToken]</InArgument>
+                <InArgument x:TypeArguments="x:String" x:Key="in_PATCHRequestBody">[CoupaInvoiceJsonString]</InArgument>
+                <InArgument x:TypeArguments="x:String" x:Key="in_InvoiceID">[CoupaInvoiceID]</InArgument>
+              </ui:InvokeWorkflowFile.Arguments>
+            </ui:InvokeWorkflowFile>
+          </Sequence>
+        </If.Then>
+        <If.Else>
+          <Sequence DisplayName="Else" sap:VirtualizedContainerService.HintSize="416,25" sap2010:WorkflowViewState.IdRef="Sequence_7">
+            <sap:WorkflowViewStateService.ViewState>
+              <scg:Dictionary x:TypeArguments="x:String, x:Object">
+                <x:Boolean x:Key="IsExpanded">False</x:Boolean>
+                <x:Boolean x:Key="IsPinned">False</x:Boolean>
+              </scg:Dictionary>
+            </sap:WorkflowViewStateService.ViewState>
+          </Sequence>
+        </If.Else>
+      </If>
+      <Assign DisplayName="CR2 Assign - Initialize Coupa invoice custom fields object" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_29">
+        <Assign.To>
+          <OutArgument x:TypeArguments="c:CoupaInvoiceCustomFields">[CoupaCustomFieldsInvoiceObject]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="c:CoupaInvoiceCustomFields">[New Coupa_Invoice_Model.CoupaInvoiceCustomFields()]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="CR2 Assign - Initialize new Coupa invoice object" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_30">
+        <Assign.To>
+          <OutArgument x:TypeArguments="c:CoupaInvoice">[newCoupaInvoiceObject]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="c:CoupaInvoice">[New Coupa_Invoice_Model.CoupaInvoice()]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="CR2 Assign - posting-date" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_25">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaCustomFieldsInvoiceObject.PostingDate]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[CoupaInvoiceObject.CustomFields.PostingDate]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="CR2 Assign - sap-document-number" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_26">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaCustomFieldsInvoiceObject.SAPDocumentNumber]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[CoupaInvoiceObject.CustomFields.SAPDocumentNumber]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="CR2 Assign custom Fields" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_31">
+        <Assign.To>
+          <OutArgument x:TypeArguments="c:CoupaInvoiceCustomFields">[newCoupaInvoiceObject.CustomFields]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="c:CoupaInvoiceCustomFields">[CoupaCustomFieldsInvoiceObject]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <Assign DisplayName="CR2 Assign - Serialize Invoice" sap:VirtualizedContainerService.HintSize="467,114" sap2010:WorkflowViewState.IdRef="Assign_27">
+        <Assign.To>
+          <OutArgument x:TypeArguments="x:String">[CoupaInvoiceJsonString]</OutArgument>
+        </Assign.To>
+        <Assign.Value>
+          <InArgument x:TypeArguments="x:String">[newCoupaInvoiceObject.SerializeToJSON(true)]</InArgument>
+        </Assign.Value>
+      </Assign>
+      <ui:InvokeWorkflowFile ArgumentsVariable="{x:Null}" ContinueOnError="{x:Null}" DisplayName="Workflows_Apps\Coupa\Coupa_PATCH_Invoice.xaml - Invoke Workflow File" sap:VirtualizedContainerService.HintSize="467,195" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_4" UnSafe="False" WorkflowFileName="Workflows_Apps\Coupa\Coupa_PATCH_Invoice.xaml">
+        <ui:InvokeWorkflowFile.Arguments>
+          <InArgument x:TypeArguments="x:String" x:Key="in_BaseURL">[CoupaBaseURL]</InArgument>
+          <InArgument x:TypeArguments="x:String" x:Key="in_Token">[CoupaToken]</InArgument>
+          <InArgument x:TypeArguments="x:String" x:Key="in_PATCHRequestBody">[CoupaInvoiceJsonString]</InArgument>
+          <InArgument x:TypeArguments="x:String" x:Key="in_InvoiceID">[CoupaInvoiceID]</InArgument>
+        </ui:InvokeWorkflowFile.Arguments>
+      </ui:InvokeWorkflowFile>
+    </Sequence>
+    <uasb:EndBusinessOperation DisplayName="End Business Operation - Sync SAP Invoice Details To Coupa" sap:VirtualizedContainerService.HintSize="450,48" sap2010:WorkflowViewState.IdRef="EndBusinessOperation_1" />
+  </Sequence>
+</Activity>
