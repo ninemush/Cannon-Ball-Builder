@@ -1,0 +1,130 @@
+Deep runtime trace: why common-activity required-property fallbacks do not survive into final package output
+
+What & Why
+The current codebase already contains required-property fallback infrastructure for at least some of the exact activity/property pairs still failing in generated packages, especially common activities like:
+- LogMessage.Message
+- InvokeWorkflowFile.WorkflowFileName
+
+Yet the latest generated packages still show these properties as missing in the final output.
+
+Before implementing another fix, we need a surgical runtime trace to determine exactly where the intended fallback or minimum-valid-value path is being lost.
+
+This is an investigation task, not an implementation task.
+
+The goal is to answer, with code evidence, why the fallback logic exists but the final package still emits invalid common activities.
+
+Questions to answer
+1. For each of these failing activity/property pairs:
+- LogMessage.Message
+- InvokeWorkflowFile.WorkflowFileName
+- ReadTextFile.File
+- SendSmtpMailMessage.Body
+- QueryEntity.EntityType
+
+trace the full path from:
+- spec / normalized spec
+- workflow-tree-assembler or deterministic generator input
+- required-property-enforcer
+- any post-emission mutation
+- final deferredWrites / xamlEntries content
+- final emitted XAML in package assembly
+
+2. For LogMessage.Message and InvokeWorkflowFile.WorkflowFileName specifically:
+- does the required-property-enforcer actually see these activities?
+- do activityType and propertyName match the fallback registry keys exactly?
+- does tier 7 or context-derived fallback execute?
+- if it executes, where is the fallback value written?
+- does a later stage overwrite, strip, stub, or bypass that value?
+
+3. For ReadTextFile.File, SendSmtpMailMessage.Body, and QueryEntity.EntityType:
+- are these expected to be handled by generator logic, enforcer logic, or both?
+- is there currently any minimum-valid fallback path at all?
+- if not, where is the missing authority supposed to live?
+
+4. Are the failing workflows bypassing the enforcer entirely because they:
+- are stubbed before enforcement
+- are emitted through a codepath that never calls the enforcer
+- use activity names/aliases that do not match policy keys
+- are mutated after enforcement using stale content
+- are removed as unreachable before the corrected content survives
+
+5. What is the earliest stage where each of the five failing required properties becomes invalid or absent?
+
+Output requirements
+Return a surgical findings report with exactly these sections:
+
+1. Executive summary
+- one paragraph
+- state the single most likely root cause
+- state whether this is primarily:
+  - enforcer bypass
+  - name/alias mismatch
+  - writeback loss
+  - later overwrite
+  - stub/removal cascade
+  - or missing minimum-valid-emission contract
+
+2. Trace table for the five target properties
+For each property:
+- activity/property
+- spec state
+- pre-emission state
+- enforcer seen? yes/no
+- fallback available? yes/no
+- fallback applied? yes/no
+- persisted to final content? yes/no
+- final XAML state
+- first stage where it is lost or invalidated
+- confidence: high / medium / low
+
+3. Enforcer call-path analysis
+- where handleMissingRequiredProperty or equivalent is invoked
+- whether the common failing activities flow through it
+- whether activityType/propertyName normalization matches the fallback registry and policy keys
+- whether any aliases or prefixes cause misses
+
+4. Writeback / mutation analysis
+- identify exactly which content surface is authoritative at each stage
+- whether fallback values are written into deferredWrites, xamlEntries, both, or neither
+- whether a later mutation rewrites the same workflow content and discards the fallback
+
+5. Stub / removal interaction
+- determine whether the failing workflows are being stubbed or removed after the fallback could have been applied
+- explain whether this makes the missing property symptom a secondary effect rather than the primary cause
+
+6. Minimum-valid-emission gap analysis
+For each of the five target activity/property pairs, state whether the correct long-term authority should live in:
+- deterministic generator
+- workflow-tree-assembler
+- required-property-enforcer
+- spec normalization
+- or a dedicated minimum-valid-emission layer
+
+7. Recommended next implementation task
+- one task only
+- narrow
+- implementation-ready
+- directly tied to the earliest proven loss point from this investigation
+
+Important constraints
+- Do not propose broad architecture rewrites
+- Do not mix this with namespace/dependency issues unless the evidence proves they are the direct cause for these five properties
+- Prefer direct code evidence over inference
+- If multiple failing properties are lost at different stages, say so clearly instead of forcing one theory
+- Do not implement fixes in this task
+
+Relevant files to inspect
+- server/required-property-enforcer.ts
+- server/workflow-tree-assembler.ts
+- server/xaml/deterministic-generators.ts
+- server/xaml-generator.ts
+- server/spec-ir-normalizer.ts
+- server/package-assembler.ts
+- server/final-artifact-validation.ts
+- server/uipath-quality-gate.ts
+- server/catalog/catalog-service.ts
+- any test files already covering required-property enforcement or package assembly
+- latest Birthday and Coupa verification bundles if available
+
+Success criterion
+At the end of this investigation, we should know exactly why common-activity fallback logic is not surviving into the final package, and we should be able to define one narrow next implementation task with high confidence.
