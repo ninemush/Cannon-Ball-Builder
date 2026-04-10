@@ -1,0 +1,375 @@
+﻿{
+    "packageId":  "UiPath.CodedWorkflows",
+    "packageVersion":  "24.10.1",
+    "serviceAccessor":  null,
+    "serviceInterface":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+    "methods":  [
+                    {
+                        "name":  "GetRunningJobInformation",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "UiPath.Robot.Activities.Api.IRunningJobInformation",
+                        "parameters":  [
+
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "Log",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "message",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "level",
+                                               "type":  "UiPath.CodedWorkflows.LogLevel",
+                                               "required":  false,
+                                               "default":  "8"
+                                           },
+                                           {
+                                               "name":  "additionalLogFields",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.Object\u003e",
+                                               "required":  false,
+                                               "default":  "null"
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "RunWorkflow",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.Object\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "workflowFilePath",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "inputArguments",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.Object\u003e",
+                                               "required":  false,
+                                               "default":  "null"
+                                           },
+                                           {
+                                               "name":  "timeout",
+                                               "type":  "System.Nullable`1\u003cSystem.TimeSpan\u003e",
+                                               "required":  false,
+                                               "default":  "null"
+                                           },
+                                           {
+                                               "name":  "isolated",
+                                               "type":  "System.Boolean",
+                                               "required":  false,
+                                               "default":  "false"
+                                           },
+                                           {
+                                               "name":  "targetSession",
+                                               "type":  "UiPath.Activities.Contracts.InvokeTargetSession",
+                                               "required":  false,
+                                               "default":  "0"
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "RunWorkflowAsync",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Threading.Tasks.Task`1\u003cSystem.Collections.Generic.IDictionary`2\u003cSystem.String, System.Object\u003e\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "workflowFilePath",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "inputArguments",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.Object\u003e",
+                                               "required":  false,
+                                               "default":  "null"
+                                           },
+                                           {
+                                               "name":  "timeout",
+                                               "type":  "System.Nullable`1\u003cSystem.TimeSpan\u003e",
+                                               "required":  false,
+                                               "default":  "null"
+                                           },
+                                           {
+                                               "name":  "isolated",
+                                               "type":  "System.Boolean",
+                                               "required":  false,
+                                               "default":  "false"
+                                           },
+                                           {
+                                               "name":  "targetSession",
+                                               "type":  "UiPath.Activities.Contracts.InvokeTargetSession",
+                                               "required":  false,
+                                               "default":  "0"
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "DelayAsync",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Threading.Tasks.Task",
+                        "parameters":  [
+                                           {
+                                               "name":  "time",
+                                               "type":  "System.TimeSpan",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "protected",
+                        "overloads":  [
+                                          {
+                                              "returnType":  "System.Threading.Tasks.Task",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "delayMs",
+                                                                     "type":  "System.Int32",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ],
+                                              "visibility":  "protected"
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "Delay",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "time",
+                                               "type":  "System.TimeSpan",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "protected",
+                        "overloads":  [
+                                          {
+                                              "returnType":  "System.Void",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "delayMs",
+                                                                     "type":  "System.Int32",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ],
+                                              "visibility":  "protected"
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "BuildClient",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Net.Http.HttpClient",
+                        "parameters":  [
+                                           {
+                                               "name":  "scope",
+                                               "type":  "System.String",
+                                               "required":  false,
+                                               "default":  "Orchestrator"
+                                           },
+                                           {
+                                               "name":  "force",
+                                               "type":  "System.Boolean",
+                                               "required":  false,
+                                               "default":  "true"
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "BuildClientAsync",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Threading.Tasks.Task`1\u003cSystem.Net.Http.HttpClient\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "scope",
+                                               "type":  "System.String",
+                                               "required":  false,
+                                               "default":  "Orchestrator"
+                                           },
+                                           {
+                                               "name":  "force",
+                                               "type":  "System.Boolean",
+                                               "required":  false,
+                                               "default":  "true"
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "RegisterServices",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "serviceLocator",
+                                               "type":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceLocator",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "RegisterServicesCore",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "serviceLocator",
+                                               "type":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceLocator",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "protected"
+                    },
+                    {
+                        "name":  "RegisterServicesInternal",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "locator",
+                                               "type":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceLocator",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "internal"
+                    },
+                    {
+                        "name":  "UpdateProtectedMembers",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "workflowInstanceId",
+                                               "type":  "System.Guid",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "workflowRuntime",
+                                               "type":  "UiPath.Activities.Contracts.IWorkflowRuntime",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "executorRuntime",
+                                               "type":  "UiPath.Robot.Activities.Api.IExecutorRuntime",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "internal"
+                    },
+                    {
+                        "name":  "InitializeServices",
+                        "declaringType":  "UiPath.CodedWorkflows.CodedWorkflowBase",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "serviceContainer",
+                                               "type":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceContainer",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "context",
+                                               "type":  "System.Activities.ActivityContext",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "crossProperties",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.Object\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "internal"
+                    },
+                    {
+                        "name":  "RegisterType",
+                        "declaringType":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceLocator",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "registrationType",
+                                               "type":  "UiPath.CodedWorkflows.CodeServiceRegistrationType",
+                                               "required":  false,
+                                               "default":  "0"
+                                           }
+                                       ],
+                        "visibility":  "public"
+                    },
+                    {
+                        "name":  "RegisterInstance",
+                        "declaringType":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceLocator",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "instance",
+                                               "type":  "TServiceImplementation",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "serviceTypes",
+                                               "type":  "System.Type[]",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "visibility":  "public"
+                    },
+                    {
+                        "name":  "Resolve",
+                        "declaringType":  "UiPath.CodedWorkflows.ICodedWorkflowsServiceContainer",
+                        "returnType":  "TService",
+                        "parameters":  [
+
+                                       ],
+                        "visibility":  "public"
+                    }
+                ],
+    "enums":  [
+                  {
+                      "name":  "UiPath.CodedWorkflows.CodeServiceRegistrationType",
+                      "values":  [
+                                     "Singleton",
+                                     "Transient"
+                                 ]
+                  },
+                  {
+                      "name":  "UiPath.CodedWorkflows.LogLevel",
+                      "values":  [
+                                     "Trace",
+                                     "Info",
+                                     "Warn",
+                                     "Error",
+                                     "Fatal"
+                                 ]
+                  }
+              ],
+    "types":  [
+
+              ],
+    "notes":  "Base coded workflow helpers from CodedWorkflowBase."
+}

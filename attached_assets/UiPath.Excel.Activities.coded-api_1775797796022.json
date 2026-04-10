@@ -1,0 +1,536 @@
+﻿{
+    "packageId":  "UiPath.Excel.Activities",
+    "packageVersion":  "3.2.1",
+    "serviceAccessor":  "excel",
+    "serviceInterface":  "UiPath.Excel.Activities.API.IExcelService",
+    "methods":  [
+                    {
+                        "name":  "UseWorkBook",
+                        "declaringType":  "UiPath.Excel.Activities.API.IExcelService",
+                        "returnType":  "UiPath.Excel.Activities.API.IWorkHandle",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Excel.Activities.API.Models.WorkbookOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "overloads":  [
+                                          {
+                                              "returnType":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "path",
+                                                                     "type":  "System.String",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "ReadRange",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Data.DataTable",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "range",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "addHeaders",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "preserveFormat",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WriteRange",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "startingCell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "table",
+                                               "type":  "System.Data.DataTable",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "addHeaders",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AppendRange",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "table",
+                                               "type":  "System.Data.DataTable",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "GetTableRange",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.String",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "tableName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "isPivot",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "ReadCell",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Object",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "cell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "preserveFormat",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "ReadCellFormula",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.String",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "cell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "ReadColumn",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Collections.Generic.IEnumerable`1\u003cSystem.Object\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "startingCell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "preserveFormat",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "ReadRow",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Collections.Generic.IEnumerable`1\u003cSystem.Object\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "startingCell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "preserveFormat",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WriteCell",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "cell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "text",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "CreatePivotTable",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "targetSheet",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "pivotTableInfo",
+                                               "type":  "UiPath.Excel.IPivotTableInfo",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "GetCellColor",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Drawing.Color",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "cell",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "SetRangeColor",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "handle",
+                                               "type":  "UiPath.Excel.Activities.API.IWorkHandle",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "sheetName",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "range",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "color",
+                                               "type":  "System.Drawing.Color",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AppendCsvFile",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "filePath",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "data",
+                                               "type":  "System.Data.DataTable",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "delimiter",
+                                               "type":  "UiPath.CSV.DelimitatorOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "encodingStr",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "ReadCsvFile",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Data.DataTable",
+                        "parameters":  [
+                                           {
+                                               "name":  "filePath",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "delimiter",
+                                               "type":  "UiPath.CSV.DelimitatorOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "includeColumnNames",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "encodingStr",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "ignoreQuotes",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WriteCsvFile",
+                        "declaringType":  "UiPath.Excel.Activities.API.ExcelOperations",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "filePath",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "data",
+                                               "type":  "System.Data.DataTable",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "delimiter",
+                                               "type":  "UiPath.CSV.DelimitatorOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "addHeaders",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "encodingStr",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "shouldQuote",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    }
+                ],
+    "enums":  [
+                  {
+                      "name":  "UiPath.CSV.DelimitatorOptions",
+                      "values":  [
+                                     "Comma",
+                                     "Semicolon",
+                                     "Pipe",
+                                     "Caret",
+                                     "Tab"
+                                 ]
+                  }
+              ],
+    "types":  [
+                  {
+                      "name":  "UiPath.Excel.Activities.API.Models.WorkbookOptions",
+                      "properties":  [
+                                         {
+                                             "name":  "Path",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "Password",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "CreateNew",
+                                             "type":  "System.Boolean"
+                                         }
+                                     ]
+                  }
+              ]
+}

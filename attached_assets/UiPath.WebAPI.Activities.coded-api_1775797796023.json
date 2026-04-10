@@ -1,0 +1,419 @@
+﻿{
+    "packageId":  "UiPath.WebAPI.Activities",
+    "packageVersion":  "2.3.2",
+    "serviceAccessor":  null,
+    "serviceInterface":  "UiPath.Web.RestClient",
+    "methods":  [
+                    {
+                        "name":  "AddParameter",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "value",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddParameters",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "parameters",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddHeader",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "value",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddHeaders",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "headers",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddUrlSegment",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "value",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddUrlSegments",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "urlSegments",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddAttachment",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "path",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddAttachments",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "files",
+                                               "type":  "System.Collections.Generic.IDictionary`2\u003cSystem.String, System.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddBody",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "type",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "body",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddBodyIfAttachments",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "type",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "body",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "AddAcceptHeader",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "acceptFormat",
+                                               "type":  "UiPath.Web.AcceptHeaderType",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "Authenticate",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "consumerKey",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "consumerSecret",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "OAuth1Token",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "OAuth1TokenSecret",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "overloads":  [
+                                          {
+                                              "returnType":  "System.Void",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "oAuth2Token",
+                                                                     "type":  "System.String",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          },
+                                          {
+                                              "returnType":  "System.Void",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "username",
+                                                                     "type":  "System.String",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 },
+                                                                 {
+                                                                     "name":  "password",
+                                                                     "type":  "System.String",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "ExecuteRequestAsync",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Threading.Tasks.Task`1\u003cUiPath.Web.RestResponse\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "method",
+                                               "type":  "UiPath.Web.Method",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "acceptFormat",
+                                               "type":  "UiPath.Web.AcceptHeaderType",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "timeoutMS",
+                                               "type":  "System.Int32",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "enableSslCertValidation",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "includeAttachment",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "cancellationToken",
+                                               "type":  "System.Threading.CancellationToken",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ],
+                        "overloads":  [
+                                          {
+                                              "returnType":  "System.Threading.Tasks.Task`1\u003cUiPath.Web.RestResponse\u003e",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "method",
+                                                                     "type":  "UiPath.Web.Method",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 },
+                                                                 {
+                                                                     "name":  "acceptFormat",
+                                                                     "type":  "UiPath.Web.AcceptHeaderType",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 },
+                                                                 {
+                                                                     "name":  "timeoutMS",
+                                                                     "type":  "System.Int32",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 },
+                                                                 {
+                                                                     "name":  "enableSslCertValidation",
+                                                                     "type":  "System.Boolean",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 },
+                                                                 {
+                                                                     "name":  "cancellationToken",
+                                                                     "type":  "System.Threading.CancellationToken",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "GetOriginalString",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.String",
+                        "parameters":  [
+
+                                       ]
+                    },
+                    {
+                        "name":  "Dispose",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+
+                                       ]
+                    },
+                    {
+                        "name":  "SetClientCertificate",
+                        "declaringType":  "UiPath.Web.RestClient",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "clientCertificate",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "clientCertificatePassword",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    }
+                ],
+    "enums":  [
+                  {
+                      "name":  "UiPath.Web.AcceptHeaderType",
+                      "values":  [
+                                     "ANY",
+                                     "JSON",
+                                     "XML",
+                                     "CUSTOM"
+                                 ]
+                  },
+                  {
+                      "name":  "UiPath.Web.Method",
+                      "values":  [
+                                     "GET",
+                                     "POST",
+                                     "PUT",
+                                     "DELETE",
+                                     "HEAD",
+                                     "OPTIONS",
+                                     "PATCH",
+                                     "MERGE"
+                                 ]
+                  }
+              ],
+    "types":  [
+                  {
+                      "name":  "UiPath.Web.RestResponse",
+                      "properties":  [
+                                         {
+                                             "name":  "Response",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "StatusCode",
+                                             "type":  "System.Int32"
+                                         },
+                                         {
+                                             "name":  "ErrorMessage",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "Status",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "ContentType",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "Headers",
+                                             "type":  "System.Collections.Generic.Dictionary`2\u003cSystem.String, System.String\u003e"
+                                         }
+                                     ]
+                  }
+              ],
+    "notes":  "No UiPath.CodedWorkflows service registry type was found in the WebAPI runtime DLLs; this file captures the public RestClient surface from UiPath.Web.dll."
+}

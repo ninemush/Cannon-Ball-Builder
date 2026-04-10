@@ -1,0 +1,936 @@
+﻿{
+    "packageId":  "UiPath.Mail.Activities",
+    "packageVersion":  "2.3.10",
+    "serviceAccessor":  "mail",
+    "serviceInterface":  "UiPath.Mail.Activities.Api.IMailService",
+    "methods":  [
+                    {
+                        "name":  "Pop3",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IMailService",
+                        "returnType":  "UiPath.Mail.Activities.Api.IPop3MailService",
+                        "parameters":  [
+                                           {
+                                               "name":  "server",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "port",
+                                               "type":  "System.Int32",
+                                               "required":  false,
+                                               "default":  "110"
+                                           }
+                                       ],
+                        "overloads":  [
+                                          {
+                                              "returnType":  "UiPath.Mail.Activities.Api.IPop3MailService",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "options",
+                                                                     "type":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "Smtp",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IMailService",
+                        "returnType":  "UiPath.Mail.Activities.Api.ISmtpMailService",
+                        "parameters":  [
+                                           {
+                                               "name":  "server",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "port",
+                                               "type":  "System.Int32",
+                                               "required":  false,
+                                               "default":  "25"
+                                           }
+                                       ],
+                        "overloads":  [
+                                          {
+                                              "returnType":  "UiPath.Mail.Activities.Api.ISmtpMailService",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "options",
+                                                                     "type":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "Imap",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IMailService",
+                        "returnType":  "UiPath.Mail.Activities.Api.IImapMailService",
+                        "parameters":  [
+                                           {
+                                               "name":  "server",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "port",
+                                               "type":  "System.Int32",
+                                               "required":  false,
+                                               "default":  "143"
+                                           }
+                                       ],
+                        "overloads":  [
+                                          {
+                                              "returnType":  "UiPath.Mail.Activities.Api.IImapMailService",
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "options",
+                                                                     "type":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                                                                     "required":  true,
+                                                                     "default":  null
+                                                                 }
+                                                             ]
+                                          }
+                                      ]
+                    },
+                    {
+                        "name":  "GetMessages",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IPop3MailService",
+                        "returnType":  "System.Collections.Generic.IReadOnlyCollection`1\u003cSystem.Net.Mail.MailMessage\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "GetMessagesAsync",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IPop3MailService",
+                        "returnType":  "System.Threading.Tasks.Task`1\u003cSystem.Collections.Generic.IReadOnlyCollection`1\u003cSystem.Net.Mail.MailMessage\u003e\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "token",
+                                               "type":  "System.Threading.CancellationToken",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithServer",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "server",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithPort",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "port",
+                                               "type":  "System.Int32",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithEmail",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "email",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithPassword",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "password",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithOAuth",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "useOAuth",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithIgnoreCRL",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "ignoreCRL",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithSecureConnection",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "secureConnection",
+                                               "type":  "UiPath.Mail.SecureSocketEncryption",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithTimeout",
+                        "declaringType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "timeout",
+                                               "type":  "System.Int32",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "SendMail",
+                        "declaringType":  "UiPath.Mail.Activities.Api.ISmtpMailService",
+                        "returnType":  "System.Void",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "SendMailAsync",
+                        "declaringType":  "UiPath.Mail.Activities.Api.ISmtpMailService",
+                        "returnType":  "System.Threading.Tasks.Task",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "token",
+                                               "type":  "System.Threading.CancellationToken",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "GetMessages",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IImapMailService",
+                        "returnType":  "System.Collections.Generic.IReadOnlyCollection`1\u003cSystem.Net.Mail.MailMessage\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "GetMessagesAsync",
+                        "declaringType":  "UiPath.Mail.Activities.Api.IImapMailService",
+                        "returnType":  "System.Threading.Tasks.Task`1\u003cSystem.Collections.Generic.IReadOnlyCollection`1\u003cSystem.Net.Mail.MailMessage\u003e\u003e",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "token",
+                                               "type":  "System.Threading.CancellationToken",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithClient",
+                        "declaringType":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "version",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithClientName",
+                        "declaringType":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithClientVersion",
+                        "declaringType":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "version",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithTop",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "top",
+                                               "type":  "System.Int32",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithDeleteMessages",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "deleteMessages",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "FromMailOptions",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "options",
+                                               "type":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithTo",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "to",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithCc",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "cc",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithBcc",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "bcc",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithSubject",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "subject",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithBody",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "body",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithHtmlBody",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "isBodyHtml",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithReplyTo",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "replyTo",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithAttachments",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "attachments",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithForwardedMessage",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "forwardedMessage",
+                                               "type":  "System.Net.Mail.MailMessage",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithSender",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           },
+                                           {
+                                               "name":  "mail",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithSenderName",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "name",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithSenderMail",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "mail",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithTop",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "top",
+                                               "type":  "System.Int32",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithDeleteMessages",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "deleteMessages",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithMarkAsRead",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "markAsRead",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithOnlyUnreadMessages",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "onlyUnreadMessages",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithFolder",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "folder",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithFilterExpression",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "filterExpression",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithFilterExpressionCharacterSet",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "filterExpressionCharacterSet",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithOrder",
+                        "declaringType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "order",
+                                               "type":  "UiPath.Mail.EOrderByDate",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithTo",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "to",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithCc",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "cc",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithBcc",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "bcc",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithSubject",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "subject",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithBody",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "body",
+                                               "type":  "System.String",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithHtmlBody",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "isBodyHtml",
+                                               "type":  "System.Boolean",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithReplyTo",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "replyTo",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithAttachments",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "attachments",
+                                               "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    },
+                    {
+                        "name":  "WithForwardedMessage",
+                        "declaringType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "returnType":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                        "parameters":  [
+                                           {
+                                               "name":  "forwardedMessage",
+                                               "type":  "System.Net.Mail.MailMessage",
+                                               "required":  true,
+                                               "default":  null
+                                           }
+                                       ]
+                    }
+                ],
+    "enums":  [
+                  {
+                      "name":  "UiPath.Mail.EOrderByDate",
+                      "values":  [
+                                     "NewestFirst",
+                                     "OldestFirst"
+                                 ]
+                  },
+                  {
+                      "name":  "UiPath.Mail.SecureSocketEncryption",
+                      "values":  [
+                                     "None",
+                                     "Auto",
+                                     "SslOnConnect",
+                                     "StartTls",
+                                     "StartTlsWhenAvailable"
+                                 ]
+                  }
+              ],
+    "types":  [
+                  {
+                      "name":  "UiPath.Mail.Activities.Api.GetImapMailOptions",
+                      "properties":  [
+                                         {
+                                             "name":  "DeleteMessages",
+                                             "type":  "System.Boolean"
+                                         },
+                                         {
+                                             "name":  "MarkAsRead",
+                                             "type":  "System.Boolean"
+                                         },
+                                         {
+                                             "name":  "OnlyUnreadMessages",
+                                             "type":  "System.Boolean"
+                                         },
+                                         {
+                                             "name":  "MailFolder",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "FilterExpression",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "FilterExpressionCharacterSet",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "OrderByDate",
+                                             "type":  "UiPath.Mail.EOrderByDate"
+                                         }
+                                     ]
+                  },
+                  {
+                      "name":  "UiPath.Mail.Activities.Api.GetPop3MailOptions",
+                      "properties":  {
+                                         "name":  "DeleteMessages",
+                                         "type":  "System.Boolean"
+                                     }
+                  },
+                  {
+                      "name":  "UiPath.Mail.Activities.Api.ImapConnectionOptions",
+                      "properties":  [
+                                         {
+                                             "name":  "ClientName",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "ClientVersion",
+                                             "type":  "System.String"
+                                         }
+                                     ]
+                  },
+                  {
+                      "name":  "UiPath.Mail.Activities.Api.MailConnectionOptions",
+                      "properties":  [
+                                         {
+                                             "name":  "Server",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "Port",
+                                             "type":  "System.Int32"
+                                         },
+                                         {
+                                             "name":  "Email",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "Password",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "UseOAuth",
+                                             "type":  "System.Boolean"
+                                         },
+                                         {
+                                             "name":  "IgnoreCRL",
+                                             "type":  "System.Boolean"
+                                         },
+                                         {
+                                             "name":  "SecureConnection",
+                                             "type":  "UiPath.Mail.SecureSocketEncryption"
+                                         },
+                                         {
+                                             "name":  "Timeout",
+                                             "type":  "System.Int32"
+                                         }
+                                     ]
+                  },
+                  {
+                      "name":  "UiPath.Mail.Activities.Api.SendMailOptions",
+                      "properties":  [
+                                         {
+                                             "name":  "To",
+                                             "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e"
+                                         },
+                                         {
+                                             "name":  "Cc",
+                                             "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e"
+                                         },
+                                         {
+                                             "name":  "Bcc",
+                                             "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e"
+                                         },
+                                         {
+                                             "name":  "Subject",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "Body",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "IsBodyHtml",
+                                             "type":  "System.Boolean"
+                                         },
+                                         {
+                                             "name":  "ReplyTo",
+                                             "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e"
+                                         },
+                                         {
+                                             "name":  "Attachments",
+                                             "type":  "System.Collections.Generic.List`1\u003cSystem.String\u003e"
+                                         },
+                                         {
+                                             "name":  "ForwardedMessage",
+                                             "type":  "System.Net.Mail.MailMessage"
+                                         }
+                                     ]
+                  },
+                  {
+                      "name":  "UiPath.Mail.Activities.Api.SendSmtpMailOptions",
+                      "properties":  [
+                                         {
+                                             "name":  "SenderMail",
+                                             "type":  "System.String"
+                                         },
+                                         {
+                                             "name":  "SenderName",
+                                             "type":  "System.String"
+                                         }
+                                     ]
+                  }
+              ]
+}
