@@ -575,6 +575,27 @@ function isCanonicalInfrastructureName(name: string): boolean {
 import { REFRAMEWORK_INFRASTRUCTURE_FILES, REFRAMEWORK_INVOKE_TARGETS } from "./shared/reframework-constants";
 export { REFRAMEWORK_INFRASTRUCTURE_FILES, REFRAMEWORK_INVOKE_TARGETS };
 
+function syncXamlWrite(
+  deferredWrites: Map<string, string>,
+  xamlEntries: Array<{ name: string; content: string }>,
+  path: string,
+  content: string,
+): void {
+  deferredWrites.set(path, content);
+  if (!path.toLowerCase().endsWith(".xaml")) return;
+  const basename = (path.split("/").pop() || path).toLowerCase();
+  const idx = xamlEntries.findIndex(e => {
+    const entryBasename = (e.name.split("/").pop() || e.name).toLowerCase();
+    return entryBasename === basename;
+  });
+  if (idx >= 0) {
+    xamlEntries[idx].content = content;
+  } else {
+    const shortName = path.split("/").pop() || path;
+    xamlEntries.push({ name: shortName, content });
+  }
+}
+
 function ensureInitInvokesInitAllSettings(
   deferredWrites: Map<string, string>,
   xamlEntries: Array<{ name: string; content: string }>,
@@ -602,7 +623,7 @@ function ensureInitInvokesInitAllSettings(
     initContent = initContent.replace(closingSequencePattern, `${invokeBlock}\n  </Sequence>`);
   }
 
-  deferredWrites.set(initKey, initContent);
+  syncXamlWrite(deferredWrites, xamlEntries, initKey, initContent);
   console.log(`[UiPath] Ensured Init.xaml invokes InitAllSettings.xaml for REFramework chain`);
 }
 
@@ -712,7 +733,7 @@ export function ensureReframeworkWiringOnMain(
   if (allPresent && !isChainOrderCorrect(mainContent)) {
     console.log(`[UiPath] REFramework wiring present but misordered — canonicalizing chain order`);
     mainContent = canonicalizeChainOrder(mainContent);
-    deferredWrites.set(mainKey, mainContent);
+    syncXamlWrite(deferredWrites, xamlEntries, mainKey, mainContent);
     ensureInitInvokesInitAllSettings(deferredWrites, xamlEntries, libPath);
     return;
   }
@@ -751,7 +772,7 @@ export function ensureReframeworkWiringOnMain(
   }
 
   mainContent = canonicalizeChainOrder(mainContent);
-  deferredWrites.set(mainKey, mainContent);
+  syncXamlWrite(deferredWrites, xamlEntries, mainKey, mainContent);
 
   ensureInitInvokesInitAllSettings(deferredWrites, xamlEntries, libPath);
 
@@ -944,14 +965,7 @@ export function buildCrossWorkflowArgContracts(
       }
 
       const fullPath = `${libPath}/${targetBasename}`;
-      if (deferredWrites.has(fullPath)) {
-        deferredWrites.set(fullPath, targetContent);
-      } else {
-        const entryIdx = xamlEntries.findIndex(e => (e.name.split("/").pop() || e.name) === targetBasename);
-        if (entryIdx >= 0) {
-          xamlEntries[entryIdx].content = targetContent;
-        }
-      }
+      syncXamlWrite(deferredWrites, xamlEntries, fullPath, targetContent);
       console.log(`[UiPath] Cross-workflow contract: declared ${newDeclarations.length} argument(s) on ${targetBasename}`);
     }
   });
@@ -1026,7 +1040,7 @@ function finalNormalize(
         p => (p.split("/").pop() || p) === (fileName.split("/").pop() || fileName)
       );
       if (archivePath) {
-        deferredWrites.set(archivePath, content);
+        syncXamlWrite(deferredWrites, xamlEntries, archivePath, content);
       }
     }
   }
@@ -1834,7 +1848,7 @@ function applyPropertyNameCorrections(
         return `${prefix}${correction.correct}="${value}"`;
       });
       if (corrected) {
-        deferredWrites.set(path, updated);
+        syncXamlWrite(deferredWrites, xamlEntries, path, updated);
         remediations.push({
           code: "PROPERTY_NAME_CORRECTED",
           detail: `${fileName}: ${correction.activityClass}.${correction.wrong} → ${correction.correct} (${correction.note})`,
@@ -1907,7 +1921,7 @@ function runPostAssemblyValidation(
     if (!path.endsWith(".xaml")) return;
     const viSweep = sweepValueIntentFromXaml(content);
     if (viSweep.repairCount > 0) {
-      deferredWrites.set(path, viSweep.content);
+      syncXamlWrite(deferredWrites, xamlEntries, path, viSweep.content);
       const fn = path.split("/").pop() || path;
       console.log(`[Post-Assembly] Pre-reachability ValueIntent sweep: cleaned ${viSweep.repairCount} fragment(s) in ${fn}`);
     }
@@ -1964,12 +1978,19 @@ function runPostAssemblyValidation(
     }
   }
 
-  let allXamlContent = [
-    ...xamlEntries.map(e => e.content),
-    ...Array.from(deferredWrites.entries())
-      .filter(([p]) => p.endsWith(".xaml"))
-      .map(([, c]) => c),
-  ].join("\n");
+  const _allXamlMap = new Map<string, string>();
+  Array.from(deferredWrites.entries()).forEach(([p, c]) => {
+    if (p.endsWith(".xaml")) {
+      _allXamlMap.set((p.split("/").pop() || p).toLowerCase(), c);
+    }
+  });
+  for (const entry of xamlEntries) {
+    const key = (entry.name.split("/").pop() || entry.name).toLowerCase();
+    if (!_allXamlMap.has(key)) {
+      _allXamlMap.set(key, entry.content);
+    }
+  }
+  let allXamlContent = Array.from(_allXamlMap.values()).join("\n");
 
   const objectDefaultPattern = /<Variable\s+x:TypeArguments="x:Object"[^>]*Default="[^"]*"/g;
   let objDefaultMatch;
@@ -2125,7 +2146,7 @@ function runPostAssemblyValidation(
         Array.from(deferredWrites.entries()).forEach(([path, content]) => {
           if (!path.endsWith(".xaml")) return;
           const updated = applyRepair(content);
-          if (updated !== content) deferredWrites.set(path, updated);
+          if (updated !== content) syncXamlWrite(deferredWrites, xamlEntries, path, updated);
         });
         for (const entry of xamlEntries) {
           entry.content = applyRepair(entry.content);
@@ -2146,7 +2167,7 @@ function runPostAssemblyValidation(
       if (!content.includes("<Transition")) return;
       const transResult = repairTransitionsInXaml(content);
       if (transResult.repairs.length > 0) {
-        deferredWrites.set(path, transResult.content);
+        syncXamlWrite(deferredWrites, xamlEntries, path, transResult.content);
         transitionRepairCount += transResult.repairs.length;
         transResult.repairs.forEach(r => {
           remediations.push({ code: "TRANSITION_REPAIRED", detail: r });
@@ -2215,6 +2236,7 @@ function runAuthoritativeNamespaceInjection(
   deferredWrites: Map<string, string>,
   deps: Record<string, string>,
   isCrossPlatform: boolean,
+  xamlEntries: Array<{ name: string; content: string }> = [],
 ): { injectedCount: number; warnings: string[] } {
   const warnings: string[] = [];
   let injectedCount = 0;
@@ -2324,7 +2346,7 @@ function runAuthoritativeNamespaceInjection(
     });
 
     if (updated !== content) {
-      deferredWrites.set(path, updated);
+      syncXamlWrite(deferredWrites, xamlEntries, path, updated);
     }
   });
 
@@ -4013,7 +4035,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             isBlockingFallback: true,
           });
           const stubCompliant = compliancePass(stubXaml, `${wfName}.xaml`);
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, stubCompliant);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, stubCompliant);
           collectedQualityIssues.push({
             severity: "blocking",
             file: `${wfName}.xaml`,
@@ -4194,7 +4216,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
         if (priorCompliantMap.has(wfName)) {
           const priorContent = priorCompliantMap.get(wfName)!;
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, priorContent);
           generatedWorkflowNames.add(wfName);
           if (wfName === "Main" || wfName === "Process") {
             hasMain = true;
@@ -4202,7 +4224,6 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             nonMainWorkflowNames.push(wfName);
           }
           xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
-          xamlEntries.push({ name: `${wfName}.xaml`, content: priorContent });
           console.log(`[UiPath] Reused prior compliant workflow "${wfName}" — skipping regeneration`);
           continue;
         }
@@ -4296,7 +4317,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           console.warn(`[UiPath] Pre-emission lowering gate FAILED for "${wfName}" — ${preEmissionGate.fatalFailures.length} fatal failure(s), blocking XAML emission`);
           const spResult = tryStructuralPreservationOrStub("", wfName, `Pre-emission critical activity lowering failed — ${preEmissionGate.fatalFailures.map(f => f.remediationHint).join("; ")}`);
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, spResult.content);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, spResult.content);
           generatedWorkflowNames.add(wfName);
           complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Critical activity lowering gate blocked emission`, wasFullStub: spResult.wasFullStub });
           if (wfName !== "Main" && wfName !== "Process") {
@@ -4382,7 +4403,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             compliant = implRepair.content;
           }
           updateStageHash(`${wfName}.xaml`, "postRepair", compliant);
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, compliant);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, compliant);
           generatedWorkflowNames.add(wfName);
           if ((wfName === "Main" || wfName === "Process") && !complianceFailed) {
             hasMain = true;
@@ -4399,7 +4420,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         } catch (err: any) {
           console.warn(`[UiPath] Tree assembly failed for "${wfName}": ${err.message} — attempting structural preservation before stub`);
           const spResult = tryStructuralPreservationOrStub("", wfName, `Tree assembly failed — ${err.message}`);
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, spResult.content);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, spResult.content);
           generatedWorkflowNames.add(wfName);
           complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Tree assembly failed — ${err.message}`, wasFullStub: spResult.wasFullStub });
           if (wfName !== "Main" && wfName !== "Process") {
@@ -4471,7 +4492,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (insertMatch) {
             const insertPos = insertMatch.index! + insertMatch[0].length;
             mainXaml = mainXaml.slice(0, insertPos) + invokeRefs.join("\n") + "\n" + mainXaml.slice(insertPos);
-            deferredWrites.set(mainXamlPath, mainXaml);
+            syncXamlWrite(deferredWrites, xamlEntries, mainXamlPath, mainXaml);
             const existingIdx = xamlEntries.findIndex(e => {
               const bn = e.name.split("/").pop() || e.name;
               return bn === `${mainWfName}.xaml`;
@@ -4491,7 +4512,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (insertMatch) {
             const insertPos = insertMatch.index! + insertMatch[0].length;
             mainXaml = mainXaml.slice(0, insertPos) + `      ${`<ui:InvokeWorkflowFile DisplayName="Initialize All Settings" WorkflowFileName="InitAllSettings.xaml" />`}\n` + mainXaml.slice(insertPos);
-            deferredWrites.set(mainXamlPath, mainXaml);
+            syncXamlWrite(deferredWrites, xamlEntries, mainXamlPath, mainXaml);
             console.log(`[UiPath] Injected InitAllSettings.xaml reference into tree-assembled ${mainWfName}.xaml`);
           }
         }
@@ -4577,7 +4598,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const wfName = normalizeWorkflowName(decomp.name);
         if (priorCompliantMap.has(wfName)) {
           const priorContent = priorCompliantMap.get(wfName)!;
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, priorContent);
           generatedWorkflowNames.add(wfName);
           if (wfName === "Main") hasMain = true;
           xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
@@ -4607,7 +4628,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               decompCompliant = spResult.content;
               complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
             }
-            deferredWrites.set(`${libPath}/${wfName}.xaml`, decompCompliant);
+            syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, decompCompliant);
             generatedWorkflowNames.add(wfName);
             if (wfName === "Main" && !decompComplianceFailed) hasMain = true;
             console.log(`[UiPath] Generated decomposed workflow "${wfName}": ${decompNodes.length} nodes, ${result.gaps.length} gaps`);
@@ -4632,7 +4653,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               specCompliant = spResult.content;
               complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
             }
-            deferredWrites.set(`${libPath}/${wfName}.xaml`, specCompliant);
+            syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, specCompliant);
             generatedWorkflowNames.add(wfName);
             if (wfName === "Main" && !specComplianceFailed) hasMain = true;
             console.log(`[UiPath] Generated decomposed workflow "${wfName}" from spec (no matching nodes): ${result.gaps.length} gaps`);
@@ -4647,7 +4668,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (generatedWorkflowNames.has(wfName)) continue;
         if (priorCompliantMap.has(wfName)) {
           const priorContent = priorCompliantMap.get(wfName)!;
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, priorContent);
           generatedWorkflowNames.add(wfName);
           if (wfName === "Main") hasMain = true;
           xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
@@ -4672,7 +4693,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             richCompliant = spResult.content;
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, richCompliant);
           generatedWorkflowNames.add(wfName);
           if (wfName === "Main" && !richComplianceFailed) hasMain = true;
           console.log(`[UiPath] Generated rich XAML for "${wfName}": ${result.gaps.length} gaps, ${result.usedPackages.length} packages`);
@@ -4684,7 +4705,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (generatedWorkflowNames.has(wfName)) continue;
         if (priorCompliantMap.has(wfName)) {
           const priorContent = priorCompliantMap.get(wfName)!;
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, priorContent);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, priorContent);
           generatedWorkflowNames.add(wfName);
           if (wfName === "Main") hasMain = true;
           xamlResults.push({ xaml: priorContent, gaps: [], usedPackages: ["UiPath.System.Activities"], variables: [] });
@@ -4709,7 +4730,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             richCompliant = spResult.content;
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
           }
-          deferredWrites.set(`${libPath}/${wfName}.xaml`, richCompliant);
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, richCompliant);
           generatedWorkflowNames.add(wfName);
           if (wfName === "Main" && !remainingComplianceFailed) hasMain = true;
           console.log(`[UiPath] Generated remaining workflow "${wfName}" alongside tree-assembled workflows`);
@@ -4739,7 +4760,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           processCompliant = spResult.content;
           complianceFallbacks.push({ file: `${processFileName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
         }
-        deferredWrites.set(`${libPath}/${processFileName}.xaml`, processCompliant);
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${processFileName}.xaml`, processCompliant);
         console.log(`[UiPath] Generated process XAML from ${processNodes.length} map nodes: ${processResult.gaps.length} gaps`);
       }
     }
@@ -4747,7 +4768,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const packageCredentialStrategy = determineCredentialStrategy(orchestratorArtifacts);
     console.log(`[UiPath] Package-level credential strategy determined: ${packageCredentialStrategy}`);
     const initXaml = generateInitAllSettingsXaml(orchestratorArtifacts, tf, packageCredentialStrategy);
-    deferredWrites.set(`${libPath}/InitAllSettings.xaml`, compliancePass(initXaml, "InitAllSettings.xaml"));
+    syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/InitAllSettings.xaml`, compliancePass(initXaml, "InitAllSettings.xaml"));
 
     if (useReFramework && !hasMain) {
       const preRefXamlLen = xamlEntries.length;
@@ -4770,40 +4791,40 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       try {
         console.log(`[UiPath] Generating REFramework structure (queue: ${queueName})`);
         const mainXaml = generateReframeworkMainXaml(projectName, queueName, tf);
-        deferredWrites.set(`${libPath}/Main.xaml`, compliancePass(mainXaml, "Main.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Main.xaml`, compliancePass(mainXaml, "Main.xaml"));
         hasMain = true;
 
         const getTransXaml = generateGetTransactionDataXaml(queueName, tf);
-        deferredWrites.set(`${libPath}/GetTransactionData.xaml`, compliancePass(getTransXaml, "GetTransactionData.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/GetTransactionData.xaml`, compliancePass(getTransXaml, "GetTransactionData.xaml"));
 
         const setStatusXaml = generateSetTransactionStatusXaml(tf);
-        deferredWrites.set(`${libPath}/SetTransactionStatus.xaml`, compliancePass(setStatusXaml, "SetTransactionStatus.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/SetTransactionStatus.xaml`, compliancePass(setStatusXaml, "SetTransactionStatus.xaml"));
 
         const closeAppsXaml = generateCloseAllApplicationsXaml(tf);
-        deferredWrites.set(`${libPath}/CloseAllApplications.xaml`, compliancePass(closeAppsXaml, "CloseAllApplications.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/CloseAllApplications.xaml`, compliancePass(closeAppsXaml, "CloseAllApplications.xaml"));
 
         const killXaml = generateKillAllProcessesXaml(tf);
-        deferredWrites.set(`${libPath}/KillAllProcesses.xaml`, compliancePass(killXaml, "KillAllProcesses.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/KillAllProcesses.xaml`, compliancePass(killXaml, "KillAllProcesses.xaml"));
 
         const initXaml = generateInitXaml(tf);
-        deferredWrites.set(`${libPath}/Init.xaml`, compliancePass(initXaml, "Init.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Init.xaml`, compliancePass(initXaml, "Init.xaml"));
         console.log(`[UiPath] Generated deterministic Init.xaml template`);
 
         const subPattern = inferAutomationSubPattern(pkg.description || "", enrichment);
 
         const refHasInitAllApps = !!getReferenceFrameworkFile("InitAllApplications.xaml", subPattern);
         const initAllAppsXaml = generateInitAllApplicationsXaml(tf);
-        deferredWrites.set(`${libPath}/InitAllApplications.xaml`, compliancePass(initAllAppsXaml, "InitAllApplications.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/InitAllApplications.xaml`, compliancePass(initAllAppsXaml, "InitAllApplications.xaml"));
         if (refHasInitAllApps) console.log(`[UiPath] Reference corpus confirms InitAllApplications.xaml for ${subPattern} pattern`);
 
         const refHasRetryTrans = !!getReferenceFrameworkFile("RetryCurrentTransaction.xaml", subPattern);
         const retryTransXaml = generateRetryCurrentTransactionXaml(tf);
-        deferredWrites.set(`${libPath}/RetryCurrentTransaction.xaml`, compliancePass(retryTransXaml, "RetryCurrentTransaction.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/RetryCurrentTransaction.xaml`, compliancePass(retryTransXaml, "RetryCurrentTransaction.xaml"));
         if (refHasRetryTrans) console.log(`[UiPath] Reference corpus confirms RetryCurrentTransaction.xaml for ${subPattern} pattern`);
 
         const refHasRetryInit = !!getReferenceFrameworkFile("RetryInit.xaml", subPattern);
         const retryInitXaml = generateRetryInitXaml(tf);
-        deferredWrites.set(`${libPath}/RetryInit.xaml`, compliancePass(retryInitXaml, "RetryInit.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/RetryInit.xaml`, compliancePass(retryInitXaml, "RetryInit.xaml"));
         if (refHasRetryInit) console.log(`[UiPath] Reference corpus confirms RetryInit.xaml for ${subPattern} pattern`);
 
         const patternOptionalFiles = REFRAMEWORK_PATTERN_OPTIONAL_FILES[subPattern] || [];
@@ -4820,7 +4841,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               optXaml = generateSendNotificationsXaml(tf);
             }
             if (optXaml) {
-              deferredWrites.set(optKey, compliancePass(optXaml, optFile));
+              syncXamlWrite(deferredWrites, xamlEntries, optKey, compliancePass(optXaml, optFile));
               console.log(`[UiPath] Generated pattern-specific ${optFile} for ${subPattern} pattern${refConfirms ? " (confirmed by reference)" : ""}`);
             }
           }
@@ -4853,7 +4874,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         <ui:LogMessage DisplayName="Log Process Placeholder" Level="Info" Message="[&quot;Process transaction logic goes here&quot;]" />`;
           }
           const processXaml = buildXaml("Process", `${projectName} - Process Transaction`, processInvocations);
-          deferredWrites.set(`${libPath}/Process.xaml`, compliancePass(processXaml, "Process.xaml"));
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Process.xaml`, compliancePass(processXaml, "Process.xaml"));
           console.log(`[UiPath] Generated Process.xaml wiring ${invokedInProcess.size} sub-workflow(s) for REFramework`);
         }
       } catch (reframeworkErr: any) {
@@ -4878,7 +4899,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       ensureReframeworkWiringOnMain(deferredWrites, xamlEntries, libPath, tf);
       if (!deferredWrites.has(`${libPath}/Init.xaml`)) {
         const initWfXaml = generateInitXaml(tf);
-        deferredWrites.set(`${libPath}/Init.xaml`, compliancePass(initWfXaml, "Init.xaml"));
+        syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Init.xaml`, compliancePass(initWfXaml, "Init.xaml"));
         console.log(`[UiPath] Generated Init.xaml for REFramework wiring (LLM Main.xaml present)`);
       }
       const reframeworkSupportFiles: Array<{ key: string; gen: () => string; label: string }> = [
@@ -4892,7 +4913,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       ];
       for (const sf of reframeworkSupportFiles) {
         if (!deferredWrites.has(sf.key)) {
-          deferredWrites.set(sf.key, compliancePass(sf.gen(), sf.label));
+          syncXamlWrite(deferredWrites, xamlEntries, sf.key, compliancePass(sf.gen(), sf.label));
           console.log(`[UiPath] Generated ${sf.label} for REFramework wiring`);
         }
       }
@@ -4911,7 +4932,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             optXaml = generateSendNotificationsXaml(tf);
           }
           if (optXaml) {
-            deferredWrites.set(optKey, compliancePass(optXaml, optFile));
+            syncXamlWrite(deferredWrites, xamlEntries, optKey, compliancePass(optXaml, optFile));
             console.log(`[UiPath] Generated pattern-specific ${optFile} for ${hasMainSubPattern} pattern (hasMain path)`);
           }
         }
@@ -4985,7 +5006,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
 
       const closeAppsXaml = generateCloseAllApplicationsXaml(tf);
-      deferredWrites.set(`${libPath}/CloseAllApplications.xaml`, compliancePass(closeAppsXaml, "CloseAllApplications.xaml"));
+      syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/CloseAllApplications.xaml`, compliancePass(closeAppsXaml, "CloseAllApplications.xaml"));
 
       mainActivities += `
         <ui:InvokeWorkflowFile DisplayName="Close All Applications" WorkflowFileName="CloseAllApplications.xaml" />`;
@@ -4998,7 +5019,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       if (mainXaml !== selfRefBefore) {
         console.warn(`[UiPath] Removed Main.xaml self-reference from simple Main fallback`);
       }
-      deferredWrites.set(`${libPath}/Main.xaml`, compliancePass(mainXaml, "Main.xaml"));
+      syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Main.xaml`, compliancePass(mainXaml, "Main.xaml"));
     }
 
     {
@@ -5077,7 +5098,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                 } catch (compErr: any) {
                   retryCompliant = tryStructuralPreservationOrStub(retryResult.xaml, className, compErr.message).content;
                 }
-                deferredWrites.set(`${libPath}/${ref}`, retryCompliant);
+                syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${ref}`, retryCompliant);
                 existingFiles.add(ref);
                 existingFilesNormalized.add(ref.replace(/\.xaml$/i, "").toLowerCase());
                 retryCount++;
@@ -5091,7 +5112,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (!generated) {
             const stubXaml = buildXaml(className, `${className} - Stub Workflow`, `
         <ui:Comment DisplayName="TODO: Implement ${escapeXml(className)}" Text="This workflow was auto-generated as a stub. Open in UiPath Studio to implement the logic." />`);
-            deferredWrites.set(`${libPath}/${ref}`, compliancePass(stubXaml, ref));
+            syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${ref}`, compliancePass(stubXaml, ref));
             existingFiles.add(ref);
             existingFilesNormalized.add(ref.replace(/\.xaml$/i, "").toLowerCase());
             stubCount++;
@@ -5213,7 +5234,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (insertMatch) {
             const insertPos = insertMatch.index! + insertMatch[0].length;
             stubbedMainXaml = stubbedMainXaml.slice(0, insertPos) + invokeRefsToInject.join("\n") + "\n" + stubbedMainXaml.slice(insertPos);
-            deferredWrites.set(mainDeferredKey, stubbedMainXaml);
+            syncXamlWrite(deferredWrites, xamlEntries, mainDeferredKey, stubbedMainXaml);
             const existingIdx = xamlEntries.findIndex(e => {
               const bn = e.name.split("/").pop() || e.name;
               return bn === "Main.xaml";
@@ -5248,7 +5269,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             if (insertMatch) {
               const insertPos = insertMatch.index! + insertMatch[0].length;
               stubbedProcessXaml = stubbedProcessXaml.slice(0, insertPos) + processInvokeRefs.join("\n") + "\n" + stubbedProcessXaml.slice(insertPos);
-              deferredWrites.set(processDeferredKey, stubbedProcessXaml);
+              syncXamlWrite(deferredWrites, xamlEntries, processDeferredKey, stubbedProcessXaml);
               const existingIdx = xamlEntries.findIndex(e => {
                 const bn = e.name.split("/").pop() || e.name;
                 return bn === "Process.xaml";
@@ -5337,7 +5358,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                 if (invokeBlock) {
                   processXaml = processXaml.substring(0, closingSeqIdx) + invokeBlock + processXaml.substring(closingSeqIdx);
                   if (processSource === "deferred") {
-                    deferredWrites.set(processPath, processXaml);
+                    syncXamlWrite(deferredWrites, xamlEntries, processPath, processXaml);
                   } else if (processSource === "entry") {
                     const processEntry = xamlEntries.find(e => e.name.endsWith("Process.xaml"));
                     if (processEntry) processEntry.content = processXaml;
@@ -5469,13 +5490,19 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const configCsv = generateConfigXlsx(projectName, sddContent || undefined, orchestratorArtifacts);
     archive.append(configCsv, { name: `${libPath}/Data/Config.xlsx` });
 
-    const allXamlParts: string[] = xamlEntries.map(e => e.content);
-    Array.from(deferredWrites.entries()).forEach(([path, content]) => {
-      if (path.endsWith(".xaml")) {
-        allXamlParts.push(content);
+    const _allXamlMap2 = new Map<string, string>();
+    Array.from(deferredWrites.entries()).forEach(([p, c]) => {
+      if (p.endsWith(".xaml")) {
+        _allXamlMap2.set((p.split("/").pop() || p).toLowerCase(), c);
       }
     });
-    const allXamlContent = allXamlParts.join("\n");
+    for (const entry of xamlEntries) {
+      const key = (entry.name.split("/").pop() || entry.name).toLowerCase();
+      if (!_allXamlMap2.has(key)) {
+        _allXamlMap2.set(key, entry.content);
+      }
+    }
+    const allXamlContent = Array.from(_allXamlMap2.values()).join("\n");
     const depAlignmentXamlContent = prePruningXamlContent;
 
     {
@@ -6051,8 +6078,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         } else {
           const stubXaml = generateStubWorkflow(missingFile);
           const stubCompliant = compliancePass(stubXaml, missingFile, true);
-          deferredWrites.set(`${libPath}/${missingFile}`, stubCompliant);
-          xamlEntries.push({ name: missingFile, content: stubCompliant });
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${missingFile}`, stubCompliant);
           stubsGenerated.push(missingFile);
           console.log(`[UiPath Validation] Generated stub workflow for missing file: ${missingFile} (tracked in xamlEntries)`);
         }
@@ -6083,8 +6109,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         } else {
           const stubXaml = generateStubWorkflow(mb.replace(".xaml", ""));
           const stubCompliant = compliancePass(stubXaml, mb, true);
-          deferredWrites.set(`${libPath}/${mb}`, stubCompliant);
-          xamlEntries.push({ name: mb, content: stubCompliant });
+          syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${mb}`, stubCompliant);
           stubsGenerated.push(mb);
           console.log(`[UiPath Pre-Package Check] Archive manifest had ${mb} without validated entry — generated stub`);
         }
@@ -6135,7 +6160,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             p => (p.split("/").pop() || p) === (xamlEntries[i].name.split("/").pop() || xamlEntries[i].name)
           );
           if (archivePath) {
-            deferredWrites.set(archivePath, cleaned);
+            syncXamlWrite(deferredWrites, xamlEntries, archivePath, cleaned);
           }
           placeholderCleanupRepairs.push({
             repairCode: "REPAIR_PLACEHOLDER_CLEANUP" as const,
@@ -6523,7 +6548,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               p => (p.split("/").pop() || p) === fileName
             );
             if (archivePath) {
-              deferredWrites.set(archivePath, content);
+              syncXamlWrite(deferredWrites, xamlEntries, archivePath, content);
             } else {
               console.warn(`[UiPath Parity] No deferredWrites key found for basename "${fileName}" during catalog conformance — skipping deferred update`);
             }
@@ -6548,7 +6573,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           p => (p.split("/").pop() || p) === entry.name
         );
         if (archivePath) {
-          deferredWrites.set(archivePath, normalized);
+          syncXamlWrite(deferredWrites, xamlEntries, archivePath, normalized);
         } else {
           console.warn(`[UiPath Parity] No deferredWrites key found for basename "${entry.name}" during assign normalization — skipping deferred update`);
         }
@@ -6644,7 +6669,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const basename = xamlEntries[i].name.split("/").pop() || xamlEntries[i].name;
         const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === basename);
         if (archivePath) {
-          deferredWrites.set(archivePath, content);
+          syncXamlWrite(deferredWrites, xamlEntries, archivePath, content);
         } else {
           console.warn(`[UiPath Parity] No deferredWrites key found for basename "${basename}" during XAML sanitization — skipping deferred update`);
         }
@@ -6693,7 +6718,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       const basename = entry.name.split("/").pop() || entry.name;
       const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === basename);
       if (archivePath) {
-        deferredWrites.set(archivePath, entry.content);
+        syncXamlWrite(deferredWrites, xamlEntries, archivePath, entry.content);
       } else {
         console.warn(`[UiPath Parity] No deferredWrites key found for basename "${basename}" during quality gate sync — skipping deferred update`);
       }
@@ -6707,7 +6732,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (repair.repaired) {
           xamlEntries[i] = { name: entry.name, content: repair.content };
           const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
-          if (archivePath) deferredWrites.set(archivePath, repair.content);
+          if (archivePath) syncXamlWrite(deferredWrites, xamlEntries, archivePath, repair.content);
         }
       }
     }
@@ -6744,7 +6769,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const basename = entry.name.split("/").pop() || entry.name;
         const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === basename);
         if (archivePath) {
-          deferredWrites.set(archivePath, entry.content);
+          syncXamlWrite(deferredWrites, xamlEntries, archivePath, entry.content);
         }
       }
       if (emissionGateResult.blocked) {
@@ -7109,7 +7134,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           const shortName = (repairedEntry.name.split("/").pop() || repairedEntry.name);
           const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === shortName);
           if (archivePath) {
-            deferredWrites.set(archivePath, repairedEntry.content);
+            syncXamlWrite(deferredWrites, xamlEntries, archivePath, repairedEntry.content);
           }
           const deferredContent = archivePath ? deferredWrites.get(archivePath) : undefined;
           const downstreamConsumed = deferredContent !== undefined && computeContentHash(deferredContent) === postHash;
@@ -7183,7 +7208,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               const postHash = computeContentHash(lastChanceRepair.content);
               const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === corruptedFile);
               if (archivePath) {
-                deferredWrites.set(archivePath, lastChanceRepair.content);
+                syncXamlWrite(deferredWrites, xamlEntries, archivePath, lastChanceRepair.content);
               }
               recordActivePathProof({
                 file: corruptedFile,
@@ -7254,7 +7279,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           const archivePath = Array.from(deferredWrites.keys()).find(p => (p.split("/").pop() || p) === corruptedFile);
           if (archivePath) {
-            deferredWrites.set(archivePath, stubCompliant);
+            syncXamlWrite(deferredWrites, xamlEntries, archivePath, stubCompliant);
           }
           outcomeRemediations.push({
             level: "workflow",
@@ -7304,7 +7329,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       if (nsFixResult.injected.length > 0) {
         entry.content = nsFixResult.xml;
         const archivePathNs = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
-        if (archivePathNs) deferredWrites.set(archivePathNs, nsFixResult.xml);
+        if (archivePathNs) syncXamlWrite(deferredWrites, xamlEntries, archivePathNs, nsFixResult.xml);
         console.log(`[Package Assembler] Injected missing xmlns for ${shortName}: ${nsFixResult.injected.join(", ")}`);
       }
 
@@ -7314,7 +7339,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (repair.repaired) {
           entry.content = repair.content;
           const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
-          if (archivePath) deferredWrites.set(archivePath, repair.content);
+          if (archivePath) syncXamlWrite(deferredWrites, xamlEntries, archivePath, repair.content);
           loadability = checkStudioLoadability(entry.content);
         }
       }
@@ -7404,7 +7429,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (repair.repaired) {
           entry.content = repair.content;
           const archivePath = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === shortName);
-          if (archivePath) deferredWrites.set(archivePath, repair.content);
+          if (archivePath) syncXamlWrite(deferredWrites, xamlEntries, archivePath, repair.content);
           loadability = checkStudioLoadability(entry.content);
         }
       }
@@ -7485,7 +7510,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               if (bindMatch && bindMatch[2]) {
                 const origExpr = bindMatch[2];
                 const convertedExpr = `${conversion.wrapper}(${origExpr})`;
-                deferredWrites.set(deferredKey, content.replace(
+                syncXamlWrite(deferredWrites, xamlEntries, deferredKey, content.replace(
                   argBindPattern,
                   `$1[${convertedExpr}]`
                 ));
@@ -7783,7 +7808,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
         }
         if (updatedContent !== dContent) {
-          deferredWrites.set(dPath, updatedContent);
+          syncXamlWrite(deferredWrites, xamlEntries, dPath, updatedContent);
           const matchingEntry = xamlEntries.find(e => (e.name.split("/").pop() || e.name) === fileName);
           if (matchingEntry) matchingEntry.content = updatedContent;
         }
@@ -7937,7 +7962,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     {
       console.log(`[Authoritative Namespace Injection] Running single authoritative pass across all XAML files...`);
       const isCrossPlatform = tf === "Portable";
-      const nsInjectionResult = runAuthoritativeNamespaceInjection(deferredWrites, deps, isCrossPlatform);
+      const nsInjectionResult = runAuthoritativeNamespaceInjection(deferredWrites, deps, isCrossPlatform, xamlEntries);
       if (nsInjectionResult.injectedCount > 0) {
         console.log(`[Authoritative Namespace Injection] Injected namespace declarations in ${nsInjectionResult.injectedCount} location(s)`);
       }
@@ -8167,7 +8192,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
 
         if (updated !== content) {
-          deferredWrites.set(path, updated);
+          syncXamlWrite(deferredWrites, xamlEntries, path, updated);
         }
       });
       if (selfCheckFixes > 0 && injectionFailures === 0) {
@@ -8392,7 +8417,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                 reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}`,
               });
               sanitized = stubXaml;
-              deferredWrites.set(path, sanitized);
+              syncXamlWrite(deferredWrites, xamlEntries, path, sanitized);
               outcomeRemediations.push({
                 level: "workflow",
                 file: fileName,
@@ -8448,7 +8473,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             console.log(`[Pre-Archive Mail Body Repair] ${entry.name}: ${bodyRepairResult.repairs.join("; ")}`);
             const archiveKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (entry.name.split("/").pop() || entry.name));
             if (archiveKey) {
-              deferredWrites.set(archiveKey, entry.content);
+              syncXamlWrite(deferredWrites, xamlEntries, archiveKey, entry.content);
             }
           }
         }
@@ -8545,7 +8570,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           postGateXamlEntries[ei] = updatedEntry;
           const archiveKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === (postGateXamlEntries[ei].name.split("/").pop() || postGateXamlEntries[ei].name));
           if (archiveKey) {
-            deferredWrites.set(archiveKey, updatedEntry.content);
+            syncXamlWrite(deferredWrites, xamlEntries, archiveKey, updatedEntry.content);
           }
         }
       }
@@ -8841,7 +8866,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (currentDeferred !== entry.content) {
           const preHash = currentDeferred ? createHash("sha256").update(currentDeferred).digest("hex") : "missing";
           const postHash = createHash("sha256").update(entry.content).digest("hex");
-          deferredWrites.set(entry.name, entry.content);
+          syncXamlWrite(deferredWrites, xamlEntries, entry.name, entry.content);
           recordMutationAttempt({
             stage: "pre-freeze-authoritative-sync",
             function: "buildNuGetPackage:authoritativeSync",
