@@ -359,7 +359,7 @@ export function isGenericTypeDefault(value: string, clrType: string): boolean {
     return trimmed === "0" || trimmed === "0.0";
   }
   if (clrType.includes("Object")) {
-    return trimmed === "Nothing" || trimmed === "null";
+    return trimmed === "" || trimmed === "Nothing" || trimmed === "null";
   }
   return false;
 }
@@ -1728,7 +1728,7 @@ export function applyRequiredPropertyEnforcement(
   };
 }
 
-function injectResolvedPropertyBindings(
+export function injectResolvedPropertyBindings(
   content: string,
   bindings: RequiredPropertyBinding[],
   entryName: string,
@@ -1752,7 +1752,14 @@ function injectResolvedPropertyBindings(
       const currentIdx = matchIdx++;
       if (currentIdx !== binding.occurrenceIndex) return match;
       const attrBoundary = new RegExp(`(?:^|\\s)${binding.propertyName}="`);
-      if (attrBoundary.test(attrs)) return match;
+      if (attrBoundary.test(attrs)) {
+        const emptyAttrRegex = new RegExp(`((?:^|\\s)${binding.propertyName}=")(")`);
+        if (emptyAttrRegex.test(attrs)) {
+          const replaced = attrs.replace(emptyAttrRegex, `$1${binding.resolvedValue}$2`);
+          return `${prefix}${replaced}${closing}`;
+        }
+        return match;
+      }
       return `${prefix}${attrs} ${binding.propertyName}="${binding.resolvedValue}"${closing}`;
     });
   }
