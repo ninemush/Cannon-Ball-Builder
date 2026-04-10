@@ -1,0 +1,129 @@
+Please split the current “Pipeline parallel codepath consolidation (4 error classes)” proposal into four separate implementation-ready tasks with explicit dependencies.
+
+Why this split is required
+The current proposal mixes four different problem classes:
+1. catalog-first dependency resolution authority
+2. deferredWrites ↔ xamlEntries synchronization authority
+3. namespace injection pass consolidation
+4. required-property fallback policy expansion
+
+These are not one coherent implementation unit. Bundling them would make regressions impossible to attribute and mixes structural correctness fixes with behavior/policy changes.
+
+Output requirements
+Return exactly four tasks, each implementation-ready, with:
+- title
+- What & Why
+- Done looks like
+- Out of scope
+- Tasks
+- Relevant files
+- Dependencies
+
+Also provide:
+- a short explanation of why the original mega-task was too broad
+- the recommended execution order
+- which currently failing tests each split task is expected to improve
+- which failing tests are explicitly NOT expected to improve yet
+
+Split requirements
+
+Task A — Catalog-first dependency resolution consolidation
+Scope:
+- make package name canonicalization and version resolution use the catalog as primary authority
+- make normalizePackageName catalog-aware
+- make buildAssemblyToPackageMap catalog-aware if still needed after the recent fixes
+- extract one shared resolvePackageVersion(canonicalName) function or equivalent shared path
+- replace the 5 current resolution sites with that shared path
+- fatal errors should occur only when a package cannot be resolved through any valid authority layer
+
+Must not include:
+- deferredWrites/xamlEntries synchronization
+- namespace injection pass redesign
+- required-property fallback policy changes
+
+Expected test impact:
+- task-366-dependency-resolution
+- task-474-catalog-coverage
+- relevant package resolution failures in pipeline-regression
+Do not promise all tests pass.
+
+Task B — deferredWrites and xamlEntries synchronization authority
+Scope:
+- create one helper or authority path that keeps deferredWrites and the corresponding xamlEntries content in sync atomically
+- apply it to all mutation sites that currently update one without the other
+- eliminate stale-content duplication in allXamlContent
+- ensure validation/read paths use current content consistently
+
+Must not include:
+- dependency resolution redesign
+- namespace injection redesign
+- fallback policy changes
+
+Expected test impact:
+- packageViable false positives in pipeline-regression
+- repeated fixture-level false quality-gate failures in uipath-generation
+Do not promise all tests pass.
+
+Task C — Namespace injection single-pass consolidation
+Scope:
+- consolidate the current dual-pass namespace/reference injection flow only if semantic behavior can be preserved
+- block creation and injection should happen in one authoritative pass
+- warnings should only be emitted for genuine failures, not intermediate missing-block states
+- preserve working cases that currently rely on block creation
+
+Must not include:
+- package canonicalization changes
+- deferredWrites/xamlEntries sync
+- required-property fallback expansion
+
+Expected test impact:
+- authoritative-declaration-synthesis warning behavior
+- compliance-side block-creation/read-only behavior
+- namespace-related failures in uipath-generation only where directly caused by dual-pass inconsistencies
+Do not promise all tests pass.
+
+Task D — Fallback-eligible required-property policy expansion
+Scope:
+- add a narrowly scoped context-derived fallback tier for a small set of well-known required properties only
+- examples allowed for consideration:
+  - LogMessage.Message from DisplayName
+  - InvokeWorkflowFile.WorkflowFileName from spec target
+  - ReadTextFile.File only if a safe, explicit policy can be justified
+  - SendSMTPMailMessage.Body only if behavior is explicitly approved
+- all fallback values must be valid VB.NET expressions
+- task must explicitly separate “safe fallback” from “masking a real defect”
+
+Must not include:
+- broad required-property policy rewrites
+- dependency resolution consolidation
+- namespace injection redesign
+- deferredWrites/xamlEntries state work
+
+Expected test impact:
+- repeated required-property execution_blocking defects in uipath-generation and pipeline-regression
+Do not promise all tests pass.
+
+Important constraints
+- Do not promise a green test suite from any single task unless the evidence clearly supports that
+- Keep each task narrow enough that regression attribution is obvious
+- Make dependencies explicit:
+  - Task A independent
+  - Task B independent
+  - Task C can depend on B if content synchronization affects the same read/write surfaces
+  - Task D should be independent of A/B/C unless evidence shows otherwise
+- Use the existing evidence from the dev environment test failures, but do not overclaim
+
+Relevant source areas to consider across the split
+- server/package-assembler.ts
+- server/uipath-shared.ts
+- server/uipath-activity-registry.ts
+- server/catalog/catalog-service.ts
+- server/xaml/xaml-compliance.ts
+- server/required-property-enforcer.ts
+- server/final-artifact-validation.ts
+- server/post-emission-dependency-analyzer.ts
+- server/__tests__/pipeline-regression.test.ts
+- server/__tests__/task-366-dependency-resolution.test.ts
+- server/__tests__/task-474-catalog-coverage.test.ts
+- server/__tests__/authoritative-declaration-synthesis.test.ts
+- server/__tests__/uipath-generation.test.ts
