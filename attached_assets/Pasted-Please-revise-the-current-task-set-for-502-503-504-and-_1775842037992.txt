@@ -1,0 +1,144 @@
+Please revise the current task set for #502, #503, #504, and #505 based on the following corrections and sequencing guidance.
+
+Goal
+We want implementation-ready tasks that attack the real remaining blockers without introducing semantic regressions or removing the last safety net too early.
+
+General instruction
+Do NOT collapse these into one mega-task.
+Revise each task individually, then provide:
+- corrected task text
+- exact dependency order
+- a short explanation of why the order is correct
+
+Priority order required
+1. #504 first
+2. #503 second
+3. #502 third, but only after revision
+4. #505 last, and only after revision
+
+Why this order
+- #504 is the highest-value structural fix because the biggest remaining defect class is spec-decomposed workflows not being authoritatively wired into the executable spine.
+- #503 is the next most important because namespace/import/reference handling is still fragile and regex-based.
+- #502 is useful, but dangerous if it turns catalog defaults into semantically-wrong fake values. It must be tightened before implementation.
+- #505 is directionally right but too risky to do now as a hard deletion of baseline mode. The safer change is to make full_implementation the default and keep baseline_openable only as an explicit, logged emergency fallback.
+
+Required corrections by task
+
+--------------------------------------------------
+Task #502 correction
+--------------------------------------------------
+The current version is too aggressive in using catalog defaults / validValues / clrType to resolve all required properties.
+
+Revise #502 so it explicitly introduces a required-property classification model. Every repeatedly failing required property must be classified into exactly one of these buckets:
+1. safe-fallback
+2. generator-owned
+3. spec-required
+4. unsupported
+
+Rules:
+- Only safe-fallback properties may use catalog-driven fallback resolution.
+- Generator-owned properties must be emitted correctly by the generator path, not silently synthesized by the enforcer.
+- Spec-required properties must fail early with precise diagnostics if absent; they must not be auto-invented from generic defaults.
+- Unsupported properties must fail clearly.
+
+Important examples:
+- QueryEntity.EntityType -> spec-required unless proven otherwise
+- UpdateEntity.EntityType -> spec-required unless proven otherwise
+- CreateEntityRecord.EntityType -> spec-required unless proven otherwise
+- CreateFormTask.FormSchemaPath -> spec-required unless proven otherwise
+- CreateFormTask.Title / TaskTitle -> do not assume safe fallback unless a deterministic and semantically valid derivation is proven
+- ReadTextFile.File -> likely generator-owned or unsupported, not generic-fallback
+- SendSmtpMailMessage.Body -> plausible safe-fallback candidate
+- While.Condition -> do not solve with generic defaults; treat as expression-sensitive
+
+Revise #502 so that:
+- catalog metadata drives detection for all required properties
+- catalog-driven fallback is only applied to properties explicitly classified as safe-fallback
+- FALLBACK_ELIGIBLE_POLICIES becomes an override / stricter-rules layer on top of the classification model
+- the task includes an explicit classification pass for the repeatedly failing properties before any fallback implementation
+
+Also require:
+- upstream impact analysis
+- downstream impact analysis
+- regression risks
+- exact files
+- explicit out-of-scope
+
+--------------------------------------------------
+Task #503 correction
+--------------------------------------------------
+This task is mostly strong.
+
+Keep the core direction:
+- one authoritative namespace source
+- all consumers derive from it
+- DOM-based XML manipulation for namespace and assembly injection instead of regex mutation
+
+But revise #503 so it does NOT fully delete every hardcoded fallback in the first pass.
+
+Add this rule:
+- keep a very small emergency fallback map for critical built-in prefixes only (for example ui, sco, scg or equivalent truly critical internals), used only when catalog loading fails
+- the fallback must be explicitly described as a safety net, not a primary authority
+
+Also require:
+- migration completeness diff between old maps and catalog-backed source
+- reference corpus validation
+- note any likely serialization-fidelity risks from DOM parse/serialize
+
+--------------------------------------------------
+Task #504 correction
+--------------------------------------------------
+This task is the highest-value structural fix and should be prioritized first.
+
+Keep the core direction:
+- spec decomposer output must become a first-class workflow wiring contract
+- package assembler must consume executionOrder, invokes, and sharedArguments during initial assembly
+- post-hoc regex-based auto-wiring should be reduced to diagnostics-only
+
+Tighten #504 with these rules:
+- do not casually invent caller variable names; variable declaration and binding must be deterministic and contract-based
+- argument direction, type, and naming must be matched explicitly between caller and callee
+- if a required argument cannot be wired safely, fail early with a precise diagnostic rather than generating an empty or semantically useless InvokeWorkflowFile block
+- filename and case normalization must be deterministic and validated
+
+Also require:
+- graph validation before final package emission
+- explicit treatment of executable vs helper workflows
+- exact upstream/downstream impact and regression analysis
+
+--------------------------------------------------
+Task #505 correction
+--------------------------------------------------
+Do NOT eliminate baseline_openable outright in this task.
+
+Revise #505 from:
+- eliminate baseline_openable mode distinction completely
+
+to:
+- make full_implementation the default path
+- retain baseline_openable only as an explicit, logged emergency fallback
+- remove silent / automatic downgrade behavior that masks failures
+- record downgrade reason in logs and artifact/report output
+
+Rules:
+- baseline_openable must no longer be the default path for simple business cases
+- full_implementation should be the normal path
+- downgrade should happen only for a small, explicit set of hard blockers
+- the task must not remove the last safety net before #502, #503, and #504 land
+
+Also require:
+- side-by-side benchmark comparison for at least one Birthday-style and one PO/Invoice-style process
+- explicit regression discussion for latency, failure visibility, and fallback semantics
+
+Output format
+Return:
+1. corrected #502
+2. corrected #503
+3. corrected #504
+4. corrected #505
+5. dependency order
+6. one short paragraph explaining why this sequence is the safest and highest-value path
+
+Important
+Keep these tasks highly detailed and implementation-ready.
+Do not shorten them into vague summaries.
