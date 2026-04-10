@@ -341,7 +341,7 @@ describe("Authoritative Declaration Synthesis", () => {
       expect(result.updated).toBe(xmlWithNoTarget);
     });
 
-    it("compliance layer emits console.warn with file identity when injection target is missing", () => {
+    it("compliance layer self-heals broken containers without emitting false-alarm warnings", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -378,21 +378,27 @@ describe("Authoritative Declaration Synthesis", () => {
   </Sequence>
 </Activity>`;
 
+      let result: string | undefined;
       try {
-        normalizeXaml(xmlWithBrokenDeclarationBlocks, "Windows");
+        result = normalizeXaml(xmlWithBrokenDeclarationBlocks, "Windows");
       } catch {
       }
 
       const warnCalls = warnSpy.mock.calls.map(c => String(c[0]));
-      const injectionWarnings = warnCalls.filter(msg =>
+      const falseAlarmWarnings = warnCalls.filter(msg =>
         msg.includes("[XAML Compliance] WARNING:") && msg.includes("Failed to inject")
       );
-      expect(injectionWarnings.length).toBeGreaterThan(0);
+      expect(falseAlarmWarnings.length).toBe(0);
 
-      const hasFileIdentity = injectionWarnings.some(msg =>
-        msg.includes("[TestWarningWorkflow]")
+      const logCalls = logSpy.mock.calls.map(c => String(c[0]));
+      const rebuildLogs = logCalls.filter(msg =>
+        msg.includes("Rebuilt malformed")
       );
-      expect(hasFileIdentity).toBe(true);
+      expect(rebuildLogs.length).toBeGreaterThan(0);
+
+      if (result) {
+        expect(result).toContain("sco:Collection");
+      }
 
       warnSpy.mockRestore();
       logSpy.mockRestore();

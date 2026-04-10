@@ -95,7 +95,7 @@ export { normalizePackageName } from "./uipath-shared";
   import { runEmissionGate, type EmissionGateResult } from "./emission-gate";
   import { buildWorkflowBusinessContextMap, type WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
-  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, buildDynamicXmlnsDeclarations, buildDynamicAssemblyRefs, buildDynamicNamespaceImports, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
+  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
@@ -2230,127 +2230,6 @@ export function buildAssemblyToPackageMap(): Map<string, string> {
     }
   }
   return map;
-}
-
-function runAuthoritativeNamespaceInjection(
-  deferredWrites: Map<string, string>,
-  deps: Record<string, string>,
-  isCrossPlatform: boolean,
-  xamlEntries: Array<{ name: string; content: string }> = [],
-): { injectedCount: number; warnings: string[] } {
-  const warnings: string[] = [];
-  let injectedCount = 0;
-
-  Array.from(deferredWrites.entries()).forEach(([path, content]) => {
-    if (!path.endsWith(".xaml")) return;
-    const fileName = path.split("/").pop() || path;
-
-    const declarations = deriveRequiredDeclarationsForXaml(content);
-    const usedPackages = declarations.neededPackages;
-
-    let updated = content;
-    const additionalXmlns = buildDynamicXmlnsDeclarations(usedPackages, isCrossPlatform, updated);
-    const additionalAssemblyRefs = buildDynamicAssemblyRefs(usedPackages, updated);
-    const additionalNamespaceImports = buildDynamicNamespaceImports(usedPackages, updated);
-
-    if (additionalXmlns) {
-      const xmlnsInsertPoint = updated.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
-      if (xmlnsInsertPoint >= 0) {
-        const insertAfter = xmlnsInsertPoint + 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'.length;
-        updated = updated.slice(0, insertAfter) + "\n" + additionalXmlns + updated.slice(insertAfter);
-        injectedCount++;
-      }
-    }
-
-    if (additionalAssemblyRefs) {
-      const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.ReferencesForImplementation>", additionalAssemblyRefs);
-      if (result.succeeded) {
-        updated = result.updated;
-        injectedCount++;
-        console.log(`[Namespace Injection] [${fileName}] Injected assembly references`);
-      } else {
-        const refsBlockPattern = /<TextExpression\.ReferencesForImplementation>[\s\S]*?<\/TextExpression\.ReferencesForImplementation>/;
-        const existingRefsBlock = updated.match(refsBlockPattern);
-        if (existingRefsBlock) {
-          const existingAsmEntries: string[] = [];
-          const existAsmPat = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
-          let ea;
-          while ((ea = existAsmPat.exec(existingRefsBlock[0])) !== null) {
-            existingAsmEntries.push(`      <AssemblyReference>${ea[1].trim()}</AssemblyReference>`);
-          }
-          const additionalLines = additionalAssemblyRefs.split("\n").filter((l: string) => l.trim());
-          const allAsmEntries = [...existingAsmEntries, ...additionalLines];
-          const freshRefsBlock = `<TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsmEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
-          updated = updated.replace(refsBlockPattern, freshRefsBlock);
-          injectedCount++;
-          console.log(`[Namespace Injection] [${fileName}] Rebuilt malformed ReferencesForImplementation block — injected assembly references`);
-        } else {
-          console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject assembly references — no ReferencesForImplementation block found`);
-          warnings.push(`${fileName}: failed to inject assembly references`);
-        }
-      }
-    }
-
-    if (additionalNamespaceImports) {
-      const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.NamespacesForImplementation>", additionalNamespaceImports);
-      if (result.succeeded) {
-        updated = result.updated;
-        injectedCount++;
-        console.log(`[Namespace Injection] [${fileName}] Injected namespace imports`);
-      } else {
-        const nsBlockPattern = /<TextExpression\.NamespacesForImplementation>[\s\S]*?<\/TextExpression\.NamespacesForImplementation>/;
-        const existingNsBlock = updated.match(nsBlockPattern);
-        if (existingNsBlock) {
-          const existingNsEntries: string[] = [];
-          const existNsPat = /<x:String[^>]*>([^<]+)<\/x:String>/g;
-          let en;
-          while ((en = existNsPat.exec(existingNsBlock[0])) !== null) {
-            existingNsEntries.push(`      <x:String>${en[1].trim()}</x:String>`);
-          }
-          const additionalLines = additionalNamespaceImports.split("\n").filter((l: string) => l.trim());
-          const allNsEntries = [...existingNsEntries, ...additionalLines];
-          const freshNsBlock = `<TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNsEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
-          updated = updated.replace(nsBlockPattern, freshNsBlock);
-          injectedCount++;
-          console.log(`[Namespace Injection] [${fileName}] Rebuilt malformed NamespacesForImplementation block — injected namespace imports`);
-        } else {
-          console.warn(`[Namespace Injection] WARNING: [${fileName}] Failed to inject namespace imports — no NamespacesForImplementation block found`);
-          warnings.push(`${fileName}: failed to inject namespace imports`);
-        }
-      }
-    }
-
-    const prefixPattern = /<(\w+):/g;
-    let pm;
-    const usedPrefixes = new Set<string>();
-    while ((pm = prefixPattern.exec(updated)) !== null) {
-      if (!["xmlns", "xml", "x", "sap", "sap2010", "mc", "s", "scg", "sco", "mva", "sads", "scg2"].includes(pm[1])) {
-        usedPrefixes.add(pm[1]);
-      }
-    }
-
-    Array.from(usedPrefixes).forEach(prefix => {
-      const hasXmlns = new RegExp(`xmlns:${prefix}=`).test(updated);
-      if (!hasXmlns) {
-        let foundPkg = false;
-        for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
-          if (info.prefix === prefix) {
-            foundPkg = true;
-            break;
-          }
-        }
-        if (!foundPkg) {
-          warnings.push(`[${fileName}] Activity prefix "${prefix}:" used but has no catalog entry — may be unresolvable in Studio`);
-        }
-      }
-    });
-
-    if (updated !== content) {
-      syncXamlWrite(deferredWrites, xamlEntries, path, updated);
-    }
-  });
-
-  return { injectedCount, warnings };
 }
 
 export function runStudioResolutionSmokeTest(
@@ -7960,25 +7839,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     }
 
     {
-      console.log(`[Authoritative Namespace Injection] Running single authoritative pass across all XAML files...`);
+      console.log(`[Authoritative Declaration Synthesis] Running consolidated single-pass namespace injection and declaration synthesis...`);
       const isCrossPlatform = tf === "Portable";
-      const nsInjectionResult = runAuthoritativeNamespaceInjection(deferredWrites, deps, isCrossPlatform, xamlEntries);
-      if (nsInjectionResult.injectedCount > 0) {
-        console.log(`[Authoritative Namespace Injection] Injected namespace declarations in ${nsInjectionResult.injectedCount} location(s)`);
-      }
-      for (const warn of nsInjectionResult.warnings) {
-        console.warn(`[Authoritative Namespace Injection] ${warn}`);
-        dependencyWarnings.push({
-          code: "NAMESPACE_INJECTION_WARNING",
-          message: warn,
-          stage: "authoritative-namespace-injection",
-          recoverable: true,
-        });
-      }
-    }
-
-    {
-      console.log(`[Authoritative Declaration Synthesis] Inspecting final XAML files for required declarations...`);
       let selfCheckFixes = 0;
       let injectionFailures = 0;
       let filesInspected = 0;
@@ -8186,6 +8048,36 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Failed to inject ${missingNamespaces.length} namespace import(s) — could not locate valid insertion point`);
           }
         }
+
+        const prefixPattern = /<(\w+):/g;
+        let pm;
+        const usedPrefixes = new Set<string>();
+        while ((pm = prefixPattern.exec(updated)) !== null) {
+          if (!["xmlns", "xml", "x", "sap", "sap2010", "mc", "s", "scg", "sco", "mva", "sads", "scg2"].includes(pm[1])) {
+            usedPrefixes.add(pm[1]);
+          }
+        }
+
+        Array.from(usedPrefixes).forEach(prefix => {
+          const hasXmlns = new RegExp(`xmlns:${prefix}=`).test(updated);
+          if (!hasXmlns) {
+            let foundPkg = false;
+            for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+              if (info.prefix === prefix) {
+                foundPkg = true;
+                break;
+              }
+            }
+            if (!foundPkg) {
+              dependencyWarnings.push({
+                code: "NAMESPACE_INJECTION_WARNING",
+                message: `[${fileName}] Activity prefix "${prefix}:" used but has no catalog entry — may be unresolvable in Studio`,
+                stage: "authoritative-declaration-synthesis",
+                recoverable: true,
+              });
+            }
+          }
+        });
 
         if (missingAssemblies.length === 0 && missingNamespaces.length === 0 && missingXmlnsDecls.length === 0) {
           console.log(`[Authoritative Declaration Synthesis] [${fileName}] All declarations already present`);

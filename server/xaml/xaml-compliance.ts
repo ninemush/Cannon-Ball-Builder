@@ -2377,9 +2377,8 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
   const varDeclBefore = xml;
   const varDeclResult = ensureVariableDeclarations(xml);
   if (varDeclResult !== varDeclBefore) {
-    findings.push({ type: "variable-declaration", description: "Missing variable declarations detected and auto-declared", severity: "warning" });
-    xml = varDeclResult;
-    console.log(`[Compliance] ensureVariableDeclarations applied auto-declarations`);
+    findings.push({ type: "variable-declaration", description: "Missing variable declarations detected (read-only — not auto-declared in compliance layer)", severity: "warning" });
+    console.log(`[Compliance READ-ONLY] ensureVariableDeclarations detected missing variables (not mutated — variable declaration is handled by pipeline post-processing)`);
   }
 
   xml = xml.replace(/WorkflowFileName="Workflows\\([^"]+)"/g, 'WorkflowFileName="$1"');
