@@ -72,3 +72,9 @@ id = "cCyVenuUuz3qSTVvBoIXg"
 uri = "file://dll-truth-audit-report.md"
 type = "text"
 title = "DLL Truth Post-Implementation Audit Report"
+
+[[outputs]]
+id = "JURGlBlxjqjxVTvBOO571"
+uri = "file://server/investigations/required-property-fallback-trace.md"
+type = "text"
+title = "Required-Property Fallback Runtime Trace — Investigation Report"
