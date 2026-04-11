@@ -10007,6 +10007,7 @@ ${depEntries}
     expressionLoweringFixes: preArchiveEnforcement?.enforcementResult.expressionLoweringFixes,
     expressionLoweringFailures: preArchiveEnforcement?.enforcementResult.expressionLoweringFailures,
     requiredPropertyEnforcementSummary: preArchiveEnforcement?.enforcementResult.summary,
+    classificationDiagnostics: preArchiveEnforcement?.enforcementResult.classificationDiagnostics,
     preComplianceGuardPassed: preArchiveEnforcement?.guardResult.passed,
     preComplianceGuardViolationCount: preArchiveEnforcement?.guardResult.violations.length,
     canonicalizationArchiveParity: canonicalizationArchiveParity.length > 0 ? canonicalizationArchiveParity : undefined,

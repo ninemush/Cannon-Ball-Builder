@@ -195,6 +195,223 @@ export const CONTEXT_DERIVED_FALLBACK_REGISTRY: ContextDerivedFallbackSpec[] = [
   },
 ];
 
+export type RequiredPropertyClassification =
+  | "safe-fallback"
+  | "generator-owned"
+  | "spec-required"
+  | "unsupported";
+
+export interface ClassificationEntry {
+  activityType: string;
+  propertyName: string;
+  classification: RequiredPropertyClassification;
+  approvedEnforcerRecovery: boolean;
+  rationale: string;
+}
+
+export interface ClassificationDiagnostic {
+  file: string;
+  workflow: string;
+  activityType: string;
+  propertyName: string;
+  classification: RequiredPropertyClassification;
+  approvedEnforcerRecovery: boolean;
+  message: string;
+  resolved: boolean;
+  resolvedValue: string | null;
+}
+
+const REQUIRED_PROPERTY_CLASSIFICATION_REGISTRY: ClassificationEntry[] = [
+  {
+    activityType: "LogMessage",
+    propertyName: "Message",
+    classification: "generator-owned",
+    approvedEnforcerRecovery: true,
+    rationale: "Primary authority is the generator. Enforcer has proven context-derived recovery from displayName/workflowName.",
+  },
+  {
+    activityType: "InvokeWorkflowFile",
+    propertyName: "WorkflowFileName",
+    classification: "generator-owned",
+    approvedEnforcerRecovery: true,
+    rationale: "Primary authority is spec invokes/executionOrder. Enforcer has proven context-derived recovery deriving .xaml filename.",
+  },
+  {
+    activityType: "QueryEntity",
+    propertyName: "EntityType",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Entity type is business-domain data from the SDD; cannot be generically defaulted.",
+  },
+  {
+    activityType: "UpdateEntity",
+    propertyName: "EntityType",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Entity type is business-domain data from the SDD; cannot be generically defaulted.",
+  },
+  {
+    activityType: "CreateEntity",
+    propertyName: "EntityType",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Entity type is business-domain data from the SDD; cannot be generically defaulted.",
+  },
+  {
+    activityType: "CreateEntityRecord",
+    propertyName: "EntityType",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Entity type is business-domain data from the SDD; cannot be generically defaulted. Alias for CreateEntity.",
+  },
+  {
+    activityType: "DeleteEntity",
+    propertyName: "EntityType",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Entity type is business-domain data from the SDD; cannot be generically defaulted.",
+  },
+  {
+    activityType: "GetEntityById",
+    propertyName: "EntityType",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Entity type is business-domain data from the SDD; cannot be generically defaulted.",
+  },
+  {
+    activityType: "CreateFormTask",
+    propertyName: "Title",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Task title is business-domain data; cannot be generically defaulted.",
+  },
+  {
+    activityType: "CreateFormTask",
+    propertyName: "TaskTitle",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Task title is business-domain data; cannot be generically defaulted.",
+  },
+  {
+    activityType: "CreateFormTask",
+    propertyName: "FormSchemaPath",
+    classification: "spec-required",
+    approvedEnforcerRecovery: false,
+    rationale: "Schema path is a deployment-specific reference; cannot be generically defaulted.",
+  },
+  {
+    activityType: "ReadTextFile",
+    propertyName: "File",
+    classification: "unsupported",
+    approvedEnforcerRecovery: false,
+    rationale: "No pipeline stage can currently produce a valid IResource-shaped file path for this property.",
+  },
+  {
+    activityType: "SendSmtpMailMessage",
+    propertyName: "Body",
+    classification: "safe-fallback",
+    approvedEnforcerRecovery: false,
+    rationale: "A placeholder body is semantically acceptable as a stub that doesn't cause runtime errors.",
+  },
+  {
+    activityType: "While",
+    propertyName: "Condition",
+    classification: "generator-owned",
+    approvedEnforcerRecovery: false,
+    rationale: "Conditions are expression-sensitive; the generator must emit a valid VB.NET expression.",
+  },
+  {
+    activityType: "If",
+    propertyName: "Condition",
+    classification: "generator-owned",
+    approvedEnforcerRecovery: false,
+    rationale: "Conditions are expression-sensitive; the generator must emit a valid VB.NET expression.",
+  },
+  {
+    activityType: "DoWhile",
+    propertyName: "Condition",
+    classification: "generator-owned",
+    approvedEnforcerRecovery: false,
+    rationale: "Conditions are expression-sensitive; the generator must emit a valid VB.NET expression.",
+  },
+];
+
+const ACTIVITY_ALIASES: Record<string, string> = {
+  "CreateEntityRecord": "CreateEntity",
+};
+
+export function getPropertyClassification(activityType: string, propertyName: string): ClassificationEntry | null {
+  const direct = REQUIRED_PROPERTY_CLASSIFICATION_REGISTRY.find(
+    e => e.activityType === activityType && e.propertyName === propertyName,
+  );
+  if (direct) return direct;
+
+  const alias = ACTIVITY_ALIASES[activityType];
+  if (alias) {
+    const aliased = REQUIRED_PROPERTY_CLASSIFICATION_REGISTRY.find(
+      e => e.activityType === alias && e.propertyName === propertyName,
+    );
+    if (aliased) return { ...aliased, activityType };
+  }
+
+  return null;
+}
+
+function buildClassificationDiagnosticMessage(
+  activityType: string,
+  propertyName: string,
+  classification: RequiredPropertyClassification,
+): string {
+  switch (classification) {
+    case "generator-owned":
+      return `${activityType}.${propertyName} is generator-owned — the XAML generator or spec decomposer must emit this value. Found empty at enforcer stage.`;
+    case "spec-required":
+      return `${activityType}.${propertyName} is spec-required — this value must be provided by the business specification. Not found in spec output.`;
+    case "unsupported":
+      return `${activityType}.${propertyName} is classified as unsupported — the current pipeline cannot resolve this property. No automated recovery is available; manual intervention or pipeline extension is required.`;
+    case "safe-fallback":
+      return `${activityType}.${propertyName} is classified as safe-fallback — catalog-driven resolution will be attempted.`;
+  }
+}
+
+const SAFE_FALLBACK_DETERMINISTIC_OVERRIDES: Record<string, string> = {
+  "SendSmtpMailMessage.Body": "[Auto-generated] Email body — requires manual completion",
+};
+
+function resolveSafeFallbackFromCatalog(prop: CatalogProperty, activityType?: string): string | null {
+  const overrideKey = activityType ? `${activityType}.${prop.name}` : null;
+  if (overrideKey && SAFE_FALLBACK_DETERMINISTIC_OVERRIDES[overrideKey]) {
+    return SAFE_FALLBACK_DETERMINISTIC_OVERRIDES[overrideKey];
+  }
+
+  if (prop.default !== undefined && prop.default !== null && prop.default !== "") {
+    if (!isSentinelValue(prop.default) && !isGenericTypeDefault(prop.default, prop.clrType)) {
+      return prop.default;
+    }
+  }
+
+  if (prop.validValues && prop.validValues.length > 0) {
+    const firstValid = prop.validValues[0];
+    if (firstValid && firstValid.trim() !== "" && !isSentinelValue(firstValid) && !isGenericTypeDefault(firstValid, prop.clrType)) {
+      return firstValid;
+    }
+  }
+
+  if (prop.clrType) {
+    if (prop.clrType.includes("String") || prop.clrType === "string") {
+      return `[Auto-generated] ${prop.name} — requires manual completion`;
+    }
+    if (prop.clrType.includes("Boolean") || prop.clrType === "bool") {
+      return "True";
+    }
+    if (prop.clrType.includes("Int") || prop.clrType === "int") {
+      return "1";
+    }
+  }
+
+  return null;
+}
+
 export const FALLBACK_ELIGIBLE_POLICIES: FallbackEligiblePolicy[] = [
   {
     activityType: "LogMessage",
@@ -301,9 +518,20 @@ export const FALLBACK_ELIGIBLE_POLICIES: FallbackEligiblePolicy[] = [
 ];
 
 export function getFallbackPolicy(activityType: string, propertyName: string): FallbackEligiblePolicy | null {
-  return FALLBACK_ELIGIBLE_POLICIES.find(
+  const direct = FALLBACK_ELIGIBLE_POLICIES.find(
     p => p.activityType === activityType && p.propertyName === propertyName,
-  ) || null;
+  );
+  if (direct) return direct;
+
+  const alias = ACTIVITY_ALIASES[activityType];
+  if (alias) {
+    const aliased = FALLBACK_ELIGIBLE_POLICIES.find(
+      p => p.activityType === alias && p.propertyName === propertyName,
+    );
+    if (aliased) return { ...aliased, activityType, propertyClass: `${activityType}.${propertyName}` };
+  }
+
+  return null;
 }
 
 export interface RequiredPropertyEnforcementResult {
@@ -313,6 +541,7 @@ export interface RequiredPropertyEnforcementResult {
   expressionLoweringFailures: ExpressionLoweringFailure[];
   invalidRequiredPropertySubstitutions: InvalidRequiredPropertySubstitution[];
   fallbackResolutionDiagnostics: FallbackResolutionDiagnostic[];
+  classificationDiagnostics: ClassificationDiagnostic[];
   totalEnforced: number;
   totalDefects: number;
   totalInvalidSubstitutionsBlocked: number;
@@ -745,6 +974,7 @@ export function enforceRequiredProperties(
   const exprFailures: ExpressionLoweringFailure[] = [];
   const invalidSubstitutions: InvalidRequiredPropertySubstitution[] = [];
   const fallbackDiagnostics: FallbackResolutionDiagnostic[] = [];
+  const classificationDiags: ClassificationDiagnostic[] = [];
 
   if (!catalogService.isLoaded()) {
     if (isPackageMode) {
@@ -765,6 +995,7 @@ export function enforceRequiredProperties(
       expressionLoweringFailures: exprFailures,
       invalidRequiredPropertySubstitutions: invalidSubstitutions,
       fallbackResolutionDiagnostics: fallbackDiagnostics,
+      classificationDiagnostics: classificationDiags,
       totalEnforced: 0,
       totalDefects,
       totalInvalidSubstitutionsBlocked: 0,
@@ -777,7 +1008,7 @@ export function enforceRequiredProperties(
     const fileName = entry.name.split("/").pop() || entry.name;
     const workflowName = fileName.replace(/\.xaml$/i, "");
     const upstreamSources = extractUpstreamSources(entry.content, workflowName);
-    enforceForFile(entry, fileName, workflowName, isPackageMode, bindings, defects, exprFixes, exprFailures, invalidSubstitutions, upstreamSources, fallbackDiagnostics);
+    enforceForFile(entry, fileName, workflowName, isPackageMode, bindings, defects, exprFixes, exprFailures, invalidSubstitutions, upstreamSources, fallbackDiagnostics, classificationDiags);
   }
 
   const totalDefects = defects.length + exprFailures.length;
@@ -791,6 +1022,7 @@ export function enforceRequiredProperties(
   if (exprFailures.length > 0) summaryParts.push(`${exprFailures.length} expression lowering failure(s)`);
   if (invalidSubstitutions.length > 0) summaryParts.push(`${invalidSubstitutions.length} invalid generic substitution(s) blocked`);
   if (fallbackDiagnostics.length > 0) summaryParts.push(`${fallbackDiagnostics.length} fallback-eligible resolution(s) diagnosed`);
+  if (classificationDiags.length > 0) summaryParts.push(`${classificationDiags.length} classification diagnostic(s)`);
 
   return {
     requiredPropertyBindings: bindings,
@@ -799,6 +1031,7 @@ export function enforceRequiredProperties(
     expressionLoweringFailures: exprFailures,
     invalidRequiredPropertySubstitutions: invalidSubstitutions,
     fallbackResolutionDiagnostics: fallbackDiagnostics,
+    classificationDiagnostics: classificationDiags,
     totalEnforced: bindings.length + exprFixes.length,
     totalDefects,
     totalInvalidSubstitutionsBlocked: invalidSubstitutions.length,
@@ -819,6 +1052,7 @@ function enforceForFile(
   invalidSubstitutions: InvalidRequiredPropertySubstitution[],
   upstreamSources: UpstreamSourceCandidate[],
   fallbackDiagnostics: FallbackResolutionDiagnostic[] = [],
+  classificationDiags: ClassificationDiagnostic[] = [],
 ): void {
   const activityTagPattern = /<((?:[a-z]+:)?[A-Z][A-Za-z]+)\s([^>]*?)(\/>|>)/g;
   let match;
@@ -856,7 +1090,7 @@ function enforceForFile(
         handleMissingRequiredProperty(
           fileName, workflowName, strippedTag, propDef, isPackageMode,
           bindings, defects, currentOccurrence, mergedSources, fallbackDiagnostics,
-          activityDisplayName,
+          activityDisplayName, classificationDiags,
         );
         continue;
       }
@@ -868,7 +1102,7 @@ function enforceForFile(
           checkPropertyValue(
             fileName, workflowName, strippedTag, propDef, rawValue, isPackageMode,
             bindings, defects, exprFixes, exprFailures, invalidSubstitutions, currentOccurrence, mergedSources, fallbackDiagnostics,
-            activityDisplayName,
+            activityDisplayName, classificationDiags,
           );
         }
       } else if (childPresent) {
@@ -882,7 +1116,7 @@ function enforceForFile(
             checkPropertyValue(
               fileName, workflowName, strippedTag, propDef, innerVal, isPackageMode,
               bindings, defects, exprFixes, exprFailures, invalidSubstitutions, currentOccurrence, mergedSources, fallbackDiagnostics,
-              activityDisplayName,
+              activityDisplayName, classificationDiags,
             );
           }
         }
@@ -936,14 +1170,11 @@ function conservativeEnforceForFile(
   }
 }
 
-function tryContextDerivedFallback(
+function tryContextDerivedFallbackByClassification(
   activityType: string,
   propertyName: string,
   context: ContextDerivedFallbackContext,
-  policy: FallbackEligiblePolicy | null,
 ): { value: string; spec: ContextDerivedFallbackSpec } | null {
-  if (!policy || !policy.contextDerivedFallbackAllowed) return null;
-
   const spec = CONTEXT_DERIVED_FALLBACK_REGISTRY.find(
     s => s.activityType === activityType && s.propertyName === propertyName,
   );
@@ -967,6 +1198,7 @@ function handleMissingRequiredProperty(
   upstreamSources: UpstreamSourceCandidate[] = [],
   fallbackDiagnostics: FallbackResolutionDiagnostic[] = [],
   displayName: string | null = null,
+  classificationDiags: ClassificationDiagnostic[] = [],
 ): void {
   const policy = getFallbackPolicy(activityType, prop.name);
   const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
@@ -1012,169 +1244,198 @@ function handleMissingRequiredProperty(
     return;
   }
 
-  const fallback = hasContractValidFallback(prop);
-  if (fallback.valid && fallback.fallbackValue) {
-    if (policy) {
-      const isDisallowedGeneric = policy.blockOnGenericDefault && policy.genericDefaultValues.includes(fallback.fallbackValue);
-      if (isDisallowedGeneric || !policy.fallbackAllowed) {
-        const policyBlockedContextFallback = tryContextDerivedFallback(
-          activityType, prop.name, {
-            displayName,
-            fileName,
-            workflowName,
-            activityType,
-            propertyName: prop.name,
-          },
-          policy,
-        );
-        if (policyBlockedContextFallback) {
-          bindings.push({
-            file: fileName,
-            workflow: workflowName,
-            activityType,
-            propertyName: prop.name,
-            sourceBinding: "context-derived",
-            originalValue: "",
-            resolvedValue: policyBlockedContextFallback.value,
-            severity: "info",
-            packageModeOutcome: "bound",
-            occurrenceIndex,
-            provenance: {
-              sourceKind: "context-derived",
-              sourceName: `${activityType}.${prop.name}.context-derived`,
-              precedenceTier: 7,
-            },
-            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-          });
-          fallbackDiagnostics.push({
-            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            propertyClass: policy.propertyClass, decision: "context-derived-fallback",
-            sourceFound: false, expressionLowered: null, fallbackApplied: true,
-            blockReason: null, originalValue: "", resolvedValue: policyBlockedContextFallback.value,
-          });
-          console.log(`[RequiredPropertyEnforcer] CONTEXT-DERIVED-FALLBACK: ${activityType}.${prop.name} in ${fileName} — tier 7 applied (policy-blocked recovery): ${policyBlockedContextFallback.value}`);
-          return;
-        }
+  const classification = getPropertyClassification(activityType, prop.name);
 
+  if (classification) {
+    switch (classification.classification) {
+      case "unsupported": {
+        const msg = buildClassificationDiagnosticMessage(activityType, prop.name, "unsupported");
+        classificationDiags.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          classification: "unsupported", approvedEnforcerRecovery: false,
+          message: msg, resolved: false, resolvedValue: null,
+        });
         if (isPackageMode) {
-          const reason = isDisallowedGeneric
-            ? `Contract fallback "${fallback.fallbackValue}" is a disallowed generic default for ${policy.propertyClass}`
-            : `Fallback not allowed by policy for ${policy.propertyClass} — contract fallback "${fallback.fallbackValue}" rejected`;
           defects.push({
             file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            failureReason: `Required property "${prop.name}" on ${activityType} has no valid source — ${reason}`,
-            originalValue: "",
+            failureReason: msg, originalValue: "",
             severity: "execution_blocking", packageModeOutcome: "structured_defect",
             rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
           });
-          fallbackDiagnostics.push({
-            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            propertyClass: policy.propertyClass, decision: "blocked",
-            sourceFound: false, expressionLowered: null, fallbackApplied: false,
-            blockReason: reason,
-            originalValue: "", resolvedValue: null,
-          });
-          console.warn(`[RequiredPropertyEnforcer] FALLBACK-POLICY-BLOCKED: ${activityType}.${prop.name} in ${fileName} — ${reason}`);
         }
+        console.warn(`[RequiredPropertyEnforcer] CLASSIFICATION-UNSUPPORTED: ${activityType}.${prop.name} in ${fileName}`);
+        return;
+      }
+
+      case "spec-required": {
+        const msg = buildClassificationDiagnosticMessage(activityType, prop.name, "spec-required");
+        classificationDiags.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          classification: "spec-required", approvedEnforcerRecovery: false,
+          message: msg, resolved: false, resolvedValue: null,
+        });
+        if (isPackageMode) {
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: "",
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+          });
+        }
+        console.warn(`[RequiredPropertyEnforcer] CLASSIFICATION-SPEC-REQUIRED: ${activityType}.${prop.name} in ${fileName}`);
+        return;
+      }
+
+      case "generator-owned": {
+        if (classification.approvedEnforcerRecovery) {
+          const contextFallbackResult = tryContextDerivedFallbackByClassification(
+            activityType, prop.name, {
+              displayName, fileName, workflowName, activityType, propertyName: prop.name,
+            },
+          );
+          if (contextFallbackResult) {
+            bindings.push({
+              file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+              sourceBinding: "context-derived", originalValue: "",
+              resolvedValue: contextFallbackResult.value,
+              severity: "info", packageModeOutcome: "bound", occurrenceIndex,
+              provenance: {
+                sourceKind: "context-derived",
+                sourceName: `${activityType}.${prop.name}.context-derived`,
+                precedenceTier: 7,
+              },
+              rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+            });
+            classificationDiags.push({
+              file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+              classification: "generator-owned", approvedEnforcerRecovery: true,
+              message: `${activityType}.${prop.name} is generator-owned with approved enforcer recovery — context-derived value applied.`,
+              resolved: true, resolvedValue: contextFallbackResult.value,
+            });
+            if (policy) {
+              fallbackDiagnostics.push({
+                file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+                propertyClass: policy.propertyClass, decision: "context-derived-fallback",
+                sourceFound: false, expressionLowered: null, fallbackApplied: true,
+                blockReason: null, originalValue: "", resolvedValue: contextFallbackResult.value,
+              });
+            }
+            console.log(`[RequiredPropertyEnforcer] CLASSIFICATION-APPROVED-RECOVERY: ${activityType}.${prop.name} in ${fileName} — enforcer recovery applied: ${contextFallbackResult.value}`);
+            return;
+          }
+        }
+
+        const msg = buildClassificationDiagnosticMessage(activityType, prop.name, "generator-owned");
+        classificationDiags.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          classification: "generator-owned", approvedEnforcerRecovery: classification.approvedEnforcerRecovery,
+          message: msg, resolved: false, resolvedValue: null,
+        });
+        if (isPackageMode) {
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: "",
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+          });
+        }
+        console.warn(`[RequiredPropertyEnforcer] CLASSIFICATION-GENERATOR-OWNED: ${activityType}.${prop.name} in ${fileName}${classification.approvedEnforcerRecovery ? " — approved recovery returned null" : ""}`);
+        return;
+      }
+
+      case "safe-fallback": {
+        const safeFallbackValue = resolveSafeFallbackFromCatalog(prop, activityType);
+        if (safeFallbackValue) {
+          if (policy && policy.blockOnGenericDefault && policy.genericDefaultValues.includes(safeFallbackValue)) {
+            const msg = `${activityType}.${prop.name} safe-fallback value "${safeFallbackValue}" blocked by policy — disallowed generic default.`;
+            classificationDiags.push({
+              file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+              classification: "safe-fallback", approvedEnforcerRecovery: false,
+              message: msg, resolved: false, resolvedValue: null,
+            });
+            if (isPackageMode) {
+              defects.push({
+                file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+                failureReason: msg, originalValue: "",
+                severity: "execution_blocking", packageModeOutcome: "structured_defect",
+                rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+              });
+            }
+            console.warn(`[RequiredPropertyEnforcer] CLASSIFICATION-SAFE-FALLBACK-BLOCKED: ${activityType}.${prop.name} in ${fileName} — policy blocked safe-fallback value`);
+            return;
+          }
+
+          bindings.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            sourceBinding: "contract-default", originalValue: "",
+            resolvedValue: safeFallbackValue,
+            severity: "info", packageModeOutcome: "bound", occurrenceIndex,
+            provenance: {
+              sourceKind: "contract-default",
+              sourceName: `${activityType}.${prop.name}.safe-fallback`,
+              precedenceTier: 6,
+            },
+            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+          });
+          classificationDiags.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            classification: "safe-fallback", approvedEnforcerRecovery: false,
+            message: `${activityType}.${prop.name} resolved via safe-fallback catalog resolution.`,
+            resolved: true, resolvedValue: safeFallbackValue,
+          });
+          if (policy) {
+            fallbackDiagnostics.push({
+              file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+              propertyClass: policy.propertyClass, decision: "fallback-applied",
+              sourceFound: false, expressionLowered: null, fallbackApplied: true,
+              blockReason: null, originalValue: "", resolvedValue: safeFallbackValue,
+            });
+          }
+          console.log(`[RequiredPropertyEnforcer] CLASSIFICATION-SAFE-FALLBACK: ${activityType}.${prop.name} in ${fileName} — safe-fallback applied: ${safeFallbackValue}`);
+          return;
+        }
+
+        const msg = `${activityType}.${prop.name} is classified as safe-fallback but no valid catalog fallback value found.`;
+        classificationDiags.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          classification: "safe-fallback", approvedEnforcerRecovery: false,
+          message: msg, resolved: false, resolvedValue: null,
+        });
+        if (isPackageMode) {
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: "",
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+          });
+        }
+        console.warn(`[RequiredPropertyEnforcer] CLASSIFICATION-SAFE-FALLBACK-EMPTY: ${activityType}.${prop.name} in ${fileName} — no valid safe-fallback value`);
         return;
       }
     }
-
-    bindings.push({
-      file: fileName,
-      workflow: workflowName,
-      activityType,
-      propertyName: prop.name,
-      sourceBinding: "contract-default",
-      originalValue: "",
-      resolvedValue: fallback.fallbackValue,
-      severity: "info",
-      packageModeOutcome: "bound",
-      occurrenceIndex,
-      provenance: {
-        sourceKind: "contract-default",
-        sourceName: `${activityType}.${prop.name}.default`,
-        precedenceTier: 6,
-      },
-      rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-    });
-    if (policy) {
-      fallbackDiagnostics.push({
-        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-        propertyClass: policy.propertyClass, decision: "fallback-applied",
-        sourceFound: false, expressionLowered: null, fallbackApplied: true,
-        blockReason: null, originalValue: "", resolvedValue: fallback.fallbackValue,
-      });
-    }
-    return;
   }
 
-  const contextFallbackResult = tryContextDerivedFallback(
-    activityType, prop.name, {
-      displayName,
-      fileName,
-      workflowName,
-      activityType,
-      propertyName: prop.name,
-    },
-    policy,
-  );
-  if (contextFallbackResult) {
-    bindings.push({
-      file: fileName,
-      workflow: workflowName,
-      activityType,
-      propertyName: prop.name,
-      sourceBinding: "context-derived",
-      originalValue: "",
-      resolvedValue: contextFallbackResult.value,
-      severity: "info",
-      packageModeOutcome: "bound",
-      occurrenceIndex,
-      provenance: {
-        sourceKind: "context-derived",
-        sourceName: `${activityType}.${prop.name}.context-derived`,
-        precedenceTier: 7,
-      },
-      rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-    });
-    if (policy) {
-      fallbackDiagnostics.push({
-        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-        propertyClass: policy.propertyClass, decision: "context-derived-fallback",
-        sourceFound: false, expressionLowered: null, fallbackApplied: true,
-        blockReason: null, originalValue: "", resolvedValue: contextFallbackResult.value,
-      });
-    }
-    console.log(`[RequiredPropertyEnforcer] CONTEXT-DERIVED-FALLBACK: ${activityType}.${prop.name} in ${fileName} — tier 7 applied: ${contextFallbackResult.value}`);
-    return;
-  }
-
+  const unclassifiedMsg = `${activityType}.${prop.name} is not classified — defaulting to unsupported.`;
+  classificationDiags.push({
+    file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+    classification: "unsupported", approvedEnforcerRecovery: false,
+    message: unclassifiedMsg,
+    resolved: false, resolvedValue: null,
+  });
   if (isPackageMode) {
-    const blockReason = policy
-      ? `Required property "${prop.name}" on ${activityType} has no valid source binding and no allowed fallback per policy for ${policy.propertyClass}`
-      : `Required property "${prop.name}" on ${activityType} has no valid source binding and no contract-valid fallback`;
     defects.push({
       file: fileName,
       workflow: workflowName,
       activityType,
       propertyName: prop.name,
-      failureReason: blockReason,
+      failureReason: unclassifiedMsg,
       originalValue: "",
       severity: "execution_blocking",
       packageModeOutcome: "structured_defect",
       rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
     });
-    if (policy) {
-      fallbackDiagnostics.push({
-        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-        propertyClass: policy.propertyClass, decision: "blocked",
-        sourceFound: false, expressionLowered: null, fallbackApplied: false,
-        blockReason, originalValue: "", resolvedValue: null,
-      });
-    }
-    console.warn(`[RequiredPropertyEnforcer] DEFECT: ${activityType}.${prop.name} in ${fileName} — no contract-valid fallback, blocking`);
   }
+  console.warn(`[RequiredPropertyEnforcer] UNCLASSIFIED-UNSUPPORTED: ${activityType}.${prop.name} in ${fileName} — no classification, defaulting to unsupported`);
 }
 
 function checkPropertyValue(
@@ -1193,6 +1454,7 @@ function checkPropertyValue(
   upstreamSources: UpstreamSourceCandidate[] = [],
   fallbackDiagnostics: FallbackResolutionDiagnostic[] = [],
   displayName: string | null = null,
+  classificationDiags: ClassificationDiagnostic[] = [],
 ): void {
   const policy = getFallbackPolicy(activityType, prop.name);
   const unwrappedValue = rawValue.replace(/^\[|\]$/g, "").trim();
@@ -1225,180 +1487,169 @@ function checkPropertyValue(
   const isGenericRaw = isGenericTypeDefault(rawValue, prop.clrType);
   const isGenericUnwrapped = !isGenericRaw && isGenericTypeDefault(unwrappedValue, prop.clrType);
   if (isPackageMode && (isGenericRaw || isGenericUnwrapped)) {
-    if (policy && policy.blockOnGenericDefault) {
-      const genericValue = isGenericRaw ? rawValue : unwrappedValue;
-      if (policy.genericDefaultValues.includes(genericValue)) {
-        const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
-        if (sourceResolution.resolved) {
-          const resolved = sourceResolution.resolved;
-          const catalogCandidate = resolved as CatalogSourceCandidate;
-          let resolvedValue: string;
-          if (catalogCandidate.resolvedLiteralValue && resolved.sourceKind === "contractMapping") {
-            resolvedValue = catalogCandidate.resolvedLiteralValue;
-          } else {
-            resolvedValue = `[${resolved.sourceName}]`;
-          }
-          bindings.push({
-            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            sourceBinding: resolved.sourceKind, originalValue: rawValue, resolvedValue,
-            severity: "info", packageModeOutcome: "bound", occurrenceIndex,
-            provenance: {
-              sourceKind: resolved.sourceKind, sourceName: resolved.sourceName,
-              sourceWorkflow: resolved.sourceWorkflow, sourceStep: resolved.sourceStep,
-              precedenceTier: resolved.precedenceTier,
-            },
-            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-          });
-          fallbackDiagnostics.push({
-            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            propertyClass: policy.propertyClass, decision: "source-bound",
-            sourceFound: true, expressionLowered: null, fallbackApplied: false,
-            blockReason: null, originalValue: rawValue, resolvedValue,
-          });
-          console.log(`[RequiredPropertyEnforcer] FALLBACK-POLICY SOURCE-RESOLVED: ${activityType}.${prop.name} in ${fileName} — replaced disallowed generic default "${rawValue}" with ${resolved.sourceKind}:${resolved.sourceName}`);
-          return;
+    const classification = getPropertyClassification(activityType, prop.name);
+    if (classification) {
+      const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
+      if (sourceResolution.resolved) {
+        const resolved = sourceResolution.resolved;
+        const catalogCandidate = resolved as CatalogSourceCandidate;
+        let resolvedValue: string;
+        if (catalogCandidate.resolvedLiteralValue && resolved.sourceKind === "contractMapping") {
+          resolvedValue = catalogCandidate.resolvedLiteralValue;
+        } else {
+          resolvedValue = `[${resolved.sourceName}]`;
         }
-
-        const genericContextFallback = tryContextDerivedFallback(
-          activityType, prop.name, {
-            displayName,
-            fileName,
-            workflowName,
-            activityType,
-            propertyName: prop.name,
+        bindings.push({
+          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+          sourceBinding: resolved.sourceKind, originalValue: rawValue, resolvedValue,
+          severity: "info", packageModeOutcome: "bound", occurrenceIndex,
+          provenance: {
+            sourceKind: resolved.sourceKind, sourceName: resolved.sourceName,
+            sourceWorkflow: resolved.sourceWorkflow, sourceStep: resolved.sourceStep,
+            precedenceTier: resolved.precedenceTier,
           },
-          policy,
-        );
-        if (genericContextFallback) {
-          bindings.push({
-            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            sourceBinding: "context-derived", originalValue: rawValue,
-            resolvedValue: genericContextFallback.value,
-            severity: "info", packageModeOutcome: "bound", occurrenceIndex,
-            provenance: {
-              sourceKind: "context-derived",
-              sourceName: `${activityType}.${prop.name}.context-derived`,
-              precedenceTier: 7,
-            },
-            rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-          });
-          fallbackDiagnostics.push({
-            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-            propertyClass: policy.propertyClass, decision: "context-derived-fallback",
-            sourceFound: false, expressionLowered: null, fallbackApplied: true,
-            blockReason: null, originalValue: rawValue, resolvedValue: genericContextFallback.value,
-          });
-          console.log(`[RequiredPropertyEnforcer] CONTEXT-DERIVED-FALLBACK: ${activityType}.${prop.name} in ${fileName} — tier 7 replaced disallowed generic default "${rawValue}": ${genericContextFallback.value}`);
-          return;
-        }
-
-        invalidSubstitutions.push({
-          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-          attemptedValue: rawValue,
-          reasonRejected: `Generic default "${rawValue}" is disallowed by fallback policy for ${policy.propertyClass} — no valid upstream source found`,
-          expectedSourceKinds: ["workflowArgument", "variable", "invokeOutput", "priorStepOutput", "contractMapping"],
-          packageModeOutcome: "blocked",
-        });
-        defects.push({
-          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-          failureReason: `Required property "${prop.name}" on ${activityType} contains disallowed generic default "${rawValue}" per fallback policy for ${policy.propertyClass} — no valid source found`,
-          originalValue: rawValue,
-          severity: "execution_blocking", packageModeOutcome: "structured_defect",
           rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
         });
-        fallbackDiagnostics.push({
-          file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
-          propertyClass: policy.propertyClass, decision: "blocked",
-          sourceFound: false, expressionLowered: null, fallbackApplied: false,
-          blockReason: `Generic default "${rawValue}" disallowed by policy for ${policy.propertyClass} — no valid upstream source`,
-          originalValue: rawValue, resolvedValue: null,
-        });
-        console.warn(`[RequiredPropertyEnforcer] FALLBACK-POLICY BLOCKED: ${activityType}.${prop.name} = "${rawValue}" in ${fileName} — disallowed generic default, no source available`);
+        console.log(`[RequiredPropertyEnforcer] CLASSIFIED-SOURCE-RESOLVED: ${activityType}.${prop.name} in ${fileName} — replaced generic default "${rawValue}" with ${resolved.sourceKind}:${resolved.sourceName}`);
         return;
       }
-    }
 
-    const sourceResolution = resolveSourceForProperty(prop, upstreamSources, fileName, workflowName, activityType);
-    if (sourceResolution.resolved) {
-      const resolved = sourceResolution.resolved;
-      const catalogCandidate = resolved as CatalogSourceCandidate;
-      let resolvedValue: string;
-      if (catalogCandidate.resolvedLiteralValue && resolved.sourceKind === "contractMapping") {
-        resolvedValue = catalogCandidate.resolvedLiteralValue;
-      } else {
-        resolvedValue = `[${resolved.sourceName}]`;
+      switch (classification.classification) {
+        case "unsupported": {
+          const msg = buildClassificationDiagnosticMessage(activityType, prop.name, "unsupported");
+          classificationDiags.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            classification: "unsupported", approvedEnforcerRecovery: false,
+            message: msg, resolved: false, resolvedValue: null,
+          });
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: rawValue,
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+          });
+          return;
+        }
+        case "spec-required": {
+          const msg = buildClassificationDiagnosticMessage(activityType, prop.name, "spec-required");
+          classificationDiags.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            classification: "spec-required", approvedEnforcerRecovery: false,
+            message: msg, resolved: false, resolvedValue: null,
+          });
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: rawValue,
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+          });
+          return;
+        }
+        case "generator-owned": {
+          if (classification.approvedEnforcerRecovery) {
+            const contextFallbackResult = tryContextDerivedFallbackByClassification(
+              activityType, prop.name, {
+                displayName, fileName, workflowName, activityType, propertyName: prop.name,
+              },
+            );
+            if (contextFallbackResult) {
+              bindings.push({
+                file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+                sourceBinding: "context-derived", originalValue: rawValue,
+                resolvedValue: contextFallbackResult.value,
+                severity: "info", packageModeOutcome: "bound", occurrenceIndex,
+                provenance: {
+                  sourceKind: "context-derived",
+                  sourceName: `${activityType}.${prop.name}.context-derived`,
+                  precedenceTier: 7,
+                },
+              });
+              classificationDiags.push({
+                file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+                classification: "generator-owned", approvedEnforcerRecovery: true,
+                message: `${activityType}.${prop.name} is generator-owned with approved enforcer recovery — context-derived value replaced generic default "${rawValue}".`,
+                resolved: true, resolvedValue: contextFallbackResult.value,
+              });
+              return;
+            }
+          }
+          const msg = buildClassificationDiagnosticMessage(activityType, prop.name, "generator-owned");
+          classificationDiags.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            classification: "generator-owned", approvedEnforcerRecovery: classification.approvedEnforcerRecovery,
+            message: msg, resolved: false, resolvedValue: null,
+          });
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: rawValue,
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+          });
+          return;
+        }
+        case "safe-fallback": {
+          const safeFallbackValue = resolveSafeFallbackFromCatalog(prop, activityType);
+          if (safeFallbackValue) {
+            if (policy && policy.blockOnGenericDefault && policy.genericDefaultValues.includes(safeFallbackValue)) {
+              const msg = `${activityType}.${prop.name} safe-fallback value "${safeFallbackValue}" blocked by policy — disallowed generic default.`;
+              classificationDiags.push({
+                file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+                classification: "safe-fallback", approvedEnforcerRecovery: false,
+                message: msg, resolved: false, resolvedValue: null,
+              });
+              defects.push({
+                file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+                failureReason: msg, originalValue: rawValue,
+                severity: "execution_blocking", packageModeOutcome: "structured_defect",
+              });
+              return;
+            }
+            bindings.push({
+              file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+              sourceBinding: "contract-default", originalValue: rawValue,
+              resolvedValue: safeFallbackValue,
+              severity: "info", packageModeOutcome: "bound", occurrenceIndex,
+              provenance: {
+                sourceKind: "contract-default",
+                sourceName: `${activityType}.${prop.name}.safe-fallback`,
+                precedenceTier: 6,
+              },
+            });
+            classificationDiags.push({
+              file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+              classification: "safe-fallback", approvedEnforcerRecovery: false,
+              message: `${activityType}.${prop.name} resolved via safe-fallback catalog resolution (replaced generic default "${rawValue}").`,
+              resolved: true, resolvedValue: safeFallbackValue,
+            });
+            return;
+          }
+          const msg = `${activityType}.${prop.name} is classified as safe-fallback but no valid catalog fallback value found.`;
+          classificationDiags.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            classification: "safe-fallback", approvedEnforcerRecovery: false,
+            message: msg, resolved: false, resolvedValue: null,
+          });
+          defects.push({
+            file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+            failureReason: msg, originalValue: rawValue,
+            severity: "execution_blocking", packageModeOutcome: "structured_defect",
+          });
+          return;
+        }
       }
-
-      bindings.push({
-        file: fileName,
-        workflow: workflowName,
-        activityType,
-        propertyName: prop.name,
-        sourceBinding: resolved.sourceKind,
-        originalValue: rawValue,
-        resolvedValue,
-        severity: "info",
-        packageModeOutcome: "bound",
-        occurrenceIndex,
-        provenance: {
-          sourceKind: resolved.sourceKind,
-          sourceName: resolved.sourceName,
-          sourceWorkflow: resolved.sourceWorkflow,
-          sourceStep: resolved.sourceStep,
-          precedenceTier: resolved.precedenceTier,
-        },
-        rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
+    } else {
+      classificationDiags.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        classification: "unsupported", approvedEnforcerRecovery: false,
+        message: `${activityType}.${prop.name} has no classification and contains generic default "${rawValue}" — defaulting to unsupported.`,
+        resolved: false, resolvedValue: null,
       });
-      console.log(`[RequiredPropertyEnforcer] SOURCE-RESOLVED (replaced generic default): ${activityType}.${prop.name} in ${fileName} — bound to ${resolved.sourceKind}:${resolved.sourceName} (tier ${resolved.precedenceTier})`);
+      defects.push({
+        file: fileName, workflow: workflowName, activityType, propertyName: prop.name,
+        failureReason: `${activityType}.${prop.name} has no classification — property is not supported by the current pipeline.`,
+        originalValue: rawValue,
+        severity: "execution_blocking", packageModeOutcome: "structured_defect",
+      });
+      console.warn(`[RequiredPropertyEnforcer] UNCLASSIFIED-GENERIC-DEFAULT: ${activityType}.${prop.name} = "${rawValue}" in ${fileName} — no classification, defaulting to unsupported`);
       return;
     }
-
-    if (isDocumentedContractGenericDefault(prop, isGenericRaw ? rawValue : unwrappedValue)) {
-      bindings.push({
-        file: fileName,
-        workflow: workflowName,
-        activityType,
-        propertyName: prop.name,
-        sourceBinding: "contract-default",
-        originalValue: rawValue,
-        resolvedValue: rawValue,
-        severity: "info",
-        packageModeOutcome: "bound",
-        occurrenceIndex,
-        provenance: {
-          sourceKind: "contract-default",
-          sourceName: `${activityType}.${prop.name}.default`,
-          precedenceTier: 6,
-        },
-        rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-      });
-      console.log(`[RequiredPropertyEnforcer] DOCUMENTED-GENERIC-DEFAULT ACCEPTED: ${activityType}.${prop.name} in ${fileName} — catalog explicitly documents this generic default`);
-      return;
-    }
-
-    invalidSubstitutions.push({
-      file: fileName,
-      workflow: workflowName,
-      activityType,
-      propertyName: prop.name,
-      attemptedValue: rawValue,
-      reasonRejected: `Generic type default "${rawValue}" for ${prop.clrType} is not resolvable from upstream sources and is not a documented contract fallback for ${activityType}.${prop.name}`,
-      expectedSourceKinds: ["workflowArgument", "variable", "invokeOutput", "priorStepOutput", "contractMapping"],
-      packageModeOutcome: "blocked",
-    });
-    defects.push({
-      file: fileName,
-      workflow: workflowName,
-      activityType,
-      propertyName: prop.name,
-      failureReason: `Required property "${prop.name}" on ${activityType} contains generic type default "${rawValue}" — source resolution attempted but no valid upstream source found — invalid substitution blocked`,
-      originalValue: rawValue,
-      severity: "execution_blocking",
-      packageModeOutcome: "structured_defect",
-      rejectedCandidates: sourceResolution.rejectedCandidates.length > 0 ? sourceResolution.rejectedCandidates : undefined,
-    });
-    console.warn(`[RequiredPropertyEnforcer] INVALID SUBSTITUTION BLOCKED: ${activityType}.${prop.name} = "${rawValue}" in ${fileName} — source resolution failed, generic default not contract-valid`);
-    return;
   }
 
   if (policy && policy.requireExpressionLowering) {
