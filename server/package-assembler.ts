@@ -3239,7 +3239,10 @@ type CachedStageEnrichment = {
   enrichment: EnrichmentResult | null;
   treeEnrichment: TreeEnrichmentResult | null;
   usedAIFallback: boolean;
+  cacheVersion?: number;
+  allTreeEnrichmentsEntries?: Array<[string, { spec: TreeWorkflowSpec; processType: ProcessType }]>;
 };
+const ENRICHMENT_CACHE_VERSION = 2;
 
 type CachedStageXaml = {
   fingerprint: string;
@@ -3777,6 +3780,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
   let treeEnrichment: TreeEnrichmentResult | null = null;
   let allTreeEnrichments: Map<string, { spec: TreeWorkflowSpec; processType: ProcessType }> = new Map();
   let _usedAIFallback = false;
+  let authoritativeDecomposedEdges: Map<string, Set<string>> | null = null;
   if (generationMode === "baseline_openable") {
     console.log(`[UiPath] baseline_openable mode — skipping AI enrichment, using flat scaffold`);
   } else {
@@ -3795,7 +3799,30 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             mappedTreeFallback = { status: "success", workflowSpec: mainEntry.spec, processType: mainEntry.processType };
           }
           const wfNames = Array.from(mapped.keys());
+          authoritativeDecomposedEdges = new Map<string, Set<string>>();
+          const normalizeEdgeTarget = (raw: string): string => {
+            let t = (raw.split("/").pop() || raw).split("\\").pop() || raw;
+            t = t.replace(/^\.+[/\\]*/, "");
+            if (!t.endsWith(".xaml")) t += ".xaml";
+            return t;
+          };
+          for (const [wfKey, wfVal] of Array.from(mapped.entries())) {
+            const edgeSet = new Set<string>();
+            const collectAuthInvokes = (nodes: any[]) => {
+              for (const n of nodes) {
+                if (n.kind === "activity" && n.template === "InvokeWorkflowFile" && n.properties?.WorkflowFileName) {
+                  edgeSet.add(normalizeEdgeTarget(n.properties.WorkflowFileName));
+                }
+                for (const arr of [n.children, n.tryChildren, n.catchChildren, n.finallyChildren, n.thenChildren, n.elseChildren, n.bodyChildren]) {
+                  if (Array.isArray(arr)) collectAuthInvokes(arr);
+                }
+              }
+            };
+            if (wfVal.spec?.rootSequence?.children) collectAuthInvokes(wfVal.spec.rootSequence.children);
+            authoritativeDecomposedEdges.set(wfKey + ".xaml", edgeSet);
+          }
           console.log(`[UiPath] Mapped ${mapped.size} decomposed spec(s) to tree enrichments (held as fallback for AI refinement): ${wfNames.join(", ")}`);
+          console.log(`[UiPath] Captured authoritative decomposed invocation graph: ${Array.from(authoritativeDecomposedEdges.entries()).map(([k, v]) => `${k}→[${Array.from(v).join(",")}]`).join(", ")}`);
           if (onProgress) onProgress({ type: "completed", stage: "spec_mapping", message: `Mapped ${mapped.size} decomposed spec(s) — proceeding to AI enrichment refinement` });
         }
       } catch (err: any) {
@@ -3803,60 +3830,196 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
     }
 
-    const canReuseEnrichment = !treeEnrichment && !forceRebuild && cachedEntry?.stageEnrichment && enrichmentFp && cachedEntry.stageEnrichment.fingerprint === enrichmentFp;
+    const canReuseEnrichment = !treeEnrichment && !forceRebuild && cachedEntry?.stageEnrichment && enrichmentFp && cachedEntry.stageEnrichment.fingerprint === enrichmentFp && (cachedEntry.stageEnrichment.cacheVersion || 0) >= ENRICHMENT_CACHE_VERSION;
     if (canReuseEnrichment) {
       enrichment = cachedEntry!.stageEnrichment!.enrichment;
       treeEnrichment = cachedEntry!.stageEnrichment!.treeEnrichment;
       _usedAIFallback = cachedEntry!.stageEnrichment!.usedAIFallback;
-      if (enrichment || treeEnrichment) {
+      if (cachedEntry!.stageEnrichment!.allTreeEnrichmentsEntries && cachedEntry!.stageEnrichment!.allTreeEnrichmentsEntries.length > 0) {
+        allTreeEnrichments = new Map(cachedEntry!.stageEnrichment!.allTreeEnrichmentsEntries);
+        console.log(`[UiPath Cache] Enrichment cache HIT — restored ${allTreeEnrichments.size} per-workflow enrichment(s)`);
+      } else if (enrichment || treeEnrichment) {
         console.log(`[UiPath Cache] Enrichment cache HIT — enrichment fingerprint unchanged (reusing ${enrichment ? `legacy enrichment with ${enrichment.nodes.length} nodes` : "tree enrichment"})`);
       } else {
         console.log(`[UiPath Cache] Enrichment cache HIT — previously attempted, cached as null`);
       }
     } else if (!treeEnrichment && cachedEntry?.stageEnrichment && enrichmentFp) {
-      console.log(`[UiPath Cache] Enrichment cache MISS — enrichment fingerprint changed`);
+      const versionMismatch = cachedEntry.stageEnrichment.fingerprint === enrichmentFp && (cachedEntry.stageEnrichment.cacheVersion || 0) < ENRICHMENT_CACHE_VERSION;
+      console.log(`[UiPath Cache] Enrichment cache MISS — ${versionMismatch ? "stale cache version (pre-per-workflow enrichment)" : "enrichment fingerprint changed"}`);
     }
     if (!treeEnrichment && !canReuseEnrichment && processNodes.length > 0 && sddContent) {
       try {
         const isSimpleTier = complexityTier === "simple";
-        const enrichmentLabel = mappedAllTreeEnrichments ? "AI refinement of mapped specs" : (isSimpleTier ? "single-pass" : "tree-based");
         const nodeCount = processNodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end").length;
-        const treeTimeout = isSimpleTier ? 60000 : (nodeCount >= 12 ? 180000 : 120000);
-        console.log(`[UiPath] Requesting ${enrichmentLabel} AI enrichment for ${processNodes.length} process nodes${mappedAllTreeEnrichments ? ` (refining ${mappedAllTreeEnrichments.size} pre-mapped specs)` : ""}${isSimpleTier ? " (simple tier — no retry)" : ""} (timeout: ${treeTimeout}ms)...`);
-        if (onProgress) onProgress({ type: "started", stage: "ai_enrichment_tree", message: `Starting ${enrichmentLabel} AI enrichment` });
-        const treeHeartbeat = onProgress ? setInterval(() => {
-          onProgress({ type: "heartbeat", stage: "ai_enrichment_tree", message: isSimpleTier ? "AI is generating workflow structure (streamlined)..." : "AI is building the workflow tree structure — this may take a minute for complex processes..." });
-        }, 10000) : null;
-        try {
-          const treeResult = await enrichWithAITree(
-            processNodes,
-            processEdges,
-            sddContent,
-            orchestratorArtifacts,
-            projectName,
-            treeTimeout,
-            automationPattern,
-            isSimpleTier,
-            mappedAllTreeEnrichments || undefined,
-          );
-          if (treeResult && treeResult.status === "success") {
-            treeEnrichment = treeResult;
-            if (mappedAllTreeEnrichments && mappedAllTreeEnrichments.size > 0) {
-              allTreeEnrichments = new Map(mappedAllTreeEnrichments);
-              const aiMainName = treeResult.workflowSpec.name || "Main";
-              allTreeEnrichments.set(aiMainName, { spec: treeResult.workflowSpec, processType: treeResult.processType });
-              console.log(`[UiPath] Tree enrichment successful: AI refined "${aiMainName}" (${treeResult.workflowSpec.variables.length} variables), preserving ${mappedAllTreeEnrichments.size} mapped workflow decomposition(s)`);
-            } else {
-              console.log(`[UiPath] Tree enrichment successful: "${treeResult.workflowSpec.name}", ${treeResult.workflowSpec.variables.length} variables`);
+
+        if (mappedAllTreeEnrichments && mappedAllTreeEnrichments.size > 0) {
+          const perWorkflowTimeout = isSimpleTier ? 45000 : (nodeCount >= 12 ? 60000 : 50000);
+          console.log(`[UiPath] Requesting per-workflow AI refinement for ${mappedAllTreeEnrichments.size} decomposed spec(s) (${processNodes.length} process nodes, timeout per workflow: ${perWorkflowTimeout}ms)...`);
+          if (onProgress) onProgress({ type: "started", stage: "ai_enrichment_tree", message: `Starting per-workflow AI refinement for ${mappedAllTreeEnrichments.size} workflow(s)` });
+          const treeHeartbeat = onProgress ? setInterval(() => {
+            onProgress({ type: "heartbeat", stage: "ai_enrichment_tree", message: `AI is refining decomposed workflow specs individually...` });
+          }, 10000) : null;
+          try {
+            const authorativeDecomposedKeys = new Set(mappedAllTreeEnrichments.keys());
+            allTreeEnrichments = new Map(mappedAllTreeEnrichments);
+            let refinedCount = 0;
+            let failedCount = 0;
+            for (const [wfName, wfEntry] of Array.from(mappedAllTreeEnrichments.entries())) {
+              const singleSpecMap = new Map<string, { spec: any; processType: ProcessType }>();
+              singleSpecMap.set(wfName, wfEntry);
+              try {
+                const perWfResult = await enrichWithAITree(
+                  processNodes,
+                  processEdges,
+                  sddContent,
+                  orchestratorArtifacts,
+                  projectName,
+                  perWorkflowTimeout,
+                  automationPattern,
+                  true,
+                  singleSpecMap,
+                );
+                if (perWfResult && perWfResult.status === "success") {
+                  const refinedSpec = perWfResult.workflowSpec;
+                  refinedSpec.name = wfName;
+
+                  {
+                    const normalizeInvokeTarget = (target: string): string => {
+                      let t = (target.split("/").pop() || target).split("\\").pop() || target;
+                      t = t.replace(/^\.+[/\\]*/, "");
+                      if (!t.endsWith(".xaml")) t += ".xaml";
+                      return t;
+                    };
+                    const originalInvokeList: Array<{ normalizedTarget: string; bindings: Record<string, any> }> = [];
+                    const collectInvokes = (nodes: any[]) => {
+                      for (const n of nodes) {
+                        if (n.kind === "activity" && n.template === "InvokeWorkflowFile" && n.properties?.WorkflowFileName) {
+                          const bindings: Record<string, any> = {};
+                          if (n.properties.Arguments) bindings.Arguments = JSON.parse(JSON.stringify(n.properties.Arguments));
+                          if (n.properties.InputArguments) bindings.InputArguments = JSON.parse(JSON.stringify(n.properties.InputArguments));
+                          if (n.properties.OutputArguments) bindings.OutputArguments = JSON.parse(JSON.stringify(n.properties.OutputArguments));
+                          originalInvokeList.push({ normalizedTarget: normalizeInvokeTarget(n.properties.WorkflowFileName), bindings });
+                        }
+                        for (const arr of [n.children, n.tryChildren, n.catchChildren, n.finallyChildren, n.thenChildren, n.elseChildren, n.bodyChildren]) {
+                          if (Array.isArray(arr)) collectInvokes(arr);
+                        }
+                      }
+                    };
+                    if (wfEntry.spec.rootSequence?.children) collectInvokes(wfEntry.spec.rootSequence.children);
+
+                    const authorizedTargets = new Set(originalInvokeList.map(i => i.normalizedTarget));
+                    const consumedIndices = new Set<number>();
+
+                    const enforceInvokeContract = (nodes: any[]): any[] => {
+                      return nodes.filter(n => {
+                        if (n.kind === "activity" && n.template === "InvokeWorkflowFile" && n.properties?.WorkflowFileName) {
+                          const normalizedTarget = normalizeInvokeTarget(n.properties.WorkflowFileName);
+                          if (!authorizedTargets.has(normalizedTarget)) {
+                            console.warn(`[UiPath] Stripped unauthorized InvokeWorkflowFile from "${wfName}": "${n.properties.WorkflowFileName}" (normalized: "${normalizedTarget}", not in authoritative decomposed spec)`);
+                            return false;
+                          }
+                          let matchIdx = -1;
+                          for (let i = 0; i < originalInvokeList.length; i++) {
+                            if (!consumedIndices.has(i) && originalInvokeList[i].normalizedTarget === normalizedTarget) {
+                              matchIdx = i;
+                              break;
+                            }
+                          }
+                          if (matchIdx >= 0) {
+                            consumedIndices.add(matchIdx);
+                            const authBindings = originalInvokeList[matchIdx].bindings;
+                            if (authBindings.Arguments) n.properties.Arguments = authBindings.Arguments;
+                            if (authBindings.InputArguments) n.properties.InputArguments = authBindings.InputArguments;
+                            if (authBindings.OutputArguments) n.properties.OutputArguments = authBindings.OutputArguments;
+                          }
+                        }
+                        for (const arr of ["children", "tryChildren", "catchChildren", "finallyChildren", "thenChildren", "elseChildren", "bodyChildren"] as const) {
+                          if (Array.isArray((n as any)[arr])) {
+                            (n as any)[arr] = enforceInvokeContract((n as any)[arr]);
+                          }
+                        }
+                        return true;
+                      });
+                    };
+                    if (refinedSpec.rootSequence?.children) {
+                      refinedSpec.rootSequence.children = enforceInvokeContract(refinedSpec.rootSequence.children);
+                    }
+                  }
+
+                  allTreeEnrichments.set(wfName, { spec: refinedSpec, processType: perWfResult.processType });
+                  refinedCount++;
+                  console.log(`[UiPath] Per-workflow refinement "${wfName}": success (${refinedSpec.variables?.length || 0} variables)`);
+                } else if (perWfResult && perWfResult.status === "validation_failed") {
+                  failedCount++;
+                  console.log(`[UiPath] Per-workflow refinement "${wfName}": validation failed — keeping original decomposed spec`);
+                } else {
+                  failedCount++;
+                  console.log(`[UiPath] Per-workflow refinement "${wfName}": null result — keeping original decomposed spec`);
+                }
+              } catch (perWfErr: any) {
+                failedCount++;
+                console.log(`[UiPath] Per-workflow refinement "${wfName}": error (${perWfErr.message}) — keeping original decomposed spec`);
+              }
             }
-            if (onProgress) onProgress({ type: "completed", stage: "ai_enrichment_tree", message: `Tree enrichment complete — ${treeResult.workflowSpec.variables.length} variables mapped` });
-          } else if (treeResult && treeResult.status === "validation_failed") {
-            const errorSummary = treeResult.validationErrors.join("; ");
-            console.log(`[UiPath] Tree enrichment validation failed: ${errorSummary} — ${mappedTreeFallback ? "falling back to mapped specs" : "falling through to deterministic scaffold"}`);
-            if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_tree", message: `Tree enrichment validation failed — ${mappedTreeFallback ? "using mapped spec fallback" : "falling back to deterministic scaffold"}` });
+
+            if (refinedCount > 0) {
+              const mainEntry = allTreeEnrichments.get("Main") || allTreeEnrichments.values().next().value;
+              if (mainEntry) {
+                treeEnrichment = { status: "success", workflowSpec: mainEntry.spec, processType: mainEntry.processType };
+              }
+              console.log(`[UiPath] Per-workflow AI refinement complete: ${refinedCount} refined, ${failedCount} kept as original (${allTreeEnrichments.size} total)`);
+            } else {
+              console.log(`[UiPath] All per-workflow AI refinements failed (${failedCount}/${mappedAllTreeEnrichments.size}) — using original decomposed specs as fallback`);
+              const mainEntry = allTreeEnrichments.get("Main") || allTreeEnrichments.values().next().value;
+              if (mainEntry) {
+                treeEnrichment = { status: "success", workflowSpec: mainEntry.spec, processType: mainEntry.processType };
+              }
+            }
+
+            const currentKeys = new Set(allTreeEnrichments.keys());
+            const extraKeys = Array.from(currentKeys).filter(k => !authorativeDecomposedKeys.has(k));
+            const missingKeys = Array.from(authorativeDecomposedKeys).filter(k => !currentKeys.has(k));
+            if (extraKeys.length > 0 || missingKeys.length > 0) {
+              const diagnostic = `[Enrichment Key Set Invariant] VIOLATED immediately after per-workflow enrichment: expected keys [${Array.from(authorativeDecomposedKeys).join(", ")}], got keys [${Array.from(currentKeys).join(", ")}]. Extras: [${extraKeys.join(", ")}], Missing: [${missingKeys.join(", ")}]`;
+              console.error(diagnostic);
+              throw new Error(diagnostic);
+            }
+
+            if (onProgress) onProgress({ type: "completed", stage: "ai_enrichment_tree", message: `Per-workflow refinement complete — ${refinedCount}/${mappedAllTreeEnrichments.size} refined` });
+          } finally {
+            if (treeHeartbeat) clearInterval(treeHeartbeat);
           }
-        } finally {
-          if (treeHeartbeat) clearInterval(treeHeartbeat);
+        } else {
+          const enrichmentLabel = isSimpleTier ? "single-pass" : "tree-based";
+          const treeTimeout = isSimpleTier ? 60000 : (nodeCount >= 12 ? 180000 : 120000);
+          console.log(`[UiPath] Requesting ${enrichmentLabel} AI enrichment for ${processNodes.length} process nodes${isSimpleTier ? " (simple tier — no retry)" : ""} (timeout: ${treeTimeout}ms)...`);
+          if (onProgress) onProgress({ type: "started", stage: "ai_enrichment_tree", message: `Starting ${enrichmentLabel} AI enrichment` });
+          const treeHeartbeat = onProgress ? setInterval(() => {
+            onProgress({ type: "heartbeat", stage: "ai_enrichment_tree", message: isSimpleTier ? "AI is generating workflow structure (streamlined)..." : "AI is building the workflow tree structure — this may take a minute for complex processes..." });
+          }, 10000) : null;
+          try {
+            const treeResult = await enrichWithAITree(
+              processNodes,
+              processEdges,
+              sddContent,
+              orchestratorArtifacts,
+              projectName,
+              treeTimeout,
+              automationPattern,
+              isSimpleTier,
+            );
+            if (treeResult && treeResult.status === "success") {
+              treeEnrichment = treeResult;
+              console.log(`[UiPath] Tree enrichment successful: "${treeResult.workflowSpec.name}", ${treeResult.workflowSpec.variables.length} variables`);
+              if (onProgress) onProgress({ type: "completed", stage: "ai_enrichment_tree", message: `Tree enrichment complete — ${treeResult.workflowSpec.variables.length} variables mapped` });
+            } else if (treeResult && treeResult.status === "validation_failed") {
+              const errorSummary = treeResult.validationErrors.join("; ");
+              console.log(`[UiPath] Tree enrichment validation failed: ${errorSummary} — falling through to deterministic scaffold`);
+              if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_tree", message: `Tree enrichment validation failed — falling back to deterministic scaffold` });
+            }
+          } finally {
+            if (treeHeartbeat) clearInterval(treeHeartbeat);
+          }
         }
       } catch (err: any) {
         console.log(`[UiPath] Tree enrichment error: ${err.message} — ${mappedTreeFallback ? "falling back to mapped specs" : "falling back to deterministic scaffold"}`);
@@ -3889,6 +4052,19 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       if (scaffold.allTreeEnrichments && scaffold.allTreeEnrichments.size > 0) {
         allTreeEnrichments = scaffold.allTreeEnrichments;
       }
+    }
+
+    if (hasDecomposedSpecs && mappedAllTreeEnrichments && mappedAllTreeEnrichments.size > 0) {
+      const expectedKeys = new Set(mappedAllTreeEnrichments.keys());
+      const actualKeys = new Set(allTreeEnrichments.keys());
+      const extraKeys = Array.from(actualKeys).filter(k => !expectedKeys.has(k));
+      const missingKeys = Array.from(expectedKeys).filter(k => !actualKeys.has(k));
+      if (extraKeys.length > 0 || missingKeys.length > 0 || actualKeys.size !== expectedKeys.size) {
+        const diagnostic = `[Enrichment Key Set Assertion] FAILED: expected ${expectedKeys.size} keys [${Array.from(expectedKeys).join(", ")}], got ${actualKeys.size} keys [${Array.from(actualKeys).join(", ")}]. Extras: [${extraKeys.join(", ")}], Missing: [${missingKeys.join(", ")}]`;
+        console.error(diagnostic);
+        throw new Error(diagnostic);
+      }
+      console.log(`[Enrichment Key Set Assertion] PASSED: ${actualKeys.size} workflow key(s) match decomposed spec key set exactly`);
     }
   }
 
@@ -8839,6 +9015,72 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     }
 
     {
+      const pfx = libPath + "/";
+      let totalSelfRefsStripped = 0;
+      for (const [path, content] of deferredWrites) {
+        if (!path.endsWith(".xaml")) continue;
+        const relPath = path.startsWith(pfx) ? path.slice(pfx.length) : (path.split("/").pop() || path);
+        const basename = (relPath.split("/").pop() || relPath);
+        const selfRefPattern = new RegExp(
+          `<ui:InvokeWorkflowFile[^>]*WorkflowFileName\\s*=\\s*"(?:[.\\/\\\\]*(?:lib[\\/\\\\])?)?${basename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*\\/>`,
+          "gi"
+        );
+        const cleaned = content.replace(selfRefPattern, (match) => {
+          totalSelfRefsStripped++;
+          console.warn(`[Invocation Enforcement] Stripped self-reference in "${basename}": ${match.slice(0, 120)}`);
+          return "";
+        });
+        if (cleaned !== content) {
+          deferredWrites.set(path, cleaned);
+        }
+      }
+      if (totalSelfRefsStripped > 0) {
+        console.warn(`[Invocation Enforcement] Stripped ${totalSelfRefsStripped} self-referencing invocation(s) across all workflows`);
+      } else {
+        console.log(`[Invocation Enforcement] No self-referencing invocations found — all workflows clean`);
+      }
+
+      if (authoritativeDecomposedEdges && authoritativeDecomposedEdges.size > 0) {
+        let totalIllegalEdgesStripped = 0;
+        let totalWorkflowsEnforced = 0;
+        let totalWorkflowsSkipped = 0;
+        for (const [path, content] of deferredWrites) {
+          if (!path.endsWith(".xaml")) continue;
+          const relPath = path.startsWith(pfx) ? path.slice(pfx.length) : (path.split("/").pop() || path);
+          const basename = (relPath.split("/").pop() || relPath);
+          if (!authoritativeDecomposedEdges.has(basename)) {
+            totalWorkflowsSkipped++;
+            continue;
+          }
+          totalWorkflowsEnforced++;
+          const allowedTargets = authoritativeDecomposedEdges.get(basename)!;
+          const invokePattern = /<ui:InvokeWorkflowFile[^>]*WorkflowFileName\s*=\s*"([^"]+)"[^>]*\/>/gi;
+          const cleaned = content.replace(invokePattern, (match, targetFile) => {
+            let normalizedTarget = (targetFile.split("/").pop() || targetFile).split("\\").pop() || targetFile;
+            normalizedTarget = normalizedTarget.replace(/^\.+[/\\]*/, "");
+            if (!normalizedTarget.endsWith(".xaml")) normalizedTarget += ".xaml";
+            if (!allowedTargets.has(normalizedTarget)) {
+              totalIllegalEdgesStripped++;
+              console.warn(`[Invocation Enforcement] Stripped illegal cross-workflow edge: "${basename}" → "${normalizedTarget}" (graph rule: edge not present in authoritative decomposed invocation graph)`);
+              return "";
+            }
+            return match;
+          });
+          if (cleaned !== content) {
+            deferredWrites.set(path, cleaned);
+          }
+        }
+        if (totalIllegalEdgesStripped > 0) {
+          console.warn(`[Invocation Enforcement] Stripped ${totalIllegalEdgesStripped} illegal cross-workflow invocation(s) based on authoritative decomposed graph (enforced ${totalWorkflowsEnforced} authoritative workflows, skipped ${totalWorkflowsSkipped} non-authoritative files)`);
+        } else {
+          console.log(`[Invocation Enforcement] All cross-workflow invocations match authoritative decomposed graph (enforced ${totalWorkflowsEnforced}, skipped ${totalWorkflowsSkipped} non-authoritative)`);
+        }
+      } else {
+        console.log(`[Invocation Enforcement] No authoritative decomposed graph available — skipping cross-workflow edge enforcement (self-reference stripping already applied)`);
+      }
+    }
+
+    {
       console.log(`[Spec Graph Validation] Running spec-aware graph validation pass...`);
       const graphValidation = runSpecGraphValidation(
         deferredWrites,
@@ -10039,6 +10281,8 @@ ${depEntries}
       enrichment,
       treeEnrichment,
       usedAIFallback: _usedAIFallback,
+      cacheVersion: ENRICHMENT_CACHE_VERSION,
+      allTreeEnrichmentsEntries: allTreeEnrichments.size > 0 ? Array.from(allTreeEnrichments.entries()) : undefined,
     };
     const xamlFp = computeXamlFingerprint(enrichment, treeEnrichment, pkg, orchestratorArtifacts, generationMode, tierStr, finalDependencyMap, tf);
     const stageXaml: CachedStageXaml = {
