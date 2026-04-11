@@ -110,6 +110,8 @@ export interface DhgContext {
   bindPointSummary?: BindPointSummary;
   sddBusinessStepsByWorkflow?: Map<string, number>;
   authoritativeClassification?: WorkflowStatusClassifierResult;
+  emergencyFallbackActive?: boolean;
+  emergencyFallbackReason?: string;
 }
 
 interface WorkflowTierClassification {
@@ -293,10 +295,12 @@ export function generateDhgFromOutcomeReport(
   md += `**Project:** ${context.projectName}\n`;
   md += `**Generated:** ${date}\n`;
   if (context.generationMode) {
-    const modeLabel = context.generationMode === "baseline_openable"
-      ? "Baseline Openable (minimal, deterministic)"
-      : "Full Implementation";
-    md += `**Generation Mode:** ${modeLabel}\n`;
+    if (context.emergencyFallbackActive) {
+      md += `**Generation Mode:** Emergency Fallback (baseline_openable)\n`;
+      md += `\n> ⚠️ **EMERGENCY FALLBACK ACTIVE** — This package was generated using the baseline fallback path because: ${context.emergencyFallbackReason || "unknown reason"}. The output may have reduced quality compared to full_implementation mode.\n\n`;
+    } else {
+      md += `**Generation Mode:** Full Implementation\n`;
+    }
     if (context.generationModeReason) md += `**Mode Reason:** ${context.generationModeReason}\n`;
   }
 

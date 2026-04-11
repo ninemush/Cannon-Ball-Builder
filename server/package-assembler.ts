@@ -3899,7 +3899,6 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     enrichment?.useReFramework,
   );
   const modeConfig = selectGenerationMode(automationPattern, undefined, _studioProfile);
-  generationMode = modeConfig.mode;
   let useReFramework = modeConfig.blockReFramework ? false : shouldUseReFramework(automationPattern);
   const genCtx: XamlGenerationContext = {
     generationMode,
@@ -7082,6 +7081,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
     }
 
+    const isEmergencyFallback = generationMode === "baseline_openable" && pkg.internal?.emergencyFallbackActive === true;
     const emissionGateMode = generationMode === "baseline_openable" ? "baseline" as const : "strict" as const;
     const emissionGateWarningsList: Array<{ code: string; message: string; file: string; line?: number; type: string }> = [];
     const workflowBusinessContext = buildWorkflowBusinessContextMap(
@@ -7093,6 +7093,20 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       })),
     );
     const emissionGateResult = runEmissionGate(xamlEntries, emissionGateMode, workflowBusinessContext);
+
+    if (isEmergencyFallback) {
+      const strictResult = runEmissionGate(xamlEntries, "strict", workflowBusinessContext);
+      const wouldHaveBlocked = strictResult.violations.filter(v => v.resolution === "blocked");
+      if (wouldHaveBlocked.length > 0) {
+        console.warn(`[Emission Gate] EMERGENCY FALLBACK: Using baseline mode, but ${wouldHaveBlocked.length} violation(s) would have been blocked in strict mode:`);
+        for (const v of wouldHaveBlocked) {
+          console.warn(`  - [${v.file}${v.line ? `:${v.line}` : ""}] ${v.type}: ${v.detail}`);
+        }
+      } else {
+        console.log(`[Emission Gate] EMERGENCY FALLBACK: Strict-mode comparison found no additional violations that would have been blocked`);
+      }
+    }
+
     if (emissionGateResult.violations.length > 0) {
       console.log(`[Emission Gate] Post-generation emission contract (${emissionGateMode} mode): ${emissionGateResult.summary.totalViolations} violation(s) — ${emissionGateResult.summary.stubbed} stubbed, ${emissionGateResult.summary.corrected} corrected, ${emissionGateResult.summary.blocked} blocked, ${emissionGateResult.summary.degraded} degraded`);
       for (const entry of xamlEntries) {

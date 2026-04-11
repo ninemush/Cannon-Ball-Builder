@@ -212,7 +212,9 @@ function RunHistoryTable({ onSelectRun }: { onSelectRun: (runId: string, ideaId:
                       {run.ideaTitle}
                     </TableCell>
                     <TableCell className="text-xs" data-testid={`text-mode-${run.runId}`}>
-                      {run.generationMode || "—"}
+                      {run.generationMode === "baseline_openable" ? (
+                        <span className="text-amber-600 dark:text-amber-400">Emergency Fallback</span>
+                      ) : (run.generationMode || "—")}
                     </TableCell>
                     <TableCell className="text-center">
                       {run.warningCount > 0 ? (
@@ -536,7 +538,11 @@ function RunDetailView({ runId, onBack }: { runId: string; onBack: () => void })
         <Card className="bg-muted/30">
           <CardContent className="p-3">
             <div className="text-[10px] text-muted-foreground">Mode</div>
-            <div className="text-sm font-medium" data-testid="text-detail-mode">{run.generationMode || "—"}</div>
+            <div className="text-sm font-medium" data-testid="text-detail-mode">
+              {run.generationMode === "baseline_openable" ? (
+                <span className="text-amber-600 dark:text-amber-400">Emergency Fallback Active</span>
+              ) : (run.generationMode || "—")}
+            </div>
           </CardContent>
         </Card>
         <Card className="bg-muted/30">

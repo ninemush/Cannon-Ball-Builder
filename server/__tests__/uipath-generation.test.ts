@@ -1823,8 +1823,8 @@ describe("UiPath Generation Regression Tests", () => {
   </Sequence>
 </Activity>`;
       const { content, blocked } = applyActivityPolicy(xaml, {
-        useStubs: false,
-        flatScaffold: false,
+        mode: "full_implementation",
+        reason: "test",
         blockReFramework: false,
         blockForbiddenActivities: true,
       }, "Test.xaml");

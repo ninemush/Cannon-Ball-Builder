@@ -588,10 +588,20 @@ async function executeRun(
     });
     await runLogger.flush();
 
+    const modeDecisionContext: Record<string, unknown> = {
+      requestedMode: "full_implementation",
+      effectiveMode: pipelineResult.generationMode,
+    };
+    if (pipelineResult.fallbackModeActive) {
+      modeDecisionContext.emergencyFallbackActive = true;
+      modeDecisionContext.emergencyFallbackReason = pipelineResult.fallbackModeReason;
+    }
+
     const outcomeReportJson = JSON.stringify({
       ...outcomeSummary,
       pipelineOutcome: pipelineResult.outcomeReport || undefined,
       assessedStatus: pipelineResult.status,
+      modeDecisionContext,
     });
 
     let snapshotPddId: number | undefined;

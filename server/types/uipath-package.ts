@@ -170,6 +170,8 @@ export interface UiPathPackageInternal {
   priorCompliantWorkflows?: Array<{ name: string; content: string }>;
   integrationServiceConnectors?: Array<{ connectorName: string; connectionName?: string; connectionId?: string }>;
   specScaffoldMeta?: SpecScaffoldMeta;
+  emergencyFallbackActive?: boolean;
+  emergencyFallbackReason?: string;
 }
 
 export interface AgentSpec {

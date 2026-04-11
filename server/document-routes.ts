@@ -1223,9 +1223,12 @@ export function registerDocumentRoutes(app: Express): void {
       } catch {}
     };
 
-    let requestedMode: "baseline_openable" | "full_implementation" | undefined;
+    let requestedMode: "full_implementation" | undefined;
     if (req.body?.generationMode === "baseline_openable") {
-      requestedMode = "baseline_openable";
+      console.log(`[Pipeline] Ignoring explicit baseline_openable request — baseline is now only available as emergency fallback`);
+    }
+    if (req.body?.generationMode === "full_implementation") {
+      requestedMode = "full_implementation";
     }
 
     let userMetaValidationMode: MetaValidationMode = "Auto";

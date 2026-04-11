@@ -60,7 +60,6 @@ export type GenerationMode = "baseline_openable" | "full_implementation";
 export interface GenerationModeConfig {
   mode: GenerationMode;
   reason: string;
-  flatScaffold: boolean;
   blockReFramework: boolean;
   blockForbiddenActivities: boolean;
 }
@@ -95,61 +94,36 @@ export function selectGenerationMode(
 ): GenerationModeConfig {
   const resolvedProfile = profile !== undefined ? profile : catalogService.getStudioProfile();
 
-  const isSimpleOrApi = automationPattern === "simple-linear" || automationPattern === "api-data-driven";
-  const isLowConfidence = confidence !== undefined && confidence < 0.6;
   const isTransactional = automationPattern === "transactional-queue";
 
   const targetFramework = resolvedProfile?.targetFramework || "Windows";
   const projectType = resolvedProfile?.projectType || "Process";
 
-  if (projectType === "Library") {
+  const isLibrary = projectType === "Library";
+
+  if (isLibrary) {
     return {
-      mode: "baseline_openable",
-      reason: `Project type "Library" defaults to baseline_openable for reliable Studio-openable output (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
-      flatScaffold: true,
+      mode: "full_implementation",
+      reason: `Project type "Library" — full_implementation with forbidden activity blocking (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
       blockReFramework: true,
       blockForbiddenActivities: true,
     };
   }
 
-  if (isTransactional && !isLowConfidence) {
+  if (isTransactional) {
     return {
       mode: "full_implementation",
-      reason: `Pattern "${automationPattern}" supports full implementation with REFramework (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
-      flatScaffold: false,
-      blockReFramework: false,
-      blockForbiddenActivities: false,
-    };
-  }
-
-  if (isSimpleOrApi || isLowConfidence) {
-    return {
-      mode: "baseline_openable",
-      reason: isLowConfidence
-        ? `Low confidence (${(confidence! * 100).toFixed(0)}%) — defaulting to baseline_openable for safety`
-        : `Pattern "${automationPattern}" defaults to baseline_openable for reliable Studio-openable output`,
-      flatScaffold: true,
-      blockReFramework: true,
-      blockForbiddenActivities: true,
-    };
-  }
-
-  if (automationPattern === "ui-automation" || automationPattern === "hybrid") {
-    return {
-      mode: "full_implementation",
-      reason: `Pattern "${automationPattern}" supports full implementation (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
-      flatScaffold: false,
+      reason: `Pattern "${automationPattern}" — full implementation with REFramework (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
       blockReFramework: false,
       blockForbiddenActivities: false,
     };
   }
 
   return {
-    mode: "baseline_openable",
-    reason: `Unknown pattern "${automationPattern}" — defaulting to baseline_openable`,
-    flatScaffold: true,
+    mode: "full_implementation",
+    reason: `Pattern "${automationPattern}" — full implementation (profile: ${resolvedProfile?.studioLine || "default"}, framework: ${targetFramework})`,
     blockReFramework: true,
-    blockForbiddenActivities: true,
+    blockForbiddenActivities: false,
   };
 }
 

@@ -26,7 +26,7 @@ import { runDhgAnalysis, type UpstreamContext, type ProcessStepSummary } from ".
 import { parseArtifactBlockAsObject } from "./lib/artifact-parser";
 import type { UiPathPackage, UiPathPackageSpec, UiPathPackageInternal } from "./types/uipath-package";
 import { analyzeAndFix, type AnalysisReport } from "./workflow-analyzer";
-import { runQualityGate, classifyQualityIssues, getBlockingFiles, type QualityGateResult } from "./uipath-quality-gate";
+import { runQualityGate, type QualityGateResult } from "./uipath-quality-gate";
 import { calculateTemplateCompliance } from "./catalog/xaml-template-builder";
 import {
   calculateConfidenceScore,
@@ -409,6 +409,8 @@ export interface PipelineResult {
   outcomeReport?: PipelineOutcomeReport;
   finalQualityReport?: FinalQualityReport;
   packageViable: boolean;
+  fallbackModeActive?: boolean;
+  fallbackModeReason?: string;
   dependencyDiagnostics?: import("./post-emission-dependency-analyzer").DependencyDiagnosticsArtifact;
   dependencyGaps?: Array<{ activityTag: string; fileName: string; detail: string }>;
   ambiguousResolutions?: Array<{ activityTag: string; candidatePackages: string[]; fileName: string }>;
@@ -433,123 +435,6 @@ export interface IdeaContext {
   processEdges: any[];
 }
 
-interface UpgradeCheckResult {
-  canUpgrade: boolean;
-  reason: string;
-}
-
-function checkFullImplementationUpgrade(
-  pkg: UiPathPackageSpec,
-  complexity: ComplexityClassification,
-): UpgradeCheckResult {
-  if (complexity.tier === "simple" && complexity.streamlined) {
-    const workflows = pkg.workflows || [];
-    if (workflows.length === 0) {
-      return { canUpgrade: false, reason: "no workflows defined" };
-    }
-
-    const allSteps = workflows.flatMap(w => w.steps || []);
-    if (allSteps.length === 0) {
-      return { canUpgrade: false, reason: "no steps defined in any workflow" };
-    }
-
-    if (!catalogService.isLoaded()) {
-      return { canUpgrade: false, reason: "activity catalog not loaded — cannot verify emission approval" };
-    }
-
-    let allActivitiesApproved = true;
-    let unapprovedActivities: string[] = [];
-    let allTypesVerified = true;
-    let unresolvedTypes: string[] = [];
-
-    const declaredDeps = new Set((pkg.dependencies || []).map(d => d.split("/").pop()?.split("@")[0] || d));
-    const requiredPackages = new Set<string>();
-
-    for (const step of allSteps) {
-      const activityType = step.activityType || "ui:Comment";
-      const actName = activityType.replace(/^ui:/, "");
-
-      const schema = catalogService.getActivitySchema(actName);
-      if (schema && !schema.activity.emissionApproved) {
-        allActivitiesApproved = false;
-        unapprovedActivities.push(actName);
-      } else if (!schema) {
-        const isSystem = ["Assign", "If", "Sequence", "TryCatch", "While", "DoWhile", "ForEach", "Flowchart", "Delay", "Throw", "Rethrow", "Comment", "LogMessage"].includes(actName);
-        if (!isSystem) {
-          allActivitiesApproved = false;
-          unapprovedActivities.push(actName);
-        }
-      }
-
-      if (schema) {
-        requiredPackages.add(schema.packageId);
-      }
-
-      const varType = step.properties?.["TypeArgument"]?.value as string | undefined;
-      if (varType && !["String", "Int32", "Boolean", "Object", "Double", "DateTime", "DataTable"].includes(varType)) {
-        const typeSchema = catalogService.getActivitySchema(varType.replace(/^.*\./, ""));
-        if (!typeSchema) {
-          allTypesVerified = false;
-          unresolvedTypes.push(varType);
-        }
-      }
-    }
-
-    for (const wf of workflows) {
-      for (const v of wf.variables || []) {
-        const vType = v.type || "String";
-        if (!["String", "Int32", "Boolean", "Object", "Double", "DateTime", "DataTable", "Array", "List", "Dictionary"].includes(vType)) {
-          const typeSchema = catalogService.getActivitySchema(vType.replace(/^.*\./, ""));
-          if (!typeSchema) {
-            allTypesVerified = false;
-            unresolvedTypes.push(vType);
-          }
-        }
-      }
-    }
-
-    if (!allTypesVerified) {
-      return {
-        canUpgrade: false,
-        reason: `${unresolvedTypes.length} unresolved type${unresolvedTypes.length === 1 ? "" : "s"}: ${unresolvedTypes.slice(0, 5).join(", ")}${unresolvedTypes.length > 5 ? "..." : ""}`,
-      };
-    }
-
-    const unresolvedDeps: string[] = [];
-    for (const reqPkg of requiredPackages) {
-      if (!declaredDeps.has(reqPkg)) {
-        const isCoreDep = ["UiPath.System.Activities", "UiPath.UIAutomation.Activities"].includes(reqPkg);
-        if (!isCoreDep) {
-          unresolvedDeps.push(reqPkg);
-        }
-      }
-    }
-
-    if (unresolvedDeps.length > 0) {
-      return {
-        canUpgrade: false,
-        reason: `${unresolvedDeps.length} unresolved dependenc${unresolvedDeps.length === 1 ? "y" : "ies"}: ${unresolvedDeps.slice(0, 5).join(", ")}`,
-      };
-    }
-
-    if (!allActivitiesApproved) {
-      return {
-        canUpgrade: false,
-        reason: `${unapprovedActivities.length} unapproved activit${unapprovedActivities.length === 1 ? "y" : "ies"} found: ${unapprovedActivities.slice(0, 5).join(", ")}${unapprovedActivities.length > 5 ? "..." : ""}`,
-      };
-    }
-
-    return {
-      canUpgrade: true,
-      reason: `simple tier process with ${allSteps.length} step(s), all activities emission-approved, types verified, dependencies resolved`,
-    };
-  }
-
-  return {
-    canUpgrade: false,
-    reason: `complexity tier "${complexity.tier}" (streamlined=${complexity.streamlined}) does not meet upgrade criteria`,
-  };
-}
 
 type CachedPipelineResult = PipelineResult & { fingerprint: string };
 
@@ -709,6 +594,8 @@ function buildDhgFromBuildResult(
   overrideXamlEntries?: { name: string; content: string }[],
   generationMode?: GenerationMode,
   finalQualityReport?: FinalQualityReport,
+  emergencyFallbackActive?: boolean,
+  emergencyFallbackReason?: string,
 ): DhgResult {
   const sddContent = ctx.sdd?.content || "";
   const workflows = pkg.workflows || [];
@@ -898,6 +785,8 @@ function buildDhgFromBuildResult(
       finalQualityReport: finalQualityReport || undefined,
       bindPointSummary: bindPointSummary.totalCount > 0 ? bindPointSummary : undefined,
       sddBusinessStepsByWorkflow: sddBusinessStepsByWorkflow.size > 0 ? sddBusinessStepsByWorkflow : undefined,
+      emergencyFallbackActive: emergencyFallbackActive || undefined,
+      emergencyFallbackReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
@@ -927,6 +816,8 @@ function buildDhgFromBuildResult(
       generationMode: generationMode || undefined,
       analysis,
       bindPointSummary: syntheticBindPoints.totalCount > 0 ? syntheticBindPoints : undefined,
+      emergencyFallbackActive: emergencyFallbackActive || undefined,
+      emergencyFallbackReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(syntheticReport, dhgContext);
   }
@@ -946,6 +837,9 @@ export interface SpecGenerationResult {
   artifacts: any | null;
   pipelineWarnings: PipelineWarning[];
   usedAIFallback: boolean;
+  emergencyFallbackActive?: boolean;
+  emergencyFallbackReason?: string;
+  effectiveMode?: GenerationMode;
 }
 
 export async function generateWorkflowSpecs(
@@ -961,12 +855,15 @@ export async function generateWorkflowSpecs(
   },
 ): Promise<SpecGenerationResult> {
   const requestedMode: GenerationMode | undefined = options?.generationMode;
-  const mode: GenerationMode = requestedMode || "baseline_openable";
+  if (requestedMode === "baseline_openable") {
+    console.warn(`[Pipeline] generateWorkflowSpecs: baseline_openable rejected — only available as emergency fallback, using full_implementation`);
+  }
+  let mode: GenerationMode = "full_implementation";
   const pipelineWarnings: PipelineWarning[] = [];
   let usedAIFallback = false;
 
   if (!requestedMode) {
-    console.log(`[Pipeline] generateWorkflowSpecs: baseline_openable is the default mode (no explicit mode requested)`);
+    console.log(`[Pipeline] generateWorkflowSpecs: full_implementation is the default mode (no explicit mode requested)`);
   }
 
   const noop: PipelineProgressCallback = () => {};
@@ -992,6 +889,22 @@ export async function generateWorkflowSpecs(
 
     const fp = computeFingerprint(pkg, ctx.sdd?.content || "", ctx.mapNodes, ctx.processEdges);
 
+    let emergencyFallbackActive = false;
+    let emergencyFallbackReason = "";
+
+    if (mode === "full_implementation" && !catalogService.isLoaded()) {
+      emergencyFallbackActive = true;
+      emergencyFallbackReason = "Activity catalog failed to load — no activity metadata available";
+      mode = "baseline_openable";
+      console.warn(`[EMERGENCY FALLBACK] Downgrading to baseline_openable — reason: ${emergencyFallbackReason}`);
+      pipelineWarnings.push({
+        code: "EMERGENCY_FALLBACK_CATALOG_UNAVAILABLE",
+        message: `[EMERGENCY FALLBACK] ${emergencyFallbackReason}`,
+        stage: "emergency-fallback",
+        recoverable: false,
+      });
+    }
+
     if (emitLegacy) emitLegacy(mode === "baseline_openable" ? "Generating baseline Studio-openable package..." : "AI-enriching XAML workflows...");
 
     let aiSkills: any[] = [];
@@ -999,25 +912,55 @@ export async function generateWorkflowSpecs(
       tracker.start("spec_generation_ai", "Fetching AI Center skills");
       tracker.heartbeat("spec_generation_ai", () => "Checking AI Center availability");
     }
+    let aiServiceUnreachable = false;
     try {
       const aiResult = await getAICenterSkills();
-      if (aiResult.available) aiSkills = aiResult.skills;
+      if (aiResult.available) {
+        aiSkills = aiResult.skills;
+      } else {
+        console.warn(`[Pipeline] AI Center skills returned available=false — continuing in full_implementation (not a hard blocker)`);
+        pipelineWarnings.push({
+          code: "AI_CENTER_SKILLS_UNAVAILABLE",
+          message: `AI Center skills not available — continuing without AI skills`,
+          stage: "ai-center",
+          recoverable: true,
+        });
+      }
       if (mode !== "baseline_openable") {
-        tracker.complete("spec_generation_ai", `${aiSkills.length} AI skill(s) available`, { skillCount: aiSkills.length });
+        if (!aiResult.available) {
+          tracker.warn("spec_generation_ai", `AI Center skills not available — non-blocking`);
+          tracker.complete("spec_generation_ai", "Continuing without AI Center skills");
+        } else {
+          tracker.complete("spec_generation_ai", `${aiSkills.length} AI skill(s) available`, { skillCount: aiSkills.length });
+        }
       }
     } catch (err: any) {
       const msg = err?.message || "Unknown error";
-      console.warn(`[Pipeline] AI Center skills fetch failed: ${msg}`);
+      console.warn(`[Pipeline] AI Center skills fetch threw — service unreachable: ${msg}`);
+      aiServiceUnreachable = true;
       pipelineWarnings.push({
-        code: "AI_CENTER_SKILLS_UNAVAILABLE",
-        message: `AI Center skills could not be fetched: ${msg}`,
+        code: "AI_CENTER_SERVICE_UNREACHABLE",
+        message: `AI enrichment service unreachable after retries: ${msg}`,
         stage: "ai-center",
-        recoverable: true,
+        recoverable: false,
       });
       if (mode !== "baseline_openable") {
-        tracker.warn("spec_generation_ai", `AI Center unavailable: ${msg}`);
-        tracker.complete("spec_generation_ai", "Continuing without AI Center");
+        tracker.warn("spec_generation_ai", `AI enrichment service unreachable: ${msg}`);
+        tracker.complete("spec_generation_ai", "Service unreachable — emergency fallback candidate");
       }
+    }
+
+    if (!emergencyFallbackActive && mode === "full_implementation" && aiServiceUnreachable) {
+      emergencyFallbackActive = true;
+      emergencyFallbackReason = "AI enrichment service unreachable after retries";
+      mode = "baseline_openable";
+      console.warn(`[EMERGENCY FALLBACK] Downgrading to baseline_openable — reason: ${emergencyFallbackReason}`);
+      pipelineWarnings.push({
+        code: "EMERGENCY_FALLBACK_AI_UNREACHABLE",
+        message: `[EMERGENCY FALLBACK] ${emergencyFallbackReason}`,
+        stage: "emergency-fallback",
+        recoverable: false,
+      });
     }
 
     const enrichedPkg = enrichPackageWithContext(pkg, ctx, artifacts, aiSkills);
@@ -1034,6 +977,8 @@ export async function generateWorkflowSpecs(
           fingerprint: fp,
           generationMode: mode,
           timestamp: new Date().toISOString(),
+          emergencyFallbackActive,
+          emergencyFallbackReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
         });
       } catch (e) {
         console.warn(`[Pipeline] Failed to persist spec snapshot: ${(e as Error).message}`);
@@ -1048,6 +993,9 @@ export async function generateWorkflowSpecs(
       artifacts,
       pipelineWarnings,
       usedAIFallback,
+      emergencyFallbackActive,
+      emergencyFallbackReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
+      effectiveMode: mode,
     };
   } finally {
     tracker.cleanup();
@@ -1065,8 +1013,6 @@ export async function compilePackageFromSpecs(
     onMetaValidation?: (event: MetaValidationEvent) => void;
     onPipelineProgress?: PipelineProgressCallback;
     metaValidationMode?: MetaValidationMode;
-    maxDowngradeAttempts?: number;
-    _downgradeAttempt?: number;
     _accumulatedDowngrades?: DowngradeEvent[];
     _accumulatedWarnings?: PipelineWarning[];
     _priorCompliantWorkflows?: Array<{ name: string; content: string }>;
@@ -1077,19 +1023,26 @@ export async function compilePackageFromSpecs(
 ): Promise<PipelineResult> {
   const ver = options?.version || computeVersion();
   const requestedMode: GenerationMode | undefined = options?.generationMode;
-  const mode: GenerationMode = requestedMode || "baseline_openable";
+  if (requestedMode === "baseline_openable") {
+    console.warn(`[Pipeline] compilePackageFromSpecs: baseline_openable rejected — only available as emergency fallback, using full_implementation`);
+  }
+  const emergencyFallbackActive = specResult.emergencyFallbackActive || false;
+  const emergencyFallbackReason = specResult.emergencyFallbackReason || "";
+  const mode: GenerationMode = emergencyFallbackActive
+    ? (specResult.effectiveMode || "baseline_openable")
+    : "full_implementation";
   const pipelineWarnings: PipelineWarning[] = [
     ...specResult.pipelineWarnings,
     ...(options?._accumulatedWarnings || []),
   ];
   const downgrades: DowngradeEvent[] = options?._accumulatedDowngrades ? [...options._accumulatedDowngrades] : [];
   let usedAIFallback = specResult.usedAIFallback;
-  const maxDowngradeAttempts = options?.maxDowngradeAttempts ?? 1;
-  const currentDowngradeAttempt = options?._downgradeAttempt ?? 0;
   const priorCompliantWorkflows = options?._priorCompliantWorkflows || [];
 
-  if (!requestedMode) {
-    console.log(`[Pipeline] compilePackageFromSpecs: baseline_openable is the default mode (no explicit mode requested)`);
+  if (emergencyFallbackActive) {
+    console.warn(`[Pipeline] compilePackageFromSpecs: emergency fallback active — using ${mode} (reason: ${emergencyFallbackReason})`);
+  } else if (!requestedMode) {
+    console.log(`[Pipeline] compilePackageFromSpecs: full_implementation is the default mode (no explicit mode requested)`);
   }
 
   try {
@@ -1121,6 +1074,12 @@ export async function compilePackageFromSpecs(
   const enriched = specResult.enrichedPkg;
   const fp = specResult.fingerprint;
 
+  if (emergencyFallbackActive) {
+    if (!enriched.internal) enriched.internal = {};
+    enriched.internal.emergencyFallbackActive = true;
+    enriched.internal.emergencyFallbackReason = emergencyFallbackReason;
+  }
+
   try {
     if (options?.runId) {
       try {
@@ -1148,57 +1107,6 @@ export async function compilePackageFromSpecs(
         options.onPipelineProgress!(event);
       } : undefined, _pipelineProfile, options?.complexityTier);
     } catch (err) {
-      if (err instanceof QualityGateError && mode === "full_implementation" && currentDowngradeAttempt < maxDowngradeAttempts) {
-        const downgradeEvent: DowngradeEvent = {
-          fromMode: "full_implementation",
-          toMode: "baseline_openable",
-          reason: `Quality gate failed after auto-remediation: ${err.message.slice(0, 200)}`,
-          triggerStage: "compiling",
-          timestamp: new Date(),
-        };
-        downgrades.push(downgradeEvent);
-        pipelineWarnings.push({
-          code: "AUTO_DOWNGRADE_QUALITY_GATE",
-          message: `Auto-downgraded from full_implementation to baseline_openable: quality gate failed after remediation`,
-          stage: "compiling",
-          recoverable: true,
-        });
-        const qgBlockingFiles = new Set<string>();
-        if (err.qualityGateResult) {
-          const classified = classifyQualityIssues(err.qualityGateResult);
-          const blockingFiles = getBlockingFiles(classified);
-          Array.from(blockingFiles).forEach(bf => qgBlockingFiles.add(bf));
-        }
-        const compliantFromCurrent = (err.compliantWorkflows || []).filter((w: { name: string; content: string }) => {
-          const shortName = w.name.split("/").pop() || w.name;
-          return !qgBlockingFiles.has(shortName);
-        });
-        const compliantFromPrior = priorCompliantWorkflows.filter(w => {
-          const shortName = w.name.split("/").pop() || w.name;
-          return !qgBlockingFiles.has(shortName);
-        });
-        const mergedCompliant = [...compliantFromCurrent];
-        const currentNames = new Set(mergedCompliant.map(w => w.name));
-        for (const pw of compliantFromPrior) {
-          if (!currentNames.has(pw.name)) {
-            mergedCompliant.push(pw);
-          }
-        }
-        if (mergedCompliant.length > 0) {
-          console.log(`[Pipeline] Carrying forward ${mergedCompliant.length} compliant workflow(s) (${compliantFromCurrent.length} from current attempt, ${compliantFromPrior.length} from prior): ${mergedCompliant.map(w => w.name).join(", ")}`);
-        }
-        tracker.warn("xaml_emission", `Quality gate failed — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
-        tracker.cleanup();
-        console.log(`[Pipeline] Auto-downgrade: full_implementation → baseline_openable due to QualityGateError (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
-        return compilePackageFromSpecs(ideaId, specResult, pkg, {
-          ...options,
-          generationMode: "baseline_openable",
-          _downgradeAttempt: currentDowngradeAttempt + 1,
-          _accumulatedDowngrades: downgrades,
-          _accumulatedWarnings: pipelineWarnings,
-          _priorCompliantWorkflows: mergedCompliant,
-        });
-      }
       throw err;
     }
 
@@ -1231,49 +1139,6 @@ export async function compilePackageFromSpecs(
         tracker.warn("xaml_emission", w.message);
       }
 
-      const excessiveStrippingWarning = buildResult.dependencyWarnings.find(
-        w => w.code === "EXCESSIVE_PROPERTY_STRIPPING" && !w.recoverable
-      );
-      if (excessiveStrippingWarning && mode !== "baseline_openable" && currentDowngradeAttempt < maxDowngradeAttempts) {
-        const downgradeEvent: DowngradeEvent = {
-          fromMode: mode,
-          toMode: "baseline_openable",
-          reason: `Excessive non-catalog property stripping detected: ${excessiveStrippingWarning.message}`,
-          triggerStage: "compiling",
-          timestamp: new Date(),
-        };
-        downgrades.push(downgradeEvent);
-        pipelineWarnings.push({
-          code: "AUTO_DOWNGRADE_EXCESSIVE_STRIPPING",
-          message: `Auto-downgraded to baseline_openable: excessive non-catalog property stripping indicates generation hallucination`,
-          stage: "compiling",
-          recoverable: true,
-        });
-        const strippingBlockedFiles = new Set<string>();
-        buildResult.dependencyWarnings?.forEach(w => {
-          if (w.code === "EXCESSIVE_PROPERTY_STRIPPING" && w.affectedFiles) {
-            w.affectedFiles.forEach(f => strippingBlockedFiles.add(f));
-          }
-        });
-        const compliantEntries = buildResult.xamlEntries.filter(entry => {
-          const shortName = entry.name.split("/").pop() || entry.name;
-          return !strippingBlockedFiles.has(shortName);
-        });
-        if (compliantEntries.length > 0) {
-          console.log(`[Pipeline] Carrying forward ${compliantEntries.length} compliant workflow(s) from build: ${compliantEntries.map(e => e.name).join(", ")}`);
-        }
-        tracker.warn("xaml_emission", `Excessive property stripping detected — auto-downgrading to baseline_openable (attempt ${currentDowngradeAttempt + 1}/${maxDowngradeAttempts})`);
-        tracker.cleanup();
-        console.log(`[Pipeline] Auto-downgrade: ${mode} → baseline_openable due to excessive property stripping`);
-        return compilePackageFromSpecs(ideaId, specResult, pkg, {
-          ...options,
-          generationMode: "baseline_openable",
-          _downgradeAttempt: currentDowngradeAttempt + 1,
-          _accumulatedDowngrades: downgrades,
-          _accumulatedWarnings: pipelineWarnings,
-          _priorCompliantWorkflows: compliantEntries.length > 0 ? compliantEntries : undefined,
-        });
-      }
     }
 
     if (options?.runId) {
@@ -1286,33 +1151,7 @@ export async function compilePackageFromSpecs(
     const archiveValidation = validateArchiveStructure(buildResult.buffer);
     if (!archiveValidation.valid) {
       tracker.warn("compliance_normalization", `Archive validation failed: ${archiveValidation.errors.join("; ")}`);
-      if (mode !== "baseline_openable" && currentDowngradeAttempt < maxDowngradeAttempts) {
-        const downgradeEvent: DowngradeEvent = {
-          fromMode: mode,
-          toMode: "baseline_openable",
-          reason: `Archive validation failed: ${archiveValidation.errors.join("; ")}`,
-          triggerStage: "validating",
-          timestamp: new Date(),
-        };
-        downgrades.push(downgradeEvent);
-        pipelineWarnings.push({
-          code: "AUTO_DOWNGRADE_ARCHIVE_INVALID",
-          message: `Auto-downgraded to baseline_openable: archive validation failed (${archiveValidation.errors.join("; ")})`,
-          stage: "validating",
-          recoverable: true,
-        });
-        tracker.cleanup();
-        console.log(`[Pipeline] Auto-downgrade: ${mode} → baseline_openable due to archive validation failure`);
-        return compilePackageFromSpecs(ideaId, specResult, pkg, {
-          ...options,
-          generationMode: "baseline_openable",
-          _downgradeAttempt: currentDowngradeAttempt + 1,
-          _accumulatedDowngrades: downgrades,
-          _accumulatedWarnings: pipelineWarnings,
-          _priorCompliantWorkflows: buildResult.xamlEntries.length > 0 ? buildResult.xamlEntries : undefined,
-        });
-      }
-      const archiveError = `Archive validation failed and no downgrade available: ${archiveValidation.errors.join("; ")}`;
+      const archiveError = `Archive validation failed: ${archiveValidation.errors.join("; ")}`;
       tracker.fail("compliance_normalization", archiveError);
       tracker.cleanup();
       throw new Error(archiveError);
@@ -1809,7 +1648,7 @@ export async function compilePackageFromSpecs(
 
     tracker.start("packaging_dhg_guide", "Generating Developer Handoff Guide");
     tracker.heartbeat("packaging_dhg_guide", () => "Analyzing workflows and writing guide");
-    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport);
+    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport, emergencyFallbackActive, emergencyFallbackReason);
     tracker.complete("packaging_dhg_guide", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
@@ -1897,6 +1736,8 @@ export async function compilePackageFromSpecs(
       outcomeReport: buildResult.outcomeReport,
       finalQualityReport,
       packageViable,
+      fallbackModeActive: emergencyFallbackActive || undefined,
+      fallbackModeReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
       dependencyDiagnostics: buildResult.dependencyDiagnostics,
       dependencyGaps: buildResult.dependencyGaps,
       ambiguousResolutions: buildResult.ambiguousResolutions,
@@ -1980,8 +1821,6 @@ export async function generateUiPathPackage(
     onPipelineProgress?: PipelineProgressCallback;
     preloadedContext?: IdeaContext;
     metaValidationMode?: MetaValidationMode;
-    maxDowngradeAttempts?: number;
-    _downgradeAttempt?: number;
     _accumulatedDowngrades?: DowngradeEvent[];
     _accumulatedWarnings?: PipelineWarning[];
     _usedAIFallback?: boolean;
@@ -1993,17 +1832,18 @@ export async function generateUiPathPackage(
   setAssemblyTargetFramework(pipelineTargetFramework);
   const ver = options?.version || computeVersion();
   const requestedMode: GenerationMode | undefined = options?.generationMode;
-  let mode: GenerationMode = requestedMode || "baseline_openable";
+  if (requestedMode === "baseline_openable") {
+    console.warn(`[Pipeline] generateUiPathPackage: baseline_openable rejected — only available as emergency fallback, using full_implementation`);
+  }
+  const mode: GenerationMode = "full_implementation";
   const mvMode: MetaValidationMode = options?.metaValidationMode || "Auto";
   const pipelineWarnings: PipelineWarning[] = options?._accumulatedWarnings ? [...options._accumulatedWarnings] : [];
   const downgrades: DowngradeEvent[] = options?._accumulatedDowngrades ? [...options._accumulatedDowngrades] : [];
   let usedAIFallback = options?._usedAIFallback || false;
   const forceRebuild = options?.forceRebuild || false;
-  let upgradeAttempted = false;
-  let upgradeSucceeded = false;
 
   if (!requestedMode) {
-    console.log(`[Pipeline] generateUiPathPackage: baseline_openable is the default mode (no explicit mode requested)`);
+    console.log(`[Pipeline] generateUiPathPackage: full_implementation is the default mode (no explicit mode requested)`);
   }
 
   const noop: PipelineProgressCallback = () => {};
@@ -2056,34 +1896,7 @@ export async function generateUiPathPackage(
     });
     console.log(`[Pipeline] Complexity classification: tier=${complexity.tier}, score=${complexity.score}, streamlined=${complexity.streamlined}, reasons=${complexity.reasons.join("; ")}`);
 
-    if (mode === "baseline_openable" && !requestedMode) {
-      upgradeAttempted = true;
-      const upgradeCheck = checkFullImplementationUpgrade(pkg, complexity);
-      if (upgradeCheck.canUpgrade) {
-        mode = "full_implementation";
-        upgradeSucceeded = true;
-        console.log(`[Pipeline] PRE-CHECK UPGRADE: baseline_openable → full_implementation (reason: ${upgradeCheck.reason})`);
-        pipelineWarnings.push({
-          code: "MODE_UPGRADE_PRECHECK",
-          message: `Upgraded from baseline_openable to full_implementation: ${upgradeCheck.reason}`,
-          stage: "mode-selection",
-          recoverable: true,
-        });
-        tracker.complete("mode_precheck", `Upgraded to full_implementation: ${upgradeCheck.reason}`, {
-          upgradeAttempted: true,
-          upgradeSucceeded: true,
-          reason: upgradeCheck.reason,
-        });
-      } else {
-        console.log(`[Pipeline] PRE-CHECK: staying with baseline_openable (reason: ${upgradeCheck.reason})`);
-        tracker.complete("mode_precheck", `Staying with baseline_openable: ${upgradeCheck.reason}`, {
-          upgradeAttempted: true,
-          upgradeSucceeded: false,
-          reason: upgradeCheck.reason,
-        });
-      }
-    }
-    console.log(`[Pipeline] INSTRUMENTATION: mode=${mode}, upgradeAttempted=${upgradeAttempted}, upgradeSucceeded=${upgradeSucceeded}, downgrades=${downgrades.length}`);
+    console.log(`[Pipeline] INSTRUMENTATION: mode=${mode}, downgrades=${downgrades.length}`);
 
     const fp = computeFingerprint(pkg, ctx.sdd?.content || "", ctx.mapNodes, ctx.processEdges);
     const degradationKey = (downgrades.length > 0 || usedAIFallback) ? "degraded" : "clean";
@@ -2122,8 +1935,6 @@ export async function generateUiPathPackage(
         onMetaValidation: options?.onMetaValidation,
         onPipelineProgress: options?.onPipelineProgress,
         metaValidationMode: mvMode,
-        maxDowngradeAttempts: options?.maxDowngradeAttempts,
-        _downgradeAttempt: options?._downgradeAttempt,
         _accumulatedDowngrades: downgrades,
         _accumulatedWarnings: options?._accumulatedWarnings,
         complexityTier: complexity.tier,
