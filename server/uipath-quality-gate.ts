@@ -739,10 +739,23 @@ function extractDeclaredSymbols(content: string): { variables: Map<string, strin
     }
   }
 
-  const propPattern = /<x:Property\s+Name="([^"]+)"\s+Type="([^"]+)"/g;
+  const propPattern = /<x:Property\s+[^>]*?Name="([^"]+)"[^>]*?Type="([^"]+)"/g;
   while ((m = propPattern.exec(content)) !== null) {
     const name = m[1];
     const typeStr = m[2];
+    let direction = "InArgument";
+    if (typeStr.includes("OutArgument")) direction = "OutArgument";
+    else if (typeStr.includes("InOutArgument")) direction = "InOutArgument";
+    const typeMatch = typeStr.match(/Argument\(([^)]+)\)/);
+    const baseType = typeMatch ? typeMatch[1] : typeStr;
+    arguments_.set(name, { type: baseType, direction });
+  }
+
+  const propPatternReverse = /<x:Property\s+[^>]*?Type="([^"]+)"[^>]*?Name="([^"]+)"/g;
+  while ((m = propPatternReverse.exec(content)) !== null) {
+    const name = m[2];
+    if (arguments_.has(name)) continue;
+    const typeStr = m[1];
     let direction = "InArgument";
     if (typeStr.includes("OutArgument")) direction = "OutArgument";
     else if (typeStr.includes("InOutArgument")) direction = "InOutArgument";
@@ -2374,7 +2387,7 @@ export function validatePackage(input: QualityGateInput): QualityGateResult {
       }
     }
     const xPropNames = new Set<string>();
-    const xPropPattern = /<x:Property\s+Name="([^"]+)"/g;
+    const xPropPattern = /<x:Property\s+[^>]*?Name="([^"]+)"/g;
     let xpm;
     while ((xpm = xPropPattern.exec(entry.content)) !== null) {
       xPropNames.add(xpm[1]);

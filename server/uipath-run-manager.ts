@@ -618,7 +618,7 @@ async function executeRun(
     }
 
     await finishRun(runId, activeRun, phaseEvents, {
-      status: isDegraded ? "completed_with_warnings" : "completed",
+      status: pipelineResult.finalQualityReport?.derivedStatus || (isDegraded ? "completed_with_warnings" : "completed"),
       outcomeReport: outcomeReportJson,
       dhgContent: pipelineResult.dhgContent || undefined,
       generationMode: pipelineResult.generationMode,

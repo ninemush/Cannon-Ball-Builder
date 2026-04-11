@@ -232,6 +232,9 @@ export interface CriticalStepLoweringResult {
   loweringOutcome: LoweringOutcome;
   packageFatal: boolean;
   remediationHint: string;
+  degradedToHandoff?: boolean;
+  activityReplacement?: "handoff_block";
+  degradationClass?: "A" | "B";
 }
 
 export interface CriticalActivityLoweringDiagnostics {
@@ -371,6 +374,50 @@ function getRegistryPropertyDef(className: string, packageId: string, propName: 
   const actDef = pkg.activities.find(a => a.className === className);
   if (!actDef) return null;
   return actDef.properties.find(p => p.name === propName) || null;
+}
+
+const CLASS_B_UNSAFE_NAMES = new Set([
+  "Selector", "Target", "FormSchemaPath", "WorkflowFileName",
+  "DataTable", "EntityType", "EntityObject", "TaskObject", "TaskDataJson",
+]);
+
+export function classifyPropertyDegradation(
+  propName: string,
+  catalogEntry: ActivityPropertyDef | null,
+): "placeholder" | "replace" {
+  if (catalogEntry) {
+    if (catalogEntry.xamlSyntax === "child-element") return "replace";
+    if (catalogEntry.clrType !== "System.String") return "replace";
+    if (
+      catalogEntry.argumentWrapper &&
+      (catalogEntry.argumentWrapper === "InArgument" || catalogEntry.argumentWrapper === "OutArgument") &&
+      catalogEntry.clrType !== "System.String"
+    ) {
+      return "replace";
+    }
+  }
+  if (CLASS_B_UNSAFE_NAMES.has(propName)) return "replace";
+  return "placeholder";
+}
+
+export function classifyMissingPropertiesDegradation(
+  missingProps: string[],
+  className: string,
+  packageId: string,
+): { degradationClass: "A" | "B"; activityReplacement?: "handoff_block" } {
+  let hasClassB = false;
+  for (const propName of missingProps) {
+    const propDef = getRegistryPropertyDef(className, packageId, propName);
+    const classification = classifyPropertyDegradation(propName, propDef);
+    if (classification === "replace") {
+      hasClassB = true;
+      break;
+    }
+  }
+  if (hasClassB) {
+    return { degradationClass: "B", activityReplacement: "handoff_block" };
+  }
+  return { degradationClass: "A" };
 }
 
 function checkRequiredPropertyCompleteness(
@@ -540,6 +587,7 @@ export function lowerCriticalActivityNode(
 
   const missingProps = checkRequiredPropertyCompleteness(contract, properties);
   if (missingProps.length > 0) {
+    const degradation = classifyMissingPropertiesDegradation(missingProps, contract.className, contract.packageId);
     return {
       file,
       workflow,
@@ -555,8 +603,11 @@ export function lowerCriticalActivityNode(
       missingRequiredProperties: missingProps,
       rejectedPseudoRepresentations: [],
       loweringOutcome: "rejected_incomplete_contract",
-      packageFatal: true,
+      packageFatal: false,
       remediationHint: `Activity ${contract.concreteType} is missing required properties: ${missingProps.join(", ")}`,
+      degradedToHandoff: true,
+      degradationClass: degradation.degradationClass,
+      ...(degradation.activityReplacement ? { activityReplacement: degradation.activityReplacement } : {}),
     };
   }
 
@@ -753,10 +804,11 @@ export function loweringDiagnosticsToPackageViolations(
   activityType: string;
   propertyName: string;
   violationType: "critical_activity_lowering_failure";
-  severity: "execution_blocking";
+  severity: "execution_blocking" | "handoff_required";
   packageFatal: boolean;
   handoffGuidanceAvailable: boolean;
   remediationHint: string;
+  degradationClass?: "A" | "B";
 }> {
   const violations: Array<{
     file: string;
@@ -764,10 +816,11 @@ export function loweringDiagnosticsToPackageViolations(
     activityType: string;
     propertyName: string;
     violationType: "critical_activity_lowering_failure";
-    severity: "execution_blocking";
+    severity: "execution_blocking" | "handoff_required";
     packageFatal: boolean;
     handoffGuidanceAvailable: boolean;
     remediationHint: string;
+    degradationClass?: "A" | "B";
   }> = [];
 
   for (const result of diagnostics.perStepResults) {
@@ -782,6 +835,19 @@ export function loweringDiagnosticsToPackageViolations(
         packageFatal: true,
         handoffGuidanceAvailable: true,
         remediationHint: result.remediationHint,
+      });
+    } else if (result.degradedToHandoff) {
+      violations.push({
+        file: result.file,
+        workflow: result.workflow,
+        activityType: result.resolvedConcreteType || result.detectedIntent,
+        propertyName: result.missingRequiredProperties.join(", ") || "FamilyContract",
+        violationType: "critical_activity_lowering_failure",
+        severity: "handoff_required",
+        packageFatal: false,
+        handoffGuidanceAvailable: true,
+        remediationHint: result.remediationHint,
+        degradationClass: result.degradationClass,
       });
     }
   }
@@ -995,6 +1061,7 @@ export function runXamlLevelCriticalActivityLowering(
       }
 
       if (missingProps.length > 0) {
+        const degradation = classifyMissingPropertiesDegradation(missingProps, contract.className, contract.packageId);
         perStepResults.push({
           file: shortName,
           workflow,
@@ -1010,8 +1077,11 @@ export function runXamlLevelCriticalActivityLowering(
           missingRequiredProperties: missingProps,
           rejectedPseudoRepresentations: [],
           loweringOutcome: "rejected_incomplete_contract",
-          packageFatal: true,
+          packageFatal: false,
           remediationHint: `Activity ${contract.concreteType} is missing required properties: ${missingProps.join(", ")}`,
+          degradedToHandoff: true,
+          degradationClass: degradation.degradationClass,
+          ...(degradation.activityReplacement ? { activityReplacement: degradation.activityReplacement } : {}),
         });
         continue;
       }
@@ -1181,6 +1251,9 @@ export interface MailFamilyLockResult {
   connectorIntentDetected?: ConnectorIntent | null;
   collapseApplied?: boolean;
   rewriteDirective?: RewriteDirective | null;
+  degradedToHandoff?: boolean;
+  activityReplacement?: "handoff_block";
+  degradationClass?: "A" | "B";
 }
 
 export interface RewriteDirective {
@@ -1801,6 +1874,7 @@ export function lockClusterToFamily(
                 collapseApplied: true,
               };
             } else {
+              const degradation = classifyMissingPropertiesDegradation(missingProps, contract.className, contract.packageId);
               return {
                 clusterId, file, workflow,
                 selectedFamily: resolvedFamily,
@@ -1810,11 +1884,14 @@ export function lockClusterToFamily(
                 lockRejectionReason: `Connector intent resolved family "${resolvedFamily}" but missing required properties: ${missingProps.join(", ")}`,
                 narrativeRepresentationsRejected: [],
                 missingRequiredProperties: missingProps,
-                packageFatal: true,
+                packageFatal: false,
                 crossFamilyDriftViolation: false,
                 detectedRepresentations,
                 connectorIntentDetected: connectorIntent,
                 collapseApplied: false,
+                degradedToHandoff: true,
+                degradationClass: degradation.degradationClass,
+                ...(degradation.activityReplacement ? { activityReplacement: degradation.activityReplacement } : {}),
               };
             }
           }
@@ -2017,6 +2094,7 @@ export function lockClusterToFamily(
 
   const missingProps = checkRequiredPropertyCompleteness(contract, propsToCheck);
   if (missingProps.length > 0) {
+    const degradation = classifyMissingPropertiesDegradation(missingProps, contract.className, contract.packageId);
     return {
       clusterId,
       file,
@@ -2028,12 +2106,15 @@ export function lockClusterToFamily(
       lockRejectionReason: `Missing required properties: ${missingProps.join(", ")}`,
       narrativeRepresentationsRejected: [],
       missingRequiredProperties: missingProps,
-      packageFatal: true,
+      packageFatal: false,
       crossFamilyDriftViolation: false,
       detectedRepresentations,
       connectorIntentDetected: connectorIntent,
       collapseApplied: multipleRepresentations,
       propertyProvenance: collapseResult?.provenance,
+      degradedToHandoff: true,
+      degradationClass: degradation.degradationClass,
+      ...(degradation.activityReplacement ? { activityReplacement: degradation.activityReplacement } : {}),
     };
   }
 

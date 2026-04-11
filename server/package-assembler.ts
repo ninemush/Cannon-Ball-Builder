@@ -68,6 +68,86 @@ import archiver from "archiver";
     }
     return null;
   }
+
+  function replaceActivityNodeRecursive(nodes: any[], predicate: (n: any) => boolean, replacement: any): boolean {
+    for (let i = 0; i < nodes.length; i++) {
+      if (predicate(nodes[i])) {
+        nodes[i] = replacement;
+        return true;
+      }
+      const childKeys = ["children", "tryChildren", "catchChildren", "finallyChildren", "thenChildren", "elseChildren", "bodyChildren"];
+      for (const key of childKeys) {
+        if (Array.isArray(nodes[i][key])) {
+          if (replaceActivityNodeRecursive(nodes[i][key], predicate, replacement)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function createHandoffBlockNode(originalDisplayName: string, originalType: string, missingProps: string[]): any {
+    return {
+      kind: "sequence",
+      displayName: `[HANDOFF: ${originalDisplayName}]`,
+      children: [
+        {
+          kind: "activity",
+          template: "Comment",
+          displayName: `HANDOFF: ${originalDisplayName}`,
+          properties: {
+            Text: `[HANDOFF] This activity replaces "${originalDisplayName}" (${originalType}). ` +
+              `Missing required properties: ${missingProps.join(", ")}. ` +
+              `Developer must implement the actual ${originalType} activity with the correct property values.`,
+          },
+          errorHandling: "none",
+        },
+        {
+          kind: "activity",
+          template: "LogMessage",
+          displayName: `Log Handoff: ${originalDisplayName}`,
+          properties: {
+            Level: "Warn",
+            Message: `"[HANDOFF] Activity '${originalDisplayName}' (${originalType}) requires developer implementation — missing: ${missingProps.join(", ")}"`,
+          },
+          errorHandling: "none",
+        },
+      ],
+    };
+  }
+
+  function applyDegradationToSpec(spec: any, degradedResults: Array<{ sourceStep: string; detectedIntent: string; missingRequiredProperties: string[]; degradationClass?: "A" | "B"; activityReplacement?: "handoff_block"; resolvedConcreteType?: string | null }>): number {
+    if (!spec?.rootSequence?.children) return 0;
+    let mutationCount = 0;
+    for (const result of degradedResults) {
+      if (result.degradationClass === "A") {
+        const node = findActivityNodeRecursive(spec.rootSequence.children, (n: any) =>
+          n.displayName === result.sourceStep || n.template === result.detectedIntent
+        );
+        if (node && node.properties) {
+          for (const propName of result.missingRequiredProperties) {
+            node.properties[propName] = `[TODO: Provide ${propName}]`;
+          }
+          if (!node.annotations) node.annotations = {};
+          node.annotations["sap2010:Annotation.AnnotationText"] =
+            `[HANDOFF] Missing properties filled with placeholders: ${result.missingRequiredProperties.join(", ")}`;
+          mutationCount++;
+        }
+      } else if (result.activityReplacement === "handoff_block") {
+        const handoffNode = createHandoffBlockNode(
+          result.sourceStep,
+          result.resolvedConcreteType || result.detectedIntent,
+          result.missingRequiredProperties,
+        );
+        const replaced = replaceActivityNodeRecursive(
+          spec.rootSequence.children,
+          (n: any) => n.displayName === result.sourceStep || n.template === result.detectedIntent,
+          handoffNode,
+        );
+        if (replaced) mutationCount++;
+      }
+    }
+    return mutationCount;
+  }
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
@@ -4849,6 +4929,28 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                 stage: "pre-emission-lowering",
                 recoverable: false,
               });
+            } else if (lockResult.degradedToHandoff) {
+              console.warn(`[UiPath] Mail family lock DEGRADED cluster "${lockResult.clusterId}" in "${wfName}": ${lockResult.lockRejectionReason} — activity-level degradation applied`);
+              dependencyWarnings.push({
+                code: "MAIL_ACTIVITY_DEGRADED",
+                message: `Mail activity degraded in cluster "${lockResult.clusterId}" (${lockResult.lockRejectionReason}) — missing properties: ${lockResult.missingRequiredProperties.join(", ")}`,
+                stage: "pre-emission-lowering",
+                recoverable: true,
+              });
+              if (spec?.rootSequence?.children) {
+                const mailDegradedResults = [{
+                  sourceStep: lockResult.clusterId,
+                  detectedIntent: lockResult.concreteActivityType || "",
+                  missingRequiredProperties: lockResult.missingRequiredProperties,
+                  degradationClass: lockResult.degradationClass,
+                  activityReplacement: lockResult.activityReplacement,
+                  resolvedConcreteType: lockResult.concreteActivityType,
+                }];
+                const mailMutCount = applyDegradationToSpec(spec, mailDegradedResults);
+                if (mailMutCount > 0) {
+                  console.log(`[UiPath] Applied ${mailMutCount} mail activity degradation mutation(s) to spec for "${wfName}"`);
+                }
+              }
             } else if (lockResult.locked) {
               console.log(`[UiPath] Mail family lock LOCKED cluster "${lockResult.clusterId}" to family "${lockResult.selectedFamily}" in "${wfName}"`);
             }
@@ -4867,6 +4969,22 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           continue;
         }
+        const degradedResults = preEmissionGate.diagnostics.perStepResults.filter(r => r.degradedToHandoff);
+        if (degradedResults.length > 0) {
+          for (const degraded of degradedResults) {
+            console.log(`[UiPath] Pre-emission lowering DEGRADED "${degraded.sourceStep}" in "${wfName}" (class ${degraded.degradationClass || "B"}): ${degraded.remediationHint}`);
+            dependencyWarnings.push({
+              code: "CRITICAL_ACTIVITY_DEGRADED",
+              message: `Activity "${degraded.sourceStep}" degraded (class ${degraded.degradationClass || "B"}): ${degraded.remediationHint}`,
+              stage: "pre-emission-lowering",
+              recoverable: true,
+            });
+          }
+          const mutCount = applyDegradationToSpec(spec, degradedResults);
+          if (mutCount > 0) {
+            console.log(`[UiPath] Applied ${mutCount} activity-level degradation mutation(s) to spec for "${wfName}"`);
+          }
+        }
         if (!preEmissionGate.passed) {
           for (const failure of preEmissionGate.fatalFailures) {
             console.warn(`[UiPath] Pre-emission critical activity lowering REJECTED "${failure.sourceStep}" in "${wfName}": ${failure.remediationHint}`);
@@ -4878,7 +4996,41 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             });
           }
           console.warn(`[UiPath] Pre-emission lowering gate FAILED for "${wfName}" — ${preEmissionGate.fatalFailures.length} fatal failure(s), blocking XAML emission`);
-          const spResult = tryStructuralPreservationOrStub("", wfName, `Pre-emission critical activity lowering failed — ${preEmissionGate.fatalFailures.map(f => f.remediationHint).join("; ")}`);
+
+          const category1Outcomes = new Set(["rejected_no_concrete_mapping", "rejected_framework_incompatible", "rejected_package_unavailable"]);
+          const hasOnlyCategory1 = preEmissionGate.fatalFailures.every(f => category1Outcomes.has(f.loweringOutcome));
+
+          let spResult: { content: string; wasFullStub: boolean };
+          if (hasOnlyCategory1) {
+            spResult = tryStructuralPreservationOrStub("", wfName, `Pre-emission critical activity lowering failed — ${preEmissionGate.fatalFailures.map(f => f.remediationHint).join("; ")}`);
+          } else {
+            let shellXaml = "";
+            try {
+              const specClone = JSON.parse(JSON.stringify(spec));
+              for (const failure of preEmissionGate.fatalFailures) {
+                if (category1Outcomes.has(failure.loweringOutcome)) continue;
+                if (specClone?.rootSequence?.children) {
+                  const handoffNode = createHandoffBlockNode(
+                    failure.sourceStep,
+                    failure.resolvedConcreteType || failure.detectedIntent,
+                    failure.missingRequiredProperties.length > 0 ? failure.missingRequiredProperties : ["(structural failure)"],
+                  );
+                  replaceActivityNodeRecursive(
+                    specClone.rootSequence.children,
+                    (n: any) => n.displayName === failure.sourceStep || n.template === failure.detectedIntent,
+                    handoffNode,
+                  );
+                }
+              }
+              setActiveCallerWorkflowName(wfName);
+              const shellResult = assembleWorkflowFromSpec(specClone, enrichEntry.processType);
+              shellXaml = shellResult.xaml;
+            } catch {
+              console.warn(`[UiPath] Shell-preserving assembly failed for "${wfName}" — falling back to full stub`);
+            }
+            spResult = tryStructuralPreservationOrStub(shellXaml, wfName, `Pre-emission critical activity lowering failed — ${preEmissionGate.fatalFailures.map(f => f.remediationHint).join("; ")}`);
+          }
+
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, spResult.content);
           generatedWorkflowNames.add(wfName);
           complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Critical activity lowering gate blocked emission`, wasFullStub: spResult.wasFullStub });
@@ -6760,6 +6912,34 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         });
       }
       console.log(`[UiPath Recovery] Registered ${deferredHallucinatedRecoveries.length} hallucinated activity remediation(s) — targeted for per-activity recovery instead of package-level downgrade`);
+    }
+    for (const diag of collectedPreEmissionDiagnostics) {
+      for (const result of diag.perStepResults) {
+        if (result.degradedToHandoff) {
+          outcomeRemediations.push({
+            level: "activity",
+            file: `${result.file}`,
+            remediationCode: "DEGRADED_ACTIVITY_MISSING_PROPERTY",
+            reason: `Activity "${result.sourceStep}" missing required properties: ${result.missingRequiredProperties.join(", ")} — degraded to ${result.degradationClass === "A" ? "placeholder" : "handoff block"}`,
+            classifiedCheck: "critical-activity-degradation",
+            developerAction: `Provide the missing properties for "${result.resolvedConcreteType || result.detectedIntent}": ${result.missingRequiredProperties.join(", ")}`,
+            estimatedEffortMinutes: 5,
+          });
+        }
+      }
+    }
+    for (const lockResult of collectedMailFamilyLockResults) {
+      if (lockResult.degradedToHandoff && lockResult.missingRequiredProperties.length > 0) {
+        outcomeRemediations.push({
+          level: "activity",
+          file: `${lockResult.file}`,
+          remediationCode: "DEGRADED_ACTIVITY_MISSING_PROPERTY",
+          reason: `Mail activity in cluster "${lockResult.clusterId}" missing required properties: ${lockResult.missingRequiredProperties.join(", ")} — degraded to ${lockResult.degradationClass === "A" ? "placeholder" : "handoff block"}`,
+          classifiedCheck: "critical-activity-degradation",
+          developerAction: `Provide the missing properties for mail activity "${lockResult.concreteActivityType || "unknown"}": ${lockResult.missingRequiredProperties.join(", ")}`,
+          estimatedEffortMinutes: 5,
+        });
+      }
     }
     const outcomeAutoRepairs: AutoRepairEntry[] = [...placeholderCleanupRepairs];
     const structuralPreservationMetrics: StructuralPreservationMetrics[] = [];
@@ -10055,7 +10235,7 @@ ${depEntries}
     "UNSAFE_VARIABLE_NAME",
     "empty-catches",
   ]);
-  const stubbedFiles = new Set(complianceFallbacks.map(fb => fb.file));
+  const stubbedFiles = new Set(complianceFallbacks.filter(fb => fb.wasFullStub).map(fb => fb.file));
   for (const esf of earlyStubFallbacks) stubbedFiles.add(esf);
   for (const r of outcomeRemediations) {
     if (r.remediationCode === "STUB_WORKFLOW_BLOCKING" || r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE") {

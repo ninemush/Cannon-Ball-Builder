@@ -209,7 +209,8 @@ export type RemediationCode =
   | "UNDECLARED_VARIABLE_MANUAL"
   | "INVOKE_ARG_TYPE_MISMATCH"
   | "POST_ASSEMBLY_REPAIR"
-  | "ASSIGN_TO_FALLBACK_VARIABLE";
+  | "ASSIGN_TO_FALLBACK_VARIABLE"
+  | "DEGRADED_ACTIVITY_MISSING_PROPERTY";
 
 export type RepairCode =
   | "REPAIR_ALIAS_NORMALIZE"
@@ -1266,7 +1267,42 @@ export async function compilePackageFromSpecs(
         };
 
         const confidenceResult = calculateConfidenceScore(scorerInput);
-        const shouldEngage = mvMode !== "Off" && (mvMode === "Always" || (mvMode === "Auto" && confidenceResult.shouldEngage));
+
+        const fixableCategories = ["ENUM_VIOLATIONS", "NESTED_ARGUMENTS", "LITERAL_EXPRESSIONS", "UNDECLARED_VARIABLES"];
+        const fixableDefectCount = qgResult?.violations.filter(v => fixableCategories.includes(v.check)).length || 0;
+        const hasFixableDefects = fixableDefectCount > 0;
+
+        const remediations = buildResult.outcomeReport?.remediations || [];
+        const degradedFiles = new Set<string>();
+        for (const r of remediations) {
+          if (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE") {
+            degradedFiles.add(r.file);
+          }
+        }
+        for (const r of remediations) {
+          if (r.remediationCode === "DEGRADED_ACTIVITY_MISSING_PROPERTY" && r.file) {
+            degradedFiles.add(r.file);
+          }
+        }
+        const reframeworkFileCount = buildResult.xamlEntries.filter(e =>
+          e.name.includes("GetTransactionData") || e.name.includes("SetTransactionStatus") ||
+          e.name.includes("InitAllSettings") || e.name.includes("InitAllApplications") ||
+          e.name.includes("RetryCurrentTransaction") || e.name.includes("CloseAllApplications") ||
+          e.name.includes("KillAllProcesses")
+        ).length;
+        const totalBusinessWorkflows = (buildResult.xamlEntries?.length || 0) - reframeworkFileCount;
+        const degradationRatio = totalBusinessWorkflows > 0 ? degradedFiles.size / totalBusinessWorkflows : 0;
+        const degradationExceedsThreshold = degradationRatio > 0.6;
+
+        let bypassReason: string | null = null;
+        if (!hasFixableDefects) bypassReason = "no_fixable_defects";
+        else if (degradationExceedsThreshold) bypassReason = "degradation_threshold_exceeded";
+        const shouldBypass = !hasFixableDefects || degradationExceedsThreshold;
+        const shouldEngage = mvMode !== "Off" && !shouldBypass && (mvMode === "Always" || (mvMode === "Auto" && confidenceResult.shouldEngage));
+
+        if (shouldBypass && mvMode !== "Off") {
+          console.log(`[Pipeline] Meta-validation BYPASSED: ${bypassReason} (fixable=${fixableDefectCount}, degradation=${(degradationRatio * 100).toFixed(0)}%)`);
+        }
 
         options?.onMetaValidation?.({ status: "assessing", confidenceScore: confidenceResult.score });
 
@@ -1558,6 +1594,7 @@ export async function compilePackageFromSpecs(
 
           options?.onMetaValidation?.(completionEvent);
         } else {
+          const mvSkipStatus = (shouldBypass && mvMode !== "Off") ? "bypassed" : "skipped";
           options?.onMetaValidation?.({ status: "not-needed", confidenceScore: confidenceResult.score, durationMs: 0 });
           metaValidationResult = {
             engaged: false,
@@ -1568,9 +1605,10 @@ export async function compilePackageFromSpecs(
             correctionsFailed: 0,
             flatStructureWarnings: 0,
             durationMs: 0,
-            status: "skipped",
+            status: mvSkipStatus,
+            ...(bypassReason ? { bypassReason } : {}),
           };
-          console.log(`[Pipeline] Meta-validation skipped (mode=${mvMode}, score=${confidenceResult.score.toFixed(2)})`);
+          console.log(`[Pipeline] Meta-validation ${mvSkipStatus} (mode=${mvMode}, score=${confidenceResult.score.toFixed(2)}${bypassReason ? `, bypass=${bypassReason}` : ""})`);
         }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1680,7 +1718,7 @@ export async function compilePackageFromSpecs(
 
     if (options?.runId) {
       try {
-        await storage.updateGenerationRunStatus(options.runId, finalStatus === "FAILED" ? "failed" : "completed");
+        await storage.updateGenerationRunStatus(options.runId, finalStatus === "FAILED" ? "failed" : finalStatus);
       } catch (e) { /* best-effort */ }
     }
 

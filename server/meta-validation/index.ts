@@ -60,5 +60,6 @@ export interface MetaValidationResult {
   correctionsFailed: number;
   flatStructureWarnings: number;
   durationMs: number;
-  status: "clean" | "fixed" | "warnings" | "skipped";
+  status: "clean" | "fixed" | "warnings" | "skipped" | "bypassed";
+  bypassReason?: string;
 }
