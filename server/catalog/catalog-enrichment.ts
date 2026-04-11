@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import type { ActivityCatalog, CatalogActivity, CatalogPackage, CanonicalIdentity, CompositionRule, PropertyConflict } from "./catalog-service";
-import { PACKAGE_NAMESPACE_MAP } from "../xaml/xaml-compliance";
+import { catalogService } from "./catalog-service";
+import { getPackageNamespaceMap } from "../xaml/xaml-compliance";
 
 type Provenance = "authoritative" | "curated";
 
@@ -591,8 +592,12 @@ export function enrichCatalog(catalogPath?: string): { catalog: ActivityCatalog;
   const catalog: ActivityCatalog = JSON.parse(raw);
   const report: EnrichmentReportEntry[] = [];
 
+  if (!catalogService.isLoaded()) {
+    catalogService.load();
+  }
   const packagePrefixMap: Record<string, string> = {};
-  for (const [pkgId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+  const nsMap = getPackageNamespaceMap();
+  for (const [pkgId, info] of Object.entries(nsMap)) {
     packagePrefixMap[pkgId] = info.prefix;
   }
 

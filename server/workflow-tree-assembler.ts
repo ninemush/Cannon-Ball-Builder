@@ -1847,7 +1847,16 @@ function applyCatalogConformance(xml: string): string {
   for (const correction of validation.corrections) {
     if (correction.type === "move-to-child-element") {
       const propName = correction.property;
-      const propVal = parsed.attributes[propName];
+      let propVal = parsed.attributes[propName];
+      let actualAttrName = propName;
+      if (propVal === undefined) {
+        const lowerProp = propName.toLowerCase();
+        const match = Object.keys(parsed.attributes).find(k => k.toLowerCase() === lowerProp);
+        if (match) {
+          propVal = parsed.attributes[match];
+          actualAttrName = match;
+        }
+      }
       if (propVal === undefined) continue;
 
       const wrapper = correction.argumentWrapper || "InArgument";
@@ -1855,14 +1864,14 @@ function applyCatalogConformance(xml: string): string {
       const wrappedVal = escapeXmlTextContent(ensureBracketWrapped(propVal, _activeDeclarationLookup || undefined));
       const childElement = `<${tag}.${propName}>\n    <${wrapper} x:TypeArguments="${xType}">${wrappedVal}</${wrapper}>\n  </${tag}.${propName}>`;
 
-      const escapedPropName = propName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedAttrName = actualAttrName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const escapedVal = propVal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-      const selfClosingRegex = new RegExp(`(<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?)${escapedPropName}="${escapedVal}"([^>]*?)\\s*\\/>`);
+      const selfClosingRegex = new RegExp(`(<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?)${escapedAttrName}="${escapedVal}"([^>]*?)\\s*\\/>`);
       if (selfClosingRegex.test(corrected)) {
         corrected = corrected.replace(selfClosingRegex, `$1$2>\n  ${childElement}\n</${tag}>`);
       } else {
-        const openRegex = new RegExp(`(<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?)${escapedPropName}="${escapedVal}"([^>]*?>)`);
+        const openRegex = new RegExp(`(<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?)${escapedAttrName}="${escapedVal}"([^>]*?>)`);
         if (openRegex.test(corrected)) {
           corrected = corrected.replace(openRegex, `$1$2\n  ${childElement}`);
           const closingTag = `</${tag}>`;

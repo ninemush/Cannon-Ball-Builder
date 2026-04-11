@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { XMLValidator } from "fast-xml-parser";
 import { buildDeterministicScaffold } from "../deterministic-scaffold";
 import {
@@ -51,7 +51,7 @@ import AdmZip from "adm-zip";
 import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
 import { normalizeXaml, smartBracketWrap, ensureBracketWrapped, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP, injectMissingNamespaceDeclarations, getPrefixToXmlns, getClrNamespaceToXamlPrefix, getNamespaceMismatchDiagnostics, clearNamespaceMismatchDiagnostics, resetNamespaceCaches, insertBeforeClosingCollectionTag } from "../xaml/xaml-compliance";
 import { normalizePropertyToValueIntent } from "../xaml/expression-builder";
-import { scanXamlForRequiredPackages, NAMESPACE_PREFIX_TO_PACKAGE, ACTIVITY_REGISTRY } from "../uipath-activity-registry";
+import { scanXamlForRequiredPackages, ACTIVITY_REGISTRY } from "../uipath-activity-registry";
 import { checkNormalizationInvariants } from "../emission-gate";
 import { metadataService } from "../catalog/metadata-service";
 import { catalogService as catalogServiceImport } from "../catalog/catalog-service";
@@ -250,6 +250,10 @@ function assertPipelineOutput(
   const errors = qgResult.violations.filter(v => v.severity === "error");
   expect(errors.length, `Quality gate errors:\n${errors.map(e => `  ${e.file}: ${e.detail}`).join("\n")}`).toBe(0);
 }
+
+beforeAll(() => {
+  if (!catalogServiceImport.isLoaded()) catalogServiceImport.load();
+});
 
 describe("Pipeline Regression Test Suite", () => {
   describe("Diverse fixture process specs through deterministic scaffold", () => {
@@ -843,38 +847,38 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
 
   describe("Package-family source-of-truth validation (Task #384)", () => {
     it("UiPath.Mail.Activities has consistent prefix mapping across registry and compliance", () => {
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["umail"]).toBe("UiPath.Mail.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("umail")).toBe("UiPath.Mail.Activities");
       expect(PACKAGE_NAMESPACE_MAP["UiPath.Mail.Activities"]).toBeDefined();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.Mail.Activities"].prefix).toBe("umail");
     });
 
     it("UiPath.WebAPI.Activities has consistent prefix mapping across registry and compliance", () => {
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["uweb"]).toBe("UiPath.WebAPI.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("uweb")).toBe("UiPath.WebAPI.Activities");
       expect(PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"]).toBeDefined();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"].prefix).toBe("uweb");
     });
 
     it("UiPath.Persistence.Activities has consistent prefix mapping across registry and compliance", () => {
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["upers"]).toBe("UiPath.Persistence.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("upers")).toBe("UiPath.Persistence.Activities");
       expect(PACKAGE_NAMESPACE_MAP["UiPath.Persistence.Activities"]).toBeDefined();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.Persistence.Activities"].prefix).toBe("upers");
     });
 
     it("UiPath.DataService.Activities has consistent prefix mapping across registry and compliance", () => {
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["uds"]).toBe("UiPath.DataService.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("uds")).toBe("UiPath.DataService.Activities");
       expect(PACKAGE_NAMESPACE_MAP["UiPath.DataService.Activities"]).toBeDefined();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.DataService.Activities"].prefix).toBe("uds");
     });
 
     it("UiPath.CommunicationsMining.Activities has consistent prefix mapping across registry and compliance", () => {
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["ucm"]).toBe("UiPath.CommunicationsMining.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("ucm")).toBe("UiPath.CommunicationsMining.Activities");
       expect(PACKAGE_NAMESPACE_MAP["UiPath.CommunicationsMining.Activities"]).toBeDefined();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.CommunicationsMining.Activities"].prefix).toBe("ucm");
     });
 
     it("UiPath.GSuite.Activities has canonical prefix 'ugs' with no dead reverse mapping", () => {
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["ugs"]).toBe("UiPath.GSuite.Activities");
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["ugsuite"]).toBeUndefined();
+      expect(catalogServiceImport.getPackageForPrefix("ugs")).toBe("UiPath.GSuite.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("ugsuite")).toBeNull();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.GSuite.Activities"]).toBeDefined();
       expect(PACKAGE_NAMESPACE_MAP["UiPath.GSuite.Activities"].prefix).toBe("ugs");
     });
@@ -1907,10 +1911,16 @@ describe("Compiler-invariant regression tests", () => {
     });
 
     it("enforceRequiredProperties uses conservative enforcement when catalog is not loaded", () => {
-      const entries = [{ name: "Main.xaml", content: ENFORCEMENT_TEST_XAML }];
-      const result = enforceRequiredProperties(entries, true);
-      expect(result.totalEnforced).toBe(0);
-      expect(result.summary).toContain("conservative enforcement");
+
+      vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
+      try {
+        const entries = [{ name: "Main.xaml", content: ENFORCEMENT_TEST_XAML }];
+        const result = enforceRequiredProperties(entries, true);
+        expect(result.totalEnforced).toBe(0);
+        expect(result.summary).toContain("conservative enforcement");
+      } finally {
+        vi.mocked(catalogServiceImport.isLoaded).mockRestore();
+      }
     });
 
     it("XAML placeholder cleanup removes sentinel-only attributes entirely", () => {
@@ -2129,20 +2139,32 @@ describe("Compiler-invariant regression tests", () => {
     });
 
     it("pre-compliance guard detects sentinels via broad scan when catalog not loaded", () => {
-      const xamlWithSentinels = `<SendMail DisplayName="Send" Body="PLACEHOLDER" Subject="TODO_impl" To="STUB_val" />`;
-      const entries = [{ name: "Main.xaml", content: xamlWithSentinels }];
-      const guardResult = runPreCompliancePackageModeGuard(entries);
-      expect(guardResult.passed).toBe(false);
-      expect(guardResult.violations.length).toBeGreaterThan(0);
-      expect(guardResult.summary).toContain("broad scan");
+
+      vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
+      try {
+        const xamlWithSentinels = `<SendMail DisplayName="Send" Body="PLACEHOLDER" Subject="TODO_impl" To="STUB_val" />`;
+        const entries = [{ name: "Main.xaml", content: xamlWithSentinels }];
+        const guardResult = runPreCompliancePackageModeGuard(entries);
+        expect(guardResult.passed).toBe(false);
+        expect(guardResult.violations.length).toBeGreaterThan(0);
+        expect(guardResult.summary).toContain("broad scan");
+      } finally {
+        vi.mocked(catalogServiceImport.isLoaded).mockRestore();
+      }
     });
 
     it("guard without catalog passes for clean XAML via broad scan", () => {
-      const cleanXaml = `<SendMail DisplayName="Send Email" Body="Hello World" Subject="Test" To="user@example.com" />`;
-      const entries = [{ name: "Main.xaml", content: cleanXaml }];
-      const guardResult = runPreCompliancePackageModeGuard(entries);
-      expect(guardResult.passed).toBe(true);
-      expect(guardResult.summary).toContain("catalog unavailable");
+
+      vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
+      try {
+        const cleanXaml = `<SendMail DisplayName="Send Email" Body="Hello World" Subject="Test" To="user@example.com" />`;
+        const entries = [{ name: "Main.xaml", content: cleanXaml }];
+        const guardResult = runPreCompliancePackageModeGuard(entries);
+        expect(guardResult.passed).toBe(true);
+        expect(guardResult.summary).toContain("catalog unavailable");
+      } finally {
+        vi.mocked(catalogServiceImport.isLoaded).mockRestore();
+      }
     });
 
     it("applyRequiredPropertyEnforcement removes sentinel attributes in package mode", () => {
@@ -2314,12 +2336,18 @@ describe("Compiler-invariant regression tests", () => {
     });
 
     it("child element sentinel values are detected by conservative enforcement", () => {
-      const xamlWithChildSentinel = `<ui:SendMail DisplayName="Send">
+
+      vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
+      try {
+        const xamlWithChildSentinel = `<ui:SendMail DisplayName="Send">
   <ui:SendMail.Body>PLACEHOLDER</ui:SendMail.Body>
 </ui:SendMail>`;
-      const entries = [{ name: "Test.xaml", content: xamlWithChildSentinel }];
-      const result = enforceRequiredProperties(entries, true);
-      expect(result.summary).toContain("conservative enforcement");
+        const entries = [{ name: "Test.xaml", content: xamlWithChildSentinel }];
+        const result = enforceRequiredProperties(entries, true);
+        expect(result.summary).toContain("conservative enforcement");
+      } finally {
+        vi.mocked(catalogServiceImport.isLoaded).mockRestore();
+      }
     });
 
     it("multiple sentinel types are all removed in single pass", () => {
@@ -5162,8 +5190,8 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
       expect(pnmEntry).toBeTruthy();
       expect(pnmEntry.prefix).toBe("ucs");
 
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["ucs"]).toBe("UiPath.ComplexScenarios.Activities");
-      expect(NAMESPACE_PREFIX_TO_PACKAGE["ucomplex"]).toBeUndefined();
+      expect(catalogServiceImport.getPackageForPrefix("ucs")).toBe("UiPath.ComplexScenarios.Activities");
+      expect(catalogServiceImport.getPackageForPrefix("ucomplex")).toBeNull();
 
       const complexActivities = ["MultipleAssign", "BuildDataTable", "FilterDataTable", "OutputDataTable", "AddDataRow", "LookupDataTable"];
       for (const activity of complexActivities) {
@@ -5174,11 +5202,8 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
       }
 
       if (catalogServiceImport.isLoaded()) {
-        const catalogPkg = catalogServiceImport.getPackageForActivity("MultipleAssign") ||
-                           catalogServiceImport.getPackageForActivity("ucs:MultipleAssign");
-        if (catalogPkg) {
-          expect(catalogPkg).toBe("UiPath.ComplexScenarios.Activities");
-        }
+        const catalogPkgByPrefix = catalogServiceImport.getPackageForPrefix("ucs");
+        expect(catalogPkgByPrefix).toBe("UiPath.ComplexScenarios.Activities");
       }
     });
   });
@@ -6081,29 +6106,15 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
         }
       });
 
-      it("forced mismatch: mutating a hardcoded entry produces a diagnostic record", () => {
+      it("consolidated source: catalog-backed PACKAGE_NAMESPACE_MAP resolves consistently with no mismatches", () => {
         resetNamespaceCaches();
         clearNamespaceMismatchDiagnostics();
-        const origInfo = PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"];
-        const origXmlns = origInfo.xmlns;
-        (PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"] as any).xmlns = "clr-namespace:FAKE.Namespace;assembly=FAKE.Assembly";
-        try {
-          resetNamespaceCaches();
-          clearNamespaceMismatchDiagnostics();
-          getPrefixToXmlns();
-          const diagnostics = getNamespaceMismatchDiagnostics();
-          const uwebDiag = diagnostics.find(d => d.key === "uweb" && d.type === "prefix-to-xmlns");
-          expect(uwebDiag).toBeDefined();
-          expect(uwebDiag!.sourceSelected).toBe("catalog");
-          expect(uwebDiag!.fallbackValue).toBe("clr-namespace:FAKE.Namespace;assembly=FAKE.Assembly");
-          expect(uwebDiag!.catalogValue).not.toBe(uwebDiag!.fallbackValue);
-          expect(uwebDiag!.fallbackReason).toBeDefined();
-          expect(uwebDiag!.prefix).toBe("uweb");
-        } finally {
-          (PACKAGE_NAMESPACE_MAP["UiPath.WebAPI.Activities"] as any).xmlns = origXmlns;
-          resetNamespaceCaches();
-          clearNamespaceMismatchDiagnostics();
-        }
+        getPrefixToXmlns();
+        const diagnostics = getNamespaceMismatchDiagnostics();
+        const mismatchDiags = diagnostics.filter(d => d.type === "prefix-to-xmlns" && d.catalogValue !== d.fallbackValue);
+        expect(mismatchDiags.length).toBe(0);
+        resetNamespaceCaches();
+        clearNamespaceMismatchDiagnostics();
       });
 
       it("clearNamespaceMismatchDiagnostics clears accumulated diagnostics", () => {
@@ -6115,45 +6126,41 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
     });
 
     describe("Catalog-unavailable degraded mode", () => {
-      it("getPrefixToXmlns produces valid fallback map even when catalog returns empty entries", () => {
+      it("getPrefixToXmlns produces emergency fallback map when catalog is unavailable", () => {
         resetNamespaceCaches();
-        const originalIsLoaded = catalogServiceImport.isLoaded;
-        (catalogServiceImport as any).isLoaded = () => false;
+  
+        vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
         try {
           const fallbackMap = getPrefixToXmlns();
           expect(fallbackMap["ui"]).toBe("http://schemas.uipath.com/workflow/activities");
-          expect(fallbackMap["uweb"]).toBeDefined();
-          expect(fallbackMap["uexcel"]).toBeDefined();
-          expect(Object.keys(fallbackMap).length).toBeGreaterThan(10);
+          expect(Object.keys(fallbackMap).length).toBeGreaterThanOrEqual(1);
         } finally {
-          (catalogServiceImport as any).isLoaded = originalIsLoaded;
+          vi.mocked(catalogServiceImport.isLoaded).mockRestore();
         }
       });
 
-      it("getClrNamespaceToXamlPrefix produces valid fallback map when catalog is unavailable", () => {
+      it("getClrNamespaceToXamlPrefix produces emergency fallback map when catalog is unavailable", () => {
         resetNamespaceCaches();
-        const originalIsLoaded = catalogServiceImport.isLoaded;
-        (catalogServiceImport as any).isLoaded = () => false;
+  
+        vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
         try {
           const fallbackMap = getClrNamespaceToXamlPrefix();
-          expect(fallbackMap["UiPath.Core"]).toBe("ui");
           expect(fallbackMap["UiPath.Core.Activities"]).toBe("ui");
-          expect(fallbackMap["UiPath.WebAPI.Activities"]).toBe("uweb");
-          expect(Object.keys(fallbackMap).length).toBeGreaterThan(10);
+          expect(Object.keys(fallbackMap).length).toBeGreaterThanOrEqual(1);
         } finally {
-          (catalogServiceImport as any).isLoaded = originalIsLoaded;
+          vi.mocked(catalogServiceImport.isLoaded).mockRestore();
         }
       });
 
       it("after catalog becomes available, cache switches from fallback to catalog truth", () => {
         resetNamespaceCaches();
-        const originalIsLoaded = catalogServiceImport.isLoaded;
-        (catalogServiceImport as any).isLoaded = () => false;
+  
+        vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
         const fallbackMap = getPrefixToXmlns();
         expect(fallbackMap["ui"]).toBeDefined();
 
         resetNamespaceCaches();
-        (catalogServiceImport as any).isLoaded = originalIsLoaded;
+        vi.mocked(catalogServiceImport.isLoaded).mockRestore();
         catalogServiceImport.load();
         const catalogMap = getPrefixToXmlns();
         expect(catalogMap["ui"]).toBe("http://schemas.uipath.com/workflow/activities");
@@ -6820,7 +6827,10 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       });
 
       it("enforceRequiredProperties does not produce ExistingWorkbook defects for ExcelApplicationScope XAML", () => {
-        const excelXaml = `<?xml version="1.0" encoding="utf-8"?>
+  
+        vi.spyOn(catalogServiceImport, "isLoaded").mockReturnValue(false);
+        try {
+          const excelXaml = `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="TestExcel"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -6849,15 +6859,18 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
   </Sequence>
 </Activity>`;
 
-        const result = enforceRequiredProperties(
-          [{ name: "TestExcel.xaml", content: excelXaml }],
-          true
-        );
+          const result = enforceRequiredProperties(
+            [{ name: "TestExcel.xaml", content: excelXaml }],
+            true
+          );
 
-        const existingWorkbookDefects = result.unresolvedRequiredPropertyDefects.filter(
-          d => d.propertyName === "ExistingWorkbook"
-        );
-        expect(existingWorkbookDefects.length).toBe(0);
+          const existingWorkbookDefects = result.unresolvedRequiredPropertyDefects.filter(
+            d => d.propertyName === "ExistingWorkbook"
+          );
+          expect(existingWorkbookDefects.length).toBe(0);
+        } finally {
+          vi.mocked(catalogServiceImport.isLoaded).mockRestore();
+        }
       });
     });
 

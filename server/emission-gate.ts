@@ -1,5 +1,6 @@
 import { catalogService } from "./catalog/catalog-service";
-import { validateXmlWellFormedness, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP } from "./xaml/xaml-compliance";
+import { validateXmlWellFormedness, GUARANTEED_ACTIVITY_PREFIX_MAP } from "./xaml/xaml-compliance";
+import type { PackageNamespaceInfo } from "./xaml/xaml-compliance";
 import { escapeXml, getAttributeSerializerDiagnostics, resetAttributeSerializerDiagnostics } from "./lib/xml-utils";
 import type { WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
 import { formatBusinessContextForHandoff } from "./sdd-business-context-mapper";
@@ -463,11 +464,39 @@ const INFRASTRUCTURE_PREFIXES = [
   "mva", "this", "local", "sco", "sd", "ss", "uix", "snetmail",
 ];
 
-export const RECOGNIZED_NAMESPACE_PREFIXES = new Set([
-  ...INFRASTRUCTURE_PREFIXES,
-  ...Object.values(PACKAGE_NAMESPACE_MAP).map(info => info.prefix).filter(p => p !== ""),
-  ...new Set(Object.values(GUARANTEED_ACTIVITY_PREFIX_MAP)),
-]);
+class LivePrefixSet extends Set<string> {
+  private _catalogGen = -1;
+
+  private refresh(): void {
+    const currentGen = catalogService.isLoaded() ? catalogService.getLoadGeneration() : -1;
+    if (this._catalogGen === currentGen && super.size > 0) return;
+    super.clear();
+    for (const p of INFRASTRUCTURE_PREFIXES) super.add(p);
+    if (catalogService.isLoaded()) {
+      for (const p of catalogService.getAllPrefixes()) {
+        if (p) super.add(p);
+      }
+    }
+    for (const p of Object.values(GUARANTEED_ACTIVITY_PREFIX_MAP)) {
+      if (p) super.add(p);
+    }
+    this._catalogGen = currentGen;
+  }
+
+  override has(value: string): boolean { this.refresh(); return super.has(value); }
+  override get size(): number { this.refresh(); return super.size; }
+  override forEach(cb: (value: string, value2: string, set: Set<string>) => void, thisArg?: unknown): void { this.refresh(); super.forEach(cb, thisArg); }
+  override [Symbol.iterator](): SetIterator<string> { this.refresh(); return super[Symbol.iterator](); }
+  override entries(): SetIterator<[string, string]> { this.refresh(); return super.entries(); }
+  override keys(): SetIterator<string> { this.refresh(); return super.keys(); }
+  override values(): SetIterator<string> { this.refresh(); return super.values(); }
+}
+
+export function getRecognizedNamespacePrefixes(): Set<string> {
+  return RECOGNIZED_NAMESPACE_PREFIXES;
+}
+
+export const RECOGNIZED_NAMESPACE_PREFIXES = new LivePrefixSet();
 
 export function isWellFormedXamlType(typeStr: string): boolean {
   const trimmed = typeStr.trim();

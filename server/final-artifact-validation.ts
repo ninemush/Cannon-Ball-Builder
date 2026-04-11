@@ -370,13 +370,25 @@ function buildPackageCompletenessViolations(
 
   for (const entry of xamlEntries) {
     const shortName = entry.name.split("/").pop() || entry.name;
-    const attrSentinelPattern = /\s+(\w+)="([^"]*)"/g;
-    let attrMatch;
     let sentinelAttrCount = 0;
     const sentinelProperties: string[] = [];
+    const attrSentinelPattern = /\s+(\w+)="([^"]*)"/g;
+    let attrMatch;
     while ((attrMatch = attrSentinelPattern.exec(entry.content)) !== null) {
       const attrName = attrMatch[1];
       const attrValue = attrMatch[2].trim();
+      if (nonExecutableAttrs.has(attrName) || attrName.startsWith("xmlns:") || attrName.startsWith("sap2010:")) continue;
+      if (!knownRequiredProperties.has(attrName)) continue;
+      if (SENTINEL_SCAN_PATTERN.test(attrValue)) {
+        sentinelAttrCount++;
+        if (!sentinelProperties.includes(attrName)) sentinelProperties.push(attrName);
+      }
+    }
+    const wrappedAttrPattern = /\s+(\w+)="\["([^"]*)"\]"/g;
+    let wrappedMatch;
+    while ((wrappedMatch = wrappedAttrPattern.exec(entry.content)) !== null) {
+      const attrName = wrappedMatch[1];
+      const attrValue = wrappedMatch[2].trim();
       if (nonExecutableAttrs.has(attrName) || attrName.startsWith("xmlns:") || attrName.startsWith("sap2010:")) continue;
       if (!knownRequiredProperties.has(attrName)) continue;
       if (SENTINEL_SCAN_PATTERN.test(attrValue)) {

@@ -7,25 +7,30 @@ import {
   type ActivityPropertyDef,
   type ActivityDef,
 } from "./activity-definitions";
-import type {
-  CatalogProperty,
-  CatalogActivity,
-  CatalogPackage,
-  ActivityCatalog,
+import {
+  catalogService,
+  type CatalogProperty,
+  type CatalogActivity,
+  type CatalogPackage,
+  type ActivityCatalog,
 } from "./catalog-service";
-import { PACKAGE_NAMESPACE_MAP } from "../xaml/xaml-compliance";
+import { getPackageNamespaceMap } from "../xaml/xaml-compliance";
 import { CANONICAL_STUDIO_VERSION } from "./metadata-schemas";
 import { loadDllExtract, importDllMetadata, type DllImportPackage } from "./dll-metadata-importer";
 
 const CATALOG_VERSION = "2.0.0";
 
-const PACKAGE_NAMESPACE_DEFAULTS: Record<string, { prefix: string; clrNamespace: string; assembly: string }> = (() => {
+function getPackageNamespaceDefaults(): Record<string, { prefix: string; clrNamespace: string; assembly: string }> {
+  if (!catalogService.isLoaded()) {
+    catalogService.load();
+  }
   const defaults: Record<string, { prefix: string; clrNamespace: string; assembly: string }> = {};
-  for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+  const nsMap = getPackageNamespaceMap();
+  for (const [packageId, info] of Object.entries(nsMap)) {
     defaults[packageId] = { prefix: info.prefix, clrNamespace: info.clrNamespace, assembly: info.assembly };
   }
   return defaults;
-})();
+}
 
 function convertProperty(p: ActivityPropertyDef): CatalogProperty {
   const result: CatalogProperty = {
@@ -262,7 +267,7 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
   for (const regPkg of ACTIVITY_DEFINITIONS_REGISTRY) {
     const vInfo = resolveVersion(regPkg.packageId, metadataPackages);
     const existingPkg = existingPackageMap.get(regPkg.packageId);
-    const nsDefaults = PACKAGE_NAMESPACE_DEFAULTS[regPkg.packageId];
+    const nsDefaults = getPackageNamespaceDefaults()[regPkg.packageId];
     const dllPkg = dllPackageMap.get(regPkg.packageId);
 
     if (existingPkg) {
@@ -353,7 +358,7 @@ export function generateActivityCatalog(options: GenerateCatalogOptions = {}): A
   for (const [dllPkgId, dllPkg] of dllPackageMap) {
     if (processedPackageIds.has(dllPkgId)) continue;
     const vInfo = resolveVersion(dllPkgId, metadataPackages);
-    const nsDefaults = PACKAGE_NAMESPACE_DEFAULTS[dllPkgId];
+    const nsDefaults = getPackageNamespaceDefaults()[dllPkgId];
 
     packages.push({
       packageId: dllPkgId,

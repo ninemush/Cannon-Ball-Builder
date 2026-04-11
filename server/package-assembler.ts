@@ -85,7 +85,7 @@ import archiver from "archiver";
   import { computeDhgAccuracy } from "./pipeline-health";
   import { getConversion, normalizeClrType } from "./xaml/type-compatibility-validator";
   import { inferTypeFromPrefix } from "./shared/type-inference";
-  import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName, NAMESPACE_PREFIX_TO_PACKAGE, getActivityPackage } from "./uipath-activity-registry";
+  import { scanXamlForRequiredPackages, classifyAutomationPattern, shouldUseReFramework, type AutomationPattern, ACTIVITY_NAME_ALIAS_MAP, normalizeActivityName, getActivityPackage } from "./uipath-activity-registry";
   import { filterBlockedActivitiesFromXaml } from "./uipath-activity-policy";
   import { catalogService, type ProcessType, type ValidationCorrection } from "./catalog/catalog-service";
   import type { StudioProfile } from "./catalog/metadata-service";
@@ -95,7 +95,7 @@ export { normalizePackageName } from "./uipath-shared";
   import { runEmissionGate, type EmissionGateResult } from "./emission-gate";
   import { buildWorkflowBusinessContextMap, type WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
-  import { PACKAGE_NAMESPACE_MAP, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
+  import { getPackageNamespaceMap, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
@@ -2737,15 +2737,17 @@ export function buildAssemblyToPackageMap(): Map<string, string> {
   if (catalogService.isLoaded()) {
     const catalogEntries = catalogService.getAllPackageNamespaceEntries();
     for (const entry of catalogEntries) {
-      if (entry.assembly && entry.packageId && !isFrameworkAssembly(entry.packageId)) {
+      const basePkgId = entry.packageId.includes("::") ? entry.packageId.split("::")[0] : entry.packageId;
+      if (entry.assembly && basePkgId && !isFrameworkAssembly(basePkgId)) {
         if (!map.has(entry.assembly)) {
-          map.set(entry.assembly, entry.packageId);
+          map.set(entry.assembly, basePkgId);
         }
       }
     }
   }
 
-  for (const [packageId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+  const nsMap = getPackageNamespaceMap();
+  for (const [packageId, info] of Object.entries(nsMap)) {
     const basePackageName = packageId.includes("::") ? packageId.split("::")[0] : packageId;
     if (info.assembly && !isFrameworkAssembly(basePackageName)) {
       if (!map.has(info.assembly)) {
@@ -2815,12 +2817,7 @@ export function runStudioResolutionSmokeTest(
 
       let matchedPackage = resolvedPackage;
       if (!matchedPackage) {
-        for (const [pkgId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
-          if (info.prefix === prefix) {
-            matchedPackage = pkgId;
-            break;
-          }
-        }
+        matchedPackage = catalogService.getPackageForPrefix(prefix);
       }
 
       if (matchedPackage && !depPackages.has(matchedPackage)) {
@@ -2828,7 +2825,7 @@ export function runStudioResolutionSmokeTest(
       }
 
       if (matchedPackage) {
-        const info = PACKAGE_NAMESPACE_MAP[matchedPackage];
+        const info = catalogService.getNamespaceForPrefix(prefix) || getPackageNamespaceMap()[matchedPackage];
         if (info && info.assembly && info.assembly !== "UiPath.Core.Activities" && info.assembly !== "System.Activities") {
           if (!declaredAssemblies.has(info.assembly)) {
             errors.push(`[${fileName}] Activity "${prefix}:${activityName}" requires assembly "${info.assembly}" which is not in AssemblyReference list`);
@@ -5895,11 +5892,16 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         "UiPath.Testing.Activities",
       ]);
 
-      for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
-        const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
-        if (prefixPattern.test(depAlignmentXamlContent)) {
-          DEPENDENCY_SAFE_LIST.add(pkgName);
-          console.log(`[Dependency Alignment] Dynamically added ${pkgName} to safe list — namespace prefix "${prefix}:" detected in XAML`);
+      if (catalogService.isLoaded()) {
+        for (const prefix of catalogService.getAllPrefixes()) {
+          const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
+          if (prefixPattern.test(depAlignmentXamlContent)) {
+            const pkgName = catalogService.getPackageForPrefix(prefix);
+            if (pkgName) {
+              DEPENDENCY_SAFE_LIST.add(pkgName);
+              console.log(`[Dependency Alignment] Dynamically added ${pkgName} to safe list — namespace prefix "${prefix}:" detected in XAML`);
+            }
+          }
         }
       }
 
@@ -8297,7 +8299,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         for (const pkg of neededPackages) {
           const nugetName = pkg.includes("::") ? pkg.split("::")[0] : pkg;
           if (!deps[nugetName]) {
-            const info = PACKAGE_NAMESPACE_MAP[pkg];
+            const info = getPackageNamespaceMap()[pkg];
             if (info) {
               const resolution = resolvePackageVersion(nugetName, tf as "Windows" | "Portable");
               if (resolution) {
@@ -8311,168 +8313,319 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
 
         const declaredPrefixes = new Set<string>();
-        const xmlnsDeclPattern = /xmlns:(\w+)="([^"]+)"/g;
-        let xdm;
-        while ((xdm = xmlnsDeclPattern.exec(updated)) !== null) {
-          declaredPrefixes.add(xdm[1]);
-        }
-
-        const missingXmlnsDecls: string[] = [];
-        Array.from(neededXmlns.entries()).forEach(([prefix, xmlns]) => {
-          if (!declaredPrefixes.has(prefix)) {
-            missingXmlnsDecls.push(`  xmlns:${prefix}="${xmlns}"`);
-          }
-        });
-
-        if (missingXmlnsDecls.length > 0) {
-          const xmlnsInsertPoint = updated.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
-          if (xmlnsInsertPoint >= 0) {
-            const insertAfter = xmlnsInsertPoint + 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'.length;
-            updated = updated.slice(0, insertAfter) + "\n" + missingXmlnsDecls.join("\n") + updated.slice(insertAfter);
-            selfCheckFixes += missingXmlnsDecls.length;
-            console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected xmlns declarations: ${missingXmlnsDecls.length}`);
-          }
-        }
-
         const declaredAssemblies = new Set<string>();
-        const asmRefPattern = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
-        let arm;
-        while ((arm = asmRefPattern.exec(updated)) !== null) {
-          declaredAssemblies.add(arm[1].trim());
-        }
-
         const declaredNamespaces = new Set<string>();
-        const nsImportPattern = /<x:String[^>]*>([^<]+)<\/x:String>/g;
-        let nsm;
-        while ((nsm = nsImportPattern.exec(updated)) !== null) {
-          declaredNamespaces.add(nsm[1].trim());
-        }
 
-        const missingAssemblies: string[] = [];
-        Array.from(neededAssemblies).forEach(asm => {
-          if (!declaredAssemblies.has(asm)) {
-            missingAssemblies.push(`      <AssemblyReference>${asm}</AssemblyReference>`);
-          }
-        });
+        const parserOpts = {
+          preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: "@_",
+          parseTagValue: false, commentPropName: "#comment",
+        };
+        const builderOpts = {
+          preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: "@_",
+          format: true, indentBy: "  ", suppressEmptyNode: false, commentPropName: "#comment",
+        };
 
-        const missingNamespaces: string[] = [];
-        Array.from(neededNamespaces).forEach(ns => {
-          if (!declaredNamespaces.has(ns)) {
-            missingNamespaces.push(`      <x:String>${ns}</x:String>`);
-          }
-        });
-
-        const hasRefsBlock = updated.includes("TextExpression.ReferencesForImplementation");
-        const hasNsBlock = updated.includes("TextExpression.NamespacesForImplementation");
-        if ((missingAssemblies.length > 0 || missingNamespaces.length > 0) && !hasRefsBlock && !hasNsBlock) {
-          const activityCloseMatch = updated.match(/<\/Activity>\s*$/);
-          const seqMatch = updated.match(/(\s*<Sequence[\s>])/);
-          const xMembersMatch = updated.match(/(\s*<x:Members>)/);
-          let bootstrapInsertIdx = -1;
-          if (xMembersMatch && xMembersMatch.index !== undefined) {
-            bootstrapInsertIdx = xMembersMatch.index;
-          } else if (seqMatch && seqMatch.index !== undefined) {
-            bootstrapInsertIdx = seqMatch.index;
-          } else if (activityCloseMatch && activityCloseMatch.index !== undefined) {
-            bootstrapInsertIdx = activityCloseMatch.index;
-          }
-          if (bootstrapInsertIdx >= 0) {
-            const allNs = Array.from(neededNamespaces).map(ns => `      <x:String>${ns}</x:String>`).join("\n");
-            const allAsm = Array.from(neededAssemblies).map(asm => `      <AssemblyReference>${asm}</AssemblyReference>`).join("\n");
-            const bootstrapBlock = `\n  <TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNs}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>\n  <TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsm}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>\n`;
-            updated = updated.slice(0, bootstrapInsertIdx) + bootstrapBlock + updated.slice(bootstrapInsertIdx);
-            selfCheckFixes += missingAssemblies.length + missingNamespaces.length;
-            missingAssemblies.length = 0;
-            missingNamespaces.length = 0;
-            console.log(`[Authoritative Declaration Synthesis] [${fileName}] Bootstrapped both NamespacesForImplementation and ReferencesForImplementation blocks (last-resort fallback)`);
-          }
-        }
-
-        if (missingAssemblies.length > 0) {
-          let asmInserted = false;
-          if (updated.includes("TextExpression.ReferencesForImplementation")) {
-            const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.ReferencesForImplementation>", missingAssemblies.join("\n"));
-            if (result.succeeded) {
-              updated = result.updated;
-              selfCheckFixes += missingAssemblies.length;
-              asmInserted = true;
-              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected assembly references: ${missingAssemblies.length}`);
-            } else {
-              const refsBlockPattern = /<TextExpression\.ReferencesForImplementation>[\s\S]*?<\/TextExpression\.ReferencesForImplementation>/;
-              const existingRefsBlock = updated.match(refsBlockPattern);
-              if (existingRefsBlock) {
-                const existingAsmEntries: string[] = [];
-                const existAsmPat = /<AssemblyReference>([^<]+)<\/AssemblyReference>/g;
-                let ea;
-                while ((ea = existAsmPat.exec(existingRefsBlock[0])) !== null) {
-                  existingAsmEntries.push(`      <AssemblyReference>${ea[1].trim()}</AssemblyReference>`);
+        function extractDomDeclarations(nodes: any[]): void {
+          for (const node of nodes) {
+            if (node[":@"]) {
+              for (const attrKey of Object.keys(node[":@"])) {
+                const m = attrKey.match(/^@_xmlns:(\w+)$/);
+                if (m) declaredPrefixes.add(m[1]);
+              }
+            }
+            for (const key of Object.keys(node)) {
+              if (key === ":@" || key === "#text" || key === "#comment") continue;
+              const children = node[key];
+              if (key === "AssemblyReference" && Array.isArray(children)) {
+                for (const child of children) {
+                  if (child["#text"] !== undefined) declaredAssemblies.add(String(child["#text"]).trim());
                 }
-                const allAsmEntries = [...existingAsmEntries, ...missingAssemblies];
-                const freshRefsBlock = `<TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsmEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
-                updated = updated.replace(refsBlockPattern, freshRefsBlock);
+              } else if (key === "x:String" && Array.isArray(children)) {
+                for (const child of children) {
+                  if (child["#text"] !== undefined) declaredNamespaces.add(String(child["#text"]).trim());
+                }
+              }
+              if (Array.isArray(children)) extractDomDeclarations(children);
+            }
+          }
+        }
+
+        function domInjectXmlns(nodes: any[], xmlns: Map<string, string>): boolean {
+          for (const node of nodes) {
+            const tagKeys = Object.keys(node).filter(k => k !== ":@" && k !== "#text" && k !== "#comment");
+            if (tagKeys.length === 0) continue;
+            const attrs = node[":@"] || {};
+            if (Object.keys(attrs).some(k => k === "@_xmlns:x")) {
+              for (const [prefix, uri] of xmlns.entries()) {
+                const attrKey = `@_xmlns:${prefix}`;
+                if (!attrs[attrKey]) attrs[attrKey] = uri;
+              }
+              node[":@"] = attrs;
+              return true;
+            }
+            for (const tagKey of tagKeys) {
+              if (Array.isArray(node[tagKey]) && domInjectXmlns(node[tagKey], xmlns)) return true;
+            }
+          }
+          return false;
+        }
+
+        function domInjectCollectionItems(
+          nodes: any[], blockTagSuffix: string, items: Array<{ tag: string; value: string }>,
+        ): boolean {
+          for (const node of nodes) {
+            for (const key of Object.keys(node)) {
+              if (key === ":@" || key === "#text" || key === "#comment") continue;
+              if (key.endsWith(blockTagSuffix)) {
+                const blockChildren: any[] = node[key];
+                if (!Array.isArray(blockChildren)) continue;
+                for (const collNode of blockChildren) {
+                  if (collNode["sco:Collection"]) {
+                    for (const item of items) {
+                      collNode["sco:Collection"].push({ [item.tag]: [{ "#text": item.value }] });
+                    }
+                    return true;
+                  }
+                }
+              }
+              if (Array.isArray(node[key]) && domInjectCollectionItems(node[key], blockTagSuffix, items)) return true;
+            }
+          }
+          return false;
+        }
+
+        function domFindActivityNode(nodes: any[]): any | null {
+          for (const node of nodes) {
+            if (node["Activity"]) return node;
+            for (const key of Object.keys(node)) {
+              if (key === ":@" || key === "#text" || key === "#comment") continue;
+              if (Array.isArray(node[key])) {
+                const found = domFindActivityNode(node[key]);
+                if (found) return found;
+              }
+            }
+          }
+          return null;
+        }
+
+        function domFindBlockNode(nodes: any[], blockTagSuffix: string): any | null {
+          for (const node of nodes) {
+            for (const key of Object.keys(node)) {
+              if (key === ":@" || key === "#text" || key === "#comment") continue;
+              if (key.endsWith(blockTagSuffix)) return node;
+              if (Array.isArray(node[key])) {
+                const found = domFindBlockNode(node[key], blockTagSuffix);
+                if (found) return found;
+              }
+            }
+          }
+          return null;
+        }
+
+        function domInsertBlockAfterSibling(nodes: any[], siblingTag: string, newBlock: Record<string, unknown>): boolean {
+          for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            for (const key of Object.keys(node)) {
+              if (key === ":@" || key === "#text" || key === "#comment") continue;
+              if (key.endsWith(siblingTag)) {
+                nodes.splice(i + 1, 0, newBlock);
+                return true;
+              }
+              if (Array.isArray(node[key]) && domInsertBlockAfterSibling(node[key], siblingTag, newBlock)) return true;
+            }
+          }
+          return false;
+        }
+
+        let domInjectionSucceeded = false;
+        try {
+          const dom = new XMLParser(parserOpts).parse(updated);
+          extractDomDeclarations(dom);
+
+          const missingXmlnsPrefixes: Array<[string, string]> = [];
+          for (const [prefix, xmlns] of neededXmlns.entries()) {
+            if (!declaredPrefixes.has(prefix)) missingXmlnsPrefixes.push([prefix, xmlns]);
+          }
+          const missingAsmValues = Array.from(neededAssemblies).filter(a => !declaredAssemblies.has(a));
+          const missingNsValues = Array.from(neededNamespaces).filter(n => !declaredNamespaces.has(n));
+
+          let mutated = false;
+
+          if (missingXmlnsPrefixes.length > 0) {
+            const xmlnsMap = new Map(missingXmlnsPrefixes);
+            if (domInjectXmlns(dom, xmlnsMap)) {
+              selfCheckFixes += missingXmlnsPrefixes.length;
+              mutated = true;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected xmlns declarations via DOM: ${missingXmlnsPrefixes.length}`);
+            }
+          }
+
+          const hasRefsBlock = !!domFindBlockNode(dom, "ReferencesForImplementation");
+          const hasNsBlock = !!domFindBlockNode(dom, "NamespacesForImplementation");
+
+          if ((missingAsmValues.length > 0 || missingNsValues.length > 0) && !hasRefsBlock && !hasNsBlock) {
+            const activityNode = domFindActivityNode(dom);
+            if (activityNode && activityNode["Activity"]) {
+              const nsItems = missingNsValues.map(ns => ({ "x:String": [{ "#text": ns }] }));
+              const asmItems = missingAsmValues.map(asm => ({ "AssemblyReference": [{ "#text": asm }] }));
+              const nsBlock = {
+                "TextExpression.NamespacesForImplementation": [{
+                  "sco:Collection": nsItems, ":@": { "@_x:TypeArguments": "x:String" },
+                }],
+              };
+              const refsBlock = {
+                "TextExpression.ReferencesForImplementation": [{
+                  "sco:Collection": asmItems, ":@": { "@_x:TypeArguments": "AssemblyReference" },
+                }],
+              };
+              const children: any[] = activityNode["Activity"];
+              let insertIdx = 0;
+              for (let i = 0; i < children.length; i++) {
+                if (children[i]["x:Members"] || children[i]["Sequence"]) { insertIdx = i; break; }
+                insertIdx = i + 1;
+              }
+              children.splice(insertIdx, 0, nsBlock, refsBlock);
+              selfCheckFixes += missingAsmValues.length + missingNsValues.length;
+              missingAsmValues.length = 0;
+              missingNsValues.length = 0;
+              mutated = true;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Bootstrapped both blocks via DOM`);
+            }
+          } else {
+            if (missingAsmValues.length > 0 && hasRefsBlock) {
+              const items = missingAsmValues.map(a => ({ tag: "AssemblyReference", value: a }));
+              if (domInjectCollectionItems(dom, "ReferencesForImplementation", items)) {
+                selfCheckFixes += missingAsmValues.length;
+                missingAsmValues.length = 0;
+                mutated = true;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected assembly references via DOM: ${items.length}`);
+              }
+            }
+            if (missingAsmValues.length > 0 && hasNsBlock && !hasRefsBlock) {
+              const asmItems = missingAsmValues.map(a => ({ "AssemblyReference": [{ "#text": a }] }));
+              const refsBlock = {
+                "TextExpression.ReferencesForImplementation": [{
+                  "sco:Collection": asmItems, ":@": { "@_x:TypeArguments": "AssemblyReference" },
+                }],
+              };
+              if (domInsertBlockAfterSibling(dom, "NamespacesForImplementation", refsBlock)) {
+                selfCheckFixes += missingAsmValues.length;
+                missingAsmValues.length = 0;
+                mutated = true;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Created ReferencesForImplementation block via DOM`);
+              }
+            }
+            if (missingNsValues.length > 0 && hasNsBlock) {
+              const items = missingNsValues.map(n => ({ tag: "x:String", value: n }));
+              if (domInjectCollectionItems(dom, "NamespacesForImplementation", items)) {
+                selfCheckFixes += missingNsValues.length;
+                missingNsValues.length = 0;
+                mutated = true;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected namespace imports via DOM: ${items.length}`);
+              }
+            }
+            if (missingNsValues.length > 0 && hasRefsBlock && !hasNsBlock) {
+              const nsItems = missingNsValues.map(n => ({ "x:String": [{ "#text": n }] }));
+              const nsBlock = {
+                "TextExpression.NamespacesForImplementation": [{
+                  "sco:Collection": nsItems, ":@": { "@_x:TypeArguments": "x:String" },
+                }],
+              };
+              if (domInsertBlockAfterSibling(dom, "ReferencesForImplementation", nsBlock)) {
+                selfCheckFixes += missingNsValues.length;
+                missingNsValues.length = 0;
+                mutated = true;
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Created NamespacesForImplementation block via DOM`);
+              }
+            }
+          }
+
+          if (mutated) {
+            updated = new XMLBuilder(builderOpts).build(dom);
+          }
+          domInjectionSucceeded = true;
+
+          if (missingAsmValues.length > 0) {
+            injectionFailures++;
+            console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] DOM injection failed for ${missingAsmValues.length} assembly reference(s)`);
+          }
+          if (missingNsValues.length > 0) {
+            injectionFailures++;
+            console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] DOM injection failed for ${missingNsValues.length} namespace import(s)`);
+          }
+        } catch (domErr) {
+          console.warn(`[Authoritative Declaration Synthesis] [${fileName}] DOM parse/injection failed — using emergency string fallback: ${domErr}`);
+        }
+
+        if (!domInjectionSucceeded) {
+          const missingXmlnsDecls: string[] = [];
+          for (const [prefix, xmlns] of neededXmlns.entries()) {
+            if (!new RegExp(`xmlns:${prefix}=`).test(updated)) {
+              missingXmlnsDecls.push(`  xmlns:${prefix}="${xmlns}"`);
+            }
+          }
+          if (missingXmlnsDecls.length > 0) {
+            const xmlnsInsertPoint = updated.indexOf('xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"');
+            if (xmlnsInsertPoint >= 0) {
+              const insertAfter = xmlnsInsertPoint + 'xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'.length;
+              updated = updated.slice(0, insertAfter) + "\n" + missingXmlnsDecls.join("\n") + updated.slice(insertAfter);
+              selfCheckFixes += missingXmlnsDecls.length;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected xmlns (emergency string fallback): ${missingXmlnsDecls.length}`);
+            }
+          }
+          const missingAssemblies: string[] = [];
+          for (const asm of neededAssemblies) {
+            if (!updated.includes(`<AssemblyReference>${asm}</AssemblyReference>`)) {
+              missingAssemblies.push(`      <AssemblyReference>${asm}</AssemblyReference>`);
+            }
+          }
+          const missingNamespaces: string[] = [];
+          for (const ns of neededNamespaces) {
+            if (!updated.includes(`>${ns}<`)) {
+              missingNamespaces.push(`      <x:String>${ns}</x:String>`);
+            }
+          }
+          if ((missingAssemblies.length > 0 || missingNamespaces.length > 0) &&
+              !updated.includes("TextExpression.ReferencesForImplementation") &&
+              !updated.includes("TextExpression.NamespacesForImplementation")) {
+            const seqMatch = updated.match(/(\s*<Sequence[\s>])/);
+            const xMembersMatch = updated.match(/(\s*<x:Members>)/);
+            const activityCloseMatch = updated.match(/<\/Activity>\s*$/);
+            let bootstrapInsertIdx = -1;
+            if (xMembersMatch?.index !== undefined) bootstrapInsertIdx = xMembersMatch.index;
+            else if (seqMatch?.index !== undefined) bootstrapInsertIdx = seqMatch.index;
+            else if (activityCloseMatch?.index !== undefined) bootstrapInsertIdx = activityCloseMatch.index;
+            if (bootstrapInsertIdx >= 0) {
+              const allNs = Array.from(neededNamespaces).map(ns => `      <x:String>${ns}</x:String>`).join("\n");
+              const allAsm = Array.from(neededAssemblies).map(asm => `      <AssemblyReference>${asm}</AssemblyReference>`).join("\n");
+              const bootstrapBlock = `\n  <TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNs}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>\n  <TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${allAsm}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>\n`;
+              updated = updated.slice(0, bootstrapInsertIdx) + bootstrapBlock + updated.slice(bootstrapInsertIdx);
+              selfCheckFixes += missingAssemblies.length + missingNamespaces.length;
+              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Bootstrapped both blocks (emergency string fallback)`);
+            }
+          } else {
+            if (missingAssemblies.length > 0) {
+              const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.ReferencesForImplementation>", missingAssemblies.join("\n"));
+              if (result.succeeded) {
+                updated = result.updated;
                 selfCheckFixes += missingAssemblies.length;
-                asmInserted = true;
-                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Rebuilt malformed ReferencesForImplementation block with ${allAsmEntries.length} total assembly reference(s) (${missingAssemblies.length} added)`);
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected assemblies (emergency string fallback): ${missingAssemblies.length}`);
+              } else {
+                injectionFailures++;
+                console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Emergency fallback failed for ${missingAssemblies.length} assembly reference(s)`);
               }
             }
-          } else {
-            const nsForImplEnd = updated.match(/<\/TextExpression\.NamespacesForImplementation>/);
-            if (nsForImplEnd && nsForImplEnd.index !== undefined) {
-              const insertAt = nsForImplEnd.index + nsForImplEnd[0].length;
-              const refsBlock = `\n  <TextExpression.ReferencesForImplementation>\n    <sco:Collection x:TypeArguments="AssemblyReference">\n${missingAssemblies.join("\n")}\n    </sco:Collection>\n  </TextExpression.ReferencesForImplementation>`;
-              updated = updated.slice(0, insertAt) + refsBlock + updated.slice(insertAt);
-              selfCheckFixes += missingAssemblies.length;
-              asmInserted = true;
-              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Created ReferencesForImplementation block with ${missingAssemblies.length} assembly reference(s)`);
-            }
-          }
-          if (!asmInserted) {
-            injectionFailures++;
-            console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Failed to inject ${missingAssemblies.length} assembly reference(s) — could not locate valid insertion point`);
-          }
-        }
-
-        if (missingNamespaces.length > 0) {
-          let nsInserted = false;
-          if (updated.includes("TextExpression.NamespacesForImplementation")) {
-            const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.NamespacesForImplementation>", missingNamespaces.join("\n"));
-            if (result.succeeded) {
-              updated = result.updated;
-              selfCheckFixes += missingNamespaces.length;
-              nsInserted = true;
-              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected namespace imports: ${missingNamespaces.length}`);
-            } else {
-              const nsBlockPattern = /<TextExpression\.NamespacesForImplementation>[\s\S]*?<\/TextExpression\.NamespacesForImplementation>/;
-              const existingNsBlock = updated.match(nsBlockPattern);
-              if (existingNsBlock) {
-                const existingNsEntries: string[] = [];
-                const existNsPat = /<x:String[^>]*>([^<]+)<\/x:String>/g;
-                let en;
-                while ((en = existNsPat.exec(existingNsBlock[0])) !== null) {
-                  existingNsEntries.push(`      <x:String>${en[1].trim()}</x:String>`);
-                }
-                const allNsEntries = [...existingNsEntries, ...missingNamespaces];
-                const freshNsBlock = `<TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${allNsEntries.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
-                updated = updated.replace(nsBlockPattern, freshNsBlock);
+            if (missingNamespaces.length > 0) {
+              const result = insertBeforeClosingCollectionTag(updated, "</TextExpression.NamespacesForImplementation>", missingNamespaces.join("\n"));
+              if (result.succeeded) {
+                updated = result.updated;
                 selfCheckFixes += missingNamespaces.length;
-                nsInserted = true;
-                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Rebuilt malformed NamespacesForImplementation block with ${allNsEntries.length} total namespace import(s) (${missingNamespaces.length} added)`);
+                console.log(`[Authoritative Declaration Synthesis] [${fileName}] Injected namespaces (emergency string fallback): ${missingNamespaces.length}`);
+              } else {
+                injectionFailures++;
+                console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Emergency fallback failed for ${missingNamespaces.length} namespace import(s)`);
               }
             }
-          } else {
-            const refsForImplEnd = updated.match(/<\/TextExpression\.ReferencesForImplementation>/);
-            if (refsForImplEnd && refsForImplEnd.index !== undefined) {
-              const insertAt = refsForImplEnd.index + refsForImplEnd[0].length;
-              const nsBlock = `\n  <TextExpression.NamespacesForImplementation>\n    <sco:Collection x:TypeArguments="x:String">\n${missingNamespaces.join("\n")}\n    </sco:Collection>\n  </TextExpression.NamespacesForImplementation>`;
-              updated = updated.slice(0, insertAt) + nsBlock + updated.slice(insertAt);
-              selfCheckFixes += missingNamespaces.length;
-              nsInserted = true;
-              console.log(`[Authoritative Declaration Synthesis] [${fileName}] Created NamespacesForImplementation block with ${missingNamespaces.length} namespace import(s)`);
-            }
-          }
-          if (!nsInserted) {
-            injectionFailures++;
-            console.warn(`[Authoritative Declaration Synthesis] WARNING: [${fileName}] Failed to inject ${missingNamespaces.length} namespace import(s) — could not locate valid insertion point`);
           }
         }
 
@@ -8488,14 +8641,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         Array.from(usedPrefixes).forEach(prefix => {
           const hasXmlns = new RegExp(`xmlns:${prefix}=`).test(updated);
           if (!hasXmlns) {
-            let foundPkg = false;
-            for (const [, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
-              if (info.prefix === prefix) {
-                foundPkg = true;
-                break;
-              }
-            }
-            if (!foundPkg) {
+            const catalogHasPrefix = catalogService.isLoaded() && catalogService.getPackageForPrefix(prefix) !== null;
+            if (!catalogHasPrefix) {
               dependencyWarnings.push({
                 code: "NAMESPACE_INJECTION_WARNING",
                 message: `[${fileName}] Activity prefix "${prefix}:" used but has no catalog entry — may be unresolvable in Studio`,
@@ -8506,8 +8653,13 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
         });
 
-        if (missingAssemblies.length === 0 && missingNamespaces.length === 0 && missingXmlnsDecls.length === 0) {
-          console.log(`[Authoritative Declaration Synthesis] [${fileName}] All declarations already present`);
+        {
+          const hadMissingXmlns = Array.from(neededXmlns.entries()).some(([p]) => !declaredPrefixes.has(p));
+          const hadMissingAsm = Array.from(neededAssemblies).some(a => !declaredAssemblies.has(a));
+          const hadMissingNs = Array.from(neededNamespaces).some(n => !declaredNamespaces.has(n));
+          if (!hadMissingXmlns && !hadMissingAsm && !hadMissingNs) {
+            console.log(`[Authoritative Declaration Synthesis] [${fileName}] All declarations already present`);
+          }
         }
 
         if (updated !== content) {

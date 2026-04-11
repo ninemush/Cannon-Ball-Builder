@@ -1,6 +1,6 @@
 import { escapeXml, escapeXmlTextContent } from "../lib/xml-utils";
 import { ACTIVITY_NAME_ALIAS_MAP, getActivityPackageFromRegistry } from "../uipath-activity-registry";
-import { catalogService } from "../catalog/catalog-service";
+import { catalogService, type PackageNamespaceInfo } from "../catalog/catalog-service";
 import { XMLValidator } from "fast-xml-parser";
 import { QualityGateError } from "../uipath-shared";
 import { findUndeclaredVariables } from "./vbnet-expression-linter";
@@ -17,172 +17,85 @@ export const XAML_INFRASTRUCTURE_TYPE_ARGUMENTS = new Set([
   "AssemblyReference",
 ]);
 
+export type { PackageNamespaceInfo } from "../catalog/catalog-service";
 
-export interface PackageNamespaceInfo {
-  prefix: string;
-  xmlns: string;
-  assembly: string;
-  clrNamespace: string;
-}
-
-export const PACKAGE_NAMESPACE_MAP: Record<string, PackageNamespaceInfo> = {
+const EMERGENCY_FALLBACK_MAP: Record<string, PackageNamespaceInfo> = {
   "UiPath.UIAutomation.Activities": { prefix: "ui", xmlns: "http://schemas.uipath.com/workflow/activities", clrNamespace: "UiPath.Core.Activities", assembly: "UiPath.UIAutomation.Activities" },
   "UiPath.System.Activities": { prefix: "ui", xmlns: "http://schemas.uipath.com/workflow/activities", clrNamespace: "UiPath.Core.Activities", assembly: "UiPath.System.Activities" },
-  "UiPath.WebAPI.Activities": { prefix: "uweb", xmlns: "clr-namespace:UiPath.WebAPI.Activities;assembly=UiPath.WebAPI.Activities", clrNamespace: "UiPath.WebAPI.Activities", assembly: "UiPath.WebAPI.Activities" },
-  "UiPath.DataService.Activities": { prefix: "uds", xmlns: "clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities", clrNamespace: "UiPath.DataService.Activities", assembly: "UiPath.DataService.Activities" },
-  "UiPath.Persistence.Activities": { prefix: "upers", xmlns: "clr-namespace:UiPath.Persistence.Activities;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.Excel.Activities": { prefix: "uexcel", xmlns: "clr-namespace:UiPath.Excel.Activities;assembly=UiPath.Excel.Activities", clrNamespace: "UiPath.Excel.Activities", assembly: "UiPath.Excel.Activities" },
-  "UiPath.Mail.Activities": { prefix: "umail", xmlns: "clr-namespace:UiPath.Mail.Activities;assembly=UiPath.Mail.Activities", clrNamespace: "UiPath.Mail.Activities", assembly: "UiPath.Mail.Activities" },
-  "UiPath.Database.Activities": { prefix: "udb", xmlns: "clr-namespace:UiPath.Database.Activities;assembly=UiPath.Database.Activities", clrNamespace: "UiPath.Database.Activities", assembly: "UiPath.Database.Activities" },
-  "UiPath.MLActivities": { prefix: "uml", xmlns: "clr-namespace:UiPath.MLActivities;assembly=UiPath.MLActivities", clrNamespace: "UiPath.MLActivities", assembly: "UiPath.MLActivities" },
-  "UiPath.IntelligentOCR.Activities": { prefix: "uocr", xmlns: "clr-namespace:UiPath.IntelligentOCR.Activities;assembly=UiPath.IntelligentOCR.Activities", clrNamespace: "UiPath.IntelligentOCR.Activities", assembly: "UiPath.IntelligentOCR.Activities" },
   "System.Activities": { prefix: "", xmlns: "http://schemas.microsoft.com/netfx/2009/xaml/activities", clrNamespace: "System.Activities", assembly: "System.Activities" },
-  "UiPath.PDF.Activities": { prefix: "updf", xmlns: "clr-namespace:UiPath.PDF.Activities;assembly=UiPath.PDF.Activities", clrNamespace: "UiPath.PDF.Activities", assembly: "UiPath.PDF.Activities" },
-  "UiPath.Word.Activities": { prefix: "uword", xmlns: "clr-namespace:UiPath.Word.Activities;assembly=UiPath.Word.Activities", clrNamespace: "UiPath.Word.Activities", assembly: "UiPath.Word.Activities" },
-  "UiPath.GSuite.Activities": { prefix: "ugs", xmlns: "clr-namespace:UiPath.GSuite.Activities;assembly=UiPath.GSuite.Activities", clrNamespace: "UiPath.GSuite.Activities", assembly: "UiPath.GSuite.Activities" },
-  "UiPath.MicrosoftOffice365.Activities": { prefix: "uo365", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities", assembly: "UiPath.MicrosoftOffice365.Activities" },
-  "UiPath.Testing.Activities": { prefix: "utest", xmlns: "clr-namespace:UiPath.Testing.Activities;assembly=UiPath.Testing.Activities", clrNamespace: "UiPath.Testing.Activities", assembly: "UiPath.Testing.Activities" },
-  "UiPath.Form.Activities": { prefix: "uform", xmlns: "clr-namespace:UiPath.Form.Activities;assembly=UiPath.Form.Activities", clrNamespace: "UiPath.Form.Activities", assembly: "UiPath.Form.Activities" },
-  "UiPath.Cryptography.Activities": { prefix: "ucrypt", xmlns: "clr-namespace:UiPath.Cryptography.Activities;assembly=UiPath.Cryptography.Activities", clrNamespace: "UiPath.Cryptography.Activities", assembly: "UiPath.Cryptography.Activities" },
-  "UiPath.ComplexScenarios.Activities": { prefix: "ucs", xmlns: "clr-namespace:UiPath.ComplexScenarios.Activities;assembly=UiPath.ComplexScenarios.Activities", clrNamespace: "UiPath.ComplexScenarios.Activities", assembly: "UiPath.ComplexScenarios.Activities" },
-  "UiPath.AmazonWebServices.Activities": { prefix: "uaws", xmlns: "clr-namespace:UiPath.AmazonWebServices.Activities;assembly=UiPath.AmazonWebServices.Activities", clrNamespace: "UiPath.AmazonWebServices.Activities", assembly: "UiPath.AmazonWebServices.Activities" },
-  "UiPath.Amazon.Textract.Activities": { prefix: "utxt", xmlns: "clr-namespace:UiPath.Amazon.Textract.Activities;assembly=UiPath.Amazon.Textract.Activities", clrNamespace: "UiPath.Amazon.Textract.Activities", assembly: "UiPath.Amazon.Textract.Activities" },
-  "UiPath.Amazon.Comprehend.Activities": { prefix: "ucmp", xmlns: "clr-namespace:UiPath.Amazon.Comprehend.Activities;assembly=UiPath.Amazon.Comprehend.Activities", clrNamespace: "UiPath.Amazon.Comprehend.Activities", assembly: "UiPath.Amazon.Comprehend.Activities" },
-  "UiPath.Amazon.Rekognition.Activities": { prefix: "urek", xmlns: "clr-namespace:UiPath.Amazon.Rekognition.Activities;assembly=UiPath.Amazon.Rekognition.Activities", clrNamespace: "UiPath.Amazon.Rekognition.Activities", assembly: "UiPath.Amazon.Rekognition.Activities" },
-  "UiPath.Azure.Activities": { prefix: "uaz", xmlns: "clr-namespace:UiPath.Azure.Activities;assembly=UiPath.Azure.Activities", clrNamespace: "UiPath.Azure.Activities", assembly: "UiPath.Azure.Activities" },
-  "UiPath.AzureFormRecognizerV3.Activities": { prefix: "uafr", xmlns: "clr-namespace:UiPath.AzureFormRecognizerV3.Activities;assembly=UiPath.AzureFormRecognizerV3.Activities", clrNamespace: "UiPath.AzureFormRecognizerV3.Activities", assembly: "UiPath.AzureFormRecognizerV3.Activities" },
-  "UiPath.GoogleCloud.Activities": { prefix: "ugc", xmlns: "clr-namespace:UiPath.GoogleCloud.Activities;assembly=UiPath.GoogleCloud.Activities", clrNamespace: "UiPath.GoogleCloud.Activities", assembly: "UiPath.GoogleCloud.Activities" },
-  "UiPath.GoogleVision.Activities": { prefix: "ugv", xmlns: "clr-namespace:UiPath.GoogleVision.Activities;assembly=UiPath.GoogleVision.Activities", clrNamespace: "UiPath.GoogleVision.Activities", assembly: "UiPath.GoogleVision.Activities" },
-  "UiPath.Salesforce.Activities": { prefix: "usf", xmlns: "clr-namespace:UiPath.Salesforce.Activities;assembly=UiPath.Salesforce.Activities", clrNamespace: "UiPath.Salesforce.Activities", assembly: "UiPath.Salesforce.Activities" },
-  "UiPath.ServiceNow.Activities": { prefix: "usnow", xmlns: "clr-namespace:UiPath.ServiceNow.Activities;assembly=UiPath.ServiceNow.Activities", clrNamespace: "UiPath.ServiceNow.Activities", assembly: "UiPath.ServiceNow.Activities" },
-  "UiPath.Slack.Activities": { prefix: "uslack", xmlns: "clr-namespace:UiPath.Slack.Activities;assembly=UiPath.Slack.Activities", clrNamespace: "UiPath.Slack.Activities", assembly: "UiPath.Slack.Activities" },
-  "UiPath.Jira.Activities": { prefix: "ujira", xmlns: "clr-namespace:UiPath.Jira.Activities;assembly=UiPath.Jira.Activities", clrNamespace: "UiPath.Jira.Activities", assembly: "UiPath.Jira.Activities" },
-  "UiPath.MicrosoftTeams.Activities": { prefix: "uteams", xmlns: "clr-namespace:UiPath.MicrosoftTeams.Activities;assembly=UiPath.MicrosoftTeams.Activities", clrNamespace: "UiPath.MicrosoftTeams.Activities", assembly: "UiPath.MicrosoftTeams.Activities" },
-  "UiPath.FTP.Activities": { prefix: "uftp", xmlns: "clr-namespace:UiPath.FTP.Activities;assembly=UiPath.FTP.Activities", clrNamespace: "UiPath.FTP.Activities", assembly: "UiPath.FTP.Activities" },
-  "UiPath.Presentations.Activities": { prefix: "upres", xmlns: "clr-namespace:UiPath.Presentations.Activities;assembly=UiPath.Presentations.Activities", clrNamespace: "UiPath.Presentations.Activities", assembly: "UiPath.Presentations.Activities" },
-  "UiPath.Credentials.Activities": { prefix: "ucred", xmlns: "clr-namespace:UiPath.Credentials.Activities;assembly=UiPath.Credentials.Activities", clrNamespace: "UiPath.Credentials.Activities", assembly: "UiPath.Credentials.Activities" },
-  "UiPath.DocumentUnderstanding.Activities": { prefix: "udu", xmlns: "clr-namespace:UiPath.DocumentUnderstanding.Activities;assembly=UiPath.DocumentUnderstanding.Activities", clrNamespace: "UiPath.DocumentUnderstanding.Activities", assembly: "UiPath.DocumentUnderstanding.Activities" },
-  "UiPath.IntegrationService.Activities": { prefix: "uis", xmlns: "clr-namespace:UiPath.IntegrationService.Activities;assembly=UiPath.IntegrationService.Activities", clrNamespace: "UiPath.IntegrationService.Activities", assembly: "UiPath.IntegrationService.Activities" },
-  "UiPath.CommunicationsMining.Activities": { prefix: "ucm", xmlns: "clr-namespace:UiPath.CommunicationsMining.Activities;assembly=UiPath.CommunicationsMining.Activities", clrNamespace: "UiPath.CommunicationsMining.Activities", assembly: "UiPath.CommunicationsMining.Activities" },
-  "UiPath.WorkflowEvents.Activities": { prefix: "uwfe", xmlns: "clr-namespace:UiPath.WorkflowEvents.Activities;assembly=UiPath.WorkflowEvents.Activities", clrNamespace: "UiPath.WorkflowEvents.Activities", assembly: "UiPath.WorkflowEvents.Activities" },
-  "UiPath.Persistence.Activities::FormTask": { prefix: "upaf", xmlns: "clr-namespace:UiPath.Persistence.Activities.FormTask;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.FormTask", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.Persistence.Activities::Job": { prefix: "upaj", xmlns: "clr-namespace:UiPath.Persistence.Activities.Job;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Job", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.Persistence.Activities::Tasks": { prefix: "upat", xmlns: "clr-namespace:UiPath.Persistence.Activities.Tasks;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Tasks", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.Persistence.Activities::UserAction": { prefix: "upau", xmlns: "clr-namespace:UiPath.Persistence.Activities.UserAction;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.UserAction", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.Persistence.Activities::Delay": { prefix: "upad", xmlns: "clr-namespace:UiPath.Persistence.Activities.Delay;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Delay", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.Persistence.Activities::Model.Apps": { prefix: "upama", xmlns: "clr-namespace:UiPath.Persistence.Activities.Model.Apps;assembly=UiPath.Persistence.Activities", clrNamespace: "UiPath.Persistence.Activities.Model.Apps", assembly: "UiPath.Persistence.Activities" },
-  "UiPath.MicrosoftOffice365.Activities::Mail": { prefix: "umam", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities.Mail;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities.Mail", assembly: "UiPath.MicrosoftOffice365.Activities" },
-  "UiPath.MicrosoftOffice365.Activities::Excel": { prefix: "umae", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities.Excel;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities.Excel", assembly: "UiPath.MicrosoftOffice365.Activities" },
-  "UiPath.MicrosoftOffice365.Activities::Files.Models": { prefix: "umafm", xmlns: "clr-namespace:UiPath.MicrosoftOffice365.Activities.Files.Models;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.MicrosoftOffice365.Activities.Files.Models", assembly: "UiPath.MicrosoftOffice365.Activities" },
-  "UiPath.MicrosoftOffice365.Activities::Shared.Utils": { prefix: "usau", xmlns: "clr-namespace:UiPath.Shared.Activities.Utils;assembly=UiPath.MicrosoftOffice365.Activities", clrNamespace: "UiPath.Shared.Activities.Utils", assembly: "UiPath.MicrosoftOffice365.Activities" },
-  "UiPath.System.Activities::Storage": { prefix: "ucas", xmlns: "clr-namespace:UiPath.Core.Activities.Storage;assembly=UiPath.System.Activities", clrNamespace: "UiPath.Core.Activities.Storage", assembly: "UiPath.System.Activities" },
-  "UiPath.System.Activities::Jobs": { prefix: "uasj", xmlns: "clr-namespace:UiPath.Activities.System.Jobs;assembly=UiPath.System.Activities", clrNamespace: "UiPath.Activities.System.Jobs", assembly: "UiPath.System.Activities" },
-  "UiPath.System.Activities::Orchestrator.Mail": { prefix: "uasom", xmlns: "clr-namespace:UiPath.Activities.System.Orchestrator.Mail;assembly=UiPath.System.Activities", clrNamespace: "UiPath.Activities.System.Orchestrator.Mail", assembly: "UiPath.System.Activities" },
-  "UiPath.DataService.Activities::Core": { prefix: "uda", xmlns: "clr-namespace:UiPath.DataService.Activities;assembly=UiPath.DataService.Activities.Core", clrNamespace: "UiPath.DataService.Activities", assembly: "UiPath.DataService.Activities.Core" },
-  "UiPath.DataService.Activities::Models": { prefix: "udam", xmlns: "clr-namespace:UiPath.DataService.Activities.Models;assembly=UiPath.DataService.Activities.Core", clrNamespace: "UiPath.DataService.Activities.Models", assembly: "UiPath.DataService.Activities.Core" },
-  "UiPath.Agentic.Activities": { prefix: "uaa", xmlns: "clr-namespace:UiPath.Agentic.Activities;assembly=UiPath.Agentic.Activities", clrNamespace: "UiPath.Agentic.Activities", assembly: "UiPath.Agentic.Activities" },
-  "UiPath.Agentic.Activities::Services.Models": { prefix: "uaasm", xmlns: "clr-namespace:UiPath.Agentic.Activities.Services.Models;assembly=UiPath.Agentic", clrNamespace: "UiPath.Agentic.Activities.Services.Models", assembly: "UiPath.Agentic" },
-  "UiPath.Process.Activities": { prefix: "upa", xmlns: "clr-namespace:UiPath.Process.Activities;assembly=UiPath.Process.Activities", clrNamespace: "UiPath.Process.Activities", assembly: "UiPath.Process.Activities" },
-  "UiPath.Process.Activities::Shared": { prefix: "upas", xmlns: "clr-namespace:UiPath.Process.Activities.Shared;assembly=UiPath.Process.Activities", clrNamespace: "UiPath.Process.Activities.Shared", assembly: "UiPath.Process.Activities" },
-  "UiPath.IntelligentOCR.StudioWeb.Activities::DataValidation": { prefix: "uisad", xmlns: "clr-namespace:UiPath.IntelligentOCR.StudioWeb.Activities.DataValidation;assembly=UiPath.IntelligentOCR.StudioWeb.Activities", clrNamespace: "UiPath.IntelligentOCR.StudioWeb.Activities.DataValidation", assembly: "UiPath.IntelligentOCR.StudioWeb.Activities" },
-  "UiPath.IntelligentOCR.StudioWeb.Activities::PDF.ExtractPDFText": { prefix: "uisape", xmlns: "clr-namespace:UiPath.IntelligentOCR.StudioWeb.Activities.PDF.ExtractPDFText;assembly=UiPath.IntelligentOCR.StudioWeb.Activities", clrNamespace: "UiPath.IntelligentOCR.StudioWeb.Activities.PDF.ExtractPDFText", assembly: "UiPath.IntelligentOCR.StudioWeb.Activities" },
-  "UiPath.Platform::ResourceHandling": { prefix: "upr", xmlns: "clr-namespace:UiPath.Platform.ResourceHandling;assembly=UiPath.Platform", clrNamespace: "UiPath.Platform.ResourceHandling", assembly: "UiPath.Platform" },
-  "UiPath.UIAutomation.Activities::uix": { prefix: "uix", xmlns: "http://schemas.uipath.com/workflow/activities/uix", clrNamespace: "", assembly: "" },
-  "UiPath.IntegrationService.Activities::isactr": { prefix: "isactr", xmlns: "http://schemas.uipath.com/workflow/integration-service-activities/isactr", clrNamespace: "", assembly: "" },
-  "UiPath.IntelligentOCR.Activities::schema": { prefix: "p", xmlns: "http://schemas.uipath.com/workflow/activities/intelligentocr", clrNamespace: "", assembly: "" },
-  "System.Net.Mail": { prefix: "snetmail", xmlns: "clr-namespace:System.Net.Mail;assembly=System", clrNamespace: "System.Net.Mail", assembly: "System" },
-  "UiPath.Box.Activities": { prefix: "ubox", xmlns: "clr-namespace:UiPath.Box.Activities;assembly=UiPath.Box.Activities", clrNamespace: "UiPath.Box.Activities", assembly: "UiPath.Box.Activities" },
-  "UiPath.MicrosoftDynamics.Activities": { prefix: "udyn", xmlns: "clr-namespace:UiPath.MicrosoftDynamics.Activities;assembly=UiPath.MicrosoftDynamics.Activities", clrNamespace: "UiPath.MicrosoftDynamics.Activities", assembly: "UiPath.MicrosoftDynamics.Activities" },
-  "UiPath.Workday.Activities": { prefix: "uwd", xmlns: "clr-namespace:UiPath.Workday.Activities;assembly=UiPath.Workday.Activities", clrNamespace: "UiPath.Workday.Activities", assembly: "UiPath.Workday.Activities" },
-  "UiPath.Coupa.IntegrationService.Activities": { prefix: "ucoupa", xmlns: "clr-namespace:UiPath.Coupa.IntegrationService.Activities;assembly=UiPath.Coupa.IntegrationService.Activities", clrNamespace: "UiPath.Coupa.IntegrationService.Activities", assembly: "UiPath.Coupa.IntegrationService.Activities" },
-  "UiPath.Act365.IntegrationService.Activities": { prefix: "uact365", xmlns: "clr-namespace:UiPath.Act365.IntegrationService.Activities;assembly=UiPath.Act365.IntegrationService.Activities", clrNamespace: "UiPath.Act365.IntegrationService.Activities", assembly: "UiPath.Act365.IntegrationService.Activities" },
-  "UiPath.ActiveDirectoryDomainServices.Activities": { prefix: "uadds", xmlns: "clr-namespace:UiPath.ActiveDirectoryDomainServices.Activities;assembly=UiPath.ActiveDirectoryDomainServices.Activities", clrNamespace: "UiPath.ActiveDirectoryDomainServices.Activities", assembly: "UiPath.ActiveDirectoryDomainServices.Activities" },
-  "UiPath.Adobe.AdobeSign.Activities": { prefix: "uadosign", xmlns: "clr-namespace:UiPath.Adobe.AdobeSign.Activities;assembly=UiPath.Adobe.AdobeSign.Activities", clrNamespace: "UiPath.Adobe.AdobeSign.Activities", assembly: "UiPath.Adobe.AdobeSign.Activities" },
-  "UiPath.AdobePdfServices.IntegrationService.Activities": { prefix: "uadobepdf", xmlns: "clr-namespace:UiPath.AdobePdfServices.IntegrationService.Activities;assembly=UiPath.AdobePdfServices.IntegrationService.Activities", clrNamespace: "UiPath.AdobePdfServices.IntegrationService.Activities", assembly: "UiPath.AdobePdfServices.IntegrationService.Activities" },
-  "UiPath.Alteryx.Activities": { prefix: "ualteryx", xmlns: "clr-namespace:UiPath.Alteryx.Activities;assembly=UiPath.Alteryx.Activities", clrNamespace: "UiPath.Alteryx.Activities", assembly: "UiPath.Alteryx.Activities" },
-  "UiPath.Amazon.Scope.Activities": { prefix: "uamzscope", xmlns: "clr-namespace:UiPath.Amazon.Scope.Activities;assembly=UiPath.Amazon.Scope.Activities", clrNamespace: "UiPath.Amazon.Scope.Activities", assembly: "UiPath.Amazon.Scope.Activities" },
-  "UiPath.AmazonConnect.Activities": { prefix: "uamzconn", xmlns: "clr-namespace:UiPath.AmazonConnect.Activities;assembly=UiPath.AmazonConnect.Activities", clrNamespace: "UiPath.AmazonConnect.Activities", assembly: "UiPath.AmazonConnect.Activities" },
-  "UiPath.AmazonWorkSpaces.Activities": { prefix: "uamzws", xmlns: "clr-namespace:UiPath.AmazonWorkSpaces.Activities;assembly=UiPath.AmazonWorkSpaces.Activities", clrNamespace: "UiPath.AmazonWorkSpaces.Activities", assembly: "UiPath.AmazonWorkSpaces.Activities" },
-  "UiPath.AppleMail.Activities": { prefix: "uaplemail", xmlns: "clr-namespace:UiPath.AppleMail.Activities;assembly=UiPath.AppleMail.Activities", clrNamespace: "UiPath.AppleMail.Activities", assembly: "UiPath.AppleMail.Activities" },
-  "UiPath.AppleNumbers.Activities": { prefix: "uaplnum", xmlns: "clr-namespace:UiPath.AppleNumbers.Activities;assembly=UiPath.AppleNumbers.Activities", clrNamespace: "UiPath.AppleNumbers.Activities", assembly: "UiPath.AppleNumbers.Activities" },
-  "UiPath.AppleScripting.Activities": { prefix: "uaplscript", xmlns: "clr-namespace:UiPath.AppleScripting.Activities;assembly=UiPath.AppleScripting.Activities", clrNamespace: "UiPath.AppleScripting.Activities", assembly: "UiPath.AppleScripting.Activities" },
-  "UiPath.AzureActiveDirectory.Activities": { prefix: "uazad", xmlns: "clr-namespace:UiPath.AzureActiveDirectory.Activities;assembly=UiPath.AzureActiveDirectory.Activities", clrNamespace: "UiPath.AzureActiveDirectory.Activities", assembly: "UiPath.AzureActiveDirectory.Activities" },
-  "UiPath.AzureWindowsVirtualDesktop.Activities": { prefix: "uazwvd", xmlns: "clr-namespace:UiPath.AzureWindowsVirtualDesktop.Activities;assembly=UiPath.AzureWindowsVirtualDesktop.Activities", clrNamespace: "UiPath.AzureWindowsVirtualDesktop.Activities", assembly: "UiPath.AzureWindowsVirtualDesktop.Activities" },
-  "UiPath.BambooHR.IntegrationService.Activities": { prefix: "ubamboo", xmlns: "clr-namespace:UiPath.BambooHR.IntegrationService.Activities;assembly=UiPath.BambooHR.IntegrationService.Activities", clrNamespace: "UiPath.BambooHR.IntegrationService.Activities", assembly: "UiPath.BambooHR.IntegrationService.Activities" },
-  "UiPath.Box.IntegrationService.Activities": { prefix: "uboxis", xmlns: "clr-namespace:UiPath.Box.IntegrationService.Activities;assembly=UiPath.Box.IntegrationService.Activities", clrNamespace: "UiPath.Box.IntegrationService.Activities", assembly: "UiPath.Box.IntegrationService.Activities" },
-  "UiPath.Callout.Activities": { prefix: "ucallout", xmlns: "clr-namespace:UiPath.Callout.Activities;assembly=UiPath.Callout.Activities", clrNamespace: "UiPath.Callout.Activities", assembly: "UiPath.Callout.Activities" },
-  "UiPath.CampaignMonitor.IntegrationService.Activities": { prefix: "ucampmon", xmlns: "clr-namespace:UiPath.CampaignMonitor.IntegrationService.Activities;assembly=UiPath.CampaignMonitor.IntegrationService.Activities", clrNamespace: "UiPath.CampaignMonitor.IntegrationService.Activities", assembly: "UiPath.CampaignMonitor.IntegrationService.Activities" },
-  "UiPath.CiscoWebexTeams.IntegrationService.Activities": { prefix: "uwebex", xmlns: "clr-namespace:UiPath.CiscoWebexTeams.IntegrationService.Activities;assembly=UiPath.CiscoWebexTeams.IntegrationService.Activities", clrNamespace: "UiPath.CiscoWebexTeams.IntegrationService.Activities", assembly: "UiPath.CiscoWebexTeams.IntegrationService.Activities" },
-  "UiPath.Citrix.Activities": { prefix: "ucitrix", xmlns: "clr-namespace:UiPath.Citrix.Activities;assembly=UiPath.Citrix.Activities", clrNamespace: "UiPath.Citrix.Activities", assembly: "UiPath.Citrix.Activities" },
-  "UiPath.Cognitive.Activities": { prefix: "ucognitive", xmlns: "clr-namespace:UiPath.Cognitive.Activities;assembly=UiPath.Cognitive.Activities", clrNamespace: "UiPath.Cognitive.Activities", assembly: "UiPath.Cognitive.Activities" },
-  "UiPath.ConfluenceCloud.IntegrationService.Activities": { prefix: "uconfluence", xmlns: "clr-namespace:UiPath.ConfluenceCloud.IntegrationService.Activities;assembly=UiPath.ConfluenceCloud.IntegrationService.Activities", clrNamespace: "UiPath.ConfluenceCloud.IntegrationService.Activities", assembly: "UiPath.ConfluenceCloud.IntegrationService.Activities" },
-  "UiPath.DocuSign.Activities": { prefix: "udocusign", xmlns: "clr-namespace:UiPath.DocuSign.Activities;assembly=UiPath.DocuSign.Activities", clrNamespace: "UiPath.DocuSign.Activities", assembly: "UiPath.DocuSign.Activities" },
-  "UiPath.Docusign.IntegrationService.Activities": { prefix: "udocuis", xmlns: "clr-namespace:UiPath.Docusign.IntegrationService.Activities;assembly=UiPath.Docusign.IntegrationService.Activities", clrNamespace: "UiPath.Docusign.IntegrationService.Activities", assembly: "UiPath.Docusign.IntegrationService.Activities" },
-  "UiPath.DocumentUnderstanding.ML.Activities": { prefix: "uduml", xmlns: "clr-namespace:UiPath.DocumentUnderstanding.ML.Activities;assembly=UiPath.DocumentUnderstanding.ML.Activities", clrNamespace: "UiPath.DocumentUnderstanding.ML.Activities", assembly: "UiPath.DocumentUnderstanding.ML.Activities" },
-  "UiPath.Dropbox.IntegrationService.Activities": { prefix: "udropbox", xmlns: "clr-namespace:UiPath.Dropbox.IntegrationService.Activities;assembly=UiPath.Dropbox.IntegrationService.Activities", clrNamespace: "UiPath.Dropbox.IntegrationService.Activities", assembly: "UiPath.Dropbox.IntegrationService.Activities" },
-  "UiPath.DropboxBusiness.IntegrationService.Activities": { prefix: "udropbiz", xmlns: "clr-namespace:UiPath.DropboxBusiness.IntegrationService.Activities;assembly=UiPath.DropboxBusiness.IntegrationService.Activities", clrNamespace: "UiPath.DropboxBusiness.IntegrationService.Activities", assembly: "UiPath.DropboxBusiness.IntegrationService.Activities" },
-  "UiPath.ExchangeServer.Activities": { prefix: "uexchange", xmlns: "clr-namespace:UiPath.ExchangeServer.Activities;assembly=UiPath.ExchangeServer.Activities", clrNamespace: "UiPath.ExchangeServer.Activities", assembly: "UiPath.ExchangeServer.Activities" },
-  "UiPath.Expensify.IntegrationService.Activities": { prefix: "uexpensify", xmlns: "clr-namespace:UiPath.Expensify.IntegrationService.Activities;assembly=UiPath.Expensify.IntegrationService.Activities", clrNamespace: "UiPath.Expensify.IntegrationService.Activities", assembly: "UiPath.Expensify.IntegrationService.Activities" },
-  "UiPath.Freshservice.IntegrationService.Activities": { prefix: "ufreshsvc", xmlns: "clr-namespace:UiPath.Freshservice.IntegrationService.Activities;assembly=UiPath.Freshservice.IntegrationService.Activities", clrNamespace: "UiPath.Freshservice.IntegrationService.Activities", assembly: "UiPath.Freshservice.IntegrationService.Activities" },
-  "UiPath.GitHub.IntegrationService.Activities": { prefix: "ugithub", xmlns: "clr-namespace:UiPath.GitHub.IntegrationService.Activities;assembly=UiPath.GitHub.IntegrationService.Activities", clrNamespace: "UiPath.GitHub.IntegrationService.Activities", assembly: "UiPath.GitHub.IntegrationService.Activities" },
-  "UiPath.GoogleVertex.IntegrationService.Activities": { prefix: "uvertex", xmlns: "clr-namespace:UiPath.GoogleVertex.IntegrationService.Activities;assembly=UiPath.GoogleVertex.IntegrationService.Activities", clrNamespace: "UiPath.GoogleVertex.IntegrationService.Activities", assembly: "UiPath.GoogleVertex.IntegrationService.Activities" },
-  "UiPath.GoToWebinar.IntegrationService.Activities": { prefix: "ugotoweb", xmlns: "clr-namespace:UiPath.GoToWebinar.IntegrationService.Activities;assembly=UiPath.GoToWebinar.IntegrationService.Activities", clrNamespace: "UiPath.GoToWebinar.IntegrationService.Activities", assembly: "UiPath.GoToWebinar.IntegrationService.Activities" },
-  "UiPath.HyperV.Activities": { prefix: "uhyperv", xmlns: "clr-namespace:UiPath.HyperV.Activities;assembly=UiPath.HyperV.Activities", clrNamespace: "UiPath.HyperV.Activities", assembly: "UiPath.HyperV.Activities" },
-  "UiPath.Java.Activities": { prefix: "ujava", xmlns: "clr-namespace:UiPath.Java.Activities;assembly=UiPath.Java.Activities", clrNamespace: "UiPath.Java.Activities", assembly: "UiPath.Java.Activities" },
-  "UiPath.Jira.IntegrationService.Activities": { prefix: "ujirais", xmlns: "clr-namespace:UiPath.Jira.IntegrationService.Activities;assembly=UiPath.Jira.IntegrationService.Activities", clrNamespace: "UiPath.Jira.IntegrationService.Activities", assembly: "UiPath.Jira.IntegrationService.Activities" },
-  "UiPath.Mailchimp.IntegrationService.Activities": { prefix: "umailchimp", xmlns: "clr-namespace:UiPath.Mailchimp.IntegrationService.Activities;assembly=UiPath.Mailchimp.IntegrationService.Activities", clrNamespace: "UiPath.Mailchimp.IntegrationService.Activities", assembly: "UiPath.Mailchimp.IntegrationService.Activities" },
-  "UiPath.Marketo.Activities": { prefix: "umarketo", xmlns: "clr-namespace:UiPath.Marketo.Activities;assembly=UiPath.Marketo.Activities", clrNamespace: "UiPath.Marketo.Activities", assembly: "UiPath.Marketo.Activities" },
-  "UiPath.Marketo.IntegrationService.Activities": { prefix: "umarketois", xmlns: "clr-namespace:UiPath.Marketo.IntegrationService.Activities;assembly=UiPath.Marketo.IntegrationService.Activities", clrNamespace: "UiPath.Marketo.IntegrationService.Activities", assembly: "UiPath.Marketo.IntegrationService.Activities" },
-  "UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities": { prefix: "uazoai", xmlns: "clr-namespace:UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities;assembly=UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities", clrNamespace: "UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities", assembly: "UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities" },
-  "UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities": { prefix: "udyncrm", xmlns: "clr-namespace:UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities;assembly=UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities", clrNamespace: "UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities", assembly: "UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities" },
-  "UiPath.MicrosoftTranslator.Activities": { prefix: "umstrans", xmlns: "clr-namespace:UiPath.MicrosoftTranslator.Activities;assembly=UiPath.MicrosoftTranslator.Activities", clrNamespace: "UiPath.MicrosoftTranslator.Activities", assembly: "UiPath.MicrosoftTranslator.Activities" },
-  "UiPath.MicrosoftVision.Activities": { prefix: "umsvision", xmlns: "clr-namespace:UiPath.MicrosoftVision.Activities;assembly=UiPath.MicrosoftVision.Activities", clrNamespace: "UiPath.MicrosoftVision.Activities", assembly: "UiPath.MicrosoftVision.Activities" },
-  "UiPath.MLServices.Activities": { prefix: "umlsvc", xmlns: "clr-namespace:UiPath.MLServices.Activities;assembly=UiPath.MLServices.Activities", clrNamespace: "UiPath.MLServices.Activities", assembly: "UiPath.MLServices.Activities" },
-  "UiPath.NetIQeDirectory.Activities": { prefix: "unetiq", xmlns: "clr-namespace:UiPath.NetIQeDirectory.Activities;assembly=UiPath.NetIQeDirectory.Activities", clrNamespace: "UiPath.NetIQeDirectory.Activities", assembly: "UiPath.NetIQeDirectory.Activities" },
-  "UiPath.OpenAI.IntegrationService.Activities": { prefix: "uopenai", xmlns: "clr-namespace:UiPath.OpenAI.IntegrationService.Activities;assembly=UiPath.OpenAI.IntegrationService.Activities", clrNamespace: "UiPath.OpenAI.IntegrationService.Activities", assembly: "UiPath.OpenAI.IntegrationService.Activities" },
-  "UiPath.Oracle.IntegrationCloud.Process.Activities": { prefix: "uoic", xmlns: "clr-namespace:UiPath.Oracle.IntegrationCloud.Process.Activities;assembly=UiPath.Oracle.IntegrationCloud.Process.Activities", clrNamespace: "UiPath.Oracle.IntegrationCloud.Process.Activities", assembly: "UiPath.Oracle.IntegrationCloud.Process.Activities" },
-  "UiPath.OracleEloqua.IntegrationService.Activities": { prefix: "ueloqua", xmlns: "clr-namespace:UiPath.OracleEloqua.IntegrationService.Activities;assembly=UiPath.OracleEloqua.IntegrationService.Activities", clrNamespace: "UiPath.OracleEloqua.IntegrationService.Activities", assembly: "UiPath.OracleEloqua.IntegrationService.Activities" },
-  "UiPath.OracleNetSuite.Activities": { prefix: "unetsuite", xmlns: "clr-namespace:UiPath.OracleNetSuite.Activities;assembly=UiPath.OracleNetSuite.Activities", clrNamespace: "UiPath.OracleNetSuite.Activities", assembly: "UiPath.OracleNetSuite.Activities" },
-  "UiPath.OracleNetSuite.IntegrationService.Activities": { prefix: "unetsuitis", xmlns: "clr-namespace:UiPath.OracleNetSuite.IntegrationService.Activities;assembly=UiPath.OracleNetSuite.IntegrationService.Activities", clrNamespace: "UiPath.OracleNetSuite.IntegrationService.Activities", assembly: "UiPath.OracleNetSuite.IntegrationService.Activities" },
-  "UiPath.Python.Activities": { prefix: "upython", xmlns: "clr-namespace:UiPath.Python.Activities;assembly=UiPath.Python.Activities", clrNamespace: "UiPath.Python.Activities", assembly: "UiPath.Python.Activities" },
-  "UiPath.QuickBooksOnline.IntegrationService.Activities": { prefix: "uqbo", xmlns: "clr-namespace:UiPath.QuickBooksOnline.IntegrationService.Activities;assembly=UiPath.QuickBooksOnline.IntegrationService.Activities", clrNamespace: "UiPath.QuickBooksOnline.IntegrationService.Activities", assembly: "UiPath.QuickBooksOnline.IntegrationService.Activities" },
-  "UiPath.Salesforce.IntegrationService.Activities": { prefix: "usfis", xmlns: "clr-namespace:UiPath.Salesforce.IntegrationService.Activities;assembly=UiPath.Salesforce.IntegrationService.Activities", clrNamespace: "UiPath.Salesforce.IntegrationService.Activities", assembly: "UiPath.Salesforce.IntegrationService.Activities" },
-  "UiPath.SalesforceMarketingCloud.IntegrationService.Activities": { prefix: "usfmc", xmlns: "clr-namespace:UiPath.SalesforceMarketingCloud.IntegrationService.Activities;assembly=UiPath.SalesforceMarketingCloud.IntegrationService.Activities", clrNamespace: "UiPath.SalesforceMarketingCloud.IntegrationService.Activities", assembly: "UiPath.SalesforceMarketingCloud.IntegrationService.Activities" },
-  "UiPath.SAPCloudForCustomer.IntegrationService.Activities": { prefix: "usapc4c", xmlns: "clr-namespace:UiPath.SAPCloudForCustomer.IntegrationService.Activities;assembly=UiPath.SAPCloudForCustomer.IntegrationService.Activities", clrNamespace: "UiPath.SAPCloudForCustomer.IntegrationService.Activities", assembly: "UiPath.SAPCloudForCustomer.IntegrationService.Activities" },
-  "UiPath.SendGrid.IntegrationService.Activities": { prefix: "usendgrid", xmlns: "clr-namespace:UiPath.SendGrid.IntegrationService.Activities;assembly=UiPath.SendGrid.IntegrationService.Activities", clrNamespace: "UiPath.SendGrid.IntegrationService.Activities", assembly: "UiPath.SendGrid.IntegrationService.Activities" },
-  "UiPath.ServiceNow.IntegrationService.Activities": { prefix: "usnowis", xmlns: "clr-namespace:UiPath.ServiceNow.IntegrationService.Activities;assembly=UiPath.ServiceNow.IntegrationService.Activities", clrNamespace: "UiPath.ServiceNow.IntegrationService.Activities", assembly: "UiPath.ServiceNow.IntegrationService.Activities" },
-  "UiPath.Smartsheet.Activities": { prefix: "usheet", xmlns: "clr-namespace:UiPath.Smartsheet.Activities;assembly=UiPath.Smartsheet.Activities", clrNamespace: "UiPath.Smartsheet.Activities", assembly: "UiPath.Smartsheet.Activities" },
-  "UiPath.Smartsheet.IntegrationService.Activities": { prefix: "usheetis", xmlns: "clr-namespace:UiPath.Smartsheet.IntegrationService.Activities;assembly=UiPath.Smartsheet.IntegrationService.Activities", clrNamespace: "UiPath.Smartsheet.IntegrationService.Activities", assembly: "UiPath.Smartsheet.IntegrationService.Activities" },
-  "UiPath.Snowflake.IntegrationService.Activities": { prefix: "usnowflake", xmlns: "clr-namespace:UiPath.Snowflake.IntegrationService.Activities;assembly=UiPath.Snowflake.IntegrationService.Activities", clrNamespace: "UiPath.Snowflake.IntegrationService.Activities", assembly: "UiPath.Snowflake.IntegrationService.Activities" },
-  "UiPath.SuccessFactors.Activities": { prefix: "usuccfact", xmlns: "clr-namespace:UiPath.SuccessFactors.Activities;assembly=UiPath.SuccessFactors.Activities", clrNamespace: "UiPath.SuccessFactors.Activities", assembly: "UiPath.SuccessFactors.Activities" },
-  "UiPath.SugarEnterprise.IntegrationService.Activities": { prefix: "usugare", xmlns: "clr-namespace:UiPath.SugarEnterprise.IntegrationService.Activities;assembly=UiPath.SugarEnterprise.IntegrationService.Activities", clrNamespace: "UiPath.SugarEnterprise.IntegrationService.Activities", assembly: "UiPath.SugarEnterprise.IntegrationService.Activities" },
-  "UiPath.SugarProfessional.IntegrationService.Activities": { prefix: "usugarp", xmlns: "clr-namespace:UiPath.SugarProfessional.IntegrationService.Activities;assembly=UiPath.SugarProfessional.IntegrationService.Activities", clrNamespace: "UiPath.SugarProfessional.IntegrationService.Activities", assembly: "UiPath.SugarProfessional.IntegrationService.Activities" },
-  "UiPath.SugarSell.IntegrationService.Activities": { prefix: "usugars", xmlns: "clr-namespace:UiPath.SugarSell.IntegrationService.Activities;assembly=UiPath.SugarSell.IntegrationService.Activities", clrNamespace: "UiPath.SugarSell.IntegrationService.Activities", assembly: "UiPath.SugarSell.IntegrationService.Activities" },
-  "UiPath.SugarServe.IntegrationService.Activities": { prefix: "usugarv", xmlns: "clr-namespace:UiPath.SugarServe.IntegrationService.Activities;assembly=UiPath.SugarServe.IntegrationService.Activities", clrNamespace: "UiPath.SugarServe.IntegrationService.Activities", assembly: "UiPath.SugarServe.IntegrationService.Activities" },
-  "UiPath.SystemCenter.Activities": { prefix: "usysctr", xmlns: "clr-namespace:UiPath.SystemCenter.Activities;assembly=UiPath.SystemCenter.Activities", clrNamespace: "UiPath.SystemCenter.Activities", assembly: "UiPath.SystemCenter.Activities" },
-  "UiPath.Tableau.Activities": { prefix: "utableau", xmlns: "clr-namespace:UiPath.Tableau.Activities;assembly=UiPath.Tableau.Activities", clrNamespace: "UiPath.Tableau.Activities", assembly: "UiPath.Tableau.Activities" },
-  "UiPath.Terminal.Activities": { prefix: "uterminal", xmlns: "clr-namespace:UiPath.Terminal.Activities;assembly=UiPath.Terminal.Activities", clrNamespace: "UiPath.Terminal.Activities", assembly: "UiPath.Terminal.Activities" },
-  "UiPath.Twilio.Activities": { prefix: "utwilio", xmlns: "clr-namespace:UiPath.Twilio.Activities;assembly=UiPath.Twilio.Activities", clrNamespace: "UiPath.Twilio.Activities", assembly: "UiPath.Twilio.Activities" },
-  "UiPath.Twilio.IntegrationService.Activities": { prefix: "utwiliois", xmlns: "clr-namespace:UiPath.Twilio.IntegrationService.Activities;assembly=UiPath.Twilio.IntegrationService.Activities", clrNamespace: "UiPath.Twilio.IntegrationService.Activities", assembly: "UiPath.Twilio.IntegrationService.Activities" },
-  "UiPath.Twitter.IntegrationService.Activities": { prefix: "utwitter", xmlns: "clr-namespace:UiPath.Twitter.IntegrationService.Activities;assembly=UiPath.Twitter.IntegrationService.Activities", clrNamespace: "UiPath.Twitter.IntegrationService.Activities", assembly: "UiPath.Twitter.IntegrationService.Activities" },
-  "UiPath.VMware.Activities": { prefix: "uvmware", xmlns: "clr-namespace:UiPath.VMware.Activities;assembly=UiPath.VMware.Activities", clrNamespace: "UiPath.VMware.Activities", assembly: "UiPath.VMware.Activities" },
-  "UiPath.Workato.Activities": { prefix: "uworkato", xmlns: "clr-namespace:UiPath.Workato.Activities;assembly=UiPath.Workato.Activities", clrNamespace: "UiPath.Workato.Activities", assembly: "UiPath.Workato.Activities" },
-  "UiPath.Workday.IntegrationService.Activities": { prefix: "uwdis", xmlns: "clr-namespace:UiPath.Workday.IntegrationService.Activities;assembly=UiPath.Workday.IntegrationService.Activities", clrNamespace: "UiPath.Workday.IntegrationService.Activities", assembly: "UiPath.Workday.IntegrationService.Activities" },
-  "UiPath.Zendesk.IntegrationService.Activities": { prefix: "uzendesk", xmlns: "clr-namespace:UiPath.Zendesk.IntegrationService.Activities;assembly=UiPath.Zendesk.IntegrationService.Activities", clrNamespace: "UiPath.Zendesk.IntegrationService.Activities", assembly: "UiPath.Zendesk.IntegrationService.Activities" },
-  "UiPath.Zoom.IntegrationService.Activities": { prefix: "uzoom", xmlns: "clr-namespace:UiPath.Zoom.IntegrationService.Activities;assembly=UiPath.Zoom.IntegrationService.Activities", clrNamespace: "UiPath.Zoom.IntegrationService.Activities", assembly: "UiPath.Zoom.IntegrationService.Activities" },
+  "System.Activities.Statements": { prefix: "s", xmlns: "clr-namespace:System.Activities.Statements;assembly=System.Activities", clrNamespace: "System.Activities.Statements", assembly: "System.Activities" },
+  "System.Collections.ObjectModel": { prefix: "sco", xmlns: "clr-namespace:System.Collections.ObjectModel;assembly=mscorlib", clrNamespace: "System.Collections.ObjectModel", assembly: "mscorlib" },
+  "System.Collections.Generic::1": { prefix: "scg", xmlns: "clr-namespace:System.Collections.Generic;assembly=mscorlib", clrNamespace: "System.Collections.Generic", assembly: "mscorlib" },
+  "System.Collections.Generic::2": { prefix: "scg2", xmlns: "clr-namespace:System.Collections.Generic;assembly=System", clrNamespace: "System.Collections.Generic", assembly: "System" },
+  "XAML": { prefix: "x", xmlns: "http://schemas.microsoft.com/winfx/2006/xaml", clrNamespace: "", assembly: "" },
 };
 
-const EXTRA_PREFIX_ALIASES: Record<string, string> = {
-  "ds": "uds",
-  "datafabric": "uds",
-  "ocr": "uocr",
-};
+let _cachedPackageNamespaceMap: Record<string, PackageNamespaceInfo> | null = null;
+let _cachedCatalogGeneration = -1;
 
-const PREFIX_ALIAS_MAP: Record<string, string> = (() => {
+export function getPackageNamespaceMap(): Record<string, PackageNamespaceInfo> {
+  if (catalogService.isLoaded()) {
+    const gen = catalogService.getLoadGeneration();
+    if (_cachedPackageNamespaceMap && _cachedCatalogGeneration === gen) {
+      return _cachedPackageNamespaceMap;
+    }
+    const map: Record<string, PackageNamespaceInfo> = {};
+    const entries = catalogService.getAllPackageNamespaceEntries();
+    for (const entry of entries) {
+      const key = entry.packageId;
+      if (!map[key]) {
+        const xmlns = entry.xmlns || (entry.clrNamespace && entry.assembly
+          ? `clr-namespace:${entry.clrNamespace};assembly=${entry.assembly}`
+          : "");
+        map[key] = {
+          prefix: entry.prefix,
+          xmlns,
+          clrNamespace: entry.clrNamespace,
+          assembly: entry.assembly,
+        };
+      }
+    }
+    for (const [k, v] of Object.entries(EMERGENCY_FALLBACK_MAP)) {
+      if (!map[k]) map[k] = v;
+    }
+    _cachedPackageNamespaceMap = map;
+    _cachedCatalogGeneration = gen;
+    return map;
+  }
+  console.warn("[xaml-compliance] WARNING: Catalog not loaded — using emergency fallback namespace map (6 built-in prefixes: ui, s, sco, scg, scg2, x across 8 entries). This may cause missing namespace resolutions.");
+  return EMERGENCY_FALLBACK_MAP;
+}
+
+/** @deprecated Transitional compatibility proxy — delegates to CatalogService. Prefer catalogService.getNamespaceForPrefix() or getPackageNamespaceMap() directly. */
+export const PACKAGE_NAMESPACE_MAP: Record<string, PackageNamespaceInfo> = new Proxy({} as Record<string, PackageNamespaceInfo>, {
+  get(_target, prop: string) {
+    return getPackageNamespaceMap()[prop];
+  },
+  has(_target, prop: string) {
+    return prop in getPackageNamespaceMap();
+  },
+  ownKeys() {
+    return Object.keys(getPackageNamespaceMap());
+  },
+  getOwnPropertyDescriptor(_target, prop: string) {
+    const map = getPackageNamespaceMap();
+    if (prop in map) {
+      return { value: map[prop], writable: false, enumerable: true, configurable: true };
+    }
+    return undefined;
+  },
+});
+
+
+function getPrefixAliasMap(): Record<string, string> {
+  if (catalogService.isLoaded()) {
+    return catalogService.getAliasMap();
+  }
   const map: Record<string, string> = {};
-  for (const [packageName, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
+  const nsMap = getPackageNamespaceMap();
+  for (const [packageName, info] of Object.entries(nsMap)) {
     if (!info.prefix) continue;
-    const parts = packageName.replace(/^UiPath\./, "").replace(/\.Activities$/, "").split(".");
+    const parts = packageName.replace(/^UiPath\./, '').replace(/\.Activities$/, '').split('.');
     for (const part of parts) {
       const alias = part.toLowerCase();
       if (alias !== info.prefix && !map[alias]) {
@@ -190,19 +103,15 @@ const PREFIX_ALIAS_MAP: Record<string, string> = (() => {
       }
     }
   }
-  for (const [alias, canonical] of Object.entries(EXTRA_PREFIX_ALIASES)) {
-    if (!map[alias]) {
-      map[alias] = canonical;
-    }
-  }
   return map;
-})();
+}
+
 
 export function normalizeNamespaceAliases(xml: string): { xml: string; warnings: string[] } {
   const warnings: string[] = [];
   let result = xml;
 
-  for (const [alias, canonical] of Object.entries(PREFIX_ALIAS_MAP)) {
+  for (const [alias, canonical] of Object.entries(getPrefixAliasMap())) {
     const aliasPattern = new RegExp(`(<\\/?)${alias}:`, "g");
     if (aliasPattern.test(result)) {
       result = result.replace(new RegExp(`(<\\/?)${alias}:`, "g"), `$1${canonical}:`);
@@ -696,7 +605,7 @@ export function collectUsedPackages(xaml: string): Set<string> {
     }
   }
 
-  for (const [alias, canonical] of Object.entries(PREFIX_ALIAS_MAP)) {
+  for (const [alias, canonical] of Object.entries(getPrefixAliasMap())) {
     const aliasPattern = new RegExp(`<${alias}:`, "g");
     if (aliasPattern.test(xaml)) {
       const packageId = canonicalPrefixToPackage.get(canonical);
@@ -880,17 +789,29 @@ export function deriveRequiredDeclarationsForXaml(content: string): Authoritativ
     }
 
     if (!matchedPackage) {
-      for (const [pkgId, info] of Object.entries(PACKAGE_NAMESPACE_MAP)) {
-        if (info.prefix === prefix) {
-          matchedPackage = pkgId;
-          break;
+      if (catalogService.isLoaded()) {
+        matchedPackage = catalogService.getPackageForPrefix(prefix);
+      }
+      if (!matchedPackage) {
+        const nsMap = getPackageNamespaceMap();
+        for (const [pkgId, info] of Object.entries(nsMap)) {
+          if (info.prefix === prefix) {
+            matchedPackage = pkgId;
+            break;
+          }
         }
       }
     }
 
     if (matchedPackage) {
       neededPackages.add(matchedPackage);
-      const info = PACKAGE_NAMESPACE_MAP[matchedPackage];
+      let info: PackageNamespaceInfo | null = null;
+      if (catalogService.isLoaded()) {
+        info = catalogService.getNamespaceForPrefix(prefix);
+      }
+      if (!info) {
+        info = getPackageNamespaceMap()[matchedPackage] || null;
+      }
       if (info) {
         if (info.assembly) neededAssemblies.add(info.assembly);
         if (info.clrNamespace) neededNamespaces.add(info.clrNamespace);
@@ -905,12 +826,13 @@ export function deriveRequiredDeclarationsForXaml(content: string): Authoritativ
     neededPackages.add("UiPath.System.Activities");
     neededPackages.add("UiPath.UIAutomation.Activities");
 
-    const sysInfo = PACKAGE_NAMESPACE_MAP["UiPath.System.Activities"];
+    const nsMap = getPackageNamespaceMap();
+    const sysInfo = nsMap["UiPath.System.Activities"];
     if (sysInfo) {
       if (sysInfo.assembly) neededAssemblies.add(sysInfo.assembly);
       if (sysInfo.clrNamespace) neededNamespaces.add(sysInfo.clrNamespace);
     }
-    const uiInfo = PACKAGE_NAMESPACE_MAP["UiPath.UIAutomation.Activities"];
+    const uiInfo = nsMap["UiPath.UIAutomation.Activities"];
     if (uiInfo) {
       if (uiInfo.assembly) neededAssemblies.add(uiInfo.assembly);
       if (uiInfo.clrNamespace) neededNamespaces.add(uiInfo.clrNamespace);

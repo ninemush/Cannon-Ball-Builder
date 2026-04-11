@@ -1,7 +1,7 @@
 import { catalogService } from "./catalog/catalog-service";
 import { metadataService as _metadataService } from "./catalog/metadata-service";
 import { isFrameworkAssembly, normalizePackageName } from "./uipath-shared";
-import { getActivityPackage, NAMESPACE_PREFIX_TO_PACKAGE } from "./uipath-activity-registry";
+import { getActivityPackage } from "./uipath-activity-registry";
 import { getFilteredSchema, registerStage } from "./catalog/filtered-schema-lookup";
 
 registerStage("post-emission-dependency-analyzer");
@@ -320,10 +320,10 @@ export class PostEmissionDependencyAnalyzer {
       }
     }
 
-    if (prefix && prefix !== "ui" && NAMESPACE_PREFIX_TO_PACKAGE[prefix]) {
-      const nsPkg = NAMESPACE_PREFIX_TO_PACKAGE[prefix];
-      if (!allCandidates.some(c => c.packageId === nsPkg)) {
-        allCandidates.push({ packageId: nsPkg, source: "registry_match" });
+    if (prefix && prefix !== "ui") {
+      const nsPkg = catalogService.isLoaded() ? catalogService.getPackageForPrefix(prefix) : null;
+      if (nsPkg && !allCandidates.some(c => c.packageId === nsPkg)) {
+        allCandidates.push({ packageId: nsPkg, source: "catalog_service" });
       }
     }
 
@@ -341,8 +341,9 @@ export class PostEmissionDependencyAnalyzer {
       return { packageId: catalogCandidate.packageId, source: catalogCandidate.source, candidates: uniquePackages };
     }
 
+    const catalogPrefixPkg = prefix && catalogService.isLoaded() ? catalogService.getPackageForPrefix(prefix) : null;
     const prefixCandidate = prefix ? allCandidates.find(c =>
-      c.source === "registry_match" && NAMESPACE_PREFIX_TO_PACKAGE[prefix] === c.packageId
+      catalogPrefixPkg === c.packageId
     ) : null;
     if (prefixCandidate) {
       return { packageId: prefixCandidate.packageId, source: prefixCandidate.source, candidates: uniquePackages };

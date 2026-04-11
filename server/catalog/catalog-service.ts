@@ -75,6 +75,8 @@ export interface CatalogPackage {
   prefix?: string;
   clrNamespace?: string;
   assembly?: string;
+  xmlns?: string;
+  prefixAliases?: string[];
   additionalNamespaces?: AdditionalNamespace[];
   activities: CatalogActivity[];
 }
@@ -115,11 +117,21 @@ export interface PaletteEntry {
   properties: { name: string; direction: string; required: boolean; xamlSyntax: string; validValues?: string[] }[];
 }
 
+export interface PackageNamespaceInfo {
+  prefix: string;
+  xmlns: string;
+  clrNamespace: string;
+  assembly: string;
+}
+
+
 class CatalogService {
   private catalog: ActivityCatalog | null = null;
   private activityIndex = new Map<string, ActivitySchema>();
   private packageIndex = new Map<string, CatalogPackage>();
   private clrTypeIndex = new Map<string, string>();
+  private prefixIndex = new Map<string, { packageId: string; prefix: string; clrNamespace: string; assembly: string; xmlns: string }>();
+  private aliasIndex = new Map<string, string>();
   private loaded = false;
   private _studioProfile: StudioProfile | null = null;
   private loadGeneration = 0;
@@ -182,6 +194,7 @@ class CatalogService {
 
       this.checkVersionAlignment();
       this.checkCatalogFreshness();
+      validateCatalogNamespaceCoverage();
     } catch (err: any) {
       this._lastLoadError = err.message;
       console.warn(`[Activity Catalog] Failed to load catalog: ${err.message} — catalog constraints disabled`);
@@ -253,10 +266,56 @@ class CatalogService {
     this.activityIndex.clear();
     this.packageIndex.clear();
     this.clrTypeIndex.clear();
+    this.prefixIndex.clear();
+    this.aliasIndex.clear();
 
     for (const pkg of this.catalog.packages) {
       if (pkg.packageId) {
         this.packageIndex.set(pkg.packageId, pkg);
+      }
+
+      if (pkg.prefix !== undefined && pkg.packageId) {
+        const xmlns = pkg.xmlns
+          ? pkg.xmlns
+          : (pkg.prefix === ""
+            ? "http://schemas.microsoft.com/netfx/2009/xaml/activities"
+            : (pkg.clrNamespace && pkg.assembly
+              ? `clr-namespace:${pkg.clrNamespace};assembly=${pkg.assembly}`
+              : ""));
+        if (pkg.prefix !== "" && !this.prefixIndex.has(pkg.prefix)) {
+          this.prefixIndex.set(pkg.prefix, {
+            packageId: pkg.packageId,
+            prefix: pkg.prefix,
+            clrNamespace: pkg.clrNamespace || "",
+            assembly: pkg.assembly || "",
+            xmlns,
+          });
+        }
+      }
+
+      if (pkg.additionalNamespaces) {
+        for (const ns of pkg.additionalNamespaces) {
+          if (ns.prefix && !this.prefixIndex.has(ns.prefix)) {
+            const xmlns = ns.xmlns || (ns.clrNamespace && ns.assembly
+              ? `clr-namespace:${ns.clrNamespace};assembly=${ns.assembly}`
+              : "");
+            this.prefixIndex.set(ns.prefix, {
+              packageId: pkg.packageId,
+              prefix: ns.prefix,
+              clrNamespace: ns.clrNamespace || "",
+              assembly: ns.assembly || "",
+              xmlns,
+            });
+          }
+        }
+      }
+
+      if (pkg.prefixAliases && pkg.prefix) {
+        for (const alias of pkg.prefixAliases) {
+          if (!this.aliasIndex.has(alias)) {
+            this.aliasIndex.set(alias, pkg.prefix);
+          }
+        }
       }
 
       for (const act of pkg.activities) {
@@ -543,16 +602,70 @@ class CatalogService {
     return names;
   }
 
+  resolvePrefix(prefix: string): string {
+    if (this.prefixIndex.has(prefix)) return prefix;
+    const aliased = this.aliasIndex.get(prefix);
+    if (aliased && this.prefixIndex.has(aliased)) return aliased;
+    return prefix;
+  }
+
+  getPackageForPrefix(prefix: string): string | null {
+    if (!this.loaded || !this.catalog) return null;
+    const resolved = this.resolvePrefix(prefix);
+    const entry = this.prefixIndex.get(resolved);
+    return entry?.packageId || null;
+  }
+
+  getNamespaceForPrefix(prefix: string): PackageNamespaceInfo | null {
+    if (!this.loaded || !this.catalog) return null;
+    const resolved = this.resolvePrefix(prefix);
+    const entry = this.prefixIndex.get(resolved);
+    if (!entry) return null;
+    return {
+      prefix: entry.prefix,
+      xmlns: entry.xmlns,
+      clrNamespace: entry.clrNamespace,
+      assembly: entry.assembly,
+    };
+  }
+
+  getFullNamespaceInfoForPrefix(prefix: string): { packageId: string; prefix: string; clrNamespace: string; assembly: string; xmlns: string } | null {
+    if (!this.loaded || !this.catalog) return null;
+    const resolved = this.resolvePrefix(prefix);
+    return this.prefixIndex.get(resolved) || null;
+  }
+
+  getAliasMap(): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const [alias, canonical] of this.aliasIndex.entries()) {
+      result[alias] = canonical;
+    }
+    return result;
+  }
+
+  getAllPrefixes(): string[] {
+    return Array.from(this.prefixIndex.keys());
+  }
+
   getAllPackageNamespaceEntries(): Array<{ packageId: string; prefix: string; clrNamespace: string; assembly: string; xmlns?: string }> {
     if (!this.loaded || !this.catalog) return [];
     const entries: Array<{ packageId: string; prefix: string; clrNamespace: string; assembly: string; xmlns?: string }> = [];
     for (const [packageId, pkg] of this.packageIndex) {
       if (pkg.prefix && pkg.clrNamespace && pkg.assembly) {
-        entries.push({ packageId, prefix: pkg.prefix, clrNamespace: pkg.clrNamespace, assembly: pkg.assembly });
+        entries.push({ packageId, prefix: pkg.prefix, clrNamespace: pkg.clrNamespace, assembly: pkg.assembly, xmlns: pkg.xmlns });
       }
       if (pkg.additionalNamespaces) {
         for (const ns of pkg.additionalNamespaces) {
-          entries.push({ packageId, prefix: ns.prefix, clrNamespace: ns.clrNamespace, assembly: ns.assembly, xmlns: ns.xmlns });
+          let variantSuffix = "";
+          if (ns.clrNamespace.startsWith(packageId + ".")) {
+            variantSuffix = ns.clrNamespace.substring(packageId.length + 1);
+          } else if (ns.clrNamespace.startsWith(pkg.clrNamespace + ".")) {
+            variantSuffix = ns.clrNamespace.substring(pkg.clrNamespace!.length + 1);
+          } else if (ns.assembly !== pkg.assembly) {
+            variantSuffix = ns.assembly.replace(packageId + ".", "");
+          }
+          const variantKey = variantSuffix ? `${packageId}::${variantSuffix}` : packageId;
+          entries.push({ packageId: variantKey, prefix: ns.prefix, clrNamespace: ns.clrNamespace, assembly: ns.assembly, xmlns: ns.xmlns });
         }
       }
     }
@@ -702,8 +815,13 @@ class CatalogService {
       }
     }
 
+    const attrNamesLower = new Map<string, string>();
+    for (const attrName of Object.keys(attributes)) {
+      attrNamesLower.set(attrName.toLowerCase(), attrName);
+    }
+
     for (const prop of schema.activity.properties) {
-      const hasAttribute = prop.name in attributes;
+      const hasAttribute = prop.name in attributes || attrNamesLower.has(prop.name.toLowerCase());
       const hasChild = children.some(c => c === prop.name || c === `${tag.split(":").pop()}.${prop.name}`);
 
       if (prop.required && !hasAttribute && !hasChild) {
@@ -821,3 +939,210 @@ class CatalogService {
 }
 
 export const catalogService = new CatalogService();
+
+const REQUIRED_PREFIX_COVERAGE: Record<string, string> = {
+  "isactr": "UiPath.IntegrationService.Activities",
+  "p": "UiPath.IntelligentOCR.Activities",
+  "snetmail": "System.Net.Mail",
+  "uaa": "UiPath.Agentic.Activities",
+  "uaasm": "UiPath.Agentic.Activities",
+  "uact365": "UiPath.Act365.IntegrationService.Activities",
+  "uadds": "UiPath.ActiveDirectoryDomainServices.Activities",
+  "uadobepdf": "UiPath.AdobePdfServices.IntegrationService.Activities",
+  "uadosign": "UiPath.Adobe.AdobeSign.Activities",
+  "uafr": "UiPath.AzureFormRecognizerV3.Activities",
+  "ualteryx": "UiPath.Alteryx.Activities",
+  "uamzconn": "UiPath.AmazonConnect.Activities",
+  "uamzscope": "UiPath.Amazon.Scope.Activities",
+  "uamzws": "UiPath.AmazonWorkSpaces.Activities",
+  "uaplemail": "UiPath.AppleMail.Activities",
+  "uaplnum": "UiPath.AppleNumbers.Activities",
+  "uaplscript": "UiPath.AppleScripting.Activities",
+  "uasj": "UiPath.System.Activities",
+  "uasom": "UiPath.System.Activities",
+  "uaws": "UiPath.AmazonWebServices.Activities",
+  "uaz": "UiPath.Azure.Activities",
+  "uazad": "UiPath.AzureActiveDirectory.Activities",
+  "uazoai": "UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities",
+  "uazwvd": "UiPath.AzureWindowsVirtualDesktop.Activities",
+  "ubamboo": "UiPath.BambooHR.IntegrationService.Activities",
+  "ubox": "UiPath.Box.Activities",
+  "uboxis": "UiPath.Box.IntegrationService.Activities",
+  "ucallout": "UiPath.Callout.Activities",
+  "ucampmon": "UiPath.CampaignMonitor.IntegrationService.Activities",
+  "ucas": "UiPath.System.Activities",
+  "ucitrix": "UiPath.Citrix.Activities",
+  "ucm": "UiPath.CommunicationsMining.Activities",
+  "ucmp": "UiPath.Amazon.Comprehend.Activities",
+  "ucognitive": "UiPath.Cognitive.Activities",
+  "uconfluence": "UiPath.ConfluenceCloud.IntegrationService.Activities",
+  "ucoupa": "UiPath.Coupa.IntegrationService.Activities",
+  "ucred": "UiPath.Credentials.Activities",
+  "ucrypt": "UiPath.Cryptography.Activities",
+  "ucs": "UiPath.ComplexScenarios.Activities",
+  "uda": "UiPath.DataService.Activities",
+  "udam": "UiPath.DataService.Activities",
+  "udb": "UiPath.Database.Activities",
+  "udocuis": "UiPath.Docusign.IntegrationService.Activities",
+  "udocusign": "UiPath.DocuSign.Activities",
+  "udropbiz": "UiPath.DropboxBusiness.IntegrationService.Activities",
+  "udropbox": "UiPath.Dropbox.IntegrationService.Activities",
+  "uds": "UiPath.DataService.Activities",
+  "udu": "UiPath.DocumentUnderstanding.Activities",
+  "uduml": "UiPath.DocumentUnderstanding.ML.Activities",
+  "udyn": "UiPath.MicrosoftDynamics.Activities",
+  "udyncrm": "UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities",
+  "ueloqua": "UiPath.OracleEloqua.IntegrationService.Activities",
+  "uexcel": "UiPath.Excel.Activities",
+  "uexchange": "UiPath.ExchangeServer.Activities",
+  "uexpensify": "UiPath.Expensify.IntegrationService.Activities",
+  "uform": "UiPath.Form.Activities",
+  "ufreshsvc": "UiPath.Freshservice.IntegrationService.Activities",
+  "uftp": "UiPath.FTP.Activities",
+  "ugc": "UiPath.GoogleCloud.Activities",
+  "ugenai": "UiPath.GenAI.Activities",
+  "ugithub": "UiPath.GitHub.IntegrationService.Activities",
+  "ugotoweb": "UiPath.GoToWebinar.IntegrationService.Activities",
+  "ugs": "UiPath.GSuite.Activities",
+  "ugv": "UiPath.GoogleVision.Activities",
+  "uhyperv": "UiPath.HyperV.Activities",
+  "ui": "UiPath.UIAutomation.Activities",
+  "uis": "UiPath.IntegrationService.Activities",
+  "uisad": "UiPath.IntelligentOCR.StudioWeb.Activities",
+  "uisape": "UiPath.IntelligentOCR.StudioWeb.Activities",
+  "uisw": "UiPath.IntelligentOCR.StudioWeb.Activities",
+  "uix": "UiPath.UIAutomation.Activities",
+  "ujava": "UiPath.Java.Activities",
+  "ujira": "UiPath.Jira.Activities",
+  "ujirais": "UiPath.Jira.IntegrationService.Activities",
+  "umae": "UiPath.MicrosoftOffice365.Activities",
+  "umafm": "UiPath.MicrosoftOffice365.Activities",
+  "umail": "UiPath.Mail.Activities",
+  "umailchimp": "UiPath.Mailchimp.IntegrationService.Activities",
+  "umam": "UiPath.MicrosoftOffice365.Activities",
+  "umarketo": "UiPath.Marketo.Activities",
+  "umarketois": "UiPath.Marketo.IntegrationService.Activities",
+  "uml": "UiPath.MLActivities",
+  "umlsvc": "UiPath.MLServices.Activities",
+  "umstrans": "UiPath.MicrosoftTranslator.Activities",
+  "umsvision": "UiPath.MicrosoftVision.Activities",
+  "unetiq": "UiPath.NetIQeDirectory.Activities",
+  "unetsuite": "UiPath.OracleNetSuite.Activities",
+  "unetsuitis": "UiPath.OracleNetSuite.IntegrationService.Activities",
+  "uo365": "UiPath.MicrosoftOffice365.Activities",
+  "uocr": "UiPath.IntelligentOCR.Activities",
+  "uoic": "UiPath.Oracle.IntegrationCloud.Process.Activities",
+  "uopenai": "UiPath.OpenAI.IntegrationService.Activities",
+  "upa": "UiPath.Process.Activities",
+  "upad": "UiPath.Persistence.Activities",
+  "upaf": "UiPath.Persistence.Activities",
+  "upaj": "UiPath.Persistence.Activities",
+  "upama": "UiPath.Persistence.Activities",
+  "upas": "UiPath.Process.Activities",
+  "upat": "UiPath.Persistence.Activities",
+  "upau": "UiPath.Persistence.Activities",
+  "updf": "UiPath.PDF.Activities",
+  "upers": "UiPath.Persistence.Activities",
+  "upr": "UiPath.Platform",
+  "upres": "UiPath.Presentations.Activities",
+  "upython": "UiPath.Python.Activities",
+  "uqbo": "UiPath.QuickBooksOnline.IntegrationService.Activities",
+  "urek": "UiPath.Amazon.Rekognition.Activities",
+  "usapc4c": "UiPath.SAPCloudForCustomer.IntegrationService.Activities",
+  "usau": "UiPath.MicrosoftOffice365.Activities",
+  "usendgrid": "UiPath.SendGrid.IntegrationService.Activities",
+  "usf": "UiPath.Salesforce.Activities",
+  "usfis": "UiPath.Salesforce.IntegrationService.Activities",
+  "usfmc": "UiPath.SalesforceMarketingCloud.IntegrationService.Activities",
+  "usheet": "UiPath.Smartsheet.Activities",
+  "usheetis": "UiPath.Smartsheet.IntegrationService.Activities",
+  "uslack": "UiPath.Slack.Activities",
+  "usnow": "UiPath.ServiceNow.Activities",
+  "usnowflake": "UiPath.Snowflake.IntegrationService.Activities",
+  "usnowis": "UiPath.ServiceNow.IntegrationService.Activities",
+  "usuccfact": "UiPath.SuccessFactors.Activities",
+  "usugare": "UiPath.SugarEnterprise.IntegrationService.Activities",
+  "usugarp": "UiPath.SugarProfessional.IntegrationService.Activities",
+  "usugars": "UiPath.SugarSell.IntegrationService.Activities",
+  "usugarv": "UiPath.SugarServe.IntegrationService.Activities",
+  "usysctr": "UiPath.SystemCenter.Activities",
+  "utableau": "UiPath.Tableau.Activities",
+  "uteams": "UiPath.MicrosoftTeams.Activities",
+  "uterminal": "UiPath.Terminal.Activities",
+  "utest": "UiPath.Testing.Activities",
+  "utwilio": "UiPath.Twilio.Activities",
+  "utwiliois": "UiPath.Twilio.IntegrationService.Activities",
+  "utwitter": "UiPath.Twitter.IntegrationService.Activities",
+  "utxt": "UiPath.Amazon.Textract.Activities",
+  "uvertex": "UiPath.GoogleVertex.IntegrationService.Activities",
+  "uvmware": "UiPath.VMware.Activities",
+  "uwd": "UiPath.Workday.Activities",
+  "uwdis": "UiPath.Workday.IntegrationService.Activities",
+  "uweb": "UiPath.WebAPI.Activities",
+  "uwebex": "UiPath.CiscoWebexTeams.IntegrationService.Activities",
+  "uwfe": "UiPath.WorkflowEvents.Activities",
+  "uword": "UiPath.Word.Activities",
+  "uworkato": "UiPath.Workato.Activities",
+  "uzendesk": "UiPath.Zendesk.IntegrationService.Activities",
+  "uzoom": "UiPath.Zoom.IntegrationService.Activities",
+};
+
+const REQUIRED_ALIAS_COVERAGE: Record<string, string> = {
+  "ds": "uds",
+  "datafabric": "uds",
+  "ocr": "uocr",
+  "uwebapi": "uweb",
+  "usfdc": "usf",
+  "ugcloud": "ugc",
+  "uazure": "uaz",
+  "ucrypto": "ucrypt",
+  "ui2": "ui",
+};
+
+export function validateCatalogNamespaceCoverage(): { missingPrefixes: string[]; mismatchedPrefixes: string[]; missingAliases: string[]; catalogPrefixCount: number; manifestEntryCount: number } {
+  if (!catalogService.isLoaded()) {
+    console.warn("[CatalogService] Cannot validate namespace coverage — catalog not loaded");
+    return { missingPrefixes: [], mismatchedPrefixes: [], missingAliases: [], catalogPrefixCount: 0, manifestEntryCount: 0 };
+  }
+
+  const catalogPrefixes = catalogService.getAllPrefixes();
+  const catalogPrefixCount = catalogPrefixes.length;
+  const manifestEntryCount = Object.keys(REQUIRED_PREFIX_COVERAGE).length + Object.keys(REQUIRED_ALIAS_COVERAGE).length;
+
+  const missingPrefixes: string[] = [];
+  const mismatchedPrefixes: string[] = [];
+  for (const [prefix, expectedPkg] of Object.entries(REQUIRED_PREFIX_COVERAGE)) {
+    const resolved = catalogService.getPackageForPrefix(prefix);
+    if (!resolved) {
+      missingPrefixes.push(prefix);
+    } else if (resolved !== expectedPkg) {
+      mismatchedPrefixes.push(`${prefix}: expected ${expectedPkg}, got ${resolved}`);
+    }
+  }
+
+  const missingAliases: string[] = [];
+  for (const [alias, expectedCanonical] of Object.entries(REQUIRED_ALIAS_COVERAGE)) {
+    const resolved = catalogService.getPackageForPrefix(alias);
+    const canonicalResolved = catalogService.getPackageForPrefix(expectedCanonical);
+    if (!resolved) {
+      missingAliases.push(alias);
+    } else if (canonicalResolved && resolved !== canonicalResolved) {
+      missingAliases.push(`${alias}: resolves to ${resolved}, but canonical ${expectedCanonical} resolves to ${canonicalResolved}`);
+    }
+  }
+
+  if (missingPrefixes.length > 0) {
+    console.warn(`[CatalogService] Migration coverage: ${missingPrefixes.length}/${manifestEntryCount} legacy prefixes missing from catalog: ${missingPrefixes.join(", ")}`);
+  }
+  if (mismatchedPrefixes.length > 0) {
+    console.warn(`[CatalogService] Migration coverage: ${mismatchedPrefixes.length} prefix→package mismatches vs legacy manifest: ${mismatchedPrefixes.join("; ")}`);
+  }
+  if (missingAliases.length > 0) {
+    console.warn(`[CatalogService] Migration coverage: ${missingAliases.length} legacy aliases not resolving: ${missingAliases.join(", ")}`);
+  }
+  if (missingPrefixes.length === 0 && mismatchedPrefixes.length === 0 && missingAliases.length === 0) {
+    console.log(`[CatalogService] Migration coverage validated: catalog has ${catalogPrefixCount} prefixes, all ${manifestEntryCount} legacy manifest entries confirmed (${Object.keys(REQUIRED_PREFIX_COVERAGE).length} prefixes + ${Object.keys(REQUIRED_ALIAS_COVERAGE).length} aliases)`);
+  }
+
+  return { missingPrefixes, mismatchedPrefixes, missingAliases, catalogPrefixCount, manifestEntryCount };
+}

@@ -1,8 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
+import { readFileSync, readdirSync, existsSync } from "fs";
+import { join } from "path";
+import { XMLParser, XMLBuilder } from "fast-xml-parser";
 import { deriveRequiredDeclarationsForXaml, PACKAGE_NAMESPACE_MAP, insertBeforeClosingCollectionTag, normalizeXaml, collectUsedPackages } from "../xaml/xaml-compliance";
 import { generateReframeworkMainXaml } from "../xaml-generator";
 import { runStudioResolutionSmokeTest } from "../package-assembler";
 import { metadataService } from "../catalog/metadata-service";
+import { catalogService as catalogServiceImport } from "../catalog/catalog-service";
 
 function buildMinimalXaml(bodyContent: string, extraXmlns: string = ""): string {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -45,6 +49,10 @@ function buildMinimalXaml(bodyContent: string, extraXmlns: string = ""): string 
   </Sequence>
 </Activity>`;
 }
+
+beforeAll(() => {
+  if (!catalogServiceImport.isLoaded()) catalogServiceImport.load();
+});
 
 describe("Authoritative Declaration Synthesis", () => {
   describe("deriveRequiredDeclarationsForXaml", () => {
@@ -526,6 +534,94 @@ describe("Authoritative Declaration Synthesis", () => {
         expect(val).not.toBe("[*]");
       }
       expect(deps["UiPath.WebAPI.Activities"]).toBe("[25.10.0]");
+    });
+  });
+
+  describe("DOM round-trip fidelity", () => {
+    const parserOpts = {
+      preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: "@_",
+      parseTagValue: false, commentPropName: "#comment",
+    };
+    const builderOpts = {
+      preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: "@_",
+      format: true, indentBy: "  ", suppressEmptyNode: false, commentPropName: "#comment",
+    };
+
+    const refsDir = join(process.cwd(), "server", "xaml-references");
+    const refDirs = existsSync(refsDir)
+      ? readdirSync(refsDir).filter(d => existsSync(join(refsDir, d, "Main.xaml")))
+      : [];
+
+    it.each(refDirs)("reference XAML %s round-trips through DOM parse/serialize without losing structural elements", (dirName) => {
+      const xamlPath = join(refsDir, dirName, "Main.xaml");
+      const original = readFileSync(xamlPath, "utf-8");
+
+      const dom = new XMLParser(parserOpts).parse(original);
+      const rebuilt = new XMLBuilder(builderOpts).build(dom);
+
+      const getTagCounts = (xml: string) => {
+        const tags = new Map<string, number>();
+        const tagPattern = /<(\/?[\w:.]+)/g;
+        let m;
+        while ((m = tagPattern.exec(xml)) !== null) {
+          const tag = m[1];
+          tags.set(tag, (tags.get(tag) || 0) + 1);
+        }
+        return tags;
+      };
+      const origTags = getTagCounts(original);
+      const rebuildTags = getTagCounts(rebuilt);
+
+      for (const [tag, count] of origTags.entries()) {
+        const rebuildCount = rebuildTags.get(tag) || 0;
+        expect(rebuildCount).toBeGreaterThanOrEqual(count * 0.9);
+      }
+
+      if (original.includes("TextExpression.NamespacesForImplementation")) {
+        expect(rebuilt).toContain("TextExpression.NamespacesForImplementation");
+      }
+      if (original.includes("TextExpression.ReferencesForImplementation")) {
+        expect(rebuilt).toContain("TextExpression.ReferencesForImplementation");
+      }
+
+      const origXmlns = (original.match(/xmlns:\w+=/g) || []).sort();
+      const rebuildXmlns = (rebuilt.match(/xmlns:\w+=/g) || []).sort();
+      expect(rebuildXmlns).toEqual(origXmlns);
+    });
+  });
+
+  describe("alias normalization regression", () => {
+    it("catalog alias prefixes resolve correctly through collectUsedPackages", () => {
+      const aliasXaml = buildMinimalXaml(`
+        <Sequence>
+          <uds:CreateEntity DisplayName="Create" />
+          <upers:CreateFormTask DisplayName="Task" />
+        </Sequence>
+      `, `xmlns:uds="http://schemas.uipath.com/workflow/activities" xmlns:upers="http://schemas.uipath.com/workflow/activities"`);
+
+      const packages = collectUsedPackages(aliasXaml);
+      expect(packages.has("UiPath.DataService.Activities")).toBe(true);
+      expect(packages.has("UiPath.Persistence.Activities")).toBe(true);
+    });
+
+    it("catalog resolves all legacy alias entries", () => {
+      const legacyAliases: Record<string, string> = {
+        "ds": "uds",
+        "datafabric": "uds",
+        "ucrypto": "ucrypt",
+        "ui2": "ui",
+        "usfdc": "usf",
+        "ugcloud": "ugc",
+        "uazure": "uaz",
+        "uwebapi": "uweb",
+        "ocr": "uocr",
+      };
+      for (const [alias, canonical] of Object.entries(legacyAliases)) {
+        const aliasResult = catalogServiceImport.getPackageForPrefix(alias);
+        const canonicalResult = catalogServiceImport.getPackageForPrefix(canonical);
+        expect(aliasResult).not.toBeNull();
+        expect(aliasResult).toBe(canonicalResult);
+      }
     });
   });
 });

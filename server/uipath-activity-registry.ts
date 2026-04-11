@@ -440,153 +440,6 @@ function inferPackageFromNamespace(ns: string): string | null {
   return null;
 }
 
-export const NAMESPACE_PREFIX_TO_PACKAGE: Record<string, string> = {
-  "uexcel": "UiPath.Excel.Activities",
-  "uweb": "UiPath.WebAPI.Activities",
-  "umail": "UiPath.Mail.Activities",
-  "udb": "UiPath.Database.Activities",
-  "uml": "UiPath.MLActivities",
-  "uocr": "UiPath.IntelligentOCR.Activities",
-  "upers": "UiPath.Persistence.Activities",
-  "uds": "UiPath.DataService.Activities",
-  "ugs": "UiPath.GSuite.Activities",
-  "uis": "UiPath.IntegrationService.Activities",
-  "updf": "UiPath.PDF.Activities",
-  "uword": "UiPath.Word.Activities",
-  "uftp": "UiPath.FTP.Activities",
-  "ucrypto": "UiPath.Cryptography.Activities",
-  "ucred": "UiPath.Credentials.Activities",
-  "uform": "UiPath.Form.Activities",
-  "utest": "UiPath.Testing.Activities",
-  "upres": "UiPath.Presentations.Activities",
-  "udu": "UiPath.DocumentUnderstanding.Activities",
-  "ucm": "UiPath.CommunicationsMining.Activities",
-  "uwebapi": "UiPath.WebAPI.Activities",
-  "ucs": "UiPath.ComplexScenarios.Activities",
-  "uwfe": "UiPath.WorkflowEvents.Activities",
-  "uo365": "UiPath.MicrosoftOffice365.Activities",
-  "uteams": "UiPath.MicrosoftTeams.Activities",
-  "usfdc": "UiPath.Salesforce.Activities",
-  "usnow": "UiPath.ServiceNow.Activities",
-  "ujira": "UiPath.Jira.Activities",
-  "uslack": "UiPath.Slack.Activities",
-  "ubox": "UiPath.Box.Activities",
-  "uaws": "UiPath.AmazonWebServices.Activities",
-  "uazure": "UiPath.Azure.Activities",
-  "ugcloud": "UiPath.GoogleCloud.Activities",
-  "ucmp": "UiPath.Amazon.Comprehend.Activities",
-  "urek": "UiPath.Amazon.Rekognition.Activities",
-  "utxt": "UiPath.Amazon.Textract.Activities",
-  "uaz": "UiPath.Azure.Activities",
-  "uafr": "UiPath.AzureFormRecognizerV3.Activities",
-  "ucoupa": "UiPath.Coupa.IntegrationService.Activities",
-  "ucrypt": "UiPath.Cryptography.Activities",
-  "ugc": "UiPath.GoogleCloud.Activities",
-  "ugv": "UiPath.GoogleVision.Activities",
-  "udyn": "UiPath.MicrosoftDynamics.Activities",
-  "usf": "UiPath.Salesforce.Activities",
-  "uwd": "UiPath.Workday.Activities",
-  "uact365": "UiPath.Act365.IntegrationService.Activities",
-  "uadds": "UiPath.ActiveDirectoryDomainServices.Activities",
-  "uadosign": "UiPath.Adobe.AdobeSign.Activities",
-  "uadobepdf": "UiPath.AdobePdfServices.IntegrationService.Activities",
-  "ualteryx": "UiPath.Alteryx.Activities",
-  "uamzscope": "UiPath.Amazon.Scope.Activities",
-  "uamzconn": "UiPath.AmazonConnect.Activities",
-  "uamzws": "UiPath.AmazonWorkSpaces.Activities",
-  "uaplemail": "UiPath.AppleMail.Activities",
-  "uaplnum": "UiPath.AppleNumbers.Activities",
-  "uaplscript": "UiPath.AppleScripting.Activities",
-  "uazad": "UiPath.AzureActiveDirectory.Activities",
-  "uazwvd": "UiPath.AzureWindowsVirtualDesktop.Activities",
-  "ubamboo": "UiPath.BambooHR.IntegrationService.Activities",
-  "uboxis": "UiPath.Box.IntegrationService.Activities",
-  "ucallout": "UiPath.Callout.Activities",
-  "ucampmon": "UiPath.CampaignMonitor.IntegrationService.Activities",
-  "uwebex": "UiPath.CiscoWebexTeams.IntegrationService.Activities",
-  "ucitrix": "UiPath.Citrix.Activities",
-  "ucognitive": "UiPath.Cognitive.Activities",
-  "uconfluence": "UiPath.ConfluenceCloud.IntegrationService.Activities",
-  "uduml": "UiPath.DocumentUnderstanding.ML.Activities",
-  "udocusign": "UiPath.DocuSign.Activities",
-  "udocuis": "UiPath.Docusign.IntegrationService.Activities",
-  "udropbox": "UiPath.Dropbox.IntegrationService.Activities",
-  "udropbiz": "UiPath.DropboxBusiness.IntegrationService.Activities",
-  "uexchange": "UiPath.ExchangeServer.Activities",
-  "uexpensify": "UiPath.Expensify.IntegrationService.Activities",
-  "ufreshsvc": "UiPath.Freshservice.IntegrationService.Activities",
-  "ugithub": "UiPath.GitHub.IntegrationService.Activities",
-  "uvertex": "UiPath.GoogleVertex.IntegrationService.Activities",
-  "ugotoweb": "UiPath.GoToWebinar.IntegrationService.Activities",
-  "uhyperv": "UiPath.HyperV.Activities",
-  "ujava": "UiPath.Java.Activities",
-  "ujirais": "UiPath.Jira.IntegrationService.Activities",
-  "umailchimp": "UiPath.Mailchimp.IntegrationService.Activities",
-  "umarketo": "UiPath.Marketo.Activities",
-  "umarketois": "UiPath.Marketo.IntegrationService.Activities",
-  "uazoai": "UiPath.MicrosoftAzureOpenAI.IntegrationService.Activities",
-  "udyncrm": "UiPath.MicrosoftDynamicsCRM.IntegrationService.Activities",
-  "umstrans": "UiPath.MicrosoftTranslator.Activities",
-  "umsvision": "UiPath.MicrosoftVision.Activities",
-  "umlsvc": "UiPath.MLServices.Activities",
-  "unetiq": "UiPath.NetIQeDirectory.Activities",
-  "uopenai": "UiPath.OpenAI.IntegrationService.Activities",
-  "uoic": "UiPath.Oracle.IntegrationCloud.Process.Activities",
-  "ueloqua": "UiPath.OracleEloqua.IntegrationService.Activities",
-  "unetsuite": "UiPath.OracleNetSuite.Activities",
-  "unetsuitis": "UiPath.OracleNetSuite.IntegrationService.Activities",
-  "upython": "UiPath.Python.Activities",
-  "uqbo": "UiPath.QuickBooksOnline.IntegrationService.Activities",
-  "usfis": "UiPath.Salesforce.IntegrationService.Activities",
-  "usfmc": "UiPath.SalesforceMarketingCloud.IntegrationService.Activities",
-  "usapc4c": "UiPath.SAPCloudForCustomer.IntegrationService.Activities",
-  "usendgrid": "UiPath.SendGrid.IntegrationService.Activities",
-  "usnowis": "UiPath.ServiceNow.IntegrationService.Activities",
-  "usheet": "UiPath.Smartsheet.Activities",
-  "usheetis": "UiPath.Smartsheet.IntegrationService.Activities",
-  "usnowflake": "UiPath.Snowflake.IntegrationService.Activities",
-  "usuccfact": "UiPath.SuccessFactors.Activities",
-  "usugare": "UiPath.SugarEnterprise.IntegrationService.Activities",
-  "usugarp": "UiPath.SugarProfessional.IntegrationService.Activities",
-  "usugars": "UiPath.SugarSell.IntegrationService.Activities",
-  "usugarv": "UiPath.SugarServe.IntegrationService.Activities",
-  "usysctr": "UiPath.SystemCenter.Activities",
-  "utableau": "UiPath.Tableau.Activities",
-  "uterminal": "UiPath.Terminal.Activities",
-  "utwilio": "UiPath.Twilio.Activities",
-  "utwiliois": "UiPath.Twilio.IntegrationService.Activities",
-  "utwitter": "UiPath.Twitter.IntegrationService.Activities",
-  "uvmware": "UiPath.VMware.Activities",
-  "uworkato": "UiPath.Workato.Activities",
-  "uwdis": "UiPath.Workday.IntegrationService.Activities",
-  "uzendesk": "UiPath.Zendesk.IntegrationService.Activities",
-  "uzoom": "UiPath.Zoom.IntegrationService.Activities",
-  "upaf": "UiPath.Persistence.Activities",
-  "upaj": "UiPath.Persistence.Activities",
-  "upat": "UiPath.Persistence.Activities",
-  "upau": "UiPath.Persistence.Activities",
-  "upad": "UiPath.Persistence.Activities",
-  "upama": "UiPath.Persistence.Activities",
-  "umam": "UiPath.MicrosoftOffice365.Activities",
-  "umae": "UiPath.MicrosoftOffice365.Activities",
-  "umafm": "UiPath.MicrosoftOffice365.Activities",
-  "usau": "UiPath.MicrosoftOffice365.Activities",
-  "ucas": "UiPath.System.Activities",
-  "uasj": "UiPath.System.Activities",
-  "uasom": "UiPath.System.Activities",
-  "uda": "UiPath.DataService.Activities",
-  "udam": "UiPath.DataService.Activities",
-  "uaa": "UiPath.Agentic.Activities",
-  "uaasm": "UiPath.Agentic.Activities",
-  "upa": "UiPath.Process.Activities",
-  "upas": "UiPath.Process.Activities",
-  "uisad": "UiPath.IntelligentOCR.StudioWeb.Activities",
-  "uisape": "UiPath.IntelligentOCR.StudioWeb.Activities",
-  "upr": "UiPath.Platform",
-  "uix": "UiPath.UIAutomation.Activities",
-  "isactr": "UiPath.IntegrationService.Activities",
-  "p": "UiPath.IntelligentOCR.Activities",
-};
 
 const UI_PREFIX_ACTIVITY_PACKAGE_MAP: Record<string, string> = {
   "ui:CreateTask": "UiPath.Persistence.Activities",
@@ -648,7 +501,7 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     }
 
     if (prefix !== "ui") {
-      const nsPkg = NAMESPACE_PREFIX_TO_PACKAGE[prefix];
+      const nsPkg = catalogService.getPackageForPrefix(prefix);
       if (nsPkg && !isFrameworkAssembly(nsPkg)) {
         packages.add(normalizePackageName(nsPkg));
         continue;
@@ -661,11 +514,18 @@ export function scanXamlForRequiredPackages(xamlContent: string): Set<string> {
     }
   }
 
-  for (const [prefix, pkgName] of Object.entries(NAMESPACE_PREFIX_TO_PACKAGE)) {
-    const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
-    if (prefixPattern.test(xamlContent) && !isFrameworkAssembly(pkgName)) {
-      packages.add(normalizePackageName(pkgName));
+  if (catalogService.isLoaded()) {
+    for (const prefix of catalogService.getAllPrefixes()) {
+      const prefixPattern = new RegExp(`<${prefix}:[A-Za-z]+[\\s/>]`);
+      if (prefixPattern.test(xamlContent)) {
+        const pkgName = catalogService.getPackageForPrefix(prefix);
+        if (pkgName && !isFrameworkAssembly(pkgName)) {
+          packages.add(normalizePackageName(pkgName));
+        }
+      }
     }
+  } else {
+    console.warn("[collectUsedPackages] Catalog not loaded — prefix-based package scan unavailable");
   }
 
   const xmlnsPattern = /xmlns:\w+="clr-namespace:(UiPath\.[^;&]+);assembly=([^"&]+)"/g;
