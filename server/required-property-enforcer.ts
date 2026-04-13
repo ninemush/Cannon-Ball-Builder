@@ -1,4 +1,5 @@
 import { catalogService, type CatalogProperty, type ActivitySchema } from "./catalog/catalog-service";
+import { isPropertyOverriddenOptional } from "./uipath-activity-registry";
 import { tryParseJsonValueIntent, buildExpression, type ValueIntent, recordExpressionLoweringDiagnostic } from "./xaml/expression-builder";
 
 export type SourceKind =
@@ -333,6 +334,13 @@ const REQUIRED_PROPERTY_CLASSIFICATION_REGISTRY: ClassificationEntry[] = [
     classification: "generator-owned",
     approvedEnforcerRecovery: false,
     rationale: "Conditions are expression-sensitive; the generator must emit a valid VB.NET expression.",
+  },
+  {
+    activityType: "BuildDataTable",
+    propertyName: "TableInfo",
+    classification: "generator-owned",
+    approvedEnforcerRecovery: false,
+    rationale: "TableInfo is an XML-encoded DataTable schema structure that must be emitted by the deterministic generator. The enforcer cannot synthesize valid table schema.",
   },
 ];
 
@@ -1082,6 +1090,10 @@ function enforceForFile(
 
     for (const propDef of schema.activity.properties) {
       if (!propDef.required) continue;
+
+      if (isPropertyOverriddenOptional(strippedTag, propDef.name)) {
+        continue;
+      }
 
       const attrBoundaryPattern = new RegExp(`(?:^|\\s)${propDef.name}="`);
       const attrPresent = attrBoundaryPattern.test(attrStr);

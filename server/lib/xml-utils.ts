@@ -106,6 +106,15 @@ export function serializeSafeAttributeValue(raw: string): string {
   return escaped;
 }
 
+export function fixUnescapedAmpersands(xmlContent: string): { content: string; fixCount: number } {
+  let fixCount = 0;
+  const fixed = xmlContent.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/g, () => {
+    fixCount++;
+    return "&amp;";
+  });
+  return { content: fixed, fixCount };
+}
+
 export interface QuoteRepairResult {
   repaired: boolean;
   content: string;

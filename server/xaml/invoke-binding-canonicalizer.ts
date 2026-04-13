@@ -565,10 +565,11 @@ const SENTINEL_HANDOFF_RE = /\bHANDOFF_\w+/;
 const SENTINEL_STUB_RE = /\bSTUB_\w+|\bASSEMBLY_FAILED\w*/;
 
 function classifySentinel(value: string): SentinelReplacementRecord["originalDefectClass"] | null {
-  if (SENTINEL_PLACEHOLDER_RE.test(value)) return "placeholder_sentinel";
-  if (SENTINEL_TODO_RE.test(value)) return "todo_sentinel";
-  if (SENTINEL_HANDOFF_RE.test(value)) return "handoff_sentinel";
-  if (SENTINEL_STUB_RE.test(value)) return "stub_sentinel";
+  const strippedValue = value.replace(/&quot;[^&]*&quot;/g, "").replace(/\[&quot;[^[]*&quot;\]/g, "");
+  if (SENTINEL_PLACEHOLDER_RE.test(strippedValue)) return "placeholder_sentinel";
+  if (SENTINEL_TODO_RE.test(strippedValue)) return "todo_sentinel";
+  if (SENTINEL_HANDOFF_RE.test(strippedValue)) return "handoff_sentinel";
+  if (SENTINEL_STUB_RE.test(strippedValue)) return "stub_sentinel";
   return null;
 }
 

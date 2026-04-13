@@ -604,7 +604,58 @@ export function gen_build_data_table(args: GeneratorArgs): string {
   const dn = _escapeXmlAttr(args.displayName || "Build Data Table");
   const outputVar = args.outputVar || args.DataTable || "dt_Result";
 
+  interface ColumnInput { name: string; type?: string }
+  let columns: Array<{ name: string; type: string }> = [];
+  let isDerived = false;
+
+  if (args.Columns && typeof args.Columns === "string") {
+    try {
+      const parsed: unknown = JSON.parse(args.Columns);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item && typeof item === "object" && "name" in item && typeof (item as ColumnInput).name === "string") {
+            const col = item as ColumnInput;
+            const colType = col.type === "int" || col.type === "Int32" ? "xs:int" : col.type === "bool" || col.type === "Boolean" ? "xs:boolean" : "xs:string";
+            columns.push({ name: String(col.name), type: colType });
+          }
+        }
+        if (columns.length > 0) isDerived = true;
+      }
+    } catch {}
+  }
+
+  let tableInfoXml: string;
+
+  if (isDerived && columns.length > 0) {
+    const schemaElements = columns.map(c => `&lt;xs:element name="${_escapeXmlAttr(c.name)}" type="${c.type}" minOccurs="0" /&gt;`).join("");
+    const dataElements = columns.map(c => `&lt;${_escapeXmlAttr(c.name)} /&gt;`).join("");
+
+    tableInfoXml = `<ucs:BuildDataTable.TableInfo>` +
+      `&lt;NewDataSet&gt;&lt;xs:schema id="NewDataSet" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata"&gt;` +
+      `&lt;xs:element name="NewDataSet" msdata:IsDataSet="true" msdata:MainDataTable="TableInfo"&gt;` +
+      `&lt;xs:complexType&gt;&lt;xs:choice minOccurs="0" maxOccurs="unbounded"&gt;` +
+      `&lt;xs:element name="TableInfo"&gt;&lt;xs:complexType&gt;&lt;xs:sequence&gt;` +
+      schemaElements +
+      `&lt;/xs:sequence&gt;&lt;/xs:complexType&gt;&lt;/xs:element&gt;` +
+      `&lt;/xs:choice&gt;&lt;/xs:complexType&gt;&lt;/xs:element&gt;` +
+      `&lt;/xs:schema&gt;&lt;TableInfo&gt;` + dataElements + `&lt;/TableInfo&gt;&lt;/NewDataSet&gt;` +
+      `</ucs:BuildDataTable.TableInfo>`;
+  } else {
+    tableInfoXml = `<ucs:BuildDataTable.TableInfo>` +
+      `&lt;NewDataSet&gt;&lt;xs:schema id="NewDataSet" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata"&gt;` +
+      `&lt;xs:element name="NewDataSet" msdata:IsDataSet="true" msdata:MainDataTable="TableInfo"&gt;` +
+      `&lt;xs:complexType&gt;&lt;xs:choice minOccurs="0" maxOccurs="unbounded"&gt;` +
+      `&lt;xs:element name="TableInfo"&gt;&lt;xs:complexType&gt;&lt;xs:sequence /&gt;` +
+      `&lt;/xs:complexType&gt;&lt;/xs:element&gt;` +
+      `&lt;/xs:choice&gt;&lt;/xs:complexType&gt;&lt;/xs:element&gt;` +
+      `&lt;/xs:schema&gt;&lt;TableInfo /&gt;&lt;/NewDataSet&gt;` +
+      `</ucs:BuildDataTable.TableInfo>`;
+    console.warn(`[UiPath] HANDOFF: BuildDataTable "${dn}": TableInfo schema non-derivable — no Columns metadata provided. ` +
+      `Emitting empty structural shell. Define columns in UiPath Studio before execution.`);
+  }
+
   return `<ucs:BuildDataTable DisplayName="${dn}">
+      ${tableInfoXml}
       <ucs:BuildDataTable.DataTable>
         <OutArgument x:TypeArguments="scg2:DataTable">[${_escapeXmlAttr(outputVar)}]</OutArgument>
       </ucs:BuildDataTable.DataTable>

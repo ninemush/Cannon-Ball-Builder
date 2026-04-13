@@ -153,7 +153,7 @@ import archiver from "archiver";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
   import { detectReframeworkStructurally, analyzeStateMachine } from "./xaml/workflow-graph-validator";
   import { runQualityGate, validatePackage, formatQualityGateViolations, classifyQualityIssues, getBlockingFiles, hasOnlyWarnings, hasBlockingIssues, type QualityGateResult, type ClassifiedIssue, type PackageReadiness } from "./uipath-quality-gate";
-  import { escapeXml, repairMalformedQuotesInXaml } from "./lib/xml-utils";
+  import { escapeXml, repairMalformedQuotesInXaml, fixUnescapedAmpersands } from "./lib/xml-utils";
   import {
     resetQuoteRepairDiagnostics,
     recordActivePathProof,
@@ -475,6 +475,7 @@ function buildSpecAwareInvocations(
   scaffoldMeta: SpecScaffoldMetaLocal,
   generatedWorkflowNames: Set<string>,
   isReFrameworkMode: boolean,
+  persistedArguments?: Map<string, Array<{ name: string; direction: string; type: string }>>,
 ): {
   invocationXaml: string;
   variablesXaml: string;
@@ -528,7 +529,12 @@ function buildSpecAwareInvocations(
   for (const wfName of topLevelWorkflows) {
     const normalized = normalizeWorkflowName(wfName);
     const contract = contractMap.get(wfName) || contractMap.get(normalized);
-    const args = contract?.sharedArguments || [];
+    const persistedArgs = persistedArguments?.get(wfName) || persistedArguments?.get(normalized);
+    if (!persistedArgs && contract?.sharedArguments?.length) {
+      failures.push(`[Contract Authority] Workflow "${wfName}" has ${contract.sharedArguments.length} scaffold argument(s) but no persisted workflow.arguments — cannot wire without authoritative contract`);
+      continue;
+    }
+    const args = persistedArgs || [];
     let argBlock = "";
     let argFailed = false;
 
@@ -552,9 +558,9 @@ function buildSpecAwareInvocations(
       }
 
       let wrapperTag: string;
-      if (arg.direction === "in") {
+      if (arg.direction === "in" || arg.direction === "InArgument") {
         wrapperTag = "InArgument";
-      } else if (arg.direction === "out") {
+      } else if (arg.direction === "out" || arg.direction === "OutArgument") {
         wrapperTag = "OutArgument";
       } else {
         wrapperTag = "InOutArgument";
@@ -598,6 +604,7 @@ function wireChildWorkflowInvocations(
   xamlEntries: Array<{ name: string; content: string }>,
   libPath: string,
   generatedWorkflowNames: Set<string>,
+  persistedArguments?: Map<string, Array<{ name: string; direction: string; type: string }>>,
 ): { diagnostics: string[]; failures: string[]; wiredCount: number } {
   const diagnostics: string[] = [];
   const failures: string[] = [];
@@ -635,8 +642,15 @@ function wireChildWorkflowInvocations(
         continue;
       }
 
-      const calleeContract = contractMap.get(invokedNormalized);
-      const calleeArgs = calleeContract?.sharedArguments || [];
+      const calleePersistedArgs = persistedArguments?.get(invokedNormalized);
+      if (!calleePersistedArgs) {
+        const calleeContract = contractMap.get(invokedNormalized);
+        if (calleeContract?.sharedArguments?.length) {
+          failures.push(`[Contract Authority] ${callerNormalized} → ${invokedNormalized}: ${calleeContract.sharedArguments.length} scaffold arg(s) but no persisted workflow.arguments — cannot wire without authoritative contract`);
+          continue;
+        }
+      }
+      const calleeArgs = calleePersistedArgs || [];
       let argBlock = "";
       let argFailed = false;
 
@@ -659,8 +673,8 @@ function wireChildWorkflowInvocations(
         callerVars.set(varName, xamlType);
 
         let wrapperTag: string;
-        if (arg.direction === "in") wrapperTag = "InArgument";
-        else if (arg.direction === "out") wrapperTag = "OutArgument";
+        if (arg.direction === "in" || arg.direction === "InArgument") wrapperTag = "InArgument";
+        else if (arg.direction === "out" || arg.direction === "OutArgument") wrapperTag = "OutArgument";
         else wrapperTag = "InOutArgument";
 
         argBlock += `
@@ -3855,6 +3869,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
   );
 
   const specScaffoldMeta = pkg.internal?.specScaffoldMeta || null;
+  let persistedSpecArguments: Map<string, Array<{ name: string; direction: string; type: string }>> | undefined;
 
   let enrichment: EnrichmentResult | null = null;
   let treeEnrichment: TreeEnrichmentResult | null = null;
@@ -4764,6 +4779,78 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       let totalExcessiveStripping = 0;
       const excessiveStrippingFiles = new Set<string>();
 
+      if (specScaffoldMeta) {
+        const scaffoldArgMap = new Map<string, Array<{ name: string; direction: "InArgument" | "OutArgument" | "InOutArgument"; type: string }>>();
+        for (const contract of specScaffoldMeta.workflowContracts) {
+          if (contract.sharedArguments && contract.sharedArguments.length > 0) {
+            const normalizedArgs = contract.sharedArguments.map(a => ({
+              name: a.name,
+              direction: (a.direction === "in" ? "InArgument" : a.direction === "out" ? "OutArgument" : "InOutArgument") as "InArgument" | "OutArgument" | "InOutArgument",
+              type: a.type,
+            }));
+            scaffoldArgMap.set(contract.name, normalizedArgs);
+            scaffoldArgMap.set(normalizeWorkflowName(contract.name), normalizedArgs);
+          }
+        }
+        for (const entry of enrichmentsToProcess) {
+          if (entry.spec.arguments) {
+            for (const a of entry.spec.arguments) {
+              if (a.direction === "in") a.direction = "InArgument";
+              else if (a.direction === "out") a.direction = "OutArgument";
+              else if (a.direction === "in_out") a.direction = "InOutArgument";
+            }
+          }
+          const scaffoldArgs = scaffoldArgMap.get(entry.name) || scaffoldArgMap.get(normalizeWorkflowName(entry.name));
+          if ((!scaffoldArgs || scaffoldArgs.length === 0) && entry.spec.arguments && entry.spec.arguments.length > 0) {
+            throw new Error(
+              `[Contract Authority] BLOCKED: Workflow "${entry.name}" has ${entry.spec.arguments.length} persisted argument(s) ` +
+              `but scaffold defines no sharedArguments. Resolve by adding arguments to the scaffold contract.`
+            );
+          }
+          if (scaffoldArgs && scaffoldArgs.length > 0) {
+            if (!entry.spec.arguments || entry.spec.arguments.length === 0) {
+              entry.spec.arguments = scaffoldArgs.slice();
+              console.log(`[UiPath] Populated ${scaffoldArgs.length} scaffold argument(s) into empty tree spec "${entry.name}": [${scaffoldArgs.map(a => a.name).join(", ")}]`);
+            } else {
+              const existingArgMap = new Map(entry.spec.arguments.map(a => [a.name.toLowerCase(), a]));
+              const scaffoldArgNames = new Set(scaffoldArgs.map(a => a.name.toLowerCase()));
+              for (const sArg of scaffoldArgs) {
+                const existing = existingArgMap.get(sArg.name.toLowerCase());
+                if (existing) {
+                  if (existing.direction !== sArg.direction) {
+                    throw new Error(
+                      `[Contract Authority] BLOCKED: Argument "${sArg.name}" direction divergence in workflow "${entry.name}": ` +
+                      `persisted spec has "${existing.direction}", scaffold has "${sArg.direction}". ` +
+                      `Resolve by correcting the spec or scaffold before assembly.`
+                    );
+                  }
+                  if (existing.type !== sArg.type) {
+                    throw new Error(
+                      `[Contract Authority] BLOCKED: Argument "${sArg.name}" type divergence in workflow "${entry.name}": ` +
+                      `persisted spec has "${existing.type}", scaffold has "${sArg.type}". ` +
+                      `Resolve by correcting the spec or scaffold before assembly.`
+                    );
+                  }
+                } else {
+                  throw new Error(
+                    `[Contract Authority] BLOCKED: Argument "${sArg.name}" in scaffold but absent from persisted spec for workflow "${entry.name}". ` +
+                    `Resolve by adding this argument to the workflow spec or removing it from the scaffold.`
+                  );
+                }
+              }
+              for (const specArg of entry.spec.arguments) {
+                if (!scaffoldArgNames.has(specArg.name.toLowerCase())) {
+                  throw new Error(
+                    `[Contract Authority] BLOCKED: Argument "${specArg.name}" in persisted spec but absent from scaffold for workflow "${entry.name}". ` +
+                    `Resolve by adding this argument to the scaffold or removing it from the spec.`
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+
       const interfaceDerivationResult = deriveSpecInterfaces(
         enrichmentsToProcess.map(e => ({ name: e.name, spec: e.spec }))
       );
@@ -4787,6 +4874,14 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       if (preEmissionContractMap.size > 0) {
         console.log(`[UiPath] Built pre-emission workflow contract map with ${preEmissionContractMap.size} workflow(s): [${Array.from(preEmissionContractMap.keys()).join(", ")}]`);
         setActiveWorkflowContractMap(preEmissionContractMap);
+      }
+
+      persistedSpecArguments = new Map<string, Array<{ name: string; direction: string; type: string }>>();
+      for (const entry of enrichmentsToProcess) {
+        if (entry.spec.arguments && entry.spec.arguments.length > 0) {
+          persistedSpecArguments.set(entry.name, entry.spec.arguments);
+          persistedSpecArguments.set(normalizeWorkflowName(entry.name), entry.spec.arguments);
+        }
       }
 
       try {
@@ -5570,7 +5665,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           const processAlreadyExists = deferredWrites.has(`${libPath}/Process.xaml`);
 
           if (specScaffoldMeta) {
-            const wiringResult = buildSpecAwareInvocations(specScaffoldMeta, generatedWorkflowNames, true);
+            const wiringResult = buildSpecAwareInvocations(specScaffoldMeta, generatedWorkflowNames, true, persistedSpecArguments);
             for (const diag of wiringResult.diagnostics) {
               console.log(diag);
             }
@@ -5694,7 +5789,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
       let specWiringUsed = false;
       if (specScaffoldMeta) {
-        const wiringResult = buildSpecAwareInvocations(specScaffoldMeta, generatedWorkflowNames, false);
+        const wiringResult = buildSpecAwareInvocations(specScaffoldMeta, generatedWorkflowNames, false, persistedSpecArguments);
         for (const diag of wiringResult.diagnostics) {
           console.log(diag);
         }
@@ -9179,7 +9274,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
     if (specScaffoldMeta) {
       console.log(`[Child Workflow Wiring] Running spec-driven child-to-helper invocation wiring...`);
-      const childWiring = wireChildWorkflowInvocations(specScaffoldMeta, deferredWrites, xamlEntries, libPath, generatedWorkflowNames);
+      const childWiring = wireChildWorkflowInvocations(specScaffoldMeta, deferredWrites, xamlEntries, libPath, generatedWorkflowNames, persistedSpecArguments);
       for (const diag of childWiring.diagnostics) {
         console.log(diag);
       }
@@ -9332,6 +9427,15 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
         sanitized = sanitized.replace(/\s+[a-zA-Z_][\w]*="No auto-correction[^"]*"/g, "");
         sanitized = sanitized.replace(/\s+[a-zA-Z_][\w]*="[^"]*;\s*(?:do not|must not|should not|cannot)[^"]*"/gi, "");
+
+        {
+          const ampFix = fixUnescapedAmpersands(sanitized);
+          if (ampFix.fixCount > 0) {
+            const archiveFileName = path.split("/").pop() || path;
+            console.log(`[Archive Gate] Fixed ${ampFix.fixCount} unescaped ampersand(s) in "${archiveFileName}"`);
+            sanitized = ampFix.content;
+          }
+        }
 
         const wellFormed = validateXmlWellFormedness(sanitized);
         if (!wellFormed.valid) {
@@ -9550,7 +9654,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
       }
 
-      const MALFORMED_QUOTING_PATTERN = /(?:AssetName|AssetValue|Value|Text|Message)="\[(?:&quot;|")\w+(?:&quot;|")]/;
+      const MALFORMED_QUOTING_PATTERN = /(?:AssetName|AssetValue|Value|Text|Message)="(?!\[&quot;)(?!\[")(\[(?:&quot;|")\w+(?:&quot;|")]|(?:&quot;|")\w+(?:&quot;|"))/;
       const JSON_OBJECT_IN_ATTR_PATTERN = /(?:Message|Value|To|Text|Expression|Condition)="\{(?:&quot;|")(?:type|value|name)(?:&quot;|")\s*:/;
       const TARGET_OBJECT_PATTERN = /<(?:Assign\.To|Assign\.Value)>[\s\S]*?(?:<(?:In|Out|InOut)Argument\b[^>]*>)?\s*\{(?:&quot;|")(?:type|value|name)(?:&quot;|")\s*:/;
 

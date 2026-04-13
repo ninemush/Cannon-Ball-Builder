@@ -425,9 +425,10 @@ function detectMixedLiteralExpression(value: string): boolean {
 }
 
 function detectSentinelInProperty(value: string): string | null {
+  const strippedValue = value.replace(/&quot;[^&]*&quot;/g, "").replace(/\[&quot;[^[]*&quot;\]/g, "");
   for (const pattern of SENTINEL_PATTERNS) {
-    if (pattern.test(value)) {
-      const match = value.match(pattern);
+    if (pattern.test(strippedValue)) {
+      const match = strippedValue.match(pattern);
       return match ? match[0] : null;
     }
   }

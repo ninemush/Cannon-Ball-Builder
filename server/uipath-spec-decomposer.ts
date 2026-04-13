@@ -585,6 +585,17 @@ function mergeSpec(
     }
   }
 
+  for (const wf of workflows) {
+    const scaffoldEntry = scaffold.workflows.find(e => e.name === wf.name);
+    if (scaffoldEntry?.sharedArguments && scaffoldEntry.sharedArguments.length > 0) {
+      wf.arguments = scaffoldEntry.sharedArguments.map(a => ({
+        name: a.name,
+        direction: a.direction,
+        type: a.type,
+      }));
+    }
+  }
+
   const spec: UiPathPackageSpec = {
     projectName: scaffold.projectName,
     description: scaffold.description || "",

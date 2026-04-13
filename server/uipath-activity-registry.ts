@@ -238,7 +238,7 @@ function buildRegistryFromCatalog(): Record<string, ActivityRegistryEntry> {
         (p: string) => p !== "ExistingWorkbook"
       );
       if (excelScopeEntry.properties.required.length === 0) {
-        delete excelScopeEntry.properties.required;
+        excelScopeEntry.properties.required = [];
       }
     }
     if (!excelScopeEntry.properties.optional.includes("ExistingWorkbook")) {
@@ -298,6 +298,16 @@ export const ACTIVITY_REGISTRY: Record<string, ActivityRegistryEntry> = new Prox
     return Object.getOwnPropertyDescriptor(target, prop);
   },
 });
+
+export function isPropertyOverriddenOptional(activityName: string, propertyName: string): boolean {
+  const prefixedKey = activityName.includes(":") ? activityName : `ui:${activityName}`;
+  const entry = ACTIVITY_REGISTRY[prefixedKey] || ACTIVITY_REGISTRY[activityName];
+  if (!entry) return false;
+  const hasExplicitRequiredList = "required" in entry.properties;
+  if (!hasExplicitRequiredList) return false;
+  if (entry.properties.required && entry.properties.required.includes(propertyName)) return false;
+  return entry.properties.optional?.includes(propertyName) ?? false;
+}
 
 export function getActivityPackageFromRegistry(activityName: string): string | null {
   const prefixedKey = `ui:${activityName}`;

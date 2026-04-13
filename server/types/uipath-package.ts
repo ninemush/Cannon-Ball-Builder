@@ -118,6 +118,11 @@ export const uipathPackageSchema = z.object({
       defaultValue: z.preprocess(v => v == null ? "" : String(v), z.string().default("")),
       scope: z.string().optional().default("workflow"),
     })).optional().default([]),
+    arguments: z.array(z.object({
+      name: z.string(),
+      direction: z.enum(["in", "out", "in_out", "InArgument", "OutArgument", "InOutArgument"]),
+      type: z.string(),
+    })).optional().default([]),
     steps: z.array(z.object({
       activity: z.string().default("Activity"),
       activityType: z.string().optional().default("ui:Comment"),
