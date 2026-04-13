@@ -1,0 +1,77 @@
+Please revise Task 508 before implementation.
+
+Goal
+Keep the parts of 508 that are strong, remove the parts that are too risky, and explicitly preserve a path forward for Data Service EntityObject recovery rather than excluding it and forgetting it.
+
+Required revisions
+
+1. Rename the task so it matches its real scope.
+The current title overclaims. It does not fix all systemic structural invalidity.
+
+Suggested title:
+508 - Fix handoff-linter false positives, extend safe mail-body coverage, and enforce business workflow invoke-contract consistency
+
+2. Keep Task 1 as-is.
+The VB expression linter must exclude handoff content from expression validation so handoff blocks do not create false undeclared-variable studio blockers.
+
+3. Keep safe mail Body coverage expansion, but only for mail families where the SMTP Body fallback pattern is already proven safe.
+Keep:
+- GmailSendMessage.Body
+- SendOutlookMailMessage.Body
+- SendMail365.Body
+
+These can be added as safe-fallback with deterministic overrides, following the same proven pattern as SMTP Body.
+
+4. Remove the proposal to add broad automatic enforcer recovery for:
+- UpdateEntity.EntityObject
+- CreateEntity.EntityObject
+
+Do NOT use vague logic like "bind to the most relevant entity-typed variable in scope."
+That is too heuristic and risks silently wiring the wrong business payload.
+
+Instead, replace that part with the following explicit position:
+- For this task, EntityObject remains in non-placeholder activity-level handoff degradation with improved diagnostics.
+- It is NOT forgotten.
+- It is deferred to a separate future task for deterministic recovery.
+
+5. Add a new explicit subsection to the task:
+Deferred follow-up: deterministic Data Service entity payload binding
+
+State that a separate future task will handle EntityObject recovery under strict deterministic rules only.
+That future task should only allow automatic binding when ALL of the following are true:
+- exactly one candidate variable exists in scope
+- candidate type is compatible with the expected entity payload type
+- EntityType is known and matches the candidate's entity family
+- candidate comes from an immediately upstream approved entity-producing step or a known approved mapping
+- there is no ambiguity
+
+If any condition fails:
+- do not auto-bind
+- keep activity-level handoff degradation
+
+Make clear this deferred follow-up is intentionally separate because EntityObject is structured business data, not a safe text-like field.
+
+6. Keep Task 3, but narrow it.
+For business workflow InvokeWorkflowFile contracts:
+- add post-decomposition consistency checks for caller-callee argument name, direction, and type alignment
+- normalize only provable mismatches
+- fail early on unresolved mismatches
+- do not silently invent missing business arguments
+
+7. Explicitly state what this task does NOT address.
+Add to out of scope:
+- XML / escaping corruption
+- non-catalog property hallucination
+- executable spine / runnable wiring defects
+
+8. Preserve the rest of the task where it is already strong.
+In particular:
+- database-substantiated evidence summary
+- handoff block non-destructive principle
+- validation against BGYY
+- relevant files
+
+Output format
+Return:
+1. revised Task 508
+2. one short note explaining why EntityObject recovery was deferred into a separate deterministic follow-up instead of being auto-bound heuristically
