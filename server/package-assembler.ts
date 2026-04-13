@@ -422,6 +422,7 @@ function clrToXamlType(clrType: string): string {
 }
 
 function specTypeToXamlType(specType: string): string | null {
+  if (specType.startsWith("x:") || specType.startsWith("s:") || specType.startsWith("scg:") || specType.startsWith("scg2:") || specType.startsWith("ui:")) return specType;
   const map: Record<string, string> = {
     "String": "x:String",
     "Int32": "x:Int32",
@@ -452,6 +453,62 @@ function specTypeToXamlType(specType: string): string | null {
   const clrResult = clrToXamlType(specType);
   if (clrResult !== "x:String" || specType === "System.String" || specType === "String") return clrResult;
   return null;
+}
+
+function canonicalizeArgumentType(rawType: string): string {
+  const specMap: Record<string, string> = {
+    "String": "x:String",
+    "Int32": "x:Int32",
+    "Int64": "x:Int64",
+    "Boolean": "x:Boolean",
+    "Double": "x:Double",
+    "Decimal": "x:Decimal",
+    "Object": "x:Object",
+    "DateTime": "s:DateTime",
+    "TimeSpan": "s:TimeSpan",
+    "DataTable": "scg2:DataTable",
+    "DataRow": "scg2:DataRow",
+    "SecureString": "s:Security.SecureString",
+    "Exception": "s:Exception",
+    "QueueItem": "ui:QueueItem",
+    "TransactionItem": "ui:TransactionItem",
+    "MailMessage": "s:Net.Mail.MailMessage",
+    "Dictionary<String,Object>": "scg:Dictionary(x:String, x:Object)",
+    "Dictionary<String, Object>": "scg:Dictionary(x:String, x:Object)",
+    "Array<String>": "scg:List(x:String)",
+    "List<String>": "scg:List(x:String)",
+    "List<Object>": "scg:List(x:Object)",
+  };
+  const directMatch = specMap[rawType];
+  if (directMatch) return directMatch;
+  const lowerKey = Object.keys(specMap).find(k => k.toLowerCase() === rawType.toLowerCase());
+  if (lowerKey) return specMap[lowerKey];
+  const clrMap: Record<string, string> = {
+    "System.Object": "x:Object",
+    "System.String": "x:String",
+    "System.Boolean": "x:Boolean",
+    "System.Int32": "x:Int32",
+    "System.Int64": "x:Int64",
+    "System.Double": "x:Double",
+    "System.DateTime": "s:DateTime",
+    "System.TimeSpan": "s:TimeSpan",
+    "System.Exception": "s:Exception",
+    "System.Data.DataTable": "scg2:DataTable",
+    "System.Data.DataRow": "scg2:DataRow",
+    "UiPath.Core.QueueItem": "ui:QueueItem",
+    "UiPath.Core.DataTypes.TransactionItem": "ui:TransactionItem",
+    "System.Security.SecureString": "s:Security.SecureString",
+    "System.Net.Mail.MailMessage": "s:Net.Mail.MailMessage",
+    "System.Collections.Generic.Dictionary`2[System.String,System.Object]": "scg:Dictionary(x:String, x:Object)",
+    "System.Collections.Generic.List`1[System.String]": "scg:List(x:String)",
+    "System.Collections.Generic.List`1[System.Object]": "scg:List(x:Object)",
+  };
+  const clrMatch = clrMap[rawType];
+  if (clrMatch) return clrMatch;
+  if (rawType === "scg:DataTable") return "scg2:DataTable";
+  if (rawType === "scg:DataRow") return "scg2:DataRow";
+  if (rawType.startsWith("x:") || rawType.startsWith("s:") || rawType.startsWith("scg:") || rawType.startsWith("scg2:") || rawType.startsWith("ui:")) return rawType;
+  return rawType;
 }
 
 function stripDirectionalPrefix(argName: string): string {
@@ -505,7 +562,7 @@ function buildSpecAwareInvocations(
   const topLevelWorkflows: string[] = [];
   for (const name of scaffoldMeta.executionOrder) {
     const normalized = normalizeWorkflowName(name);
-    if (isCanonicalInfrastructureName(normalized)) continue;
+    if (isCanonicalInfrastructureName(normalized) && !generatedWorkflowNames.has(normalized) && !generatedWorkflowNames.has(name)) continue;
     if (invokedByOthers.has(name) || invokedByOthers.has(normalized)) continue;
     if (!generatedWorkflowNames.has(normalized) && !generatedWorkflowNames.has(name)) {
       diagnostics.push(`[Spec Wiring] Workflow "${name}" in executionOrder but not in generated files — skipping`);
@@ -515,7 +572,6 @@ function buildSpecAwareInvocations(
   }
 
   Array.from(generatedWorkflowNames).forEach(gwfName => {
-    if (isCanonicalInfrastructureName(gwfName)) return;
     const alreadyTop = topLevelWorkflows.some(t => normalizeWorkflowName(t) === gwfName);
     if (alreadyTop) return;
     if (invokedByOthers.has(gwfName)) return;
@@ -617,7 +673,7 @@ function wireChildWorkflowInvocations(
 
   for (const contract of scaffoldMeta.workflowContracts) {
     const callerNormalized = normalizeWorkflowName(contract.name);
-    if (isCanonicalInfrastructureName(callerNormalized)) continue;
+    if (isCanonicalInfrastructureName(callerNormalized) && !generatedWorkflowNames.has(callerNormalized) && !generatedWorkflowNames.has(contract.name)) continue;
     if (!contract.invokes || contract.invokes.length === 0) continue;
 
     const callerKey = `${libPath}/${callerNormalized}.xaml`;
@@ -629,7 +685,7 @@ function wireChildWorkflowInvocations(
 
     for (const invokedName of contract.invokes) {
       const invokedNormalized = normalizeWorkflowName(invokedName);
-      if (isCanonicalInfrastructureName(invokedNormalized)) continue;
+      if (isCanonicalInfrastructureName(invokedNormalized) && !generatedWorkflowNames.has(invokedNormalized) && !generatedWorkflowNames.has(invokedName)) continue;
       const invokedFileName = `${invokedNormalized}.xaml`;
 
       if (callerContent.includes(`WorkflowFileName="${invokedFileName}"`)) {
@@ -2739,7 +2795,7 @@ function runSpecGraphValidation(
   const specWorkflowNames = new Set<string>();
   for (const contract of specScaffoldMeta.workflowContracts) {
     const normalized = normalizeWorkflowName(contract.name);
-    if (!isCanonicalInfrastructureName(normalized)) {
+    if (!isCanonicalInfrastructureName(normalized) || generatedWorkflowNames.has(normalized)) {
       specWorkflowNames.add(normalized);
     }
   }
@@ -2761,6 +2817,28 @@ function runSpecGraphValidation(
 
   if (unreachableSpec.length > 0) {
     errors.push(`${unreachableSpec.length} spec-generated workflow(s) unreachable from Main.xaml: ${unreachableSpec.join(", ")}`);
+  }
+
+  for (const contract of specScaffoldMeta.workflowContracts) {
+    if (!contract.invokes || contract.invokes.length === 0) continue;
+    const callerNormalized = normalizeWorkflowName(contract.name);
+    const callerFile = `${callerNormalized}.xaml`;
+    const callerContent = allFiles.get(callerFile) || (() => {
+      const mapped = filenameToKey.get(callerFile) || canonicalToKey.get(callerNormalized.toLowerCase());
+      return mapped ? allFiles.get(mapped) : undefined;
+    })();
+    if (!callerContent) continue;
+    for (const invokedName of contract.invokes) {
+      const invokedNormalized = normalizeWorkflowName(invokedName);
+      const invokedFileName = `${invokedNormalized}.xaml`;
+      const hasRef = callerContent.includes(`WorkflowFileName="${invokedFileName}"`) ||
+        callerContent.includes(`WorkflowFileName="${invokedNormalized}"`) ||
+        callerContent.includes(`WorkflowFileName="${invokedName}.xaml"`) ||
+        callerContent.includes(`WorkflowFileName="${invokedName}"`);
+      if (!hasRef && generatedWorkflowNames.has(invokedNormalized)) {
+        warnings.push(`[Spec Graph Validation] WIRING GAP: scaffold declares ${callerNormalized} → ${invokedNormalized} but emitted ${callerFile} has no WorkflowFileName reference to ${invokedFileName}`);
+      }
+    }
   }
 
   const visited = new Set<string>();
@@ -4786,7 +4864,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             const normalizedArgs = contract.sharedArguments.map(a => ({
               name: a.name,
               direction: (a.direction === "in" ? "InArgument" : a.direction === "out" ? "OutArgument" : "InOutArgument") as "InArgument" | "OutArgument" | "InOutArgument",
-              type: a.type,
+              type: canonicalizeArgumentType(a.type),
             }));
             scaffoldArgMap.set(contract.name, normalizedArgs);
             scaffoldArgMap.set(normalizeWorkflowName(contract.name), normalizedArgs);
@@ -4826,7 +4904,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                       `Resolve by correcting the spec or scaffold before assembly.`
                     );
                   }
-                  if (existing.type !== sArg.type) {
+                  if (canonicalizeArgumentType(existing.type) !== canonicalizeArgumentType(sArg.type)) {
                     throw new Error(
                       `[Contract Authority] BLOCKED: Argument "${sArg.name}" type divergence in workflow "${entry.name}": ` +
                       `persisted spec has "${existing.type}", scaffold has "${sArg.type}". ` +
@@ -5698,7 +5776,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             if (enrichment?.decomposition?.length) {
               for (const decomp of enrichment.decomposition) {
                 const wfName = normalizeWorkflowName(decomp.name);
-                if (isCanonicalInfrastructureName(wfName)) continue;
+                if (isCanonicalInfrastructureName(wfName) && !generatedWorkflowNames.has(wfName)) continue;
                 if (invokedInProcess.has(wfName)) continue;
                 invokedInProcess.add(wfName);
                 processInvocations += `
@@ -5706,7 +5784,6 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               }
             }
             Array.from(generatedWorkflowNames).forEach(gwfName => {
-              if (isCanonicalInfrastructureName(gwfName)) return;
               if (invokedInProcess.has(gwfName)) return;
               invokedInProcess.add(gwfName);
               processInvocations += `
@@ -5875,7 +5952,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (!deferredMatch) continue;
           const deferredBasename = deferredMatch[1];
           const canonicalBasename = canonicalizeWorkflowName(deferredBasename);
-          if (infrastructureFiles.has(canonicalBasename)) continue;
+          if (infrastructureFiles.has(canonicalBasename) && !generatedWorkflowNames.has(deferredBasename) && !generatedWorkflowNames.has(normalizeWorkflowName(deferredBasename))) continue;
           if (invokedNames.has(deferredBasename)) continue;
           invokedNames.add(deferredBasename);
           mainActivities += `
