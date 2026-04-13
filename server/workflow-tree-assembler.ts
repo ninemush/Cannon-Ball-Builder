@@ -2310,6 +2310,7 @@ export function resolveActivityTemplate(
     "SendSmtpMailMessage": ["Body"],
     "GmailSendMessage": ["Body", "To", "Subject"],
     "SendOutlookMailMessage": ["Body", "To", "Subject"],
+    "SendMail365": ["Body", "To", "Subject"],
     "LogMessage": ["Message"],
     "InvokeWorkflowFile": ["WorkflowFileName"],
   };
@@ -2324,7 +2325,7 @@ export function resolveActivityTemplate(
         inRequiredPropertyGuaranteeMap: guarantees.length > 0,
         requiredPropertyGuaranteed: guarantees,
       };
-      if (dispatchKey === "SendSmtpMailMessage") {
+      if (dispatchKey === "SendSmtpMailMessage" || dispatchKey === "GmailSendMessage" || dispatchKey === "SendOutlookMailMessage" || dispatchKey === "SendMail365") {
         const bodyProvided = !!(props.Body && String(props.Body).trim());
         record.confirmedPairDetail = {
           sourcePresent: bodyProvided,
@@ -2469,6 +2470,10 @@ export function resolveActivityTemplate(
 
   if (dispatchKey === "SendOutlookMailMessage") {
     return applyCatalogConformance(resolveSendOutlookMailMessageTemplate(node));
+  }
+
+  if (dispatchKey === "SendMail365") {
+    return applyCatalogConformance(resolveSendMail365Template(node));
   }
 
   if (dispatchKey === "GetImapMailMessage") {
@@ -2885,6 +2890,39 @@ function resolveSendOutlookMailMessageTemplate(node: ActivityNode): string {
   if (bcc) {
     attrs += ` Bcc="${serializeSafeAttributeValue(wrapSmtpPropValue(bcc))}"`;
   }
+
+  return `<${tag} ${attrs}>\n${childParts}</${tag}>`;
+}
+
+function resolveSendMail365Template(node: ActivityNode): string {
+  const props = node.properties || {};
+  const displayName = escapeXml(node.displayName);
+  const to = getPropString(props, "To", "to") || "PLACEHOLDER_To";
+  const subject = getPropString(props, "Subject", "subject") || "PLACEHOLDER_Subject";
+  const body = getPropString(props, "Body", "body") || "";
+  const cc = getPropString(props, "Cc", "cc");
+  const bcc = getPropString(props, "Bcc", "bcc");
+  const isBodyHtml = getPropString(props, "IsBodyHtml", "isBodyHtml") || "True";
+  const account = getPropString(props, "Account", "account") || "PLACEHOLDER_Account";
+
+  const tag = getActivityTag("SendMail365");
+  let attrs = `DisplayName="${displayName}"`;
+  attrs += ` IsBodyHtml="${serializeSafeAttributeValue(isBodyHtml)}"`;
+
+  const safeBody = body
+    ? escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(body), _activeDeclarationLookup || undefined))
+    : escapeXmlTextContent(ensureBracketWrapped("str_EmailBody", _activeDeclarationLookup || undefined));
+
+  let childParts = "";
+  childParts += `  <${tag}.Account>\n    <InArgument x:TypeArguments="x:String">${escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(account), _activeDeclarationLookup || undefined))}</InArgument>\n  </${tag}.Account>\n`;
+  childParts += `  <${tag}.To>\n    <InArgument x:TypeArguments="x:String">${escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(to), _activeDeclarationLookup || undefined))}</InArgument>\n  </${tag}.To>\n`;
+  childParts += `  <${tag}.Subject>\n    <InArgument x:TypeArguments="x:String">${escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(subject), _activeDeclarationLookup || undefined))}</InArgument>\n  </${tag}.Subject>\n`;
+  if (!body) {
+    childParts += `  <!-- HANDOFF: Body binding was not provided — using placeholder variable str_EmailBody. Replace with actual email body content. -->\n`;
+  }
+  childParts += `  <${tag}.Body>\n    <InArgument x:TypeArguments="x:String">${safeBody}</InArgument>\n  </${tag}.Body>\n`;
+  if (cc) childParts += `  <${tag}.Cc>\n    <InArgument x:TypeArguments="x:String">${escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(cc), _activeDeclarationLookup || undefined))}</InArgument>\n  </${tag}.Cc>\n`;
+  if (bcc) childParts += `  <${tag}.Bcc>\n    <InArgument x:TypeArguments="x:String">${escapeXmlTextContent(ensureBracketWrapped(wrapSmtpPropValue(bcc), _activeDeclarationLookup || undefined))}</InArgument>\n  </${tag}.Bcc>\n`;
 
   return `<${tag} ${attrs}>\n${childParts}</${tag}>`;
 }

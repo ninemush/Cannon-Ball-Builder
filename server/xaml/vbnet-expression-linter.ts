@@ -125,6 +125,16 @@ function looksLikeFilenameOrUrl(expr: string): boolean {
   return false;
 }
 
+function looksLikeHandoffContent(expr: string): boolean {
+  if (/\bHANDOFF_\w+/.test(expr)) return true;
+  if (/\[HANDOFF\]/i.test(expr)) return true;
+  if (/\bHANDOFF\b/i.test(expr) && /placeholder|replace|TODO|binding|content/i.test(expr)) return true;
+  if (/\bSTUB_\w+/.test(expr)) return true;
+  if (/\bASSEMBLY_FAILED\b/.test(expr)) return true;
+  if (/\bPLACEHOLDER_\w+/.test(expr)) return true;
+  return false;
+}
+
 export function extractExpressions(xamlContent: string, fileName: string): ExpressionLocation[] {
   const results: ExpressionLocation[] = [];
   const lines = xamlContent.split("\n");
@@ -140,6 +150,7 @@ export function extractExpressions(xamlContent: string, fileName: string): Expre
       if (/^x:|^xmlns:|^mc:|^sap/.test(expr)) continue;
       if (looksLikeLogMessageText(expr)) continue;
       if (looksLikeFilenameOrUrl(expr)) continue;
+      if (looksLikeHandoffContent(expr)) continue;
       results.push({
         file: fileName,
         line: i + 1,
@@ -217,6 +228,7 @@ export function extractExpressions(xamlContent: string, fileName: string): Expre
     if (expr.startsWith("&quot;") || expr.startsWith("\"")) continue;
     if (looksLikeLogMessageText(expr)) continue;
     if (looksLikeFilenameOrUrl(expr)) continue;
+    if (looksLikeHandoffContent(expr)) continue;
     const lineNum = xamlContent.substring(0, mm.index).split("\n").length;
     const alreadyFound = results.some(r => r.expression === expr && Math.abs(r.line - lineNum) <= 2);
     if (!alreadyFound) {
@@ -566,6 +578,14 @@ export function lintExpression(expression: string): LintResult {
   const issues: LintIssue[] = [];
   let corrected = expression;
   let wasModified = false;
+
+  if (looksLikeHandoffContent(expression)) {
+    return {
+      original: expression,
+      corrected: null,
+      issues: [],
+    };
+  }
 
   if (isComplexExpression(expression)) {
     issues.push({ code: "COMPLEX_EXPRESSION_PASSTHROUGH", message: "Complex expression (lambdas, LINQ, nested calls, or 3+ operators) — emitting as-is to avoid regex corruption", autoFixed: false });
@@ -1186,6 +1206,9 @@ export function findUndeclaredVariables(expression: string, declaredVars: Set<st
   if (/^\[[\w]+\]/.test(trimmedExpr) && /\s—\s/.test(trimmedExpr)) return undeclared;
 
   if (/HANDOFF_|STUB_|ASSEMBLY_FAILED/.test(trimmedExpr)) return undeclared;
+  if (/\[HANDOFF\]/i.test(trimmedExpr)) return undeclared;
+  if (/\bHANDOFF\b/i.test(trimmedExpr) && /placeholder|replace|TODO|binding|content/i.test(trimmedExpr)) return undeclared;
+  if (/\bPLACEHOLDER_\w+/.test(trimmedExpr)) return undeclared;
 
   if (/^\{.*"type"\s*:\s*"literal".*"value"\s*:/.test(trimmedExpr) ||
       /^\{&quot;type&quot;/.test(trimmedExpr) ||

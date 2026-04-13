@@ -1,4 +1,5 @@
 import { extractDeclaredVariables, findUndeclaredVariables } from "./vbnet-expression-linter";
+import { emitInvokeContractTrace } from "../pipeline-trace-collector";
 
 export type ContractDefectType =
   | "unknown_target_argument"
@@ -512,8 +513,13 @@ function validateParentChildContracts(
         continue;
       }
 
+      const unknownTargetArguments: string[] = [];
+      const missingRequiredArguments: string[] = [];
+      const undeclaredSymbols: string[] = [];
+
       for (const [bindingName, bindingValue] of invocation.bindings) {
         if (!childContract.declaredArguments.has(bindingName)) {
+          unknownTargetArguments.push(bindingName);
           defects.push({
             file: invocation.file,
             workflow: invocation.workflow,
@@ -547,12 +553,57 @@ function validateParentChildContracts(
               notes: `Binding direction mismatch for "${bindingName}" in "${invocation.targetWorkflow}": bound as ${bindingDirection} but declared as ${childArg.direction}`,
             });
           }
+
+          const bindingType = detectBindingType(bindingValue, invocation.rawElement, bindingName);
+          if (bindingType && childArg.type !== "x:Object") {
+            const normalizedBindingType = normalizeTypeName(bindingType);
+            const normalizedArgType = normalizeTypeName(childArg.type);
+            if (normalizedBindingType && normalizedArgType && normalizedBindingType !== normalizedArgType) {
+              defects.push({
+                file: invocation.file,
+                workflow: invocation.workflow,
+                defectType: "invoke_argument_binding_mismatch",
+                activityType: invocation.activityType,
+                propertyName: bindingName,
+                referencedSymbol: bindingName,
+                targetWorkflow: invocation.targetWorkflow,
+                targetArgument: bindingName,
+                offendingValue: `bound type "${bindingType}", declared type "${childArg.type}"`,
+                severity: "handoff_required",
+                detectionMethod: "contract_comparison",
+                notes: `Type mismatch for "${bindingName}" in "${invocation.targetWorkflow}": bound as "${bindingType}" but declared as "${childArg.type}"`,
+              });
+            }
+          }
+        }
+      }
+
+      const callerDeclaredVars = extractDeclaredVariables(entry.content);
+      const callerDeclaredArgs = extractArguments(entry.content);
+      const allCallerDeclared = new Set(callerDeclaredVars);
+      for (const argKey of Array.from(callerDeclaredArgs.keys())) {
+        allCallerDeclared.add(argKey);
+      }
+
+      for (const [bindingName, bindingValue] of invocation.bindings) {
+        if (!bindingValue || bindingValue.trim().length === 0) continue;
+        let exprToCheck = bindingValue.trim();
+        if (exprToCheck.startsWith("[") && exprToCheck.endsWith("]")) {
+          exprToCheck = exprToCheck.slice(1, -1);
+        }
+        if (/HANDOFF_|STUB_|ASSEMBLY_FAILED|PLACEHOLDER_/.test(exprToCheck)) continue;
+        const undeclaredRefs = findUndeclaredVariables(exprToCheck, allCallerDeclared);
+        for (const ref of undeclaredRefs) {
+          if (!undeclaredSymbols.includes(ref)) {
+            undeclaredSymbols.push(ref);
+          }
         }
       }
 
       for (const [argName, argInfo] of childContract.declaredArguments) {
         if (argInfo.direction === "InArgument" || argInfo.direction === "InOutArgument") {
           if (!invocation.bindings.has(argName)) {
+            missingRequiredArguments.push(argName);
             defects.push({
               file: invocation.file,
               workflow: invocation.workflow,
@@ -570,6 +621,20 @@ function validateParentChildContracts(
           }
         }
       }
+
+      const providedBindings: Record<string, string> = {};
+      for (const [k, v] of invocation.bindings) {
+        providedBindings[k] = v.substring(0, 200);
+      }
+      emitInvokeContractTrace({
+        callerWorkflow: invocation.workflow,
+        targetWorkflow: invocation.targetWorkflow,
+        targetDeclaredArguments: Array.from(childContract.declaredArguments.keys()),
+        providedBindings,
+        unknownTargetArguments,
+        missingRequiredArguments,
+        undeclaredSymbols,
+      });
     }
   }
 }
@@ -583,6 +648,46 @@ function detectBindingDirection(argName: string, rawElement: string): string | n
   if (outPattern.test(rawElement)) return "OutArgument";
   if (inPattern.test(rawElement)) return "InArgument";
   return null;
+}
+
+function detectBindingType(bindingValue: string, rawElement: string, argName: string): string | null {
+  const escapedName = argName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const argElementPattern = new RegExp(`<(?:In|Out|InOut)Argument\\b[^>]*\\bx:Key="${escapedName}"[^>]*>`, "gi");
+  let argMatch;
+  while ((argMatch = argElementPattern.exec(rawElement)) !== null) {
+    const tagStr = argMatch[0];
+    const typeArgMatch = tagStr.match(/x:TypeArguments="([^"]+)"/);
+    if (typeArgMatch) {
+      const typeArg = typeArgMatch[1];
+      if (typeArg && typeArg !== "x:Object") {
+        return typeArg.replace(/^x:/, "");
+      }
+    }
+  }
+  const altPattern = new RegExp(`<(?:In|Out|InOut)Argument\\b[^>]*\\bx:TypeArguments="([^"]+)"[^>]*\\bx:Key="${escapedName}"`, "i");
+  const altMatch = rawElement.match(altPattern);
+  if (altMatch) {
+    const typeArg = altMatch[1];
+    if (typeArg && typeArg !== "x:Object") {
+      return typeArg.replace(/^x:/, "");
+    }
+  }
+  return null;
+}
+
+function normalizeTypeName(typeName: string): string {
+  const map: Record<string, string> = {
+    "string": "String", "x:string": "String", "x:String": "String", "System.String": "String",
+    "int32": "Int32", "x:int32": "Int32", "x:Int32": "Int32", "System.Int32": "Int32", "integer": "Int32",
+    "int64": "Int64", "x:int64": "Int64", "x:Int64": "Int64", "System.Int64": "Int64",
+    "boolean": "Boolean", "x:boolean": "Boolean", "x:Boolean": "Boolean", "System.Boolean": "Boolean",
+    "double": "Double", "x:double": "Double", "x:Double": "Double", "System.Double": "Double",
+    "decimal": "Decimal", "x:decimal": "Decimal", "x:Decimal": "Decimal", "System.Decimal": "Decimal",
+    "object": "Object", "x:object": "Object", "x:Object": "Object", "System.Object": "Object",
+    "datetime": "DateTime", "System.DateTime": "DateTime",
+  };
+  const cleaned = typeName.replace(/^x:/, "");
+  return map[typeName] || map[cleaned.toLowerCase()] || cleaned;
 }
 
 function isExpressionProperty(value: string): boolean {
