@@ -847,18 +847,37 @@ Generate the hierarchical WorkflowSpec JSON tree. Use tryCatch nodes to wrap act
       for (const [name, entry] of preMappedSpecs) {
         const spec = entry.spec;
         const varNames = (spec.variables || []).map((v: any) => v.name).join(", ");
+        const argNames = (spec.arguments || []).map((a: any) => `${a.name}(${a.direction}:${a.type})`).join(", ");
         const childCount = spec.rootSequence?.children?.length || 0;
-        specSummaries.push(`- ${name}: ${childCount} activities, variables=[${varNames}]`);
+        specSummaries.push(`- ${name}: ${childCount} activities, variables=[${varNames}]${argNames ? `, arguments=[${argNames}]` : ""}`);
       }
       preMappedContext = `\n\nPRE-MAPPED WORKFLOW STRUCTURE (use as starting point — refine properties to match catalog, add error handling, fix variable flow):
 ${specSummaries.join("\n")}
-${JSON.stringify(Array.from(preMappedSpecs.entries()).map(([name, e]) => ({ name, spec: e.spec })), null, 2).slice(0, 6000)}
+${(() => {
+        const entries = Array.from(preMappedSpecs.entries()).map(([name, e]) => ({ name, spec: e.spec }));
+        if (preMappedSpecs.size === 1) {
+          return JSON.stringify(entries, null, 2);
+        }
+        const perWorkflowBudget = 30000;
+        const includedEntries: typeof entries = [];
+        let totalLen = 0;
+        for (const entry of entries) {
+          const entryJson = JSON.stringify(entry, null, 2);
+          if (totalLen + entryJson.length > preMappedSpecs.size * perWorkflowBudget && includedEntries.length > 0) {
+            break;
+          }
+          includedEntries.push(entry);
+          totalLen += entryJson.length;
+        }
+        return JSON.stringify(includedEntries, null, 2);
+      })()}
 
 IMPORTANT: The pre-mapped structure above is authoritative for workflow decomposition and activity selection. Your job is to REFINE it:
 1. Ensure all activity properties conform to the catalog (Section 2 templates)
 2. Add proper error handling (TryCatch, RetryScope) where appropriate
 3. Fix variable declarations and ensure proper flow between activities
-4. Keep the same workflow structure and activity templates — do NOT change which activities are used unless they violate the catalog`;
+4. Keep the same workflow structure and activity templates — do NOT change which activities are used unless they violate the catalog
+5. ARGUMENTS ARE CONTRACTUALLY REQUIRED: If the pre-mapped spec includes arguments, you MUST preserve ALL of them exactly as specified (same name, direction, and type). Do NOT remove, rename, or change the direction/type of any argument. These are part of the workflow's interface contract.`;
     }
 
     let section2Block = "";

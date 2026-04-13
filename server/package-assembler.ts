@@ -4802,10 +4802,12 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           const scaffoldArgs = scaffoldArgMap.get(entry.name) || scaffoldArgMap.get(normalizeWorkflowName(entry.name));
           if ((!scaffoldArgs || scaffoldArgs.length === 0) && entry.spec.arguments && entry.spec.arguments.length > 0) {
-            throw new Error(
-              `[Contract Authority] BLOCKED: Workflow "${entry.name}" has ${entry.spec.arguments.length} persisted argument(s) ` +
-              `but scaffold defines no sharedArguments. Resolve by adding arguments to the scaffold contract.`
+            const quarantinedNames = entry.spec.arguments.map((a: any) => a.name).join(", ");
+            console.warn(
+              `[Contract Authority] WARNING: Workflow "${entry.name}" has ${entry.spec.arguments.length} persisted argument(s) ` +
+              `but scaffold defines no sharedArguments. Removing non-canonical arguments from authoritative contract: [${quarantinedNames}]`
             );
+            entry.spec.arguments = [];
           }
           if (scaffoldArgs && scaffoldArgs.length > 0) {
             if (!entry.spec.arguments || entry.spec.arguments.length === 0) {
@@ -4832,19 +4834,26 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                     );
                   }
                 } else {
-                  throw new Error(
-                    `[Contract Authority] BLOCKED: Argument "${sArg.name}" in scaffold but absent from persisted spec for workflow "${entry.name}". ` +
-                    `Resolve by adding this argument to the workflow spec or removing it from the scaffold.`
+                  entry.spec.arguments.push({ ...sArg });
+                  console.warn(
+                    `[Contract Authority] WARNING: Argument "${sArg.name}" in scaffold but absent from persisted spec for workflow "${entry.name}". ` +
+                    `Adopted from scaffold (scaffold is authoritative).`
                   );
                 }
               }
-              for (const specArg of entry.spec.arguments) {
+              const nonCanonicalArgs: string[] = [];
+              entry.spec.arguments = entry.spec.arguments.filter((specArg: any) => {
                 if (!scaffoldArgNames.has(specArg.name.toLowerCase())) {
-                  throw new Error(
-                    `[Contract Authority] BLOCKED: Argument "${specArg.name}" in persisted spec but absent from scaffold for workflow "${entry.name}". ` +
-                    `Resolve by adding this argument to the scaffold or removing it from the spec.`
-                  );
+                  nonCanonicalArgs.push(specArg.name);
+                  return false;
                 }
+                return true;
+              });
+              if (nonCanonicalArgs.length > 0) {
+                console.warn(
+                  `[Contract Authority] WARNING: ${nonCanonicalArgs.length} argument(s) in persisted spec but absent from scaffold for workflow "${entry.name}": ` +
+                  `[${nonCanonicalArgs.join(", ")}]. Removed from authoritative contract (non-canonical).`
+                );
               }
             }
           }

@@ -205,6 +205,13 @@ Output a JSON object with this exact shape:
 {
   "name": "${workflow.name}",
   "description": "${workflow.description}",
+  "arguments": [
+    {
+      "name": "string (argument name matching scaffold contract)",
+      "direction": "in|out|in_out",
+      "type": "String|Int32|Boolean|DataTable|Object|DateTime|Array<String>|Dictionary<String,Object>"
+    }
+  ],
   "variables": [
     {
       "name": "string (camelCase variable name)",
@@ -588,11 +595,33 @@ function mergeSpec(
   for (const wf of workflows) {
     const scaffoldEntry = scaffold.workflows.find(e => e.name === wf.name);
     if (scaffoldEntry?.sharedArguments && scaffoldEntry.sharedArguments.length > 0) {
-      wf.arguments = scaffoldEntry.sharedArguments.map(a => ({
-        name: a.name,
-        direction: a.direction,
-        type: a.type,
-      }));
+      const scaffoldArgs = scaffoldEntry.sharedArguments;
+      const llmArgs: Array<{ name: string; direction: string; type: string }> = wf.arguments || [];
+      const llmArgMap = new Map(llmArgs.map(a => [a.name.toLowerCase(), a]));
+      const reconciledArgs: typeof wf.arguments = [];
+      for (const sArg of scaffoldArgs) {
+        const llmMatch = llmArgMap.get(sArg.name.toLowerCase());
+        if (llmMatch && llmMatch.direction === sArg.direction && llmMatch.type === sArg.type) {
+          reconciledArgs.push({ name: sArg.name, direction: sArg.direction, type: sArg.type });
+        } else {
+          if (llmMatch) {
+            console.warn(`[SpecDecomposer] LLM argument "${llmMatch.name}" for "${wf.name}" conflicts with scaffold (LLM: dir=${llmMatch.direction} type=${llmMatch.type}, scaffold: dir=${sArg.direction} type=${sArg.type}) — using scaffold as canonical`);
+          }
+          reconciledArgs.push({ name: sArg.name, direction: sArg.direction, type: sArg.type });
+        }
+      }
+      for (const llmArg of llmArgs) {
+        const inScaffold = scaffoldArgs.some(s => s.name.toLowerCase() === llmArg.name.toLowerCase());
+        if (!inScaffold) {
+          console.warn(`[SpecDecomposer] LLM-only argument "${llmArg.name}" for "${wf.name}" not in scaffold — discarding (scaffold is canonical)`);
+        }
+      }
+      wf.arguments = reconciledArgs;
+    } else if (!scaffoldEntry?.sharedArguments || scaffoldEntry.sharedArguments.length === 0) {
+      if (wf.arguments && wf.arguments.length > 0) {
+        console.warn(`[SpecDecomposer] LLM output ${wf.arguments.length} argument(s) for "${wf.name}" but scaffold has none — discarding (scaffold is canonical)`);
+        wf.arguments = [];
+      }
     }
   }
 

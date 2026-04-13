@@ -232,7 +232,21 @@ export function mapWorkflowToSpec(workflow: FlatWorkflow): WorkflowSpec {
     name: workflow.name || "Workflow",
     description: workflow.description || "",
     variables,
-    arguments: [],
+    arguments: (workflow.arguments || []).map(a => {
+      const dirMap: Record<string, "InArgument" | "OutArgument" | "InOutArgument"> = {
+        in: "InArgument",
+        out: "OutArgument",
+        in_out: "InOutArgument",
+        InArgument: "InArgument",
+        OutArgument: "OutArgument",
+        InOutArgument: "InOutArgument",
+      };
+      return {
+        name: a.name,
+        direction: dirMap[a.direction] || "InArgument",
+        type: a.type,
+      };
+    }),
     rootSequence: {
       kind: "sequence",
       displayName: workflow.name || "Workflow",
