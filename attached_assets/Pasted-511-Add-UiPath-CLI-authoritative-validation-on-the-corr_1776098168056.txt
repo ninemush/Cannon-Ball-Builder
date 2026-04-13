@@ -1,0 +1,101 @@
+511 - Add UiPath CLI authoritative validation on the correct platform
+
+What & Why
+
+Integrate UiPath CLI into the package generation pipeline as an authoritative second-pass validator, but only on a runner that is compatible with the generated project type. UiPath CLI 25.10 requires .NET 8, and the supported CLI package depends on both OS and project type:
+	•	UiPath.CLI.Windows supports Windows and Cross-platform RPA projects on Windows
+	•	UiPath.CLI.Linux supports Cross-platform RPA projects on Linux
+	•	UiPath.CLI.Windows.Legacy supports Windows Legacy projects on Windows only.  ￼
+
+Your current generated projects are not uniformly cross-platform, so Linux Replit cannot be treated as the authoritative validator for every package. This task adds the CLI integration scaffolding now, detects project type up front, and only runs authoritative CLI validation on a compatible agent. Custom validators remain the fast first pass.
+
+Done looks like
+	•	The pipeline detects project type from the generated project.json before attempting CLI validation
+	•	The pipeline installs and uses .NET 8, not .NET 6, for UiPath CLI execution  ￼
+	•	Cross-platform projects can be authoritatively validated on Linux using UiPath.CLI.Linux
+	•	Windows projects are marked as requiring a Windows validation agent and are not falsely presented as Linux CLI validated
+	•	UiPath CLI analyze diagnostics are parsed into structured defects and can be fed into the existing healing loop
+	•	UiPath CLI pack is used as authoritative build validation on compatible agents
+	•	Reports and DHG clearly distinguish:
+	•	custom_validated_only
+	•	cli_validated
+	•	cli_skipped_incompatible_agent
+	•	cli_failed
+	•	Existing custom validators remain in place as a fast pre-filter
+
+Out of scope
+	•	Replacing the custom quality gate or deterministic validators
+	•	Treating Linux Replit as an authoritative validator for Windows or Windows Legacy projects
+	•	Running Robot execution or test cases
+	•	Installing UiPath Studio GUI
+	•	Provisioning the Windows validation agent itself, unless that infrastructure already exists
+
+Tasks
+
+1. Add project-type detection and CLI compatibility routing
+Before any CLI step, inspect the generated project.json and classify the project as:
+	•	Cross-platform
+	•	Windows
+	•	Windows Legacy
+
+Then map that to the required CLI flavor and runner type:
+	•	Cross-platform on Linux -> UiPath.CLI.Linux
+	•	Windows on Windows -> UiPath.CLI.Windows
+	•	Windows Legacy on Windows -> UiPath.CLI.Windows.Legacy  ￼
+
+If the current runner is incompatible, do not attempt authoritative CLI validation. Mark the result as cli_skipped_incompatible_agent.
+
+2. Upgrade runtime requirement to .NET 8 and add a CLI wrapper
+Replace the task’s .NET 6+ assumption with .NET 8. Build a utility module that:
+	•	checks runtime availability
+	•	checks CLI package availability
+	•	wraps analyze and pack
+	•	enforces timeouts
+	•	captures stdout/stderr
+	•	returns structured success/failure states.  ￼
+
+3. Add authoritative CLI validation for compatible projects only
+After the existing custom quality gate, write the generated package to a temporary UiPath project folder and run:
+	•	uipcli package analyze
+	•	parse analyzer diagnostics into structured defects: rule ID, severity, file, line, message
+	•	feed those diagnostics into the existing healing loop as an additional defect source
+
+Only do this when the runner and project type are compatible.
+
+4. Add authoritative CLI build validation for compatible projects only
+After healing iterations, run:
+	•	uipcli package pack
+
+If pack succeeds on a compatible agent, mark the package as cli_validated. If it fails, capture the CLI build errors and surface them in:
+	•	final quality report
+	•	DHG
+	•	pipeline diagnostics
+
+Do not claim “studio-stable” solely because Linux CLI packed a Windows project. CLI authority is only valid on the correct platform/project pairing.  ￼
+
+5. Add explicit validation-state reporting
+Add a field such as cliValidationMode or equivalent to pipeline results and reports with these values:
+	•	custom_validated_only
+	•	cli_validated
+	•	cli_skipped_incompatible_agent
+	•	cli_failed
+
+Update DHG, final quality report, and UI-facing summaries to show this clearly.
+
+6. Validate against your actual project mix
+Run the updated pipeline against:
+	•	one Cross-platform project, if available, to prove Linux CLI validation works
+	•	one current Windows-targeted project, to prove the pipeline correctly marks it as cli_skipped_incompatible_agent instead of pretending it was authoritatively validated on Linux
+
+Relevant files
+	•	server/uipath-pipeline.ts
+	•	server/package-assembler.ts
+	•	server/final-artifact-validation.ts
+	•	server/dhg-generator.ts
+	•	server/meta-validation/iterative-llm-corrector.ts
+	•	server/meta-validation/deterministic-validators.ts
+	•	server/meta-validation/correction-applier.ts
+	•	server/uipath-quality-gate.ts
+	•	.replit
+
+My recom
