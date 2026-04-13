@@ -383,6 +383,11 @@ export interface PipelineOutcomeReport {
   postFreezeMutationTrace?: import("./workflow-status-classifier").PostClassifierMutationTrace;
   workflowAutoWiringDiagnostics?: import("./auto-wiring-diagnostics").WorkflowAutoWiringDiagnostics;
   symbolDiscoveryDiagnostics?: import("./declaration-registry").SymbolDiscoveryDiagnostic[];
+  cliValidationMode?: import("./uipath-cli-validator").CliValidationMode;
+  cliValidationSummary?: string;
+  cliAnalyzerDefectCount?: number;
+  cliPackSuccess?: boolean;
+  cliProjectType?: import("./uipath-cli-validator").UiPathProjectType;
 }
 
 export interface PipelineResult {
@@ -420,6 +425,8 @@ export interface PipelineResult {
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
   criticalActivityContractDiagnostics?: import("./required-property-diagnostics").RequiredPropertyDiagnosticsResult;
+  cliValidationMode?: import("./uipath-cli-validator").CliValidationMode;
+  cliValidationResult?: import("./uipath-cli-validator").CliValidationResult;
 }
 
 export interface DhgResult {
@@ -597,6 +604,7 @@ function buildDhgFromBuildResult(
   finalQualityReport?: FinalQualityReport,
   emergencyFallbackActive?: boolean,
   emergencyFallbackReason?: string,
+  cliValidationResultForDhg?: import("./uipath-cli-validator").CliValidationResult,
 ): DhgResult {
   const sddContent = ctx.sdd?.content || "";
   const workflows = pkg.workflows || [];
@@ -788,6 +796,10 @@ function buildDhgFromBuildResult(
       sddBusinessStepsByWorkflow: sddBusinessStepsByWorkflow.size > 0 ? sddBusinessStepsByWorkflow : undefined,
       emergencyFallbackActive: emergencyFallbackActive || undefined,
       emergencyFallbackReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
+      cliValidationMode: cliValidationResultForDhg?.mode,
+      cliProjectType: cliValidationResultForDhg?.compatibility.projectType,
+      cliAnalyzerDefectCount: cliValidationResultForDhg?.analyzeResult?.defects.length,
+      cliPackSuccess: cliValidationResultForDhg?.packResult?.success,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
@@ -1628,6 +1640,89 @@ export async function compilePackageFromSpecs(
     tracker.complete("validation", "Validation and remediation complete");
     await periodicTraceFlush();
 
+    let cliValidationResult: import("./uipath-cli-validator").CliValidationResult | undefined;
+    try {
+      tracker.start("cli_validation", "Running UiPath CLI authoritative validation");
+      const { runCliValidation, checkCliCompatibility, formatCliValidationSummary } = await import("./uipath-cli-validator");
+
+      const projectJsonForCli = buildResult.projectJsonContent || "{}";
+      const cliCompat = checkCliCompatibility(projectJsonForCli);
+
+      if (!cliCompat.isCompatible) {
+        console.log(`[Pipeline] CLI validation skipped: ${cliCompat.reason}`);
+        cliValidationResult = {
+          mode: "cli_skipped_incompatible_agent",
+          compatibility: cliCompat,
+          dotnetAvailable: false,
+          cliAvailable: false,
+          durationMs: 0,
+        };
+        tracker.complete("cli_validation", `CLI validation skipped: incompatible agent for ${cliCompat.projectType} project`, {
+          mode: "cli_skipped_incompatible_agent",
+          projectType: cliCompat.projectType,
+        });
+      } else {
+        cliValidationResult = await runCliValidation(projectJsonForCli, finalXamlEntries, options?.onProgress);
+        const summary = formatCliValidationSummary(cliValidationResult);
+        console.log(`[Pipeline] CLI validation result:\n${summary}`);
+
+        if (cliValidationResult.mode === "cli_validated") {
+          tracker.complete("cli_validation", `CLI validation passed (${cliValidationResult.compatibility.projectType})`, {
+            mode: "cli_validated",
+            projectType: cliValidationResult.compatibility.projectType,
+            analyzerDefects: cliValidationResult.analyzeResult?.defects.length || 0,
+          });
+        } else if (cliValidationResult.mode === "cli_failed") {
+          const defectCount = cliValidationResult.analyzeResult?.defects.length || 0;
+          tracker.warn("cli_validation", `CLI validation failed: ${defectCount} defect(s) found`);
+
+          if (cliValidationResult.analyzeResult && cliValidationResult.analyzeResult.defects.length > 0) {
+            for (const defect of cliValidationResult.analyzeResult.defects.slice(0, 10)) {
+              pipelineWarnings.push({
+                code: `CLI_ANALYZER_${defect.severity.toUpperCase()}`,
+                message: `[CLI Analyzer] ${defect.ruleId}: ${defect.message}${defect.file ? ` in ${defect.file}` : ""}`,
+                stage: "cli_validation",
+                recoverable: defect.severity !== "Error",
+                affectedFiles: defect.file ? [defect.file] : undefined,
+              });
+            }
+          }
+
+          if (cliValidationResult.packResult && !cliValidationResult.packResult.success) {
+            for (const err of cliValidationResult.packResult.errors.slice(0, 5)) {
+              pipelineWarnings.push({
+                code: "CLI_PACK_ERROR",
+                message: `[CLI Pack] ${err}`,
+                stage: "cli_validation",
+                recoverable: false,
+              });
+            }
+          }
+
+          tracker.complete("cli_validation", `CLI validation failed — ${defectCount} analyzer defect(s)`, {
+            mode: "cli_failed",
+            projectType: cliValidationResult.compatibility.projectType,
+            analyzerDefects: defectCount,
+          });
+        } else {
+          tracker.complete("cli_validation", `CLI validation: ${cliValidationResult.mode}`, {
+            mode: cliValidationResult.mode,
+            projectType: cliValidationResult.compatibility.projectType,
+          });
+        }
+      }
+    } catch (cliErr: unknown) {
+      const errMsg = cliErr instanceof Error ? cliErr.message : String(cliErr);
+      console.warn(`[Pipeline] CLI validation failed gracefully: ${errMsg}`);
+      pipelineWarnings.push({
+        code: "CLI_VALIDATION_UNAVAILABLE",
+        message: `CLI validation unavailable: ${errMsg}`,
+        stage: "cli_validation",
+        recoverable: true,
+      });
+      tracker.complete("cli_validation", "CLI validation unavailable — falling back to custom validation");
+    }
+
     if (options?.runId) {
       try {
         await storage.updateGenerationRunStatus(options.runId, "packaging");
@@ -1647,6 +1742,15 @@ export async function compilePackageFromSpecs(
       try {
         await storage.updateGenerationRunStatus(options.runId, "dhg_generating");
       } catch (e) { /* best-effort */ }
+    }
+
+    if (buildResult.outcomeReport && cliValidationResult) {
+      buildResult.outcomeReport.cliValidationMode = cliValidationResult.mode;
+      buildResult.outcomeReport.cliProjectType = cliValidationResult.compatibility.projectType;
+      buildResult.outcomeReport.cliAnalyzerDefectCount = cliValidationResult.analyzeResult?.defects.length;
+      buildResult.outcomeReport.cliPackSuccess = cliValidationResult.packResult?.success;
+      const { formatCliValidationSummary: fmtSummary } = await import("./uipath-cli-validator");
+      buildResult.outcomeReport.cliValidationSummary = fmtSummary(cliValidationResult);
     }
 
     tracker.start("final_artifact_validation", "Running final artifact truth gate");
@@ -1686,7 +1790,7 @@ export async function compilePackageFromSpecs(
 
     tracker.start("packaging_dhg_guide", "Generating Developer Handoff Guide");
     tracker.heartbeat("packaging_dhg_guide", () => "Analyzing workflows and writing guide");
-    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport, emergencyFallbackActive, emergencyFallbackReason);
+    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport, emergencyFallbackActive, emergencyFallbackReason, cliValidationResult);
     tracker.complete("packaging_dhg_guide", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
@@ -1747,6 +1851,26 @@ export async function compilePackageFromSpecs(
       console.log(`[Pipeline] Package buffer suppressed: completeness violations prevent viable package archive`);
     }
 
+    if (finalQualityReport) {
+      finalQualityReport.cliValidationMode = cliValidationResult?.mode || "custom_validated_only";
+      if (cliValidationResult) {
+        const analyzerDefects = cliValidationResult.analyzeResult?.defects || [];
+        finalQualityReport.cliValidationDetails = {
+          projectType: cliValidationResult.compatibility.projectType,
+          cliFlavor: cliValidationResult.compatibility.requiredCliFlavor,
+          runnerPlatform: cliValidationResult.compatibility.currentRunner,
+          dotnetAvailable: cliValidationResult.dotnetAvailable,
+          cliToolAvailable: cliValidationResult.cliAvailable,
+          analyzerDefectCount: analyzerDefects.length,
+          analyzerErrorCount: analyzerDefects.filter(d => d.severity === "Error").length,
+          analyzerWarningCount: analyzerDefects.filter(d => d.severity === "Warning").length,
+          packSuccess: cliValidationResult.packResult?.success,
+          packErrors: cliValidationResult.packResult?.errors,
+          durationMs: cliValidationResult.durationMs,
+        };
+      }
+    }
+
     const effectivePackageBuffer = packageViable ? finalPackageBuffer : Buffer.alloc(0);
 
     const result: PipelineResult = {
@@ -1784,6 +1908,8 @@ export async function compilePackageFromSpecs(
       invokeContractTrace: buildResult.invokeContractTrace,
       stageHashParity: buildResult.stageHashParity,
       criticalActivityContractDiagnostics: buildResult.criticalActivityContractDiagnostics,
+      cliValidationMode: cliValidationResult?.mode || "custom_validated_only",
+      cliValidationResult: cliValidationResult,
     };
 
     evictOldestPipelineCacheEntry();

@@ -7,6 +7,7 @@ import type {
   DowngradeEvent,
   PipelineOutcomeReport,
 } from "./uipath-pipeline";
+import type { CliValidationMode } from "./uipath-cli-validator";
 import type { AutomationPattern } from "./uipath-activity-registry";
 import { validateExecutablePaths, type ExecutablePathDefect } from "./xaml/executable-path-validator";
 import {
@@ -195,6 +196,20 @@ export interface FinalQualityReport {
   criticalActivityLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
   mailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
   quoteRepairDiagnostics?: QuoteRepairDiagnosticsReport;
+  cliValidationMode?: CliValidationMode;
+  cliValidationDetails?: {
+    projectType?: string;
+    cliFlavor?: string;
+    runnerPlatform?: string;
+    dotnetAvailable?: boolean;
+    cliToolAvailable?: boolean;
+    analyzerDefectCount?: number;
+    analyzerErrorCount?: number;
+    analyzerWarningCount?: number;
+    packSuccess?: boolean;
+    packErrors?: string[];
+    durationMs?: number;
+  };
 }
 
 export interface QuoteRepairDiagnosticsReport {

@@ -6,6 +6,7 @@ import type {
 import type { DhgAnalysisResult, SddArtifactCrossReference } from "./xaml/dhg-analyzers";
 import type { FinalQualityReport } from "./final-artifact-validation";
 import type { WorkflowStatusClassifierResult, WorkflowStatusClassification } from "./workflow-status-classifier";
+import type { CliValidationMode, UiPathProjectType } from "./uipath-cli-validator";
 import { normalizeClassifierFileName } from "./workflow-status-classifier";
 
 export interface HandoffBlockEntry {
@@ -112,6 +113,10 @@ export interface DhgContext {
   authoritativeClassification?: WorkflowStatusClassifierResult;
   emergencyFallbackActive?: boolean;
   emergencyFallbackReason?: string;
+  cliValidationMode?: CliValidationMode;
+  cliProjectType?: UiPathProjectType;
+  cliAnalyzerDefectCount?: number;
+  cliPackSuccess?: boolean;
 }
 
 interface WorkflowTierClassification {
@@ -346,6 +351,33 @@ export function generateDhgFromOutcomeReport(
         : "Not Ready";
     }
     md += `**Deployment Readiness:** ${adjustedRating} (${adjustedPercent}%)\n`;
+  }
+
+  if (context.cliValidationMode) {
+    const cliModeLabels: Record<string, string> = {
+      "custom_validated_only": "Custom Validated Only (CLI not available)",
+      "cli_validated": "CLI Validated (authoritative)",
+      "cli_skipped_incompatible_agent": "CLI Skipped (incompatible agent)",
+      "cli_failed": "CLI Failed",
+    };
+    const cliLabel = cliModeLabels[context.cliValidationMode] || context.cliValidationMode;
+    md += `**CLI Validation:** ${cliLabel}`;
+    if (context.cliProjectType) {
+      md += ` | Project Type: ${context.cliProjectType}`;
+    }
+    if (context.cliAnalyzerDefectCount !== undefined) {
+      md += ` | Analyzer Defects: ${context.cliAnalyzerDefectCount}`;
+    }
+    if (context.cliPackSuccess !== undefined) {
+      md += ` | Pack: ${context.cliPackSuccess ? "Success" : "Failed"}`;
+    }
+    md += `\n`;
+
+    if (context.cliValidationMode === "cli_skipped_incompatible_agent") {
+      md += `\n> **Note:** CLI authoritative validation was skipped because the current runner is not compatible with the project type (${context.cliProjectType || "unknown"}). This package has been validated with custom validators only. Full CLI validation requires a ${context.cliProjectType === "CrossPlatform" ? "Linux or Windows" : "Windows"} runner.\n`;
+    } else if (context.cliValidationMode === "cli_failed") {
+      md += `\n> **Warning:** UiPath CLI validation failed. The package may have issues that require attention. Review the CLI analyzer defects below.\n`;
+    }
   }
 
   md += `\n`;
