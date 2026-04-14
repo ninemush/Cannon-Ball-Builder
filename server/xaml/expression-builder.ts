@@ -164,6 +164,18 @@ export function isPlaceholderSentinel(value: string): boolean {
   return value.startsWith(PLACEHOLDER_SENTINEL_PREFIX) || value.startsWith(BLOCKED_SENTINEL_PREFIX);
 }
 
+const RESOURCE_NAME_PROPERTIES = new Set([
+  "QueueName", "queueName",
+  "AssetName", "assetName",
+  "FolderPath", "folderPath",
+  "OrchestratorQueueName", "orchestratorQueueName",
+  "TaskCatalog", "taskCatalog",
+]);
+
+export function isResourceNameProperty(propertyName: string): boolean {
+  return RESOURCE_NAME_PROPERTIES.has(propertyName);
+}
+
 const SIMPLE_LITERAL = /^(".*"|'.*'|\d+(\.\d+)?|True|False|Nothing|null)$/;
 
 function isVariableName(val: string): boolean {
@@ -324,6 +336,13 @@ export function normalizeStringToExpression(val: string, isDeclared?: (name: str
     return `""`;
   }
 
+  if (propertyName && isResourceNameProperty(propertyName)) {
+    if (/^[a-zA-Z0-9_]+(-[a-zA-Z0-9_]+)+$/.test(trimmed)) {
+      const escaped = trimmed.replace(/"/g, '""');
+      return `"${escaped}"`;
+    }
+  }
+
   const jsonResult = tryParseJsonValueIntent(trimmed);
   if (jsonResult) {
     const resolved = buildExpression(jsonResult.intent);
@@ -432,6 +451,12 @@ export function normalizePropertyToValueIntent(
 
   if (isPlaceholderSentinel(trimmed)) {
     return { type: "literal", value: trimmed };
+  }
+
+  if (propertyName && isResourceNameProperty(propertyName)) {
+    if (/^[a-zA-Z0-9_]+(-[a-zA-Z0-9_]+)+$/.test(trimmed)) {
+      return { type: "literal", value: trimmed };
+    }
   }
 
   const jsonResult = tryParseJsonValueIntent(trimmed);

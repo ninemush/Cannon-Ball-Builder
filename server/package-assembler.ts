@@ -187,6 +187,104 @@ export { normalizePackageName } from "./uipath-shared";
   import { canonicalizeInvokeBindings, canonicalizeTargetValueExpressions, runPreGateResidualJsonCanonicalization, repairInvokeBindingsWithTripleEvidence, type InvokeCanonicalizationResult, type TargetValueCanonicalizationResult, type InvokeBindingRepairResult } from "./xaml/invoke-binding-canonicalizer";
   import { classifyFromArchiveBuffer, buildWorkflowStatusParity, normalizeClassifierFileName, AUTHORITATIVE_STUB_PATTERNS, verifyAndReclassifyFromArchive, assertClassificationFreshness, freezeArchiveWorkflows, isArchiveFrozen, getArchiveFreezePoint, resetArchiveFreeze, checkPostFreezeDeferredWriteMutation, getMutationTrace, recordMutationAttempt, assertNoPostFreezeStatusMutation, createGuardedDeferredWrites, createGuardedPostGateEntries, verifyFrozenArchiveBuffer, sealAuthoritativeXamlSource, getAuthoritativeXamlForArchive, recordAuthoritativeAppendHash, isAuthoritativeXamlSealed, getArchiveAuthorityDiagnostics, resetAuthoritativeSeal, type WorkflowStatusClassifierResult, type WorkflowStatusParityEntry, type WorkflowStatusParityResult, type PostClassifierMutationTrace, type ArchiveAuthorityDiagnostics } from "./workflow-status-classifier";
 
+interface RequiredPropertyFallbackEntry {
+  value: string;
+  tier: "contract-valid" | "structural-openability";
+}
+
+const REQUIRED_PROPERTY_FALLBACK_REGISTRY: Record<string, Record<string, RequiredPropertyFallbackEntry>> = {
+  "AddQueueItem": {
+    "QueueType": { value: "Simple", tier: "contract-valid" },
+    "QueueName": { value: "TODO_SpecifyQueueName", tier: "structural-openability" },
+  },
+  "ui:AddQueueItem": {
+    "QueueType": { value: "Simple", tier: "contract-valid" },
+    "QueueName": { value: "TODO_SpecifyQueueName", tier: "structural-openability" },
+  },
+  "ExcelApplicationScope": {
+    "ExistingWorkbook": { value: "TODO_SpecifyWorkbook.xlsx", tier: "structural-openability" },
+    "WorkbookPath": { value: "TODO_SpecifyWorkbook.xlsx", tier: "structural-openability" },
+  },
+  "ui:ExcelApplicationScope": {
+    "ExistingWorkbook": { value: "TODO_SpecifyWorkbook.xlsx", tier: "structural-openability" },
+    "WorkbookPath": { value: "TODO_SpecifyWorkbook.xlsx", tier: "structural-openability" },
+  },
+  "GetCredential": {
+    "Target": { value: "TODO_CredentialAsset", tier: "structural-openability" },
+    "AssetName": { value: "TODO_CredentialAsset", tier: "structural-openability" },
+  },
+  "ui:GetCredential": {
+    "Target": { value: "TODO_CredentialAsset", tier: "structural-openability" },
+    "AssetName": { value: "TODO_CredentialAsset", tier: "structural-openability" },
+  },
+  "GetAsset": {
+    "AssetName": { value: "TODO_AssetName", tier: "structural-openability" },
+  },
+  "ui:GetAsset": {
+    "AssetName": { value: "TODO_AssetName", tier: "structural-openability" },
+  },
+  "GetTransactionItem": {
+    "QueueName": { value: "TODO_SpecifyQueueName", tier: "structural-openability" },
+  },
+  "ui:GetTransactionItem": {
+    "QueueName": { value: "TODO_SpecifyQueueName", tier: "structural-openability" },
+  },
+  "SetTransactionStatus": {
+    "Status": { value: "Successful", tier: "contract-valid" },
+  },
+  "ui:SetTransactionStatus": {
+    "Status": { value: "Successful", tier: "contract-valid" },
+  },
+  "UseExcel": {
+    "ExcelFile": { value: "TODO_SpecifyWorkbook.xlsx", tier: "structural-openability" },
+  },
+  "ui:UseExcel": {
+    "ExcelFile": { value: "TODO_SpecifyWorkbook.xlsx", tier: "structural-openability" },
+  },
+  "ReadTextFile": {
+    "FileName": { value: "TODO_SpecifyFileName.txt", tier: "structural-openability" },
+  },
+  "ui:ReadTextFile": {
+    "FileName": { value: "TODO_SpecifyFileName.txt", tier: "structural-openability" },
+  },
+  "WriteTextFile": {
+    "FileName": { value: "TODO_SpecifyFileName.txt", tier: "structural-openability" },
+  },
+  "ui:WriteTextFile": {
+    "FileName": { value: "TODO_SpecifyFileName.txt", tier: "structural-openability" },
+  },
+  "HttpClient": {
+    "EndPoint": { value: "TODO_SpecifyEndpoint", tier: "structural-openability" },
+    "Method": { value: "GET", tier: "contract-valid" },
+    "AcceptFormat": { value: "JSON", tier: "contract-valid" },
+  },
+  "ui:HttpClient": {
+    "EndPoint": { value: "TODO_SpecifyEndpoint", tier: "structural-openability" },
+    "Method": { value: "GET", tier: "contract-valid" },
+    "AcceptFormat": { value: "JSON", tier: "contract-valid" },
+  },
+  "LogMessage": {
+    "Level": { value: "Info", tier: "contract-valid" },
+    "Message": { value: "TODO: Add log message", tier: "structural-openability" },
+  },
+  "ui:LogMessage": {
+    "Level": { value: "Info", tier: "contract-valid" },
+    "Message": { value: "TODO: Add log message", tier: "structural-openability" },
+  },
+  "CreateFormTask": {
+    "TaskTitle": { value: "TODO_FormTaskTitle", tier: "structural-openability" },
+  },
+  "upers:CreateFormTask": {
+    "TaskTitle": { value: "TODO_FormTaskTitle", tier: "structural-openability" },
+  },
+  "InvokeWorkflowFile": {
+    "WorkflowFileName": { value: "TODO_SpecifyWorkflow.xaml", tier: "structural-openability" },
+  },
+  "ui:InvokeWorkflowFile": {
+    "WorkflowFileName": { value: "TODO_SpecifyWorkflow.xaml", tier: "structural-openability" },
+  },
+};
+
 interface DomCorrectionResult {
   content: string;
   correctedProperties: Set<string>;
@@ -2632,7 +2730,7 @@ function runPostAssemblyValidation(
           warnings.push(`${schema.activity.displayName || activityTag} activity is missing required property "${propDef.name}" — auto-filled with contract default`);
           remediations.push({
             code: "MISSING_REQUIRED_PROPERTY_BOUND",
-            detail: `${activityTag}.${propDef.name} set to contract default "${contractDefault}"`,
+            detail: `${activityTag}.${propDef.name} set to contract default "${contractDefault}" (tier: contract-valid safe default)`,
           });
           const traceRunId = getCurrentRunId();
           if (traceRunId) {
@@ -2644,29 +2742,52 @@ function runPostAssemblyValidation(
             });
           }
         } else {
-          missingPropRepairs.push({ activityTag, propName: propDef.name, defaultValue: "", isStructuredDefect: true });
-          warnings.push(`${schema.activity.displayName || activityTag} activity is missing required property "${propDef.name}" — structured defect recorded (no value injected)`);
-          remediations.push({
-            code: "MISSING_REQUIRED_PROPERTY_DEFECT",
-            detail: `${activityTag}.${propDef.name} has no valid source binding and no contract-valid fallback — structured defect, property left absent`,
-          });
-          const traceRunId = getCurrentRunId();
-          if (traceRunId) {
-            recordTransform(traceRunId, {
-              stage: "required_property_enforcement",
-              file: "package",
-              description: `Structured defect: required property ${activityTag}.${propDef.name} has no contract-valid binding — property not injected`,
-              after: "[DEFECT: no value injected]",
+          const tagWithoutPrefix = activityTag.includes(":") ? activityTag.split(":").pop()! : activityTag;
+          const registryFallback = REQUIRED_PROPERTY_FALLBACK_REGISTRY[activityTag]?.[propDef.name] ||
+            REQUIRED_PROPERTY_FALLBACK_REGISTRY[tagWithoutPrefix]?.[propDef.name];
+
+          if (registryFallback) {
+            missingPropRepairs.push({ activityTag, propName: propDef.name, defaultValue: registryFallback.value, isStructuredDefect: registryFallback.tier === "structural-openability" });
+            const tierLabel = registryFallback.tier === "contract-valid" ? "contract-valid safe default" : "structural-openability placeholder";
+            warnings.push(`${schema.activity.displayName || activityTag} activity is missing required property "${propDef.name}" — filled from fallback registry (${tierLabel})`);
+            remediations.push({
+              code: "MISSING_REQUIRED_PROPERTY_BOUND",
+              detail: `${activityTag}.${propDef.name} set to registry fallback "${registryFallback.value}" (tier: ${tierLabel})`,
             });
+            const traceRunId = getCurrentRunId();
+            if (traceRunId) {
+              recordTransform(traceRunId, {
+                stage: "required_property_enforcement",
+                file: "package",
+                description: `Registry fallback (${tierLabel}): required property ${activityTag}.${propDef.name} set to "${registryFallback.value}"`,
+                after: registryFallback.value,
+              });
+            }
+          } else {
+            missingPropRepairs.push({ activityTag, propName: propDef.name, defaultValue: "", isStructuredDefect: true });
+            warnings.push(`${schema.activity.displayName || activityTag} activity is missing required property "${propDef.name}" — activity will be degraded to Comment+LogMessage stub`);
+            remediations.push({
+              code: "MISSING_REQUIRED_PROPERTY_DEFECT",
+              detail: `${activityTag}.${propDef.name} has no valid source binding and no fallback — activity degraded to developer handoff stub`,
+            });
+            const traceRunId = getCurrentRunId();
+            if (traceRunId) {
+              recordTransform(traceRunId, {
+                stage: "required_property_enforcement",
+                file: "package",
+                description: `Structured defect: required property ${activityTag}.${propDef.name} — activity degraded to Comment+LogMessage stub`,
+                after: "[DEGRADED: activity replaced with stub]",
+              });
+            }
           }
         }
       }
       checkedActivities.add(activityTag);
     }
 
-    const contractBoundRepairs = missingPropRepairs.filter(r => !r.isStructuredDefect);
-    if (contractBoundRepairs.length > 0) {
-      for (const repair of contractBoundRepairs) {
+    const injectableRepairs = missingPropRepairs.filter(r => r.defaultValue !== "");
+    if (injectableRepairs.length > 0) {
+      for (const repair of injectableRepairs) {
         const attrInjection = ` ${repair.propName}="${repair.defaultValue}"`;
         const selfClosingPattern = new RegExp(`(<${repair.activityTag}\\s[^>]*?)(/?>)`, "g");
         const applyRepair = (content: string): string => {
@@ -2685,10 +2806,53 @@ function runPostAssemblyValidation(
         }
       }
     }
+    const unresolvedDefects = missingPropRepairs.filter(r => r.isStructuredDefect && r.defaultValue === "");
+    if (unresolvedDefects.length > 0) {
+      const hasPropertyBinding = (activityXml: string, tag: string, propName: string): boolean => {
+        if (activityXml.includes(`${propName}="`)) return true;
+        if (activityXml.includes(`${tag}.${propName}`)) return true;
+        if (activityXml.includes(`<${propName}`)) return true;
+        return false;
+      };
+      const makeStub = (tag: string, propName: string, dn: string): string => {
+        return `<ui:Comment DisplayName="[DEGRADED] ${dn} — missing required property ${propName}">\n` +
+          `  <ui:Comment.Body>\n` +
+          `    <InArgument x:TypeArguments="x:String">"Activity ${tag} requires property ${propName} but no valid binding or fallback exists."</InArgument>\n` +
+          `  </ui:Comment.Body>\n` +
+          `</ui:Comment>\n` +
+          `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${dn} requires developer implementation (missing: ${propName})&quot;" />`;
+      };
+      const degradeActivity = (content: string, tag: string, propName: string): string => {
+        const selfClosePattern = new RegExp(`<${tag}\\s[^>]*?/>`, "g");
+        let degraded = content.replace(selfClosePattern, (match) => {
+          if (hasPropertyBinding(match, tag, propName)) return match;
+          const dnMatch = match.match(/DisplayName="([^"]*)"/);
+          return makeStub(tag, propName, dnMatch ? dnMatch[1] : tag);
+        });
+        const openClosePattern = new RegExp(`<${tag}\\s[^>]*?>[\\s\\S]*?</${tag}>`, "g");
+        degraded = degraded.replace(openClosePattern, (match) => {
+          if (hasPropertyBinding(match, tag, propName)) return match;
+          const dnMatch = match.match(/DisplayName="([^"]*)"/);
+          return makeStub(tag, propName, dnMatch ? dnMatch[1] : tag);
+        });
+        return degraded;
+      };
+      for (const defect of unresolvedDefects) {
+        Array.from(deferredWrites.entries()).forEach(([path, content]) => {
+          if (!path.endsWith(".xaml")) return;
+          const updated = degradeActivity(content, defect.activityTag, defect.propName);
+          if (updated !== content) syncXamlWrite(deferredWrites, xamlEntries, path, updated);
+        });
+        for (const entry of xamlEntries) {
+          entry.content = degradeActivity(entry.content, defect.activityTag, defect.propName);
+        }
+      }
+    }
     if (missingPropRepairs.length > 0) {
-      const defectCount = missingPropRepairs.filter(r => r.isStructuredDefect).length;
-      const boundCount = contractBoundRepairs.length;
-      console.log(`[Post-Assembly] Required property enforcement: ${boundCount} contract-bound, ${defectCount} structured defect(s) — zero sentinel placeholders injected, defect properties left absent`);
+      const defectCount = unresolvedDefects.length;
+      const contractBoundCount = missingPropRepairs.filter(r => !r.isStructuredDefect).length;
+      const structuralFillCount = missingPropRepairs.filter(r => r.isStructuredDefect && r.defaultValue !== "").length;
+      console.log(`[Post-Assembly] Required property enforcement: ${contractBoundCount} contract-bound, ${structuralFillCount} structural-openability filled, ${defectCount} degraded to Comment+LogMessage stubs`);
     }
   }
 

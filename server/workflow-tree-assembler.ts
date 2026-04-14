@@ -11,7 +11,7 @@ import type {
   RetryScopeNode,
   PropertyValue,
 } from "./workflow-spec-types";
-import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue } from "./types/uipath-package";
+import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue, isBlockedSentinel } from "./types/uipath-package";
 import { resolveToScalarString } from "./xaml/deterministic-generators";
 import { catalogService } from "./catalog/catalog-service";
 import { getFilteredSchema, registerStage } from "./catalog/filtered-schema-lookup";
@@ -428,6 +428,14 @@ export function normalizeVariableTypeAttr(typeAttr: string): string {
 
 function mapClrType(type: string, context: MapClrTypeContext = "non-critical"): string {
   const trimmed = type.trim();
+
+  if (/^scg:(?:List|Dictionary)\(/.test(trimmed) || /^scg2:/.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^[a-z]+:[A-Z]/.test(trimmed) && !trimmed.includes("clr-namespace:")) {
+    return trimmed;
+  }
+
   const lower = trimmed.toLowerCase();
   if (lower === "string" || lower === "system.string" || lower === "x:string") return "x:String";
   if (lower === "int32" || lower === "integer" || lower === "int" || lower === "system.int32" || lower === "x:int32") return "x:Int32";
@@ -3743,7 +3751,34 @@ function flattenNodeProperties(properties: Record<string, unknown> | undefined):
   if (!properties) return result;
 
   for (const [key, val] of Object.entries(properties)) {
+    if (isBlockedPropertyValue(val)) {
+      console.warn(`[flattenNodeProperties] Property "${key}" contains blocked sentinel — omitting from flattened output (remediation: omit)`);
+      emitTypedPropertyDiagnostic({
+        workflowFile: _activeRemediationContext?.fileName || "unknown",
+        templateName: "(flattenNodeProperties)",
+        propertyName: key,
+        classification: "unsupported-structured",
+        action: "blocked",
+        reason: "Blocked property sentinel intercepted at flattenNodeProperties boundary — property omitted",
+        stage: "flattenNodeProperties-sentinel-guard",
+      });
+      continue;
+    }
+
     if (typeof val === "string") {
+      if (isBlockedSentinel(val)) {
+        console.warn(`[flattenNodeProperties] Property "${key}" string value is blocked sentinel — omitting (remediation: omit)`);
+        emitTypedPropertyDiagnostic({
+          workflowFile: _activeRemediationContext?.fileName || "unknown",
+          templateName: "(flattenNodeProperties)",
+          propertyName: key,
+          classification: "unsupported-structured",
+          action: "blocked",
+          reason: "Blocked sentinel string intercepted at flattenNodeProperties boundary — property omitted",
+          stage: "flattenNodeProperties-sentinel-guard",
+        });
+        continue;
+      }
       let resolved = val;
       try {
         const parsed = JSON.parse(val);
@@ -3751,16 +3786,35 @@ function flattenNodeProperties(properties: Record<string, unknown> | undefined):
           resolved = resolveValueIntentToString(parsed);
         }
       } catch (_jsonParseIgnored) { /* not JSON — use raw string */ }
+      if (isBlockedSentinel(resolved)) {
+        console.warn(`[flattenNodeProperties] Property "${key}" resolved to blocked sentinel — omitting (remediation: omit)`);
+        continue;
+      }
       result[key] = resolved;
     } else if (val !== null && val !== undefined && typeof val === "object") {
       const obj = val as Record<string, unknown>;
       if (isValueIntentShape(obj)) {
-        result[key] = resolveValueIntentToString(obj as { type: string; name?: string; value?: string; expression?: string; baseUrl?: string });
+        const resolved = resolveValueIntentToString(obj as { type: string; name?: string; value?: string; expression?: string; baseUrl?: string });
+        if (isBlockedSentinel(resolved)) {
+          console.warn(`[flattenNodeProperties] Property "${key}" ValueIntent resolved to blocked sentinel — omitting (remediation: omit)`);
+          continue;
+        }
+        result[key] = resolved;
       } else if ("value" in obj && Object.keys(obj).length <= 3) {
-        result[key] = String(obj.value);
+        const strVal = String(obj.value);
+        if (isBlockedSentinel(strVal)) {
+          console.warn(`[flattenNodeProperties] Property "${key}" object value is blocked sentinel — omitting (remediation: omit)`);
+          continue;
+        }
+        result[key] = strVal;
       }
     } else if (val !== null && val !== undefined) {
-      result[key] = String(val);
+      const strVal = String(val);
+      if (isBlockedSentinel(strVal)) {
+        console.warn(`[flattenNodeProperties] Property "${key}" coerced value is blocked sentinel — omitting (remediation: omit)`);
+        continue;
+      }
+      result[key] = strVal;
     }
   }
   return result;
@@ -4289,6 +4343,27 @@ function validateForEachTypeConsistency(itemType: string, valuesExpression: stri
   return itemType;
 }
 
+function upgradeObjectVariableForForEachConsumer(
+  valuesExpression: string,
+  allVariables: VariableDeclaration[],
+  itemType: string,
+): void {
+  const expr = valuesExpression.trim().replace(/^\[|\]$/g, "").trim();
+  const simpleVarMatch = expr.match(/^([a-zA-Z_]\w*)$/);
+  if (!simpleVarMatch) return;
+
+  const varName = simpleVarMatch[1];
+  const decl = allVariables.find(v => v.name === varName);
+  if (!decl) return;
+
+  const isObjectTyped = decl.type === "x:Object" || decl.type === "System.Object" || decl.type === "Object";
+  if (!isObjectTyped) return;
+
+  const safeCollectionType = `scg:List(${itemType || "x:Object"})`;
+  console.warn(`[Consumer-Driven Type Inference] Variable "${varName}" typed as "${decl.type}" but bound to ForEach.Values (expects IEnumerable) — upgrading to "${safeCollectionType}"`);
+  (decl as { type: string }).type = safeCollectionType;
+}
+
 function assembleForEachNode(
   node: ForEachNode,
   allVariables: VariableDeclaration[],
@@ -4300,6 +4375,9 @@ function assembleForEachNode(
   const displayName = escapeXml(node.displayName);
   const inferredType = inferForEachItemType(node.itemType || "x:Object", node.valuesExpression, allVariables);
   const itemType = validateForEachTypeConsistency(inferredType, node.valuesExpression);
+
+  upgradeObjectVariableForForEachConsumer(node.valuesExpression, allVariables, itemType);
+
   const wrappedValues = ensureBracketWrapped(node.valuesExpression, _activeDeclarationLookup || undefined);
 
   const effectiveIteratorName = inferForEachIteratorFromBody(node, allVariables);

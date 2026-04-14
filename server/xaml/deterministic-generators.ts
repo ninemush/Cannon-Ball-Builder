@@ -10,22 +10,58 @@ export function _uuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+const SENTINEL_TODO_PLACEHOLDER = "TODO: implement this expression";
+
+type SentinelRemediationOutcome = "todo-placeholder" | "omit";
+
+function logSentinelRemediation(source: string, sentinel: string, outcome: SentinelRemediationOutcome, detail: string): void {
+  console.warn(`[Sentinel Boundary] stage=resolveToScalarString source="${source}" outcome=${outcome} sentinel="${sentinel.substring(0, 40)}" detail="${detail}"`);
+}
+
 export function resolveToScalarString(val: unknown): string {
   if (val === null || val === undefined) return "";
-  if (typeof val === "string") return val;
+  if (typeof val === "string") {
+    if (isBlockedSentinel(val)) {
+      logSentinelRemediation("string-value", val, "todo-placeholder", "Blocked sentinel string intercepted at scalar boundary");
+      return SENTINEL_TODO_PLACEHOLDER;
+    }
+    return val;
+  }
   if (typeof val === "number" || typeof val === "boolean") return String(val);
   if (typeof val === "object") {
     const obj = val as Record<string, unknown>;
     if (typeof obj.type === "string") {
-      if ((obj.type === "literal" || obj.type === "vb_expression") && typeof obj.value === "string") return obj.value;
-      if (obj.type === "variable" && typeof obj.name === "string") return obj.name;
-      if (obj.type === "url_with_params" && typeof obj.baseUrl === "string") return obj.baseUrl;
+      if ((obj.type === "literal" || obj.type === "vb_expression") && typeof obj.value === "string") {
+        if (isBlockedSentinel(obj.value)) {
+          logSentinelRemediation("typed-property-value", obj.value, "todo-placeholder", `Blocked sentinel in ${obj.type} property value`);
+          return SENTINEL_TODO_PLACEHOLDER;
+        }
+        return obj.value;
+      }
+      if (obj.type === "variable" && typeof obj.name === "string") {
+        if (isBlockedSentinel(obj.name)) {
+          logSentinelRemediation("variable-name", obj.name, "todo-placeholder", "Blocked sentinel in variable name");
+          return SENTINEL_TODO_PLACEHOLDER;
+        }
+        return obj.name;
+      }
+      if (obj.type === "url_with_params" && typeof obj.baseUrl === "string") {
+        if (isBlockedSentinel(obj.baseUrl)) {
+          logSentinelRemediation("url-base", obj.baseUrl, "todo-placeholder", "Blocked sentinel in URL base");
+          return SENTINEL_TODO_PLACEHOLDER;
+        }
+        return obj.baseUrl;
+      }
       if (obj.type === "expression" && typeof obj.left === "string" && typeof obj.operator === "string" && typeof obj.right === "string") {
+        if (isBlockedSentinel(obj.left) || isBlockedSentinel(obj.right)) {
+          logSentinelRemediation("expression-operand", obj.left + "|" + obj.right, "todo-placeholder", "Blocked sentinel in expression operand");
+          return SENTINEL_TODO_PLACEHOLDER;
+        }
         return `${obj.left} ${obj.operator} ${obj.right}`;
       }
     }
-    console.warn(`[Deterministic Generator] Unresolvable structured object blocked from scalar position: ${JSON.stringify(obj).substring(0, 120)}`);
-    return "";
+    logSentinelRemediation("unresolvable-object", JSON.stringify(obj).substring(0, 60), "todo-placeholder", "Unresolvable structured object at scalar position");
+    return SENTINEL_TODO_PLACEHOLDER;
   }
   return String(val);
 }

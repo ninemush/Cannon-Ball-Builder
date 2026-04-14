@@ -1,7 +1,7 @@
 import { catalogService } from "./catalog/catalog-service";
 import { validateXmlWellFormedness, GUARANTEED_ACTIVITY_PREFIX_MAP } from "./xaml/xaml-compliance";
 import type { PackageNamespaceInfo } from "./xaml/xaml-compliance";
-import { escapeXml, getAttributeSerializerDiagnostics, resetAttributeSerializerDiagnostics } from "./lib/xml-utils";
+import { escapeXml, getAttributeSerializerDiagnostics, resetAttributeSerializerDiagnostics, detectRawAmpersands } from "./lib/xml-utils";
 import type { WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
 import { formatBusinessContextForHandoff } from "./sdd-business-context-mapper";
 
@@ -94,7 +94,7 @@ const XML_INFRASTRUCTURE_TAGS = new Set([
   "AssemblyReference", "Collection",
 ]);
 
-const SENTINEL_PATTERNS = /\b(HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*)\b/;
+const SENTINEL_PATTERNS = /\b(HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|__BLOCKED_\w+|PLACEHOLDER_\w+)\b/;
 
 function findLineNumber(content: string, charIndex: number): number {
   let line = 1;
@@ -605,42 +605,139 @@ function cleanSentinelExpressions(
 ): string {
   let result = content;
 
-  const attrPattern = /("[^"]*(?:HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*)[^"]*")/g;
+  const COMPOUND_SENTINEL_MARKER = "__COMPOUND_SENTINEL_DEGRADED__";
+  let hasCompoundDegradation = false;
+
+  const attrPattern = /("[^"]*(?:HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|__BLOCKED_\w+|PLACEHOLDER_\w+)[^"]*")/g;
 
   result = result.replace(attrPattern, (fullMatch) => {
     const sentinelMatch = fullMatch.match(SENTINEL_PATTERNS);
     if (!sentinelMatch) return fullMatch;
 
+    const sentinelToken = sentinelMatch[1];
     const lineNum = findLineNumber(content, content.indexOf(fullMatch));
+    const innerValue = fullMatch.slice(1, -1);
+    const isSentinelOnly = innerValue.trim() === sentinelToken;
 
-    violations.push({
-      file: fileName,
-      line: lineNum,
-      type: "sentinel-expression",
-      detail: `Sentinel expression "${sentinelMatch[1]}" found and replaced with TODO stub`,
-      resolution: "corrected",
-    });
-
-    return `"TODO: implement this expression"`;
+    if (isSentinelOnly) {
+      violations.push({
+        file: fileName,
+        line: lineNum,
+        type: "sentinel-expression",
+        detail: `Sentinel expression "${sentinelToken}" found and replaced with TODO stub (remediation: TODO literal placeholder)`,
+        resolution: "corrected",
+      });
+      return `"TODO: implement this expression"`;
+    } else {
+      hasCompoundDegradation = true;
+      violations.push({
+        file: fileName,
+        line: lineNum,
+        type: "sentinel-expression",
+        detail: `Sentinel "${sentinelToken}" embedded in compound expression — activity degraded to Comment+LogMessage stub`,
+        resolution: "degraded",
+      });
+      return `"${COMPOUND_SENTINEL_MARKER}"`;
+    }
   });
 
-  const elemPattern = /(>)([^<]*(?:HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*)[^<]*)(<)/g;
+  const INFRASTRUCTURE_TAGS = new Set([
+    "InArgument", "OutArgument", "InOutArgument", "DelegateInArgument",
+    "Variable", "Sequence", "Flowchart", "FlowStep", "FlowDecision",
+    "FlowSwitch", "ActivityAction", "ActivityBuilder", "Activity",
+    "TextExpression", "Literal", "VisualBasicValue", "VisualBasicReference",
+  ]);
+
+  const isActivityTag = (tag: string): boolean => {
+    const bareTag = tag.includes(":") ? tag.split(":").pop()! : tag;
+    if (INFRASTRUCTURE_TAGS.has(bareTag)) return false;
+    return true;
+  };
+
+  const makeCompoundDegradationStub = (activityTag: string, displayName: string, context: string): string => {
+    return `<ui:Comment DisplayName="[DEGRADED] ${escapeXml(displayName)} — ${context}">\n` +
+      `  <ui:Comment.Body>\n` +
+      `    <InArgument x:TypeArguments="x:String">"This activity (${escapeXml(activityTag)}) contained a compound sentinel and was replaced with a developer handoff stub."</InArgument>\n` +
+      `  </ui:Comment.Body>\n` +
+      `</ui:Comment>\n` +
+      `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${escapeXml(displayName)} requires developer implementation&quot;" />`;
+  };
+
+  if (hasCompoundDegradation) {
+    const escapedMarker = COMPOUND_SENTINEL_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const selfClosePattern = new RegExp(
+      `<((?:[a-z]+:)?[A-Z]\\w+)\\s[^>]*?"${escapedMarker}"[^>]*?/>`,
+      "g"
+    );
+    result = result.replace(selfClosePattern, (_match, activityTag) => {
+      if (!isActivityTag(activityTag)) {
+        return _match.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO: implement this expression"`);
+      }
+      const dnMatch = _match.match(/DisplayName="([^"]*)"/);
+      return makeCompoundDegradationStub(activityTag, dnMatch ? dnMatch[1] : activityTag, "compound sentinel remediation");
+    });
+
+    const openClosePattern = new RegExp(
+      `<((?:[a-z]+:)?[A-Z]\\w+)\\s[^>]*?"${escapedMarker}"[^>]*?>[\\s\\S]*?</\\1>`,
+      "g"
+    );
+    result = result.replace(openClosePattern, (_match, activityTag) => {
+      if (!isActivityTag(activityTag)) {
+        return _match.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO: implement this expression"`);
+      }
+      const dnMatch = _match.match(/DisplayName="([^"]*)"/);
+      return makeCompoundDegradationStub(activityTag, dnMatch ? dnMatch[1] : activityTag, "compound sentinel remediation");
+    });
+
+    result = result.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO: implement this expression"`);
+  }
+
+  const elemPattern = /(>)([^<]*(?:HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|__BLOCKED_\w+|PLACEHOLDER_\w+)[^<]*)(<)/g;
+  let hasElemCompound = false;
   result = result.replace(elemPattern, (fullMatch, openDelim, textContent, closeDelim) => {
     const sentinelMatch = textContent.match(SENTINEL_PATTERNS);
     if (!sentinelMatch) return fullMatch;
 
     const lineNum = findLineNumber(content, content.indexOf(fullMatch));
+    const isSentinelOnly = textContent.trim() === sentinelMatch[1];
 
-    violations.push({
-      file: fileName,
-      line: lineNum,
-      type: "sentinel-expression",
-      detail: `Sentinel expression "${sentinelMatch[1]}" in element text replaced with TODO stub`,
-      resolution: "corrected",
-    });
-
-    return `${openDelim}TODO: implement this expression${closeDelim}`;
+    if (isSentinelOnly) {
+      violations.push({
+        file: fileName,
+        line: lineNum,
+        type: "sentinel-expression",
+        detail: `Sentinel expression "${sentinelMatch[1]}" in element text replaced with TODO stub`,
+        resolution: "corrected",
+      });
+      return `${openDelim}TODO: implement this expression${closeDelim}`;
+    } else {
+      hasElemCompound = true;
+      violations.push({
+        file: fileName,
+        line: lineNum,
+        type: "sentinel-expression",
+        detail: `Sentinel "${sentinelMatch[1]}" embedded in compound element text — marked for activity-level degradation`,
+        resolution: "degraded",
+      });
+      return `${openDelim}${COMPOUND_SENTINEL_MARKER}${closeDelim}`;
+    }
   });
+
+  if (hasElemCompound) {
+    const escapedMarker = COMPOUND_SENTINEL_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const elemDegradePattern = new RegExp(
+      `<((?:[a-z]+:)?[A-Z]\\w+)\\s[^>]*?>[\\s\\S]*?${escapedMarker}[\\s\\S]*?</\\1>`,
+      "g"
+    );
+    result = result.replace(elemDegradePattern, (_match, activityTag) => {
+      if (!isActivityTag(activityTag)) {
+        return _match.replace(new RegExp(escapedMarker, "g"), "TODO: implement this expression");
+      }
+      const dnMatch = _match.match(/DisplayName="([^"]*)"/);
+      return makeCompoundDegradationStub(activityTag, dnMatch ? dnMatch[1] : activityTag, "compound sentinel in element text");
+    });
+    result = result.replace(new RegExp(escapedMarker, "g"), "TODO: implement this expression");
+  }
 
   return result;
 }
@@ -773,13 +870,20 @@ export function checkNormalizationInvariants(
     });
   }
 
-  const blockedSentinelPattern = /__BLOCKED_TYPED_PROPERTY__/g;
+  const allSentinelPattern = /\b(__BLOCKED_\w+|HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|PLACEHOLDER_\w+)\b/g;
   let bsMatch;
-  while ((bsMatch = blockedSentinelPattern.exec(content)) !== null) {
+  while ((bsMatch = allSentinelPattern.exec(content)) !== null) {
     if (isInDeclarationRange(bsMatch.index)) continue;
+    const surroundingCtx = content.substring(Math.max(0, bsMatch.index - 80), bsMatch.index + bsMatch[0].length + 80);
+    const alreadyCleaned = /TODO: implement this expression/.test(surroundingCtx)
+      || /\[DEGRADED\]/.test(surroundingCtx)
+      || /\[STUBBED\]/.test(surroundingCtx)
+      || /\[HANDOFF\]/.test(surroundingCtx)
+      || /DisplayName="\[/.test(surroundingCtx);
+    if (alreadyCleaned) continue;
     violations.push({
-      pattern: "blocked-sentinel-leak",
-      detail: `Blocked property sentinel leaked into XAML at ${fileName}:${findLineNumber(content, bsMatch.index)}`,
+      pattern: "sentinel-leak",
+      detail: `Sentinel "${bsMatch[0]}" leaked into XAML at ${fileName}:${findLineNumber(content, bsMatch.index)} (post-cleanSentinelExpressions residual)`,
       line: findLineNumber(content, bsMatch.index),
     });
   }
@@ -822,6 +926,19 @@ export function runEmissionGate(
     if (typeResult.blocked) anyBlocked = true;
 
     content = cleanSentinelExpressions(fileName, content, violations);
+
+    const ampDetect = detectRawAmpersands(content);
+    if (ampDetect.count > 0) {
+      violations.push({
+        file: fileName,
+        type: "sentinel-expression",
+        detail: `[Ampersand Gap Detector] ${ampDetect.count} raw ampersand(s) detected in ${fileName} — serializer bypass: value(s) reached XAML without passing through escapeXml/escapeXmlAttributeValue. Requires upstream call-site fix.`,
+        resolution: "degraded",
+      });
+      for (const loc of ampDetect.locations) {
+        console.warn(`[Emission Gate] WARNING: Raw ampersand at ${fileName}:${loc.line} — "${loc.context}" — serializer bypass, requires call-site fix`);
+      }
+    }
 
     const normViolations = checkNormalizationInvariants(content, fileName);
     for (const nv of normViolations) {

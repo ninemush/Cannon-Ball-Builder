@@ -42,6 +42,8 @@ export function escapeXmlTextContent(str: string): string {
 export function normalizeXmlExpression(str: string): string {
   let result = str;
   let prev: string;
+  let iterations = 0;
+  const MAX_ITERATIONS = 3;
   do {
     prev = result;
     result = result
@@ -50,6 +52,11 @@ export function normalizeXmlExpression(str: string): string {
       .replace(/&amp;lt;/g, "&lt;")
       .replace(/&amp;gt;/g, "&gt;")
       .replace(/&amp;apos;/g, "&apos;");
+    iterations++;
+    if (iterations >= MAX_ITERATIONS) {
+      console.warn(`[normalizeXmlExpression] Entity normalization loop capped at ${MAX_ITERATIONS} iterations to prevent entity collapse`);
+      break;
+    }
   } while (result !== prev);
   return result;
 }
@@ -113,6 +120,30 @@ export function fixUnescapedAmpersands(xmlContent: string): { content: string; f
     return "&amp;";
   });
   return { content: fixed, fixCount };
+}
+
+export function detectRawAmpersands(xmlContent: string): { count: number; locations: Array<{ line: number; col: number; context: string }> } {
+  const locations: Array<{ line: number; col: number; context: string }> = [];
+  const lines = xmlContent.split("\n");
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
+    const ampPattern = /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/g;
+    let match;
+    while ((match = ampPattern.exec(line)) !== null) {
+      locations.push({
+        line: lineIdx + 1,
+        col: match.index + 1,
+        context: line.substring(Math.max(0, match.index - 20), match.index + 30).trim(),
+      });
+    }
+  }
+  if (locations.length > 0) {
+    console.warn(`[XML Well-Formedness] Detected ${locations.length} raw ampersand(s) in XAML output — these indicate a serialization bypass`);
+    for (const loc of locations.slice(0, 5)) {
+      console.warn(`  Line ${loc.line}, Col ${loc.col}: ...${loc.context}...`);
+    }
+  }
+  return { count: locations.length, locations };
 }
 
 export interface QuoteRepairResult {
