@@ -1,0 +1,51 @@
+Refine Task #517 before implementation. Keep the current structure and intent, but make these precise edits so the executor does not misinterpret the fix.
+
+Objective:
+Tighten the task wording without changing scope. Preserve the current root-cause framing, done criteria, out-of-scope boundaries, and file list. This is a wording/precision refinement, not a redesign.
+
+Required edits:
+
+1. Clarify `resolveUnknownToScalar` return expectations
+   Replace any wording that implies it always returns a string.
+   Use this wording instead:
+   “Resolve it via `resolveUnknownToScalar`, which may yield a usable scalar value or `null`.”
+
+2. Tighten the opaque-argument preservation rule
+   Current wording about “using the property name as the binding name” is too ambiguous and could cause the implementer to invent a synthetic binding name in the top-level `Arguments` case.
+   Replace that instruction with:
+   “If the resolved value is a legitimate opaque value such as a variable reference, plain expression, or simple string, preserve it using the existing opaque-argument path expected by downstream generation. Do not synthesize metadata-field bindings such as `type` or `value`, and do not block these unless they are sentinel-contaminated or unserializable.”
+
+3. Clarify JSON recursion behavior
+   Do not imply that every parsed JSON string should recurse into object normalization.
+   Use wording like:
+   “If the resolved scalar is a JSON string, only recurse when it parses into a plain object or other argument-container shape already supported by the current normalizer path. If it parses to a scalar or unsupported shape, treat it as an opaque value instead.”
+
+4. Define “structurally unusable”
+   Add one short definition so the term is unambiguous.
+   Use this meaning:
+   “Structurally unusable includes: `null` after resolution, blocked sentinel values, `undefined`, incomplete typed-property shells with no usable payload, and objects that are neither normalized binding maps nor parseable argument containers nor supported scalar forms.”
+
+5. Strengthen emitter fail-closed wording
+   After the line that says rejected arguments should be skipped entirely, add:
+   “Rejection must leave no empty XML node, partial argument element, or serialized fallback text behind.”
+
+6. Add one missing regression test
+   Add this exact regression expectation:
+   “Incomplete typed-property objects such as `{ type: "vb_expression" }` follow the blocked or safe-fallback path and never generate bindings or emitted XAML.”
+
+7. Preserve the core invariant explicitly
+   Keep or strengthen the invariant that:
+   “A top-level ValueIntent object must never fall through into generic `Object.entries(...)` handling.”
+
+8. Do not loosen the defense-in-depth requirements
+   Retain all three guard layers:
+
+* IR normalizer
+* expression builder
+* deterministic generator emitter
+
+9. Do not broaden scope
+   Do not add decomposer fixes, sentinel-system redesign, or argument-type inference work.
+
+Deliverable:
+Return the fully refined Task #517 text, ready to paste into the tracker, with the edits integrated cleanly into the existing task wording rather than appended as commentary.

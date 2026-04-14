@@ -1,0 +1,50 @@
+Update Task #517 with two refinements:
+
+**A. Top-level ValueIntent handling in `normalizeInvokeArgumentDictionary()`**
+Before `isAlreadyNormalizedBindings(...)` and before generic object iteration, detect whether `val` is a top-level ValueIntent.
+
+Required flow:
+
+* Resolve the ValueIntent to a scalar or structured payload.
+* If the resolved value matches `__BLOCKED_TYPED_PROPERTY__` or the blocked-sentinel helper, emit a blocked diagnostic and return `null`.
+* If the resolved value is a VB dictionary expression, parse it with `parseVbDictionaryToBindings(...)`.
+* If the resolved value is a supported JSON/object representation, normalize it through the existing object path.
+* If the resolved value is a legitimate opaque scalar expression or variable reference, preserve it as a single opaque argument payload rather than blocking it.
+* Only block when the resolved value is malformed, sentinel-contaminated, or structurally unusable.
+
+Important: never allow a top-level ValueIntent object to fall through into generic `Object.entries(...)` handling, or it will recreate bogus bindings like `type` and `value`.
+
+**B. Add emitter-level defense in depth**
+In `gen_invoke_workflow_file` within `deterministic-generators.ts`, add a final guard before XAML emission:
+
+* Reject any argument value that is a blocked sentinel or blocked-sentinel family value.
+* Reject undefined / invalid corrected values rather than serializing them.
+* Log the rejection clearly and fail closed.
+
+**C. Shared sentinel helper**
+Create a single helper such as `isBlockedSentinel(value)` and use it in:
+
+* `resolveToPlainScalar`
+* `resolveUnknownToScalar`
+* `normalizeInvokeArgumentDictionary`
+* `expression-builder.ts`
+* `deterministic-generators.ts`
+
+Recognize:
+
+* exact `__BLOCKED_TYPED_PROPERTY__`
+* future `__BLOCKED_*__` values
+
+**D. Catalog crash hardening**
+
+* Do not emit enum corrections with `correctedValue: undefined`.
+* Skip applying any correction whose corrected value is not a string.
+* Harden `stripEnumQuotes()` so non-string input cannot crash validation.
+
+**E. Regression tests**
+
+1. ValueIntent wrapping a VB dictionary expression normalizes to real bindings.
+2. ValueIntent wrapping `__BLOCKED_TYPED_PROPERTY__` is blocked and never emitted.
+3. Top-level ValueIntent never generates bogus bindings named `type` or `value`.
+4. Legitimate scalar ValueIntent inputs such as variable/expression payloads are preserved as opaque argument payloads when structurally valid.
+5. Unfixable enum violations do not crash catalog validation and do not skip subsequent checks.
