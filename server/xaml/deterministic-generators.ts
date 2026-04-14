@@ -9,7 +9,7 @@ export function _uuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
-function resolveToScalarString(val: unknown): string {
+export function resolveToScalarString(val: unknown): string {
   if (val === null || val === undefined) return "";
   if (typeof val === "string") return val;
   if (typeof val === "number" || typeof val === "boolean") return String(val);

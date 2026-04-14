@@ -12,6 +12,7 @@ import type {
   PropertyValue,
 } from "./workflow-spec-types";
 import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue } from "./types/uipath-package";
+import { resolveToScalarString } from "./xaml/deterministic-generators";
 import { catalogService } from "./catalog/catalog-service";
 import { getFilteredSchema, registerStage } from "./catalog/filtered-schema-lookup";
 import { inferTypeFromPrefix, PREFIXED_VAR_REF_REGEX, DEMOTION_WHITELIST_REGEX } from "./shared/type-inference";
@@ -1155,8 +1156,10 @@ function registerImplicitOutputVariables(children: WorkflowNode[], registry: Dec
         }
 
         if (templateName === "GetCredential") {
-          const usernameVar = (props.Username || props.username || "str_Username") as string;
-          const passwordVar = (props.Password || props.password || "sec_Password") as string;
+          const rawUsername = props.Username || props.username || "str_Username";
+          const rawPassword = props.Password || props.password || "sec_Password";
+          const usernameVar = coerceGetCredentialProp(rawUsername, "Username");
+          const passwordVar = coerceGetCredentialProp(rawPassword, "Password");
           const cleanUser = usernameVar.replace(/^\[|\]$/g, "");
           const cleanPass = passwordVar.replace(/^\[|\]$/g, "");
           if (!registry.hasName(cleanUser)) {
@@ -3712,6 +3715,21 @@ function resolveValueIntentToString(vi: { type: string; name?: string; value?: s
   }
 }
 
+function coerceGetCredentialProp(val: unknown, propName: string): string {
+  if (typeof val === "string") return val;
+  const defaultVal = propName === "Password" ? "sec_Password" : "str_Username";
+  if (val !== null && val !== undefined && typeof val === "object") {
+    const resolved = resolveToScalarString(val);
+    if (resolved && !resolved.startsWith("OBJECT_SERIALIZED:")) {
+      console.log(`[GetCredential] Coerced ValueIntent for ${propName}: → "${resolved}"`);
+      return resolved;
+    }
+    console.warn(`[GetCredential] Non-string, non-ValueIntent value for ${propName}: ${JSON.stringify(val).substring(0, 120)} — using default`);
+    return defaultVal;
+  }
+  return String(val ?? defaultVal);
+}
+
 function isValueIntentShape(obj: Record<string, unknown>): boolean {
   return typeof obj.type === "string" && (
     obj.type === "literal" || obj.type === "variable" || obj.type === "expression" ||
@@ -4427,8 +4445,8 @@ function crossCheckGetCredentialVariableTypes(
 
   for (const node of credNodes) {
     const props = node.properties || {};
-    const passwordVar = (props.Password as string) || (props.password as string) || "sec_Password";
-    const usernameVar = (props.Username as string) || (props.username as string) || "str_Username";
+    const passwordVar = coerceGetCredentialProp(props.Password || props.password || "sec_Password", "Password");
+    const usernameVar = coerceGetCredentialProp(props.Username || props.username || "str_Username", "Username");
 
     const pwDecl = allVariables.find(v => v.name === passwordVar);
     if (pwDecl) {
@@ -4461,8 +4479,8 @@ function crossCheckGetCredentialVariableTypesRegistry(
 
   for (const node of credNodes) {
     const props = node.properties || {};
-    const passwordVar = (props.Password as string) || (props.password as string) || "sec_Password";
-    const usernameVar = (props.Username as string) || (props.username as string) || "str_Username";
+    const passwordVar = coerceGetCredentialProp(props.Password || props.password || "sec_Password", "Password");
+    const usernameVar = coerceGetCredentialProp(props.Username || props.username || "str_Username", "Username");
 
     if (registry.hasVariableName(passwordVar)) {
       const existing = registry.getVariable(passwordVar);
