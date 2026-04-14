@@ -886,7 +886,6 @@ class CatalogService {
               type: "fix-invalid-value",
               property: prop.name,
               detail: `ENUM_VIOLATION: "${prop.name}" value "${currentVal}" is not a valid enum value on ${tag}. Valid values: ${prop.validValues.join(", ")}`,
-              correctedValue: undefined,
             });
           }
         }
@@ -897,7 +896,8 @@ class CatalogService {
     return result;
   }
 
-  private stripEnumQuotes(value: string): string {
+  private stripEnumQuotes(value: string | undefined): string {
+    if (typeof value !== "string") return "";
     return value.replace(/&quot;/g, "").replace(/^["']+|["']+$/g, "").trim();
   }
 

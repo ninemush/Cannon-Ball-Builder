@@ -1,5 +1,6 @@
 import type { WorkflowNode, ActivityNode, PropertyValue } from "./workflow-spec-types";
 import { isValueIntent, type ValueIntent } from "./xaml/expression-builder";
+import { isBlockedSentinel } from "./types/uipath-package";
 
 export interface NormalizedIRShape {
   kind: "scalar" | "invoke_binding" | "typed_child_element" | "type_argument" | "blocked";
@@ -107,24 +108,37 @@ function resolveToPlainScalar(val: PropertyValue): string | null {
     if (val.startsWith(STRUCTURED_OBJECT_PREFIX)) {
       return null;
     }
+    if (isBlockedSentinel(val)) {
+      return null;
+    }
     return val;
   }
   if (typeof val === "object" && val !== null && isValueIntent(val)) {
     const intent = val as ValueIntent;
+    let resolved: string | undefined;
     switch (intent.type) {
       case "literal":
-        return intent.value;
+        resolved = intent.value;
+        break;
       case "variable":
-        return intent.name;
+        resolved = intent.name;
+        break;
       case "vb_expression":
-        return intent.value;
+        resolved = intent.value;
+        break;
       case "expression":
-        return `${intent.left} ${intent.operator} ${intent.right}`;
+        resolved = `${intent.left} ${intent.operator} ${intent.right}`;
+        break;
       case "url_with_params":
-        return intent.baseUrl;
+        resolved = intent.baseUrl;
+        break;
       default:
         return null;
     }
+    if (resolved !== undefined && isBlockedSentinel(resolved)) {
+      return null;
+    }
+    return resolved ?? null;
   }
   return null;
 }
@@ -139,17 +153,21 @@ function resolveUnknownToScalar(val: unknown): string | null {
       return resolveToPlainScalar(val as PropertyValue);
     }
     if (typeof obj.type === "string") {
+      let resolved: string | undefined;
       if ((obj.type === "literal" || obj.type === "vb_expression") && typeof obj.value === "string") {
-        return obj.value;
+        resolved = obj.value;
+      } else if (obj.type === "variable" && typeof obj.name === "string") {
+        resolved = obj.name;
+      } else if (obj.type === "expression" && typeof obj.left === "string" && typeof obj.operator === "string" && typeof obj.right === "string") {
+        resolved = `${obj.left} ${obj.operator} ${obj.right}`;
+      } else if (obj.type === "url_with_params" && typeof obj.baseUrl === "string") {
+        resolved = obj.baseUrl;
       }
-      if (obj.type === "variable" && typeof obj.name === "string") {
-        return obj.name;
-      }
-      if (obj.type === "expression" && typeof obj.left === "string" && typeof obj.operator === "string" && typeof obj.right === "string") {
-        return `${obj.left} ${obj.operator} ${obj.right}`;
-      }
-      if (obj.type === "url_with_params" && typeof obj.baseUrl === "string") {
-        return obj.baseUrl;
+      if (resolved !== undefined) {
+        if (isBlockedSentinel(resolved)) {
+          return null;
+        }
+        return resolved;
       }
     }
   }
@@ -227,6 +245,12 @@ function bindingsToMap(bindings: InvokeBindingIR[]): InvokeBindingMap {
   return map;
 }
 
+type NormalizeArgResult =
+  | { kind: "bindings"; bindings: InvokeBindingIR[] }
+  | { kind: "blocked" }
+  | { kind: "opaque"; resolvedValue: string }
+  | { kind: "none" };
+
 function normalizeInvokeArgumentDictionary(
   val: unknown,
   directionDefault: "InArgument" | "OutArgument",
@@ -234,8 +258,8 @@ function normalizeInvokeArgumentDictionary(
   workflowName: string,
   displayName: string,
   template: string,
-): InvokeBindingIR[] | null {
-  if (val === null || val === undefined) return null;
+): NormalizeArgResult {
+  if (val === null || val === undefined) return { kind: "none" };
 
   if (typeof val === "string") {
     const trimmed = val.trim();
@@ -250,19 +274,19 @@ function normalizeInvokeArgumentDictionary(
         emitDiagnostic(workflowName, displayName, template, propertyName,
           `__STRUCTURED_OBJECT__ string (unparseable)`, "blocked",
           `Cannot parse structured object sentinel for invoke arguments`);
-        return null;
+        return { kind: "none" };
       }
     }
 
     if (/^New\s+Dictionary/i.test(trimmed) || /Dictionary\s*\(\s*Of/i.test(trimmed)) {
       const parsed = parseVbDictionaryToBindings(trimmed, directionDefault);
       if (parsed && parsed.length > 0) {
-        return parsed;
+        return { kind: "bindings", bindings: parsed };
       }
       emitDiagnostic(workflowName, displayName, template, propertyName,
         `VB Dictionary expression (no pairs extracted)`, "skipped",
         `Invoke argument is a VB Dictionary expression but no key-value pairs could be extracted`);
-      return null;
+      return { kind: "none" };
     }
 
     try {
@@ -274,13 +298,50 @@ function normalizeInvokeArgumentDictionary(
       emitDiagnostic(workflowName, displayName, template, propertyName,
         `opaque string (non-JSON, non-VB)`, "blocked",
         `Cannot normalize opaque string invoke argument: "${trimmed.substring(0, 60)}"`);
-      return null;
+      return { kind: "none" };
     }
-    return null;
+    return { kind: "none" };
   }
 
-  if (typeof val !== "object" || Array.isArray(val)) return null;
+  if (typeof val !== "object" || Array.isArray(val)) return { kind: "none" };
   const obj = val as Record<string, unknown>;
+
+  if (typeof obj.type === "string" && !isAlreadyNormalizedBindings(obj)) {
+    const resolved = resolveUnknownToScalar(val);
+    if (resolved === null) {
+      emitDiagnostic(workflowName, displayName, template, propertyName,
+        `ValueIntent-like(${obj.type}) → blocked/null`, "blocked",
+        `Top-level ValueIntent-like object in invoke arguments blocked (unresolvable or structurally unusable)`);
+      return { kind: "blocked" };
+    }
+    if (isBlockedSentinel(resolved)) {
+      emitDiagnostic(workflowName, displayName, template, propertyName,
+        `ValueIntent-like(${obj.type}) → blocked sentinel`, "blocked",
+        `Top-level ValueIntent-like object in invoke arguments contains blocked sentinel`);
+      return { kind: "blocked" };
+    }
+    if (/^New\s+Dictionary/i.test(resolved) || /Dictionary\s*\(\s*Of/i.test(resolved)) {
+      const parsed = parseVbDictionaryToBindings(resolved, directionDefault);
+      if (parsed && parsed.length > 0) {
+        return { kind: "bindings", bindings: parsed };
+      }
+      emitDiagnostic(workflowName, displayName, template, propertyName,
+        `ValueIntent → VB Dictionary (no pairs extracted)`, "blocked",
+        `ValueIntent resolved to VB Dictionary expression but no key-value pairs could be extracted`);
+      return { kind: "blocked" };
+    }
+    try {
+      const parsed = JSON.parse(resolved);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return normalizeInvokeArgumentDictionary(parsed, directionDefault, propertyName, workflowName, displayName, template);
+      }
+    } catch {
+    }
+    emitDiagnostic(workflowName, displayName, template, propertyName,
+      `ValueIntent-like(${obj.type}) → opaque scalar`, "preserved-opaque",
+      `Top-level ValueIntent-like object resolved to opaque scalar value: "${resolved.substring(0, 60)}"`);
+    return { kind: "opaque", resolvedValue: resolved };
+  }
 
   if (isAlreadyNormalizedBindings(obj)) {
     const bindings: InvokeBindingIR[] = [];
@@ -294,7 +355,7 @@ function normalizeInvokeArgumentDictionary(
         value: typeof e.value === "string" ? e.value : "",
       });
     }
-    return bindings;
+    return { kind: "bindings", bindings };
   }
 
   const bindings: InvokeBindingIR[] = [];
@@ -350,7 +411,7 @@ function normalizeInvokeArgumentDictionary(
       });
     }
   }
-  return bindings.length > 0 ? bindings : null;
+  return bindings.length > 0 ? { kind: "bindings", bindings } : { kind: "none" };
 }
 
 function normalizeTypeArgument(
@@ -482,15 +543,21 @@ export function normalizeActivityNodeForGenerator(
       if (rawVal === undefined || rawVal === null) continue;
       if (typeof rawVal === "string" && rawVal.trim() === "") continue;
 
-      const bindings = normalizeInvokeArgumentDictionary(
+      const result = normalizeInvokeArgumentDictionary(
         rawVal, "InArgument", argKey, workflowName, displayName, template,
       );
-      if (bindings && bindings.length > 0) {
-        Object.assign(mergedBindings, bindingsToMap(bindings));
+      if (result.kind === "blocked") {
+        delete props[argKey];
+        modified = true;
+      } else if (result.kind === "opaque") {
+        props[argKey] = result.resolvedValue;
+        modified = true;
+      } else if (result.kind === "bindings" && result.bindings.length > 0) {
+        Object.assign(mergedBindings, bindingsToMap(result.bindings));
         anyBindingsNormalized = true;
         emitDiagnostic(workflowName, displayName, template, argKey,
-          `dictionary/object (${bindings.length} entries)`,
-          `explicit named bindings (${bindings.length} entries)`);
+          `dictionary/object (${result.bindings.length} entries)`,
+          `explicit named bindings (${result.bindings.length} entries)`);
       }
     }
 
@@ -500,15 +567,21 @@ export function normalizeActivityNodeForGenerator(
       if (rawVal === undefined || rawVal === null) continue;
       if (typeof rawVal === "string" && rawVal.trim() === "") continue;
 
-      const bindings = normalizeInvokeArgumentDictionary(
+      const result = normalizeInvokeArgumentDictionary(
         rawVal, "OutArgument", outKey, workflowName, displayName, template,
       );
-      if (bindings && bindings.length > 0) {
-        Object.assign(mergedBindings, bindingsToMap(bindings));
+      if (result.kind === "blocked") {
+        delete props[outKey];
+        modified = true;
+      } else if (result.kind === "opaque") {
+        props[outKey] = result.resolvedValue;
+        modified = true;
+      } else if (result.kind === "bindings" && result.bindings.length > 0) {
+        Object.assign(mergedBindings, bindingsToMap(result.bindings));
         anyBindingsNormalized = true;
         emitDiagnostic(workflowName, displayName, template, outKey,
-          `dictionary/object (${bindings.length} entries)`,
-          `merged into Arguments as Out-direction bindings (${bindings.length} entries)`);
+          `dictionary/object (${result.bindings.length} entries)`,
+          `merged into Arguments as Out-direction bindings (${result.bindings.length} entries)`);
         delete props[outKey];
       } else {
         emitDiagnostic(workflowName, displayName, template, outKey,

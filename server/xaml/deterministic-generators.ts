@@ -1,5 +1,6 @@
 import { escapeXml, escapeXmlAttributeValue } from "../lib/xml-utils";
 import { randomBytes } from "crypto";
+import { isBlockedSentinel } from "../types/uipath-package";
 
 export function _uuid(): string {
   const bytes = randomBytes(16);
@@ -250,16 +251,29 @@ export function gen_invoke_workflow_file(args: GeneratorArgs): string {
   if (wfArguments && typeof wfArguments === "object") {
     const argEntries = Object.entries(wfArguments);
     if (argEntries.length > 0) {
-      const argLines = argEntries.map(([key, val]: [string, Record<string, unknown>]) => {
-        const dir = String(val.direction || "InArgument");
-        const type = String(val.type || "x:String");
-        const value = String(val.value || "");
-        return `        <${dir} x:TypeArguments="${type}" x:Key="${_escapeXmlAttr(key)}">${_escapeXmlAttr(value)}</${dir}>`;
-      });
-      argsBlock = `
+      const argLines: string[] = [];
+      for (const [key, val] of argEntries) {
+        const entry = val as Record<string, unknown>;
+        const rawValue = entry.value;
+        if (rawValue === undefined || rawValue === null) {
+          console.warn(`[gen_invoke_workflow_file] Rejected undefined/null argument value for "${key}" (workflow="${fileName}")`);
+          continue;
+        }
+        const dir = String(entry.direction || "InArgument");
+        const type = String(entry.type || "x:String");
+        const value = String(rawValue);
+        if (isBlockedSentinel(value) || isBlockedSentinel(key) || isBlockedSentinel(type)) {
+          console.warn(`[gen_invoke_workflow_file] Rejected blocked sentinel in argument "${key}" (value="${value.substring(0, 60)}", workflow="${fileName}")`);
+          continue;
+        }
+        argLines.push(`        <${dir} x:TypeArguments="${type}" x:Key="${_escapeXmlAttr(key)}">${_escapeXmlAttr(value)}</${dir}>`);
+      }
+      if (argLines.length > 0) {
+        argsBlock = `
       <ui:InvokeWorkflowFile.Arguments>
 ${argLines.join("\n")}
       </ui:InvokeWorkflowFile.Arguments>`;
+      }
     }
   }
 

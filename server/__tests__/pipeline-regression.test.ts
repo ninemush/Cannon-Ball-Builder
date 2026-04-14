@@ -19,7 +19,8 @@ import {
   getAndClearTypedPropertyDiagnostics,
   emitTypedPropertyDiagnostic,
 } from "../workflow-tree-assembler";
-import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue } from "../types/uipath-package";
+import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue, isBlockedSentinel } from "../types/uipath-package";
+import { gen_invoke_workflow_file } from "../xaml/deterministic-generators";
 import type { PropertyValue } from "../workflow-spec-types";
 import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity, buildAssemblyToPackageMap } from "../package-assembler";
 import { runFinalArtifactValidation, type PackageCompletenessViolation, type PackageCompletenessViolationsArtifact } from "../final-artifact-validation";
@@ -4516,6 +4517,222 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
       const sentinelViolations = violations.filter(v => v.pattern === "blocked-sentinel-leak");
       expect(sentinelViolations.length).toBeGreaterThan(0);
       expect(sentinelViolations[0].detail).toContain("Blocked property sentinel leaked");
+    });
+
+    it("ValueIntent wrapping VB dictionary normalizes to named bindings (not type/value)", () => {
+      getAndClearNormalizationDiagnostics();
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: { type: "vb_expression", value: 'New Dictionary(Of String, Object) From {{"in_Config", in_Config}, {"in_TransactionItem", in_TransactionItem}}' },
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = result.properties["Arguments"] as any;
+      if (args) {
+        const keys = Object.keys(args);
+        expect(keys).not.toContain("type");
+        expect(keys).not.toContain("value");
+        expect(keys).toContain("in_Config");
+        expect(keys).toContain("in_TransactionItem");
+      }
+    });
+
+    it("ValueIntent wrapping blocked sentinel is blocked and never emitted to XAML", () => {
+      getAndClearNormalizationDiagnostics();
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: { type: "literal", value: BLOCKED_PROPERTY_SENTINEL },
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(result.properties["Arguments"]).toBeUndefined();
+      const xaml = gen_invoke_workflow_file({
+        displayName: "Invoke Test",
+        WorkflowFileName: "Test.xaml",
+        Arguments: result.properties["Arguments"],
+      });
+      expect(xaml).not.toContain(BLOCKED_PROPERTY_SENTINEL);
+      expect(xaml).not.toContain("x:Key");
+    });
+
+    it("top-level ValueIntent never generates bogus type/value bindings", () => {
+      getAndClearNormalizationDiagnostics();
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: { type: "vb_expression", value: "str_ConfigValue" },
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = result.properties["Arguments"];
+      expect(args).toBeDefined();
+      if (typeof args === "string") {
+        expect(args).toBe("str_ConfigValue");
+      } else if (args && typeof args === "object") {
+        const keys = Object.keys(args as any);
+        expect(keys).not.toContain("type");
+        expect(keys).not.toContain("value");
+      }
+    });
+
+    it("legitimate scalar ValueIntent inputs are preserved, not blocked or split", () => {
+      getAndClearNormalizationDiagnostics();
+      const variableIntent = { type: "variable", name: "in_TransactionItem" };
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: variableIntent,
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = result.properties["Arguments"];
+      expect(args).toBeDefined();
+      if (typeof args === "string") {
+        expect(args).toBe("in_TransactionItem");
+      } else if (args && typeof args === "object") {
+        const keys = Object.keys(args as any);
+        expect(keys).not.toContain("type");
+        expect(keys).not.toContain("name");
+      }
+      const diags = getAndClearNormalizationDiagnostics();
+      const blockedDiags = diags.filter((d: any) => d.normalizedShape === "blocked");
+      expect(blockedDiags.length).toBe(0);
+    });
+
+    it("incomplete typed-property objects (no value field) do not generate bindings", () => {
+      getAndClearNormalizationDiagnostics();
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: { type: "vb_expression" },
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = result.properties["Arguments"];
+      if (args && typeof args === "object") {
+        const keys = Object.keys(args as any);
+        expect(keys).not.toContain("type");
+        expect(keys).not.toContain("value");
+      }
+    });
+
+    it("when normalizeInvokeArgumentDictionary returns null, Arguments property is deleted", () => {
+      getAndClearNormalizationDiagnostics();
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: { type: "literal", value: BLOCKED_PROPERTY_SENTINEL },
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      expect(result.properties["Arguments"]).toBeUndefined();
+      const xaml = gen_invoke_workflow_file({
+        displayName: "Invoke Test",
+        WorkflowFileName: "Test.xaml",
+        ...result.properties,
+      });
+      expect(xaml).not.toContain("x:Key=\"type\"");
+      expect(xaml).not.toContain("x:Key=\"value\"");
+    });
+
+    it("unfixable enum violations with correctedValue undefined do not crash catalog validation", () => {
+      const cs = catalogServiceImport;
+      const testTag = "ui:LogMessage";
+      const testAttrs: Record<string, string> = { Level: "InvalidLevelValue", DisplayName: "Test" };
+      expect(() => {
+        const result = cs.validateEmittedActivity(testTag, testAttrs, []);
+        expect(result).toBeDefined();
+      }).not.toThrow();
+    });
+
+    it("isBlockedSentinel recognizes both exact and prefix-based sentinel values", () => {
+      expect(isBlockedSentinel("__BLOCKED_TYPED_PROPERTY__")).toBe(true);
+      expect(isBlockedSentinel("__BLOCKED_FUTURE_SENTINEL__")).toBe(true);
+      expect(isBlockedSentinel("normal_value")).toBe(false);
+      expect(isBlockedSentinel("PLACEHOLDER_something")).toBe(false);
+    });
+
+    it("gen_invoke_workflow_file rejects sentinel argument values", () => {
+      const xaml = gen_invoke_workflow_file({
+        displayName: "Invoke Test",
+        WorkflowFileName: "Test.xaml",
+        Arguments: {
+          goodArg: { direction: "InArgument", type: "x:String", value: "hello" },
+          badArg: { direction: "InArgument", type: "x:Object", value: BLOCKED_PROPERTY_SENTINEL },
+        },
+      });
+      expect(xaml).toContain("x:Key=\"goodArg\"");
+      expect(xaml).not.toContain("x:Key=\"badArg\"");
+      expect(xaml).not.toContain(BLOCKED_PROPERTY_SENTINEL);
+    });
+
+    it("unknown type object at top level does not generate bogus bindings", () => {
+      getAndClearNormalizationDiagnostics();
+      const node: any = {
+        kind: "activity",
+        template: "InvokeWorkflowFile",
+        displayName: "Invoke Test",
+        properties: {
+          WorkflowFileName: "Test.xaml",
+          Arguments: { type: "unexpected", value: "x" },
+        },
+        children: [],
+      };
+      const result = normalizeActivityNodeForGenerator(node, "TestWorkflow");
+      const args = result.properties["Arguments"];
+      if (args && typeof args === "object") {
+        const keys = Object.keys(args as any);
+        expect(keys).not.toContain("type");
+        expect(keys).not.toContain("value");
+      }
+      const xaml = gen_invoke_workflow_file({
+        displayName: "Invoke Test",
+        WorkflowFileName: "Test.xaml",
+        Arguments: result.properties["Arguments"],
+      });
+      expect(xaml).not.toContain("x:Key=\"type\"");
+      expect(xaml).not.toContain("x:Key=\"value\"");
+    });
+
+    it("gen_invoke_workflow_file rejects undefined argument values without emitting partial XAML", () => {
+      const xaml = gen_invoke_workflow_file({
+        displayName: "Invoke Test",
+        WorkflowFileName: "Test.xaml",
+        Arguments: {
+          goodArg: { direction: "InArgument", type: "x:String", value: "hello" },
+          undefinedArg: { direction: "InArgument", type: "x:Object", value: undefined },
+          nullArg: { direction: "InArgument", type: "x:Object", value: null },
+        },
+      });
+      expect(xaml).toContain("x:Key=\"goodArg\"");
+      expect(xaml).not.toContain("x:Key=\"undefinedArg\"");
+      expect(xaml).not.toContain("x:Key=\"nullArg\"");
     });
   });
 

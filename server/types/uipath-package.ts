@@ -70,12 +70,16 @@ function resolveNestedJsonInTypedPropertyObject(obj: Record<string, unknown>): b
 
 export const BLOCKED_PROPERTY_SENTINEL = "__BLOCKED_TYPED_PROPERTY__";
 
+export function isBlockedSentinel(value: string): boolean {
+  return value === BLOCKED_PROPERTY_SENTINEL || value.startsWith("__BLOCKED_");
+}
+
 export function isBlockedPropertyValue(val: unknown): boolean {
   if (typeof val === "object" && val !== null) {
     const obj = val as Record<string, unknown>;
     return obj.type === "literal" && obj.value === BLOCKED_PROPERTY_SENTINEL;
   }
-  if (typeof val === "string") return val === BLOCKED_PROPERTY_SENTINEL;
+  if (typeof val === "string") return isBlockedSentinel(val);
   return false;
 }
 

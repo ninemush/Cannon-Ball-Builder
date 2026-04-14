@@ -158,8 +158,10 @@ const TIMEZONE_PATTERN = /^[A-Z][a-zA-Z]+\/[A-Z][a-zA-Z_]+$/;
 const FILE_PATH_PATTERN = /^[A-Za-z]:\\|^\\\\|^\/[a-zA-Z]|^\.\//;
 const CONFIG_VALUE_PATTERN = /^[a-zA-Z0-9_.:-]+\.[a-zA-Z]{2,}$|^[a-zA-Z]+[_-][a-zA-Z]+$/;
 
+const BLOCKED_SENTINEL_PREFIX = "__BLOCKED_";
+
 export function isPlaceholderSentinel(value: string): boolean {
-  return value.startsWith(PLACEHOLDER_SENTINEL_PREFIX);
+  return value.startsWith(PLACEHOLDER_SENTINEL_PREFIX) || value.startsWith(BLOCKED_SENTINEL_PREFIX);
 }
 
 const SIMPLE_LITERAL = /^(".*"|'.*'|\d+(\.\d+)?|True|False|Nothing|null)$/;

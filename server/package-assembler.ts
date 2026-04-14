@@ -7397,7 +7397,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             for (const bc of batchedCorrections) {
               const freshAttrs: Record<string, string> = { ...bc.attrs };
               for (const corr of batchedCorrections) {
-                if (corr.fullTag === bc.fullTag && corr.correction) {
+                if (corr.fullTag === bc.fullTag && corr.correction && typeof corr.correction.correctedValue === "string") {
                   freshAttrs[corr.correction.property] = corr.correction.correctedValue;
                 }
               }
