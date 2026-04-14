@@ -31,13 +31,43 @@ const FIXABLE_QG_CHECKS = new Set([
   "invalid-activity-property",
   "undeclared-variable",
   "expression-syntax",
+  "cli-namespace-error",
+  "cli-argument-error",
+  "cli-variable-error",
+  "cli-expression-error",
 ]);
+
+const CLI_RULE_TO_CHECK: Record<string, string> = {
+  "ST-NMG-001": "cli-namespace-error",
+  "ST-NMG-002": "cli-namespace-error",
+  "ST-NMG-004": "cli-namespace-error",
+  "ST-NMG-005": "cli-namespace-error",
+  "ST-NMG-006": "cli-namespace-error",
+  "ST-NMG-008": "cli-namespace-error",
+  "ST-NMG-009": "cli-namespace-error",
+  "ST-NMG-011": "cli-namespace-error",
+  "ST-NMG-012": "cli-namespace-error",
+  "ST-NMG-016": "cli-namespace-error",
+  "ST-DBP-002": "cli-argument-error",
+  "ST-DBP-006": "cli-argument-error",
+  "ST-DBP-020": "cli-argument-error",
+  "ST-USG-005": "cli-variable-error",
+  "ST-USG-007": "cli-variable-error",
+  "ST-USG-010": "cli-variable-error",
+  "ST-USG-014": "cli-variable-error",
+  "ST-USG-028": "cli-variable-error",
+  "ST-USG-034": "cli-expression-error",
+  "ST-SEC-009": "cli-expression-error",
+};
+
+const CLI_FIXABLE_RULE_IDS = new Set(Object.keys(CLI_RULE_TO_CHECK));
 
 export interface QualityGateIssue {
   check: string;
   file: string;
   detail: string;
   severity: string;
+  source?: "internal" | "cli";
 }
 
 export interface WorkflowSpecContext {
@@ -76,8 +106,39 @@ export interface ProjectContext {
 function countFixableQgViolations(violations: QualityGateViolation[]): QualityGateIssue[] {
   return violations
     .filter(v => FIXABLE_QG_CHECKS.has(v.check))
-    .map(v => ({ check: v.check, file: v.file, detail: v.detail, severity: v.severity }));
+    .map(v => ({ check: v.check, file: v.file, detail: v.detail, severity: v.severity, source: "internal" as const }));
 }
+
+export function normalizeCliDefectsToQgIssues(
+  cliDefects: Array<{ source: string; ruleId: string; severity: string; file: string; line?: number; message: string }>
+): { fixable: QualityGateIssue[]; diagnosticOnly: Array<{ ruleId: string; file: string; message: string; severity: string }> } {
+  const fixable: QualityGateIssue[] = [];
+  const diagnosticOnly: Array<{ ruleId: string; file: string; message: string; severity: string }> = [];
+
+  for (const defect of cliDefects) {
+    const mappedCheck = CLI_RULE_TO_CHECK[defect.ruleId];
+    if (mappedCheck && FIXABLE_QG_CHECKS.has(mappedCheck)) {
+      fixable.push({
+        check: mappedCheck,
+        file: defect.file || "unknown.xaml",
+        detail: `[CLI:${defect.ruleId}] ${defect.message}`,
+        severity: defect.severity === "Error" ? "error" : "warning",
+        source: "cli",
+      });
+    } else {
+      diagnosticOnly.push({
+        ruleId: defect.ruleId,
+        file: defect.file,
+        message: defect.message,
+        severity: defect.severity,
+      });
+    }
+  }
+
+  return { fixable, diagnosticOnly };
+}
+
+export { CLI_FIXABLE_RULE_IDS, CLI_RULE_TO_CHECK };
 
 function countFragileIssues(correctionSet: CorrectionSet): number {
   return correctionSet.corrections.filter(
@@ -162,6 +223,10 @@ ${allIssues}
 - For MISSING_PROPERTIES: add missing required properties using values from the spec.
 - For NESTED_ARGUMENTS: collapse doubled/nested InArgument or OutArgument wrappers.
 - For expression-syntax: use valid VB.NET syntax (& not +, <> not !=, no $"" interpolation, bracket-wrap variables).
+- For cli-namespace-error: ensure all XML namespace prefixes used in activities have corresponding xmlns declarations in the root Activity element. Add missing xmlns entries matching the pattern xmlns:prefix="clr-namespace:Namespace;assembly=Assembly".
+- For cli-argument-error: ensure all InvokeWorkflowFile arguments match the target workflow's declared In/Out/InOut arguments in type and direction. Remove undeclared arguments and add missing required ones.
+- For cli-variable-error: ensure all referenced variables are declared in the nearest enclosing scope's Variables section with correct x:TypeArguments. Remove unused variable declarations that trigger warnings.
+- For cli-expression-error: fix VB.NET expression syntax errors flagged by the CLI analyzer — ensure proper bracket-wrapping, correct method calls, and valid type casts.
 - Preserve XML namespaces, argument declarations, and overall document structure from the current XAML.
 - Return the COMPLETE regenerated XAML — not a diff, not a snippet.
 
@@ -427,7 +492,10 @@ export async function runIterativeLlmCorrection(
         const deterministicResolved = Math.max(0, deterministicBefore - deterministicAfter);
 
         let qgResolved = 0;
-        if (qgIssues.length > 0 && projectContext) {
+        const internalQgIssues = qgIssues.filter(q => q.source !== "cli");
+        const cliQgIssues = qgIssues.filter(q => q.source === "cli");
+
+        if (internalQgIssues.length > 0 && projectContext) {
           try {
             const postFixQg = runQualityGate({
               xamlEntries: mutableEntries,
@@ -440,10 +508,11 @@ export async function runIterativeLlmCorrection(
               const wfName = v.file.replace(".xaml", "").split("/").pop() || v.file;
               return wfName === workflowName;
             });
-            qgResolved = Math.max(0, qgIssues.length - postFixQgForWf.length);
+            qgResolved = Math.max(0, internalQgIssues.length - postFixQgForWf.length);
 
-            if (postFixQgForWf.length > 0) {
-              qgIssuesByWorkflow[workflowName] = postFixQgForWf;
+            const remainingForWf = [...postFixQgForWf, ...cliQgIssues];
+            if (remainingForWf.length > 0) {
+              qgIssuesByWorkflow[workflowName] = remainingForWf;
             } else {
               delete qgIssuesByWorkflow[workflowName];
             }
@@ -453,25 +522,48 @@ export async function runIterativeLlmCorrection(
               `[Iterative LLM Corrector] Round ${round}: post-fix quality gate re-run failed for ${workflowName}: ${errMsg} — treating QG issues as unresolved`,
             );
           }
-        } else if (qgIssues.length > 0) {
+        } else if (internalQgIssues.length > 0) {
           console.warn(
             `[Iterative LLM Corrector] Round ${round}: no project context available — cannot verify QG resolution for ${workflowName}`,
           );
         }
 
+        const cliDeferredCount = cliQgIssues.length;
         const actuallyResolved = deterministicResolved + qgResolved;
+        const nonRegression = deterministicAfter <= deterministicBefore;
 
         if (actuallyResolved > 0) {
-          const qgStillPresent = qgIssues.length - qgResolved;
+          const qgStillPresent = internalQgIssues.length - qgResolved;
           roundApplied += actuallyResolved;
           totalApplied += actuallyResolved;
+
+          if (cliDeferredCount > 0) {
+            roundApplied += cliDeferredCount;
+            totalApplied += cliDeferredCount;
+            const remainingInternal = qgIssuesByWorkflow[workflowName]?.filter(q => q.source !== "cli") || [];
+            if (remainingInternal.length > 0) {
+              qgIssuesByWorkflow[workflowName] = remainingInternal;
+            } else {
+              delete qgIssuesByWorkflow[workflowName];
+            }
+            console.log(
+              `[Iterative LLM Corrector] Round ${round}: ${cliDeferredCount} CLI-sourced issue(s) in ${workflowName} accepted with deferred verification (final CLI pass will verify)`,
+            );
+          }
 
           if (qgStillPresent > 0) {
             totalFailed += qgStillPresent;
           }
 
           console.log(
-            `[Iterative LLM Corrector] Round ${round}: regeneration resolved ${deterministicResolved} deterministic + ${qgResolved}/${qgIssues.length} QG issue(s) in ${workflowName} (${deterministicAfter} deterministic remaining)`,
+            `[Iterative LLM Corrector] Round ${round}: regeneration resolved ${deterministicResolved} deterministic + ${qgResolved}/${internalQgIssues.length} internal QG issue(s) in ${workflowName} (${deterministicAfter} deterministic remaining, ${cliDeferredCount} CLI-deferred)`,
+          );
+        } else if (cliDeferredCount > 0 && nonRegression) {
+          roundApplied += cliDeferredCount;
+          totalApplied += cliDeferredCount;
+          delete qgIssuesByWorkflow[workflowName];
+          console.log(
+            `[Iterative LLM Corrector] Round ${round}: ${cliDeferredCount} CLI-sourced issue(s) in ${workflowName} accepted with deferred verification (no internal regression detected, final CLI pass will verify)`,
           );
         } else {
           entry.content = originalContent;

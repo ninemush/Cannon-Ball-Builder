@@ -36,6 +36,7 @@ import {
   calculateEstimatedCost,
   recordGenerationMetrics,
   runIterativeLlmCorrection,
+  normalizeCliDefectsToQgIssues,
   type MetaValidationMode,
   type MetaValidationResult,
   type ConfidenceScorerInput,
@@ -1451,12 +1452,56 @@ export async function compilePackageFromSpecs(
           let iterativeLlmApplied = 0;
           let iterativeSkipped = 0;
           let iterativeFailed = 0;
+          let preCorrectCliDefectCount = 0;
+          let cliDiagnosticOnly: Array<{ ruleId: string; file: string; message: string; severity: string }> = [];
           try {
             if (options?.onProgress) options.onProgress("Running iterative LLM self-correction...");
 
-            const qgViolationsForIterative = (postCorrectionQualityGate?.violations || qgResult?.violations || [])
+            const qgViolationsForIterative: Array<{ check: string; file: string; detail: string; severity: string; source?: "internal" | "cli" }> = (postCorrectionQualityGate?.violations || qgResult?.violations || [])
               .filter(v => ["unknown-activity", "deprecated-activity", "non-emission-approved-activity", "target-incompatible-activity", "invalid-activity-property", "undeclared-variable", "expression-syntax"].includes(v.check))
-              .map(v => ({ check: v.check, file: v.file, detail: v.detail, severity: v.severity }));
+              .map(v => ({ check: v.check, file: v.file, detail: v.detail, severity: v.severity, source: "internal" as const }));
+
+            try {
+              const { runCliAnalyze, cliDefectsToHealingInput, checkCliCompatibility } = await import("./uipath-cli-validator");
+              const projectJsonForPreCli = buildResult.projectJsonContent || "{}";
+              const preCliCompat = checkCliCompatibility(projectJsonForPreCli);
+
+              if (preCliCompat.isCompatible) {
+                if (options?.onProgress) options.onProgress("Running pre-correction CLI analysis...");
+                const preCliStart = Date.now();
+                const preCliResult = await runCliAnalyze(projectJsonForPreCli, finalXamlEntries);
+                const preCliDuration = Date.now() - preCliStart;
+
+                if (preCliResult.defects.length > 0) {
+                  preCorrectCliDefectCount = preCliResult.defects.length;
+                  preCorrectCliDefectCount_outer = preCliResult.defects.length;
+                  const healingInput = cliDefectsToHealingInput(preCliResult.defects);
+                  const normalized = normalizeCliDefectsToQgIssues(healingInput);
+
+                  if (normalized.fixable.length > 0) {
+                    qgViolationsForIterative.push(...normalized.fixable);
+                    console.log(`[Pipeline] Pre-correction CLI analyze: ${preCliResult.defects.length} defect(s) found, ${normalized.fixable.length} fixable merged into corrector input, ${normalized.diagnosticOnly.length} diagnostic-only (${preCliDuration}ms)`);
+                  } else {
+                    console.log(`[Pipeline] Pre-correction CLI analyze: ${preCliResult.defects.length} defect(s) found, none fixable (${preCliDuration}ms)`);
+                  }
+                  cliDiagnosticOnly = normalized.diagnosticOnly;
+
+                  for (const diag of normalized.diagnosticOnly) {
+                    pipelineWarnings.push({
+                      code: `CLI_DIAGNOSTIC_${diag.severity.toUpperCase()}`,
+                      message: `[CLI Diagnostic] ${diag.ruleId}: ${diag.message}${diag.file ? ` in ${diag.file}` : ""}`,
+                      stage: "remediating",
+                      recoverable: true,
+                    });
+                  }
+                } else {
+                  console.log(`[Pipeline] Pre-correction CLI analyze: no defects found (${preCliDuration}ms)`);
+                }
+              }
+            } catch (preCliErr: unknown) {
+              const errMsg = preCliErr instanceof Error ? preCliErr.message : String(preCliErr);
+              console.warn(`[Pipeline] Pre-correction CLI analyze failed gracefully: ${errMsg}`);
+            }
 
             const workflowSpecs = enriched.workflows?.map((w: any) => ({
               name: w.name,
@@ -1541,10 +1586,14 @@ export async function compilePackageFromSpecs(
             if (iterativeResult.remainingIssueCount > 0) {
               pipelineWarnings.push({
                 code: "ITERATIVE_LLM_REMAINING_ISSUES",
-                message: `${iterativeResult.remainingIssueCount} fragile defect(s) remain after iterative LLM correction (unknown-activity, invalid-activity-property, ENUM_VIOLATIONS, LITERAL_EXPRESSIONS, UNDECLARED_VARIABLES, MISSING_PROPERTIES, NESTED_ARGUMENTS)`,
+                message: `${iterativeResult.remainingIssueCount} fragile defect(s) remain after iterative LLM correction (unknown-activity, invalid-activity-property, ENUM_VIOLATIONS, LITERAL_EXPRESSIONS, UNDECLARED_VARIABLES, MISSING_PROPERTIES, NESTED_ARGUMENTS, cli-namespace-error, cli-argument-error, cli-variable-error, cli-expression-error)`,
                 stage: "remediating",
                 recoverable: true,
               });
+            }
+
+            if (preCorrectCliDefectCount > 0) {
+              console.log(`[Pipeline] CLI defect metrics: pre-correction=${preCorrectCliDefectCount}, diagnostic-only=${cliDiagnosticOnly.length}`);
             }
           } catch (iterErr: unknown) {
             const errMsg = iterErr instanceof Error ? iterErr.message : String(iterErr);
@@ -1640,6 +1689,7 @@ export async function compilePackageFromSpecs(
     tracker.complete("validation", "Validation and remediation complete");
     await periodicTraceFlush();
 
+    let preCorrectCliDefectCount_outer = 0;
     let cliValidationResult: import("./uipath-cli-validator").CliValidationResult | undefined;
     try {
       tracker.start("cli_validation", "Running UiPath CLI authoritative validation");
@@ -1709,6 +1759,11 @@ export async function compilePackageFromSpecs(
             mode: cliValidationResult.mode,
             projectType: cliValidationResult.compatibility.projectType,
           });
+        }
+
+        const postCorrectionCliDefectCount = cliValidationResult.analyzeResult?.defects.length || 0;
+        if (preCorrectCliDefectCount_outer > 0 || postCorrectionCliDefectCount > 0) {
+          console.log(`[Pipeline] CLI defect delta: pre-correction=${preCorrectCliDefectCount_outer}, post-correction=${postCorrectionCliDefectCount}, delta=${preCorrectCliDefectCount_outer - postCorrectionCliDefectCount}`);
         }
       }
     } catch (cliErr: unknown) {

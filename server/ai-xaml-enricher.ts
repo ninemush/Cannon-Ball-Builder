@@ -318,6 +318,76 @@ OUTPUT FORMAT RULES (strict):
 - Workflow names must not include ".xaml" extensions or surrounding quotes.
 - ForEach "iteratorName" must be a valid identifier that matches variables referenced in body expressions.`;
 
+const SECTION_7_XAML_STRUCTURE_REFERENCE = `=== SECTION 7: CORRECT XAML STRUCTURE REFERENCE ===
+These structural patterns are from verified Studio baselines and production projects. Use them as reference for correct nesting, typing, and argument shapes.
+
+--- Studio Baseline Envelope (Windows/VB) ---
+<Activity mc:Ignorable="sap sap2010" x:Class="Main"
+  xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities"
+  xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=mscorlib"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <mva:VisualBasic.Settings><x:Null /></mva:VisualBasic.Settings>
+  <TextExpression.NamespacesForImplementation>
+    <sco:Collection x:TypeArguments="x:String">
+      <x:String>System</x:String>
+      <x:String>System.Collections.Generic</x:String>
+      <x:String>System.Linq</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+    </sco:Collection>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <sco:Collection x:TypeArguments="AssemblyReference">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
+      <AssemblyReference>UiPath.Core</AssemblyReference>
+      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+    </sco:Collection>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence DisplayName="Main">
+    <!-- workflow body here -->
+  </Sequence>
+</Activity>
+
+--- Pattern: If / Then / Else with Sequence bodies ---
+<If Condition="[String.IsNullOrEmpty(str_Value)]" DisplayName="If Value Is Empty">
+  <If.Then>
+    <Sequence DisplayName="Then">
+      <Throw DisplayName="Throw Error" Exception="[New BusinessRuleException(&quot;Value is missing&quot;)]" />
+    </Sequence>
+  </If.Then>
+  <If.Else>
+    <Sequence DisplayName="Else">
+      <!-- else activities -->
+    </Sequence>
+  </If.Else>
+</If>
+
+--- Pattern: InvokeWorkflowFile with typed arguments ---
+<ui:InvokeWorkflowFile DisplayName="Invoke Sub-Workflow" WorkflowFileName="Workflows_Apps\\Process_Step.xaml">
+  <ui:InvokeWorkflowFile.Arguments>
+    <InArgument x:TypeArguments="x:String" x:Key="in_InputValue">[str_InputValue]</InArgument>
+    <OutArgument x:TypeArguments="x:String" x:Key="out_Result">[str_Result]</OutArgument>
+  </ui:InvokeWorkflowFile.Arguments>
+</ui:InvokeWorkflowFile>
+
+--- Pattern: Typed ForEach with body ---
+<ui:ForEach x:TypeArguments="x:String" DisplayName="For Each item" Values="[arr_Items]">
+  <ui:ForEach.Body>
+    <ActivityAction x:TypeArguments="x:String">
+      <ActivityAction.Argument>
+        <DelegateInArgument x:TypeArguments="x:String" Name="item" />
+      </ActivityAction.Argument>
+      <Sequence DisplayName="Body">
+        <!-- loop body activities -->
+      </Sequence>
+    </ActivityAction>
+  </ui:ForEach.Body>
+</ui:ForEach>`;
+
 const SECTION_6_XAML_REFERENCE_SNIPPETS = `=== SECTION 6: VERIFIED XAML REFERENCE SNIPPETS ===
 These snippets are from verified production UiPath projects. Use them as reference for correct namespace imports, assembly references, and activity usage patterns.
 
@@ -484,7 +554,7 @@ Generate the enriched workflow specification. For each node, provide the specifi
       console.warn(`[AI XAML Enricher] UI context extraction failed: ${err.message}`);
     }
 
-    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + "\n\n" + SECTION_6_XAML_REFERENCE_SNIPPETS + uiContextBlock;
+    const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + "\n\n" + SECTION_6_XAML_REFERENCE_SNIPPETS + "\n\n" + SECTION_7_XAML_STRUCTURE_REFERENCE + uiContextBlock;
 
       console.log(`[AI XAML Enricher] Requesting enrichment for ${nodeDescriptions.length} nodes (streaming)...`);
       const enrichLlmOptions = {

@@ -43,6 +43,9 @@ export {
 
 export {
   runIterativeLlmCorrection,
+  normalizeCliDefectsToQgIssues,
+  CLI_FIXABLE_RULE_IDS,
+  CLI_RULE_TO_CHECK,
   type IterativeCorrectionResult,
   type QualityGateIssue,
   type WorkflowSpecContext,
