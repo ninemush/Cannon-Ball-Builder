@@ -616,4 +616,49 @@ describe("VB.NET Expression Linter", () => {
       expect(undeclared).not.toContain("InSentCount");
     });
   });
+
+  describe("Task #516 — XML re-escaping and bare-word quoting", () => {
+    it("CSHARP_STRING_CONCAT fix produces valid XML without raw ampersands", () => {
+      const xaml = '<Sequence><Assign DisplayName="Concat"><Assign.Value><InArgument x:TypeArguments="x:String">[&quot;Hello&quot; + str_Name]</InArgument></Assign.Value></Assign></Sequence>';
+      const result = lintXamlExpressions([{ name: "test.xaml", content: xaml }]);
+      expect(result.corrections.length).toBeGreaterThan(0);
+      expect(result.correctedEntries.length).toBe(1);
+      const patched = result.correctedEntries[0].content;
+      const hasRawAmpersand = /&(?!amp;|quot;|lt;|gt;|apos;|#\d+;|#x[\da-fA-F]+;)/.test(patched);
+      expect(hasRawAmpersand).toBe(false);
+      expect(patched).toContain("&amp;");
+
+      const unmatchedTags = patched.match(/<[^/!][^>]*[^/]>/g)?.length || 0;
+      const closingTags = patched.match(/<\/[^>]+>/g)?.length || 0;
+      expect(unmatchedTags).toBe(closingTags);
+    });
+
+    it("bare-word string literals in comparison expressions are auto-quoted", () => {
+      const xaml = '<Sequence xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><Variable x:TypeArguments="x:String" Name="str_Label" /><If Condition="[str_Label = personal]" DisplayName="Check" /></Sequence>';
+      const result = lintXamlExpressions([{ name: "test.xaml", content: xaml }]);
+      expect(result.correctedEntries.length).toBe(1);
+      const patched = result.correctedEntries[0].content;
+      expect(patched).toContain('&quot;personal&quot;');
+      expect(patched).not.toContain("= personal]");
+    });
+
+    it("bare-word quoting does not affect other expressions in the file", () => {
+      const xaml = '<Sequence xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><Variable x:TypeArguments="x:String" Name="str_Label" /><If Condition="[str_Label = active]" DisplayName="C1" /><ui:LogMessage Message="[str_Label]" DisplayName="Log" /></Sequence>';
+      const result = lintXamlExpressions([{ name: "test.xaml", content: xaml }]);
+      expect(result.correctedEntries.length).toBe(1);
+      const patched = result.correctedEntries[0].content;
+      expect(patched).toContain('&quot;active&quot;');
+      expect(patched).toContain('Message="[str_Label]"');
+    });
+
+    it("mixed CSHARP_STRING_CONCAT + bare-word fix produces valid XML", () => {
+      const xaml = '<Sequence xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"><Variable x:TypeArguments="x:String" Name="str_Status" /><If Condition="[str_Status = pending]" DisplayName="C1" /><Assign DisplayName="A1"><Assign.Value><InArgument x:TypeArguments="x:String">[&quot;Result: &quot; + str_Status]</InArgument></Assign.Value></Assign></Sequence>';
+      const result = lintXamlExpressions([{ name: "test.xaml", content: xaml }]);
+      expect(result.correctedEntries.length).toBe(1);
+      const patched = result.correctedEntries[0].content;
+      expect(patched).toContain('&quot;pending&quot;');
+      const hasRawAmpersand = /&(?!amp;|quot;|lt;|gt;|apos;|#\d+;|#x[\da-fA-F]+;)/.test(patched);
+      expect(hasRawAmpersand).toBe(false);
+    });
+  });
 });

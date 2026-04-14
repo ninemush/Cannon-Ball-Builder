@@ -168,7 +168,11 @@ export function buildPreEmissionContractMap(
 }
 
 function stripDirectionPrefix(name: string): string {
-  return name.replace(/^(in_|out_|io_)/i, "");
+  const underscoreStripped = name.replace(/^(in_|out_|io_)/i, "");
+  if (underscoreStripped !== name) return underscoreStripped;
+  const pascalMatch = name.match(/^(In|Out|Io|InOut)([A-Z].*)/);
+  if (pascalMatch) return pascalMatch[2];
+  return name;
 }
 
 function resolveBindingAgainstContract(
@@ -1779,9 +1783,17 @@ function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean =
 
 export function resolvePropertyValueRaw(value: PropertyValue): string {
   if (isValueIntent(value)) {
-    return buildExpression(value as ValueIntent);
+    const result = buildExpression(value as ValueIntent);
+    if (result === "vb_expression" || result === "[vb_expression]") {
+      return `["TODO: Implement expression"]`;
+    }
+    return result;
   }
-  return String(value);
+  const strVal = String(value);
+  if (strVal === "vb_expression") {
+    return `["TODO: Implement expression"]`;
+  }
+  return strVal;
 }
 
 export function parseEmittedXmlForValidation(xml: string): {
@@ -2399,12 +2411,15 @@ export function resolveActivityTemplate(
     let resolvedBindings: InvokeArgumentBinding[];
     if (calleeContract) {
       resolvedBindings = [];
+      const matchedContractArgs = new Set<string>();
+
       for (const binding of argBindings) {
         const resolution = resolveBindingAgainstContract(binding, calleeContract);
         if (resolution.matched && resolution.contractArg) {
           const emittedName = resolution.contractArg.name;
           const emittedDirection = resolution.contractArg.direction;
           const emittedType = resolution.contractArg.type || binding.type;
+          matchedContractArgs.add(emittedName.toLowerCase());
           resolvedBindings.push({
             name: emittedName,
             direction: emittedDirection,
@@ -2422,6 +2437,56 @@ export function resolveActivityTemplate(
           });
           console.warn(`[Contract Resolution] Unsupported binding "${binding.name}" withheld from InvokeWorkflowFile "${fileName}" — no matching callee argument found`);
         }
+      }
+
+      for (const contractArg of calleeContract.arguments) {
+        if (matchedContractArgs.has(contractArg.name.toLowerCase())) continue;
+        if (contractArg.direction !== "InArgument") continue;
+
+        const callerVarName = _activeDeclarationLookup
+          ? (() => {
+              const stripped = stripDirectionPrefix(contractArg.name);
+              const strippedLower = stripped.charAt(0).toLowerCase() + stripped.slice(1);
+              const candidates = [
+                contractArg.name,
+                `in_${stripped}`,
+                `In${stripped}`,
+                stripped,
+                `str_${strippedLower}`,
+                `str_${stripped}`,
+                strippedLower,
+              ];
+              for (const candidate of candidates) {
+                if (_activeDeclarationLookup(candidate)) return candidate;
+              }
+              return null;
+            })()
+          : null;
+
+        const bindingValue = callerVarName
+          ? `[${callerVarName}]`
+          : `["TODO: Bind ${contractArg.name}"]`;
+
+        if (!callerVarName) {
+          _contractDiagnostics.push({
+            kind: "unsupported_binding",
+            callerWorkflow: _activeCallerWorkflowName,
+            calleeFile: fileName,
+            bindingName: contractArg.name,
+            reason: `No matching caller variable found for required InArgument "${contractArg.name}" in callee "${fileName}". Emitting TODO placeholder binding.`,
+          });
+          console.warn(`[Contract Resolution] No caller variable for required InArgument "${contractArg.name}" on "${fileName}" — emitting TODO placeholder`);
+        } else {
+          console.log(`[Contract Resolution] Auto-bound missing InArgument "${contractArg.name}" to caller variable "${callerVarName}" for "${fileName}"`);
+        }
+
+        resolvedBindings.push({
+          name: contractArg.name,
+          direction: contractArg.direction,
+          type: contractArg.type || "",
+          value: bindingValue,
+          typeInferredFromDefault: false,
+        });
       }
     } else {
       resolvedBindings = argBindings;

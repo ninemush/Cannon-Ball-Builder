@@ -1571,4 +1571,80 @@ describe("Expression and Value Passthrough Authority", () => {
       expect(result.xaml).not.toContain('"variable"');
     });
   });
+
+  describe("Task #516 — Assign child-element emission", () => {
+    it("emits Assign.To and Assign.Value as child elements, not attributes", () => {
+      const spec = {
+        name: "AssignChildTest",
+        variables: [{ name: "str_Result", type: "String", defaultValue: "" }],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "Assign",
+              displayName: "Set Result",
+              properties: { To: "str_Result", Value: '"Done"' },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("<Assign.To>");
+      expect(result.xaml).toContain("<Assign.Value>");
+      expect(result.xaml).not.toMatch(/Assign\s+[^>]*To="/);
+    });
+  });
+
+  describe("Task #516 — InvokeWorkflowFile argument auto-binding", () => {
+    it("emits InvokeWorkflowFile with WorkflowFileName property", () => {
+      const spec = {
+        name: "InvokeBindTest",
+        variables: [],
+        rootSequence: {
+          kind: "sequence" as const,
+          displayName: "Main",
+          children: [
+            {
+              kind: "activity" as const,
+              template: "InvokeWorkflowFile",
+              displayName: "Call Sub",
+              properties: { WorkflowFileName: "Sub.xaml" },
+              errorHandling: "none" as const,
+            },
+          ],
+        },
+      };
+      const result = assembleWorkflowFromSpec(spec as any);
+      expect(result.xaml).toContain("InvokeWorkflowFile");
+      expect(result.xaml).toContain("Sub.xaml");
+    });
+
+    it("TODO placeholder is a safe string literal, not a variable reference", () => {
+      const placeholder = '["TODO: Bind InPersonName"]';
+      expect(placeholder).toContain('"TODO:');
+      expect(placeholder).not.toMatch(/^\[TODO_Bind/);
+    });
+  });
+
+  describe("Task #516 — vb_expression placeholder leak", () => {
+    it("buildExpression returns TODO for empty vb_expression value", () => {
+      const result = buildExpression({ type: "vb_expression", value: "" });
+      expect(result).toContain("TODO");
+      expect(result).not.toContain("vb_expression");
+    });
+
+    it("buildExpression returns TODO for literal 'vb_expression' value", () => {
+      const result = buildExpression({ type: "vb_expression", value: "vb_expression" });
+      expect(result).toContain("TODO");
+    });
+
+    it("buildExpression passes through valid vb_expression values", () => {
+      const result = buildExpression({ type: "vb_expression", value: "str_Name.Contains(\"test\")" });
+      expect(result).toContain("str_Name.Contains");
+      expect(result).not.toContain("TODO");
+    });
+  });
 });

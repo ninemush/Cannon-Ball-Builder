@@ -251,6 +251,9 @@ export function buildExpression(intent: ValueIntent, options?: { clrType?: strin
       return buildComparisonExpression(intent.left, intent.operator, intent.right);
 
     case "vb_expression": {
+      if (!intent.value || intent.value === "vb_expression" || intent.value.trim() === "") {
+        return `["TODO: Implement expression"]`;
+      }
       if (isPlaceholderSentinel(intent.value)) {
         throw new Error(`PLACEHOLDER sentinel "${intent.value}" cannot be emitted — resolve to a valid default or emit a blocking diagnostic`);
       }

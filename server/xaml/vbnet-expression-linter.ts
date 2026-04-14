@@ -1518,24 +1518,26 @@ export function lintXamlExpressions(
         unfixable += unfixableCount;
 
         if (result.corrected) {
+          const xmlSafeCorrected = result.corrected.replace(/&(?!amp;|quot;|lt;|gt;|apos;|#\d+;|#x[\da-fA-F]+;)/g, "&amp;");
+
           corrections.push({
             file: loc.file,
             line: loc.line,
             original: loc.expression,
-            corrected: result.corrected,
+            corrected: xmlSafeCorrected,
             issues: result.issues,
           });
 
           patchedContent = patchedContent.replace(
             `[${loc.expression}]`,
-            `[${result.corrected}]`
+            `[${xmlSafeCorrected}]`
           );
 
           const exprAttrPattern = new RegExp(
             `(Expression(?:Text)?=")${loc.expression.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(")`,
             "g"
           );
-          patchedContent = patchedContent.replace(exprAttrPattern, `$1${result.corrected}$2`);
+          patchedContent = patchedContent.replace(exprAttrPattern, `$1${xmlSafeCorrected}$2`);
         }
 
         const DEDICATED_CHECK_CODES = new Set([
@@ -1574,16 +1576,65 @@ export function lintXamlExpressions(
 
       const exprToCheck = result.corrected || loc.expression;
       const undeclaredVars = findUndeclaredVariables(exprToCheck, declaredVars);
+
+      const VB_KEYWORDS_FOR_QUOTING = new Set([
+        "true", "false", "nothing", "not", "and", "or", "andalso", "orelse",
+        "is", "isnot", "like", "mod", "new", "typeof", "gettype", "ctype",
+        "cstr", "cint", "cdbl", "cbool", "cdate", "directcast", "trycast",
+      ]);
+
       for (const varName of undeclaredVars) {
-        violations.push({
-          category: "accuracy",
-          severity: "error",
-          check: "UNDECLARED_VARIABLE",
-          file: loc.file,
-          detail: `Line ${loc.line}: Undeclared variable "${varName}" in expression: ${loc.expression.substring(0, 60)}${loc.expression.length > 60 ? "..." : ""} — variable is not declared in any <Variable> block in scope`,
-        });
-        totalIssues++;
-        unfixable++;
+        const isBareWord = /^[a-zA-Z_]\w*$/.test(varName) &&
+          !varName.includes(".") &&
+          !varName.includes("(") &&
+          !VB_KEYWORDS_FOR_QUOTING.has(varName.toLowerCase());
+
+        const escapedVarName = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const comparisonPattern = new RegExp(`=\\s*${escapedVarName}\\s*(?:$|[)\\]&|])`);
+        const isComparisonRhs = comparisonPattern.test(exprToCheck);
+
+        if (isBareWord && isComparisonRhs) {
+          const quotedValue = `&quot;${varName}&quot;`;
+          const currentExprInContent = result.corrected
+            ? result.corrected.replace(/&(?!amp;|quot;|lt;|gt;|apos;|#\d+;|#x[\da-fA-F]+;)/g, "&amp;")
+            : loc.expression;
+          const bareWordInExprPattern = new RegExp(
+            `(=\\s*)${escapedVarName}\\b`, 'g'
+          );
+          const quotedExpr = currentExprInContent.replace(bareWordInExprPattern, `$1${quotedValue}`);
+
+          if (quotedExpr !== currentExprInContent) {
+            patchedContent = patchedContent.replace(
+              `[${currentExprInContent}]`,
+              `[${quotedExpr}]`
+            );
+            const exprAttrPattern = new RegExp(
+              `(Expression(?:Text)?=")${currentExprInContent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(")`,
+              "g"
+            );
+            patchedContent = patchedContent.replace(exprAttrPattern, `$1${quotedExpr}$2`);
+          }
+
+          violations.push({
+            category: "accuracy",
+            severity: "warning",
+            check: "EXPRESSION_SYNTAX",
+            file: loc.file,
+            detail: `Line ${loc.line}: Auto-quoted bare word "${varName}" as string literal in comparison expression: ${loc.expression.substring(0, 60)}${loc.expression.length > 60 ? "..." : ""}`,
+          });
+          totalIssues++;
+          autoFixed++;
+        } else {
+          violations.push({
+            category: "accuracy",
+            severity: "error",
+            check: "UNDECLARED_VARIABLE",
+            file: loc.file,
+            detail: `Line ${loc.line}: Undeclared variable "${varName}" in expression: ${loc.expression.substring(0, 60)}${loc.expression.length > 60 ? "..." : ""} — variable is not declared in any <Variable> block in scope`,
+          });
+          totalIssues++;
+          unfixable++;
+        }
       }
     }
 
