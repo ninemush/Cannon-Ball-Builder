@@ -1,0 +1,194 @@
+Implement Task #515: align CannonBall UiPath package output with Studio 25.10 starter-template structure, but do it in a way that preserves all existing CannonBall validators, quality gates, and downstream assumptions.
+
+Objective:
+Make generated packages structurally closer to fresh UiPath Studio 25.10 starter templates so packages open cleanly in Studio with fewer warnings, while keeping CannonBall’s existing modern-project rules and current tests intact.
+
+Non-negotiable guardrails:
+
+* Keep projectProfile as "Development" exactly. Do not change to Studio’s misspelled "Developement".
+* Keep modernBehavior: true exactly. Do not remove it.
+* Do not remove existing assembly references such as System.Activities.Core.Presentation or System.ComponentModel.Composition. Only add missing references.
+* Do not introduce any new hardcoded assumptions that C# always means Portable outside a helper abstraction. For this patch, existing behavior may remain, but wrap language detection in a shared helper so Windows C# can be supported later without another broad refactor.
+* Do not generate entry point IDs separately in different files. Generate once and reuse consistently across project.json and entry-points.json.
+* Do not make Studio-baseline freshness checks fail builds or block package generation. Warning-only.
+
+Required changes:
+
+1. Fix project.json structural gaps
+   Update package-assembler.ts and document-routes.ts so generated project.json:
+
+* sets workflowSerialization to "NewtonsoftJson"
+* includes a projectId UUID using the existing generateUuid() helper
+* removes includeOriginalXaml from libraryOptions
+* sets requiresUserInteraction conditionally:
+
+  * Windows => true
+  * Portable => false
+* preserves modernBehavior: true
+* preserves projectProfile: "Development"
+
+Also update:
+
+* server/**tests**/fixtures/process-specs.ts to remove includeOriginalXaml
+* the 6 reference project.json files under server/xaml-references/COE* so workflowSerialization is "NewtonsoftJson" for consistency
+
+2. Emit entry-points.json and project.uiproj
+   In package-assembler.ts archive assembly:
+
+* generate entry-points.json using schema:
+  https://cloud.uipath.com/draft/2024-12/entry-point
+* ensure entry-points.json mirrors project.json entryPoints exactly
+* reuse the same uniqueId values already generated for project.json
+* generate project.uiproj containing project name, type ("Process"), description, and main file
+
+3. Centralize namespace and assembly reference generation
+   Create a shared builder/helper for XAML namespace imports and assembly references so the same rules are reused across all emitters instead of manually duplicating lists.
+
+Add missing namespaces:
+
+* System.Activities.Validation
+* System.Activities.XamlIntegration
+* System.Collections.ObjectModel
+* System.Diagnostics
+* System.Drawing
+* System.Net.Mail
+* System.Windows.Markup
+* GlobalVariablesNamespace
+* GlobalConstantsNamespace
+
+Add missing assemblies:
+
+* mscorlib
+* System.ComponentModel.TypeConverter
+* System.Data.Common
+* System.Data.DataSetExtensions
+* System.Drawing
+* System.Drawing.Common
+* System.Drawing.Primitives
+* System.Linq
+* System.Net.Mail
+* System.ObjectModel
+* System.Xaml
+
+For C# targets also add:
+
+* Microsoft.CSharp
+* System.Runtime.Serialization
+* System.ServiceModel.Activities
+* System.Text namespace
+
+For Windows targets only also add:
+
+* PresentationCore
+* PresentationFramework
+* WindowsBase
+
+Apply the shared builder or equivalent shared constants/functions consistently in all current duplicate emission paths, including:
+
+* xaml-generator.ts buildTextExpressionBlocks()
+* xaml-generator.ts REFramework templates
+* workflow-tree-assembler.ts
+* xaml-compliance.ts constants
+* deterministic-generators.ts
+* package-assembler.ts XAML emission path
+
+4. Fix root Activity emission for C#
+   For C# projects:
+
+* add sap2010:ExpressionActivityEditor.ExpressionActivityEditor="C#" on the root <Activity> element
+* remove VisualBasic.Settings="{x:Null}"
+
+For VB projects:
+
+* preserve VisualBasic.Settings="{x:Null}"
+* do not add the C# ExpressionActivityEditor attribute
+
+Patch all root Activity emitters, including:
+
+* generateRichXaml
+* generateRichXamlFromSpec
+* generateReframeworkMainXaml
+* generateGetTransactionDataXaml
+* assembleWorkflowTree
+* xaml-compliance.ts structural constants
+
+In xaml-compliance.ts, create a dedicated C# root-settings variant instead of trying to force VB settings for all languages.
+
+5. Update framework assembly allowlist
+   In server/uipath-shared.ts, extend FRAMEWORK_ASSEMBLIES so the dependency analyzer does not flag the newly added standard framework assemblies as orphan dependencies.
+
+Add:
+
+* System.Drawing.Common
+* System.Drawing.Primitives
+* System.Data.Common
+* System.Data.DataSetExtensions
+* System.Net.Mail
+* System.ObjectModel
+* System.Linq
+* System.ComponentModel.TypeConverter
+* mscorlib
+* System.Drawing
+* System.Runtime.Serialization
+* System.ServiceModel.Activities
+* System.Xaml
+* System.Private.CoreLib
+* System.Data
+
+6. Add Studio baseline references
+   Store sanitized Studio 25.10 starter baselines under:
+   server/xaml-references/studio-baselines/
+   with subfolders:
+
+* windows-vb/
+* crossplatform-vb/
+* windows-csharp/
+* crossplatform-csharp/
+
+Each baseline should include only:
+
+* project.json
+* Main.xaml
+* entry-points.json
+* project.uiproj
+
+These are reference baselines only, not runtime dependencies.
+
+7. Add monthly baseline freshness warning
+   Extend metadata-refresher to track baseline freshness using a small sidecar metadata file, for example:
+   server/xaml-references/studio-baselines/baselines-meta.json
+
+Store:
+
+* studioVersion
+* createdAt
+* hashes for each baseline file
+
+On the existing monthly metadata refresh cycle:
+
+* emit a warning if baselines appear stale relative to the configured/observed expected Studio version or age threshold
+* do not auto-download
+* do not fail refresh
+* do not block generation
+
+Tests required:
+
+* project.json now uses NewtonsoftJson
+* project.json includes valid UUID projectId
+* requiresUserInteraction is true for Windows and false for Portable
+* entry-points.json exists in archive
+* project.uiproj exists in archive
+* entry-points.json and project.json entryPoints match exactly on count, file path, display name, and uniqueId
+* VB XAML includes VisualBasic.Settings and excludes C# editor attribute
+* C# XAML includes sap2010:ExpressionActivityEditor.ExpressionActivityEditor="C#" and excludes VisualBasic.Settings
+* dependency analyzer no longer flags newly added framework assemblies as orphan dependencies
+* all existing quality gates and tests continue to pass
+
+Definition of done:
+
+* Generated packages are structurally aligned with Studio starter-template expectations
+* No regression in CannonBall validators, package assembly, or quality-gate behavior
+* Metadata files are emitted consistently
+* XAML root/activity headers are language-correct
+* Framework assembly diagnostics remain clean
+* All tests pass
