@@ -1,0 +1,162 @@
+Please revise the current tasking as follows.
+
+## 1) Update task 514 only
+
+Keep **#514** tightly focused on the **PO Invoice Reconciliation** failure chain for idea `d3274c92`.
+
+Do **not** merge BGYY work into #514.
+
+### Updated scope for #514
+
+This task is specifically about the tracking/remediation failure chain that caused spec-generated workflows to become unreachable from `Main.xaml`, plus the secondary `GetCredential` object crash.
+
+### Root causes to address in #514
+
+#### A. `compliancePass()` side effect creates duplicate `xamlEntries`
+
+Problem:
+
+* `Process.xaml` is generated once, then later rebuilt during spec-aware wiring.
+* Some call sites invoke `compliancePass(...)` inline inside `syncXamlWrite(...)`.
+* Because JavaScript evaluates arguments before the outer call, `compliancePass(...)` mutates tracking state first and pushes a new entry into `xamlEntries`.
+* `syncXamlWrite(...)` then updates an existing entry but leaves the newly pushed duplicate orphaned.
+* This creates duplicate tracked entries for `Process.xaml`.
+
+Required fix:
+
+* Audit **all inline `compliancePass(...)` calls passed directly into `syncXamlWrite(...)`**.
+* In those cases, suppress tracking side effects by using `skipTracking: true`.
+* `syncXamlWrite(...)` must remain the single owner of tracking in those code paths.
+* Do this based on actual call sites in the current branch, not a hard-coded expected count.
+
+#### B. `duplicate-file` remediation is treating bookkeeping duplication like XML corruption
+
+Problem:
+
+* The gap analyzer emits `duplicate-file` when duplicate tracked XAML entries exist.
+* Current remediation treats that as a severe validation failure and replaces the file with a stub.
+* For `Process.xaml`, this destroys the invocation chain and makes spec workflows unreachable.
+* A duplicate bookkeeping record is not the same as malformed XML.
+
+Required fix:
+
+* Handle `duplicate-file` separately from real XML/content corruption categories.
+* For duplicates, deduplicate entries rather than stubbing the file.
+* Keep the latest valid content and remove extras.
+* Stub remediation must remain reserved for true corruption categories such as `xml-wellformedness`, `malformed-quote`, and similar content-level failures.
+
+#### C. `GetCredential` object-as-string crash in workflow assembly
+
+Problem:
+
+* `Username` and `Password` can arrive as `ValueIntent`-style objects instead of raw strings.
+* Current logic later assumes string semantics and calls `.replace(...)`.
+* This crashes assembly of workflows such as `CoupaLogin`, causing fallback to structural stubs.
+
+Required fix:
+
+* In both `crossCheckGetCredentialVariableTypes()` and the workflow tree assembler’s `GetCredential` handling, resolve object-shaped values to scalar strings before further processing.
+* Reuse the same scalar-string resolution helper already used by deterministic generators.
+* Guard string operations with type checks or explicit coercion after resolution.
+* Never call `.replace(...)` on unresolved objects.
+
+#### D. Safety net for critical infrastructure files
+
+Problem:
+
+* If `Main.xaml` or `Process.xaml` is stubbed, the invocation chain can be completely severed.
+
+Required fix:
+
+* Before stubbing critical orchestrator files such as `Main.xaml` or `Process.xaml`, extract and preserve existing `InvokeWorkflowFile` references from the original content where possible.
+* Preserve those invoke relationships in the generated stub as a defense-in-depth safeguard.
+* This is not the primary fix. It is a protective fallback.
+
+### Done looks like for #514
+
+* Package generation for PO Invoice Reconciliation (`idea d3274c92`) completes without blocking errors
+* `Process.xaml` correctly wires `Dispatcher`, `Performer`, and `ExceptionHandler`
+* `CoupaLogin` assembles without crashing on `GetCredential`
+* Spec Graph Validation passes
+* Spec-generated workflows remain reachable from `Main.xaml`
+* Package reaches at least `openable_with_warnings`
+* No regressions in `baseline_openable`, simple-process, or non-REFramework generation paths
+
+### Out of scope for #514
+
+* 14 undeclared-variable warnings in `ExceptionHandler`
+* Missing required activity properties such as `ExtractMetadata`, `QueueType`, or `FormTask Title`
+* Broad redesign of `compliancePass()`
+* Any BGYY-specific XML escaping, structural emission, or argument-binding work
+
+### Validation for #514
+
+Re-run the same PO Invoice path and confirm:
+
+* no `duplicate-file` violation for `Process.xaml`
+* `Process.xaml` wires 3 workflows
+* `CoupaLogin` assembles without crash
+* Spec Graph Validation passes
+* package quality reaches at least `openable_with_warnings`
+
+### Tests for #514
+
+#### Unit tests
+
+* inline `compliancePass(...)` inside `syncXamlWrite(...)` does not create duplicate tracked entries
+* `duplicate-file` remediation deduplicates instead of stubbing
+* `GetCredential` accepts `ValueIntent`-style object inputs without crashing
+* stub fallback for `Main.xaml` / `Process.xaml` preserves invoke targets when available
+
+#### Integration tests
+
+* PO Invoice regression path for `idea d3274c92`
+* `baseline_openable` regression
+* non-REFramework / simple-process regression
+
+### Relevant files for #514
+
+* `server/package-assembler.ts:4597-4710`
+* `server/package-assembler.ts:5641-5810`
+* `server/package-assembler.ts:8033-8155`
+* `server/package-assembler.ts:1074-1093`
+* `server/xaml/gap-analyzer.ts:173-192`
+* `server/workflow-tree-assembler.ts:1153-1167`
+* `server/workflow-tree-assembler.ts:4354-4386`
+* `server/xaml/deterministic-generators.ts:281-302`
+
+---
+
+## 2) Keep task 516 separate from 514
+
+**#516 should remain a separate task**. Do not merge it into #514.
+
+This is a different defect family:
+
+* **#514** = tracking / remediation classification / scalar coercion defects
+* **#516** = XML escaping / expression emission / structural XAML emission / argument binding defects
+
+### For #516, confirm the task stays focused on:
+
+* expression linter writing corrected expressions back into XAML without XML-escaping newly introduced raw `&`
+* XML well-formedness failures in `BGYY_Main.xaml` and `BGYY_GetTodaysBirthdays.xaml`
+* missing `InvokeWorkflowFile` argument bindings
+* attribute-vs-child-element structural emission defects
+* `vb_expression` placeholder leakage
+* unquoted string literals in condition expressions
+
+### No scope merge between the two tasks
+
+Please make sure:
+
+* fixes for PO Invoice root causes stay in **#514**
+* fixes for BGYY root causes stay in **#516**
+* the two tasks are implemented, tested, and reviewed independently
+
+## Requested deliverable
+
+Please return:
+
+1. the updated text/scope for **#514**
+2. confirmation that **#516** remains separate and unchanged in ownership as a distinct defect family
+3. any file overlap or dependency notes between the two tasks

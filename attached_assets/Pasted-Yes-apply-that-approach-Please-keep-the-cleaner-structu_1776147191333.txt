@@ -1,0 +1,63 @@
+Yes, apply that approach.
+
+Please keep the cleaner structure for #514, but restore the missing implementation context that materially helps the executor.
+
+## Requested refinement for #514
+
+### Keep
+
+* the cleaner task framing
+* the tighter “What & Why”
+* the clearer task bullets
+* the note to audit actual current call sites rather than relying on a fixed count
+
+### Restore
+
+* a short forensic context section explaining the causal chain:
+
+  * `compliancePass()` inline inside `syncXamlWrite(...)`
+  * argument evaluation causes pre-write tracking mutation
+  * orphan duplicate entry for `Process.xaml`
+  * `duplicate-file` emitted by gap analysis
+  * remediation incorrectly stubs `Process.xaml`
+  * invocation chain is severed
+* the missing helper reference for `resolveToScalarString`
+* the missing `crossCheckGetCredentialVariableTypesRegistry` / adjacent registry-handling reference if both paths need the same coercion fix
+* the explicit unit-test and integration-test list
+
+## Important file references to restore
+
+Please make sure the final #514 task includes these references if they are still valid in the current branch:
+
+* `server/xaml/deterministic-generators.ts:12-27` for `resolveToScalarString`
+* `server/xaml/deterministic-generators.ts:281-302` for the existing `GetCredential` generation path using that helper
+* `server/workflow-tree-assembler.ts:4354-4386`
+* `server/workflow-tree-assembler.ts:4388-4420` if that adjacent registry/type-check path also needs the same coercion fix
+
+Also keep the existing package-assembler and gap-analyzer references already identified.
+
+## Test expectations to keep explicit
+
+Please retain an explicit test section, not just validation prose.
+
+### Unit tests
+
+* inline `compliancePass(...)` inside `syncXamlWrite(...)` does not create duplicate tracked entries
+* `duplicate-file` remediation deduplicates instead of stubbing
+* `GetCredential` accepts `ValueIntent`-style object inputs without crashing
+* critical-file stub fallback preserves invoke targets when available
+
+### Integration tests
+
+* PO Invoice regression path for `idea d3274c92`
+* `baseline_openable` regression
+* non-REFramework / simple-process regression
+
+## Guidance on the forensic section
+
+Keep it short and directly useful to the implementer. It should explain *why* the fixes belong where they do, without turning the ticket back into a long investigation memo.
+
+The final result should be:
+
+* concise enough to execute quickly
+* detailed enough to prevent fixing the symptom but missing the actual failure chain

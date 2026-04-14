@@ -1,0 +1,57 @@
+#514 - Fix Process.xaml duplication cascade and GetCredential object crash
+
+## What & Why
+
+The last package generation run (`40dcfb8a`) failed with a blocking Spec Graph Validation error: all 6 spec-generated workflows were unreachable from `Main.xaml`. Root cause is a `compliancePass()` side-effect that creates duplicate `xamlEntries` for `Process.xaml`, triggering a false `duplicate-file` violation, which then replaces `Process.xaml` with a stub and severs the entire invocation chain. A secondary defect causes `CoupaLogin` tree assembly to crash because `GetCredential` property values are `ValueIntent` objects, not strings.
+
+## Done looks like
+
+* Package generation for the PO Invoice Reconciliation use case (`idea d3274c92`) completes without blocking errors
+* `Process.xaml` correctly wires `Dispatcher`, `Performer`, and `ExceptionHandler` into the REFramework invocation chain
+* `CoupaLogin` workflow assembles without crashing on `GetCredential` properties
+* No regressions in other generation paths (`baseline_openable`, simple processes, non-REFramework)
+
+## Out of scope
+
+* Fixing the 14 undeclared-variable warnings in `ExceptionHandler` (quality warnings, not blocking)
+* Fixing missing required activity properties (`ExtractMetadata`, `QueueType`, `FormTask Title`) because these are structured defects already recorded for developer handoff
+* Rewriting the entire `compliancePass()` architecture, since only the side-effect tracking issue is in scope
+
+## Tasks
+
+### Eliminate the double-push bug
+
+All inline `compliancePass()` calls passed directly into `syncXamlWrite()` must use `skipTracking: true` so `compliancePass()` does not push to `xamlEntries` when `syncXamlWrite()` is already responsible for tracking. This is the primary root cause.
+
+### Fix duplicate-file remediation strategy
+
+When the gap analyzer detects duplicate `xamlEntries` with the same basename, remediation must deduplicate entries by keeping the latest content and removing extras instead of replacing the file with a stub. Stub remediation should apply only to actual XML corruption such as `xml-wellformedness`, `malformed-quote`, and similar content-level failures. `duplicate-file` must be handled separately and must not enter the `severeValidationErrors` stub-remediation path.
+
+### Fix GetCredential object-as-string crash
+
+In `crossCheckGetCredentialVariableTypes()` and the tree assembler’s `GetCredential` handling, resolve `ValueIntent`-style objects to their scalar string value before any string operations. Use the same `resolveToScalarString()` helper already used by the deterministic generators. Guard `.replace()` calls with a type check or explicit string coercion after resolution.
+
+### Add a safety net for critical infrastructure files
+
+Before any stub remediation of `Process.xaml` or `Main.xaml`, extract and preserve existing `InvokeWorkflowFile` references from the original content where possible. Inject those invokes into the stub so the invocation chain is never completely severed. This is a defense-in-depth safeguard, not the primary fix.
+
+### Validate the fix
+
+Re-run the pipeline with the same input (`idea d3274c92`) and confirm:
+
+* no `duplicate-file` violations
+* `Process.xaml` wires 3 workflows
+* `CoupaLogin` assembles without crash
+* Spec Graph Validation passes
+* package reaches at least `openable_with_warnings` quality
+
+## Relevant files
+
+* `server/package-assembler.ts:4597-4710`
+* `server/package-assembler.ts:5641-5810`
+* `server/package-assembler.ts:8033-8155`
+* `server/package-assembler.ts:1074-1093`
+* `server/xaml/gap-analyzer.ts:173-192`
+* `server/workflow-tree-assembler.ts:1153-1167`
+* `server/workflow-tree-assembler.ts:4354-4386`
+* `server/xaml/deterministic-generators.ts:281-302`
