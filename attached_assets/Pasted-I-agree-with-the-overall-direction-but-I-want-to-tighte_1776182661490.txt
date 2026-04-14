@@ -1,0 +1,73 @@
+I agree with the overall direction, but I want to tighten the implementation standard so we are fixing defect classes at shared boundaries, not just patching the latest manifestations.
+
+Here is my view.
+
+The strongest systemic fixes in your analysis are the ones that operate at **shared boundaries and invariants**:
+
+1. **Sentinel leak**
+   I agree this is a real compiler/pipeline boundary defect, not a prompt issue.
+   The standard should be:
+
+   * blocked sentinels must not survive flattening
+   * they must not survive generator dispatch or template fallback
+   * they must not survive final emission
+   * if one still leaks, the emission gate should convert it into a localized remediation path rather than a package-fatal outcome
+
+   That means we should treat this as an **invariant-closure problem**, not just “add one more sentinel cleanup.”
+
+2. **Ampersand escaping**
+   I agree this is systemic if fixed at the XML/XAML serialization boundary.
+   Since the expression layer legitimately emits VB concatenation with `&`, every emitted attribute/text value must be escaped centrally through shared serializer utilities.
+   I do **not** want a broad regex-only final repair as the primary solution. The right shape is:
+
+   * fix central escaping utilities
+   * then use the final pass as a detector / narrow repair guard, not a second serializer
+
+3. **Required-property handling**
+   I agree this needs a shared mechanism, but I want to be careful about calling it systemic just because it is catalog-driven.
+   The catalog knowing a property is required and typed does **not** automatically mean we know a runtime-safe default.
+   So I want this implemented as:
+
+   * a shared fallback framework
+   * preferably with an **explicit per-activity/property fallback registry** for known contract-valid defaults
+   * and if no safe default exists, emit a localized remediation rather than inventing a fake value
+
+   In other words, systemic lookup is not the same as systemic semantic correctness.
+
+Where I want the task tightened:
+
+4. **Queue-name literal guard**
+   I agree the failure is real, but I do **not** want a global rule like “hyphenated uppercase-like token means string literal” across the entire expression system.
+   That is too broad.
+   Scope this to known string-valued resource-name properties such as queue/asset identifiers, not arbitrary expressions.
+
+5. **Collection typing**
+   I agree the `obj_` + `ForEach.Values` failure is real, but I do **not** want a blanket `obj_ -> List(Of Object)` rule.
+   Make this **consumer-driven**:
+
+   * when a variable is bound to a property expecting `IEnumerable` or another collection contract, infer a safe collection type from the consuming property metadata and nearby usage
+   * do not rely on variable prefix alone
+
+So my position is:
+
+* **Sentinel boundary closure** = systemic
+* **Serializer-level ampersand escaping** = systemic
+* **Shared required-property fallback framework** = systemic only if done with explicit safe defaults / localized remediation, not generic guessing
+* **Queue-name literalization** = scoped heuristic safety net
+* **Collection retyping** = scoped, consumer-driven repair, not prefix-driven
+
+That is the standard I want for #519.
+
+Please implement it with that framing:
+
+* shared-boundary hardening first
+* explicit safe fallback framework second
+* scoped heuristics only where a deeper fix would be too risky right now
+
+Also, when you report back, separate the changes into:
+
+1. true shared-boundary / invariant fixes
+2. shared fallback framework changes
+3. scoped heuristic safety nets
+
+That will make it easier to tell whether we actually fixed the defect classes or just reduced the latest symptoms.

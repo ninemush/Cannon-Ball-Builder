@@ -20,8 +20,8 @@
       "feedStatus": "active"
     },
     "UiPath.Mail.Activities": {
-      "preferred": "2.7.12",
-      "lastVerifiedAt": "2026-04-10T14:57:38.910Z",
+      "preferred": "2.8.10",
+      "lastVerifiedAt": "2026-04-14T14:43:31.435Z",
       "verificationSource": "uipath-official-feed",
       "feedStatus": "active"
     },
@@ -106,8 +106,8 @@
       "feedStatus": "active"
     },
     "UiPath.GSuite.Activities": {
-      "preferred": "3.7.11",
-      "lastVerifiedAt": "2026-04-10T14:57:38.910Z",
+      "preferred": "3.8.10",
+      "lastVerifiedAt": "2026-04-14T14:43:38.067Z",
       "verificationSource": "uipath-official-feed",
       "feedStatus": "active"
     },
@@ -130,8 +130,8 @@
       "feedStatus": "active"
     },
     "UiPath.MicrosoftOffice365.Activities": {
-      "preferred": "3.7.10",
-      "lastVerifiedAt": "2026-04-10T14:57:38.910Z",
+      "preferred": "3.8.11",
+      "lastVerifiedAt": "2026-04-14T14:43:38.877Z",
       "verificationSource": "uipath-official-feed",
       "feedStatus": "active"
     },
@@ -890,7 +890,7 @@
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-04-10T14:57:38.910Z",
+  "lastRefreshedAt": "2026-04-14T14:43:57.332Z",
   "lastVerifiedAt": "2026-04-10T14:57:38.910Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"

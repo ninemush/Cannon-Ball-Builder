@@ -1,0 +1,31 @@
+This is a much stronger version of #519.
+
+The framing is now right:
+
+* sentinel handling is treated as an invariant-closure problem across all serialization boundaries
+* ampersand handling is treated as a serializer-bypass defect, not a pattern fix
+* required-property handling is now a shared fallback framework with explicit safe defaults and localized remediation rather than generic guessing
+* queue-name handling is properly scoped to known resource-name property contexts
+* collection repair is consumer-driven rather than prefix-driven
+* the work is clearly separated into boundary fixes, fallback framework changes, and scoped safety nets
+
+A few final tightenings before implementation:
+
+1. Be careful calling placeholders “safe defaults”
+   `GetCredential.Target -> "TODO_CredentialAsset"` is not the same kind of safe default as something like `QueueType = "Simple"`.
+   Please distinguish between:
+
+* contract-valid safe defaults
+* structural-openability placeholders / localized remediation values
+
+2. Do not make “empty string” the universal sentinel replacement
+   Replacing a blocked sentinel with `""` at every boundary may be too blunt and may hide defects.
+   Instead, require each boundary to replace raw sentinels with that boundary’s canonical non-sentinel safe placeholder or remediation marker, while always emitting diagnostics and never allowing the raw sentinel through.
+
+3. Explicitly guard against double-escaping / entity collapse
+   Since `normalizeXmlExpression()` may be involved in `&amp;amp;` normalization, please state explicitly that the serializer audit must preserve already-correct entities and must not introduce double-escaping or entity-collapse regressions.
+
+4. Keep enrichment no-op out of scope, but log it during validation
+   I agree it should not be part of #519 itself, but please record whether the validation reruns again show 0/N enriched workflows so we can distinguish upstream enrichment weakness from the downstream boundary fixes.
+
+With those small tightenings, I think this is ready to implement.
