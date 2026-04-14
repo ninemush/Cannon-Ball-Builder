@@ -104,6 +104,20 @@ export const FRAMEWORK_ASSEMBLIES = new Set<string>([
   "PresentationFramework",
   "PresentationCore",
   "WindowsBase",
+  "System.Drawing.Common",
+  "System.Drawing.Primitives",
+  "System.Data.Common",
+  "System.Data.DataSetExtensions",
+  "System.Net.Mail",
+  "System.ObjectModel",
+  "System.Linq",
+  "System.ComponentModel.TypeConverter",
+  "mscorlib",
+  "System.Drawing",
+  "System.Runtime.Serialization",
+  "System.ServiceModel.Activities",
+  "System.Private.CoreLib",
+  "System.Data",
   // UiPath.Platform is an infrastructure assembly providing CLR types (IResource, ILocalResource)
   // used as argument types inside other packages' activities. It has no entry in generation-metadata.json
   // and is not a standalone installable NuGet package. Excluded from required-package scanning.

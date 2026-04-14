@@ -1,5 +1,6 @@
 import { writeFileSync, readFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
+import { createHash } from "crypto";
 import {
   generationMetadataSchema,
   serviceEndpointsSchema,
@@ -1251,6 +1252,8 @@ export function startRefreshScheduler(intervalMs: number = 24 * 60 * 60 * 1000):
         console.warn(`[MetadataRefresher] OIDC refresh failed: ${results.oidc.message}`);
       }
     }
+    checkBaselineFreshness();
+
     if (results.newerLines?.newerLineAvailable) {
       console.warn(`[MetadataRefresher] NEWER STUDIO LINE DETECTED: ${results.newerLines.newerLineAvailable} (latest: ${results.newerLines.latestVersion}). Current catalog targets ${metadataService.getStudioTarget()?.line || "unknown"}. Consider upgrading the catalog to match the connected tenant's Studio version.`);
       for (const pkg of results.newerLines.packages) {
@@ -1259,6 +1262,80 @@ export function startRefreshScheduler(intervalMs: number = 24 * 60 * 60 * 1000):
     }
   }, intervalMs);
   console.log(`[MetadataRefresher] Scheduler started (interval: ${Math.round(intervalMs / 3600000)}h)`);
+}
+
+export function checkBaselineFreshness(): void {
+  try {
+    const baselinesMetaPath = join(process.cwd(), "server", "xaml-references", "studio-baselines", "baselines-meta.json");
+    if (!existsSync(baselinesMetaPath)) {
+      console.warn("[BaselineFreshness] baselines-meta.json not found — skipping freshness check");
+      return;
+    }
+    const metaRaw = readFileSync(baselinesMetaPath, "utf-8");
+    const meta = JSON.parse(metaRaw);
+    const baselineVersion = meta.studioVersion;
+    const createdAt = meta.createdAt;
+
+    if (!baselineVersion || !createdAt) {
+      console.warn("[BaselineFreshness] baselines-meta.json missing studioVersion or createdAt — skipping freshness check");
+      return;
+    }
+
+    const studioTarget = metadataService.getStudioTarget();
+    const currentVersion = studioTarget?.version;
+
+    if (currentVersion && currentVersion !== baselineVersion) {
+      console.warn(
+        `[BaselineFreshness] WARNING: Studio baselines were created for version ${baselineVersion} ` +
+        `but current catalog targets ${currentVersion}. Consider re-extracting baselines from Studio ${currentVersion}.`
+      );
+    }
+
+    const createdDate = new Date(createdAt);
+    const ageMs = Date.now() - createdDate.getTime();
+    const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+    const STALE_THRESHOLD_DAYS = 90;
+
+    if (ageDays > STALE_THRESHOLD_DAYS) {
+      console.warn(
+        `[BaselineFreshness] WARNING: Studio baselines are ${ageDays} days old (created ${createdAt}). ` +
+        `Consider refreshing from a current Studio ${currentVersion || baselineVersion} installation.`
+      );
+    } else {
+      console.log(`[BaselineFreshness] Baselines OK — version ${baselineVersion}, ${ageDays} days old`);
+    }
+
+    const basePath = join(process.cwd(), "server", "xaml-references", "studio-baselines");
+    const templates = meta.templates || {};
+    let hashMismatches = 0;
+    for (const [templateName, templateMeta] of Object.entries(templates)) {
+      const hashes = (templateMeta as Record<string, unknown>)?.hashes as Record<string, string> | undefined;
+      if (!hashes) continue;
+      for (const [fileName, expectedHash] of Object.entries(hashes)) {
+        const filePath = join(basePath, templateName, fileName);
+        if (!existsSync(filePath)) {
+          console.warn(`[BaselineFreshness] WARNING: Missing baseline file ${templateName}/${fileName}`);
+          hashMismatches++;
+          continue;
+        }
+        const content = readFileSync(filePath);
+        const actualHash = createHash("sha256").update(content).digest("hex");
+        if (actualHash !== expectedHash) {
+          console.warn(
+            `[BaselineFreshness] WARNING: Hash mismatch for ${templateName}/${fileName} — ` +
+            `expected ${expectedHash.substring(0, 12)}…, got ${actualHash.substring(0, 12)}…`
+          );
+          hashMismatches++;
+        }
+      }
+    }
+    if (hashMismatches > 0) {
+      console.warn(`[BaselineFreshness] ${hashMismatches} baseline file(s) have hash mismatches — consider re-extracting from Studio`);
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[BaselineFreshness] Failed to check baseline freshness: ${message}`);
+  }
 }
 
 export function stopRefreshScheduler(): void {

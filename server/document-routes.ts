@@ -1395,6 +1395,10 @@ export function registerDocumentRoutes(app: Express): void {
           }
           const _resolvedFramework = _metaTarget ? (isServerless ? "Portable" : _metaTarget.targetFramework) : (isServerless ? "Portable" : "Windows");
           const _resolvedLang = _resolvedFramework === "Portable" ? "CSharp" : (_metaTarget?.expressionLanguage || "VisualBasic");
+          // NOTE: This project.json is intentionally minimal — it is used for download-only
+          // preview packages, not for fully assembled production packages. Fields like
+          // workflowSerialization, projectId, and entry-points.json are omitted because
+          // the canonical package-assembler handles those for production builds.
           return JSON.stringify({
             name: pipelineResult.projectName,
             description: pkg.description || "",
@@ -1410,7 +1414,7 @@ export function registerDocumentRoutes(app: Express): void {
               netFrameworkLazyLoading: false,
               isPausable: true,
               isAttended: false,
-              requiresUserInteraction: false,
+              requiresUserInteraction: _resolvedFramework === "Windows",
               supportsPersistence: false,
               executionType: "Workflow",
               readyForPiP: false,
@@ -1420,7 +1424,7 @@ export function registerDocumentRoutes(app: Express): void {
             designOptions: {
               projectProfile: "Development",
               outputType: "Process",
-              libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
+              libraryOptions: { privateWorkflows: [] },
               processOptions: { ignoredFiles: [] },
               fileInfoCollection: [],
               modernBehavior: true,

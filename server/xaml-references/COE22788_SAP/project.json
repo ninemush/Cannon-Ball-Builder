@@ -22,7 +22,7 @@
     "isAttended": false,
     "requiresUserInteraction": false,
     "supportsPersistence": false,
-    "workflowSerialization": "DataContract",
+    "workflowSerialization": "NewtonsoftJson",
     "excludedLoggedData": [
       "Private:*",
       "*password*"

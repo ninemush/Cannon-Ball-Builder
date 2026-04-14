@@ -54,6 +54,7 @@ export {
 
 import { type XamlGap, type DhgDeploymentResult, extractSystemFromGap } from "./xaml/gap-analyzer";
 import type { TargetFramework } from "./xaml/xaml-compliance";
+import { buildRootActivityAttr as _buildRootActivityAttr, buildRootActivityChildren as _buildRootActivityChildren, buildTextExpressionBlocks as _buildTextExpressionBlocksShared } from "./xaml/xaml-studio-references";
 
 export type GenerationMode = "baseline_openable" | "full_implementation";
 
@@ -1195,47 +1196,8 @@ function inferTypeFromDefaultValue(defaultValue: string | undefined): string | n
   return null;
 }
 
-function buildTextExpressionBlocks(isCSharp: boolean): string {
-  return `
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>${isCSharp ? "" : `
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>`}
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-      <x:String>System.ComponentModel</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
-      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-      <AssemblyReference>System.ServiceModel</AssemblyReference>
-      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>`;
+function buildTextExpressionBlocksLocal(isCSharp: boolean): string {
+  return _buildTextExpressionBlocksShared(isCSharp ? "Portable" : "Windows");
 }
 
 function renderVariablesBlock(variables: VariableDecl[], targetFramework?: TargetFramework): string {
@@ -2834,11 +2796,9 @@ export function generateRichXamlFromNodes(
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>
-${buildTextExpressionBlocks(targetFramework === "Portable")}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(targetFramework === "Portable")}
 ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
     ${dictConfigVariable}${variablesBlock}${activities}
   </Sequence>
@@ -3043,10 +3003,9 @@ export function generateRichXamlFromSpec(
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(targetFramework === "Portable")}
 ${xMembersBlockSpec}  <Sequence DisplayName="${escapeXml(wfName)}">
     ${specDictConfigVar}${variablesBlock}${activities}
   </Sequence>
@@ -3151,7 +3110,9 @@ export function generateInitAllSettingsXaml(orchestratorArtifacts?: any, targetF
   xmlns:scg2="clr-namespace:System.Data;assembly=System.Data"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCSharp)}
   <x:Members>
     <x:Property Name="out_Config" Type="OutArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
   </x:Members>
@@ -3224,7 +3185,9 @@ export function generateInitXaml(targetFramework?: TargetFramework): string {
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCSharp)}
   <x:Members>
     <x:Property Name="in_Config" Type="InArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
     <x:Property Name="io_Config" Type="InOutArgument({clr-namespace:System.Collections.Generic;assembly=${nsScg}}Dictionary({http://schemas.microsoft.com/winfx/2006/xaml}String, {http://schemas.microsoft.com/winfx/2006/xaml}Object))" />
@@ -3313,50 +3276,10 @@ export function generateReframeworkMainXaml(projectName: string, queueName: stri
   xmlns:sads="clr-namespace:System.Activities.Statements;assembly=System.Activities"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
   <sap2010:WorkflowViewState.IdRef>Main_1</sap2010:WorkflowViewState.IdRef>
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>${isCSharp ? "" : `
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>`}
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-      <x:String>System.ComponentModel</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>${isCSharp ? "" : `
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>`}
-      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-      <AssemblyReference>System.ServiceModel</AssemblyReference>
-      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>
+${buildTextExpressionBlocksLocal(isCSharp)}
   <StateMachine DisplayName="${safeName} - REFramework Main">
     <StateMachine.Variables>
       <Variable x:TypeArguments="x:Int32" Name="int_TransactionNumber" Default="0" />
@@ -3541,10 +3464,9 @@ export function generateGetTransactionDataXaml(queueName: string, targetFramewor
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>${buildTextExpressionBlocks(isCSharp)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCSharp)}
   <x:Members>
     <x:Property Name="in_QueueName" Type="InArgument(x:String)" />
     <x:Property Name="out_TransactionItem" Type="OutArgument(ui:QueueItem)" />
@@ -3597,7 +3519,9 @@ export function generateSetTransactionStatusXaml(targetFramework?: TargetFramewo
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCSharp)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCSharp)}
   <x:Members>
     <x:Property Name="in_TransactionItem" Type="InArgument(ui:QueueItem)" />
     <x:Property Name="in_Status" Type="InArgument(x:String)" />
@@ -3669,7 +3593,9 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — CloseApplication not ava
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Close All Applications">
     <TryCatch DisplayName="Safe Cleanup">
       <TryCatch.Try>
@@ -3736,7 +3662,9 @@ ${isCrossPlatform ? "<!-- Cross-Platform (Portable) — KillProcess not availabl
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Kill All Processes">
     ${killBody}
   </Sequence>
@@ -3763,7 +3691,9 @@ export function generateInitAllApplicationsXaml(targetFramework: TargetFramework
   xmlns:scg="clr-namespace:System.Collections.Generic;assembly=${nsScg}"
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=${nsSco}"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">${buildTextExpressionBlocks(isCrossPlatform)}
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr(targetFramework)}>
+${_buildRootActivityChildren(targetFramework)}
+${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Initialize All Applications">
     <ui:LogMessage Level="Info" Message="[&quot;Initializing all applications...&quot;]" DisplayName="Log Init Start" />
     <TryCatch DisplayName="Safe Application Initialization">
@@ -3818,7 +3748,7 @@ export function generateRetryCurrentTransactionXaml(targetFramework: TargetFrame
     <x:Property sap2010:Annotation.AnnotationText="Used during transitions between states to represent exceptions other than business exceptions." Name="in_SystemException" Type="InArgument(s:Exception)" />
     <x:Property sap2010:Annotation.AnnotationText="Used to indicate whether the retry procedure is managed by an Orchestrator queue." Name="in_QueueRetry" Type="InArgument(x:Boolean)" />
     <x:Property Name="out_MaxRetryReached" Type="OutArgument(x:Boolean)" />
-  </x:Members>${buildTextExpressionBlocks(isCrossPlatform)}
+  </x:Members>${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Retry Current Transaction">
     <Sequence.Variables>
       <Variable x:TypeArguments="x:Int32" Name="int_MaxRetries" Default="3" />
@@ -3895,7 +3825,7 @@ export function generateRetryInitXaml(targetFramework: TargetFramework = "Window
   <x:Members>
     <x:Property Name="io_RetryInit" Type="InOutArgument(x:Boolean)" />
     <x:Property Name="io_InitRetryCounter" Type="InOutArgument(x:Int32)" />
-  </x:Members>${buildTextExpressionBlocks(isCrossPlatform)}
+  </x:Members>${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Retry Init Logic">
     <Sequence.Variables>
       <Variable x:TypeArguments="x:Int32" Name="int_MaxInitRetries" Default="3" />
@@ -3951,7 +3881,7 @@ export function generateBuildTransactionDataXaml(targetFramework: TargetFramewor
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <x:Members>
     <x:Property Name="out_TransactionData" Type="OutArgument(System.Data.DataTable)" />
-  </x:Members>${buildTextExpressionBlocks(isCrossPlatform)}
+  </x:Members>${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Build Transaction Data">
     <Sequence.Variables>
       <Variable x:TypeArguments="System.Data.DataTable" Name="dt_TransactionData" />
@@ -3990,7 +3920,7 @@ export function generateCleanupAndPrepXaml(targetFramework: TargetFramework = "W
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <x:Members>
     <x:Property Name="in_FolderPaths" Type="InArgument(scg:List(x:String))" />
-  </x:Members>${buildTextExpressionBlocks(isCrossPlatform)}
+  </x:Members>${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Cleanup and Prep">
     <ui:LogMessage Level="Info" Message="[&quot;Starting cleanup and preparation...&quot;]" DisplayName="Log Cleanup Start" />
     <TryCatch DisplayName="Safe Cleanup">
@@ -4040,7 +3970,7 @@ export function generateSendNotificationsXaml(targetFramework: TargetFramework =
     <x:Property sap2010:Annotation.AnnotationText="System Exception sent as a notification to the business." Name="in_SystemException" Type="InArgument(s:Exception)" />
     <x:Property sap2010:Annotation.AnnotationText="Identifier and other details related to the processed transaction" Name="in_TransactionDetails" Type="InArgument(x:String)" />
     <x:Property sap2010:Annotation.AnnotationText="Indicates if this is a process or transaction exception" Name="in_TransactionException" Type="InArgument(x:Boolean)" />
-  </x:Members>${buildTextExpressionBlocks(isCrossPlatform)}
+  </x:Members>${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Send Notifications">
     <ui:LogMessage Level="Info" Message="[&quot;Preparing notification...&quot;]" DisplayName="Log Notification Start" />
     <ui:LogMessage Level="Info" Message="[&quot;TODO: Implement notification logic — send email/Slack/Teams notification based on exception type&quot;]" DisplayName="Log Notification Placeholder" />

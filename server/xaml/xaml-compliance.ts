@@ -6,6 +6,7 @@ import { QualityGateError } from "../uipath-shared";
 import { findUndeclaredVariables } from "./vbnet-expression-linter";
 import { inferTypeFromPrefix } from "../shared/type-inference";
 import { getFilteredSchema, registerStage } from "../catalog/filtered-schema-lookup";
+import { buildComplianceActivityAttr as _buildComplianceActivityAttr, buildComplianceChildren as _buildComplianceChildren } from "./xaml-studio-references";
 
 registerStage("xaml-compliance");
 
@@ -1087,76 +1088,15 @@ const UIPATH_CROSS_PLATFORM_NAMESPACES = `xmlns="http://schemas.microsoft.com/ne
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"`;
 
-const UIPATH_VB_SETTINGS = `
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>
-  <sap2010:WorkflowViewState.IdRef>__ROOT_ID__</sap2010:WorkflowViewState.IdRef>
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
-      <AssemblyReference>mscorlib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>`;
+function getComplianceAttr(isCSharp: boolean): string {
+  const framework = isCSharp ? "Portable" : "Windows";
+  return _buildComplianceActivityAttr(framework);
+}
 
-const UIPATH_CSHARP_SETTINGS = `
-  <sap2010:WorkflowViewState.IdRef>__ROOT_ID__</sap2010:WorkflowViewState.IdRef>
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Runtime</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
-      <AssemblyReference>System.Data.Common</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>`;
+function getComplianceChildren(isCSharp: boolean, rootId: string): string {
+  const framework = isCSharp ? "Portable" : "Windows";
+  return _buildComplianceChildren(framework, rootId);
+}
 
 export function parseInvokeArgs(rawValue: string, direction: "In" | "Out" | "InOut"): string {
   const decoded = rawValue.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
@@ -2107,14 +2047,26 @@ export function normalizeXaml(rawXaml: string, targetFramework: TargetFramework 
   }
 
   if (!isStateMachineWorkflow) {
-    const settingsBlock = isCrossPlatform
-      ? UIPATH_CSHARP_SETTINGS.replace("__ROOT_ID__", rootId)
-      : UIPATH_VB_SETTINGS.replace("__ROOT_ID__", rootId);
+    const complianceAttr = getComplianceAttr(isCrossPlatform);
+    const childrenBlock = getComplianceChildren(isCrossPlatform, rootId);
+
+    if (complianceAttr) {
+      const alreadyHasCSharpAttr = /ExpressionActivityEditor\.ExpressionActivityEditor="C#"/.test(xml);
+      if (!alreadyHasCSharpAttr) {
+        const activityTagClose = xml.match(/<Activity\s[^>]*>/);
+        if (activityTagClose && activityTagClose.index !== undefined) {
+          const closePos = xml.indexOf(">", activityTagClose.index);
+          if (closePos !== -1) {
+            xml = xml.slice(0, closePos) + complianceAttr + xml.slice(closePos);
+          }
+        }
+      }
+    }
 
     const alreadyHasSettings = /VisualBasic\.Settings|TextExpression\.NamespacesForImplementation/.test(xml);
     const firstTag = xml.match(/<(Sequence|StateMachine|Flowchart)\s/);
     if (firstTag && firstTag.index !== undefined && !alreadyHasSettings) {
-      xml = xml.slice(0, firstTag.index) + settingsBlock + "\n  " + xml.slice(firstTag.index);
+      xml = xml.slice(0, firstTag.index) + childrenBlock + "\n  " + xml.slice(firstTag.index);
     }
   }
 

@@ -254,9 +254,9 @@ describe("Deterministic XAML Generators", () => {
       expect(NET6_NAMESPACE_DECLARATIONS).toContain("xmlns:uix=");
     });
 
-    it("NET6_REFERENCES_FOR_IMPLEMENTATION uses System.Private.CoreLib", () => {
+    it("NET6_REFERENCES_FOR_IMPLEMENTATION uses System.Private.CoreLib and mscorlib", () => {
       expect(NET6_REFERENCES_FOR_IMPLEMENTATION).toContain("System.Private.CoreLib");
-      expect(NET6_REFERENCES_FOR_IMPLEMENTATION).not.toContain("mscorlib");
+      expect(NET6_REFERENCES_FOR_IMPLEMENTATION).toContain("mscorlib");
     });
   });
 
@@ -376,7 +376,7 @@ describe("Golden XAML Snapshot Tests", () => {
 
   it("LogMessage produces exact self-closing element", () => {
     const xml = gen_log_message({ displayName: "Log Start", level: "Info", message: '[&quot;Starting&quot;]' });
-    expect(xml).toMatchInlineSnapshot(`"<ui:LogMessage Level="Info" Message="[&amp;quot;Starting&amp;quot;]" DisplayName="Log Start" />"`);
+    expect(xml).toMatchInlineSnapshot(`"<ui:LogMessage Level="Info" Message="[&quot;Starting&quot;]" DisplayName="Log Start" />"`);
   });
 
   it("Assign produces proper To/Value child elements", () => {
@@ -511,7 +511,8 @@ describe("Integration: assembleWorkflowFromSpec with deterministic dispatch", ()
     expect(result.xaml).toContain('Level="Info"');
     expect(result.xaml).toContain("Process started");
     expect(result.xaml).toContain("System.Private.CoreLib");
-    expect(result.xaml).not.toContain("mscorlib");
+    expect(result.xaml).toContain("<AssemblyReference>mscorlib</AssemblyReference>");
+    expect(result.xaml).not.toContain("assembly=mscorlib");
   });
 
   it("dispatches GetAsset through deterministic generator with outputVar", () => {
@@ -719,6 +720,7 @@ describe("Integration: assembleWorkflowFromSpec with deterministic dispatch", ()
     const result = assembleWorkflowFromSpec(spec);
     expect(result.xaml).toContain('assembly=System.Private.CoreLib');
     expect(result.xaml).not.toContain('assembly=mscorlib');
+    expect(result.xaml).toContain('<AssemblyReference>mscorlib</AssemblyReference>');
     expect(result.xaml).toContain('xmlns:uix=');
   });
 });

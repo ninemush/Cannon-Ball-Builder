@@ -1,0 +1,42 @@
+{
+  "studioVersion": "25.10.7",
+  "createdAt": "2026-04-14T00:00:00Z",
+  "templates": {
+    "windows-vb": {
+      "files": ["project.json", "Main.xaml", "entry-points.json", "project.uiproj"],
+      "hashes": {
+        "Main.xaml": "5efb02159ff20eb09fbee228e4e287333d80f6c2a2049c2891fea7f155d52e72",
+        "entry-points.json": "fcc4f7b2675cbb442a680979e18c22c2cdb27764479a5d986e0307ef4e0437e9",
+        "project.json": "db62089f72b32d1c17d85b3906a2a56ba85d95e0e61dfcb9f7d30539ed7f8548",
+        "project.uiproj": "8b2d86111f47b82b8de218af055bd98ddcc01b690cc9c16bbdf706d15fe1816d"
+      }
+    },
+    "crossplatform-vb": {
+      "files": ["project.json", "Main.xaml", "entry-points.json", "project.uiproj"],
+      "hashes": {
+        "Main.xaml": "7ce0d3471f28cd9749029440a1dc42096afdccb46f0271e42e8cf1c8d38deace",
+        "entry-points.json": "fcc4f7b2675cbb442a680979e18c22c2cdb27764479a5d986e0307ef4e0437e9",
+        "project.json": "75e623441aef154f95e2a34af171d105c959c8b9913ef6f7e0676a4765b378ef",
+        "project.uiproj": "8b2d86111f47b82b8de218af055bd98ddcc01b690cc9c16bbdf706d15fe1816d"
+      }
+    },
+    "windows-csharp": {
+      "files": ["project.json", "Main.xaml", "entry-points.json", "project.uiproj"],
+      "hashes": {
+        "Main.xaml": "b00857969e4fd3133ecb82b790d8614a08393b33836d90308663fd36057bc522",
+        "entry-points.json": "fcc4f7b2675cbb442a680979e18c22c2cdb27764479a5d986e0307ef4e0437e9",
+        "project.json": "1a2aca3f4c76bc6c9ee005f7c901c356b8fc8253c54a33527458fcb579822765",
+        "project.uiproj": "8b2d86111f47b82b8de218af055bd98ddcc01b690cc9c16bbdf706d15fe1816d"
+      }
+    },
+    "crossplatform-csharp": {
+      "files": ["project.json", "Main.xaml", "entry-points.json", "project.uiproj"],
+      "hashes": {
+        "Main.xaml": "3b49906c25e3590014100f524507bf7d27b557d35ecbe520b4a2a2bd4cebde50",
+        "entry-points.json": "fcc4f7b2675cbb442a680979e18c22c2cdb27764479a5d986e0307ef4e0437e9",
+        "project.json": "b6282db29188346d03ccc77bcabd89ca1e1ce977b9f50e4144a4a6c38634146a",
+        "project.uiproj": "8b2d86111f47b82b8de218af055bd98ddcc01b690cc9c16bbdf706d15fe1816d"
+      }
+    }
+  }
+}

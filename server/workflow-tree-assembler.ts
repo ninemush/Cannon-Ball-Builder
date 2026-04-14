@@ -34,6 +34,7 @@ import { DeclarationRegistry, scopeIdMatchesStackEntryExternal, type SymbolDisco
 import { isExcludedSymbolToken } from "./shared/symbol-exclusions";
 import { dispatchGenerator, hasGenerator, resolveTemplateName } from "./xaml/generator-registry";
 import { normalizeWorkflowTreeForGenerators, getAndClearNormalizationDiagnostics } from "./spec-ir-normalizer";
+import { buildRootActivityAttr as _buildRootActivityAttr, buildRootActivityChildren as _buildRootActivityChildren, buildTextExpressionBlocks as _buildTextExpressionBlocksShared } from "./xaml/xaml-studio-references";
 
 export interface PropertyRemediationRecord {
   propertyName: string;
@@ -5516,49 +5517,9 @@ export function assembleWorkflowFromSpec(
   xmlns:upers="http://schemas.uipath.com/workflow/activities/persistence"
   xmlns:uweb="http://schemas.uipath.com/workflow/activities/web"
   xmlns:ss="clr-namespace:System.Security;assembly=System.Private.CoreLib"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <mva:VisualBasic.Settings>
-    <x:Null />
-  </mva:VisualBasic.Settings>
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-      <x:String>System.ComponentModel</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
-      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-      <AssemblyReference>System.ServiceModel</AssemblyReference>
-      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_buildRootActivityAttr("Windows")}>
+${_buildRootActivityChildren("Windows")}
+${_buildTextExpressionBlocksShared("Windows")}
 ${xMembersBlock}  <Sequence DisplayName="${escapeXml(workflowName)}">
     ${variablesBlock}
     ${activitiesXml}

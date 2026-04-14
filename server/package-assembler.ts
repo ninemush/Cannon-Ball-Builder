@@ -1,4 +1,5 @@
 import archiver from "archiver";
+import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityChildren as _pkgBuildRootActivityChildren, buildTextExpressionBlocks as _pkgBuildTextExpressionBlocks } from "./xaml/xaml-studio-references";
   import AdmZip from "adm-zip";
   import { createHash } from "crypto";
   import { PassThrough } from "stream";
@@ -1106,6 +1107,7 @@ export function generateStubWithInvokePreservation(
   fileName: string,
   originalContent: string | undefined,
   stubOptions: { reason: string; arguments?: Array<{ name: string; direction: string; type: string }> },
+  targetFramework?: string,
 ): string {
   const isCriticalInfraFile = /^(Process|Main)\.xaml$/i.test(fileName);
   if (isCriticalInfraFile && originalContent) {
@@ -1120,7 +1122,7 @@ export function generateStubWithInvokePreservation(
     if (preservedTargets.length > 0) {
       console.log(`[UiPath Safety Net] Preserved ${preservedTargets.length} InvokeWorkflowFile reference(s) from ${fileName}: ${preservedTargets.join(", ")}`);
       const stubName = fileName.replace(/\.xaml$/i, "");
-      return buildXaml(stubName, `${stubName} - Remediated`, preservedInvokes);
+      return buildXaml(stubName, `${stubName} - Remediated`, preservedInvokes, undefined, targetFramework);
     }
   }
   return generateStubWorkflow(fileName.replace(/\.xaml$/i, ""), stubOptions);
@@ -3525,8 +3527,9 @@ export function clearPackageCache(ideaId: string): void {
   }
 }
 
-function buildXaml(className: string, displayName: string, activities: string, variablesBlock?: string): string {
+function buildXaml(className: string, displayName: string, activities: string, variablesBlock?: string, targetFramework?: string): string {
   const vars = variablesBlock || "<Sequence.Variables />";
+  const fw: "Windows" | "Portable" = (targetFramework === "Portable" ? "Portable" : "Windows");
   return `<?xml version="1.0" encoding="utf-8"?>
 <Activity mc:Ignorable="sap sap2010" x:Class="${escapeXml(className)}"
   xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
@@ -3539,46 +3542,9 @@ function buildXaml(className: string, displayName: string, activities: string, v
   xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
   xmlns:ui="http://schemas.uipath.com/workflow/activities"
   xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
-  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <TextExpression.NamespacesForImplementation>
-    <sco:Collection x:TypeArguments="x:String">
-      <x:String>System</x:String>
-      <x:String>System.Collections</x:String>
-      <x:String>System.Collections.Generic</x:String>
-      <x:String>System.Data</x:String>
-      <x:String>System.IO</x:String>
-      <x:String>System.Linq</x:String>
-      <x:String>System.Xml</x:String>
-      <x:String>System.Xml.Linq</x:String>
-      <x:String>UiPath.Core</x:String>
-      <x:String>UiPath.Core.Activities</x:String>
-      <x:String>Microsoft.VisualBasic</x:String>
-      <x:String>Microsoft.VisualBasic.Activities</x:String>
-      <x:String>System.Activities</x:String>
-      <x:String>System.Activities.Statements</x:String>
-      <x:String>System.Activities.Expressions</x:String>
-      <x:String>System.ComponentModel</x:String>
-    </sco:Collection>
-  </TextExpression.NamespacesForImplementation>
-  <TextExpression.ReferencesForImplementation>
-    <sco:Collection x:TypeArguments="AssemblyReference">
-      <AssemblyReference>System.Activities</AssemblyReference>
-      <AssemblyReference>System.Activities.Core.Presentation</AssemblyReference>
-      <AssemblyReference>Microsoft.VisualBasic</AssemblyReference>
-      <AssemblyReference>System.Private.CoreLib</AssemblyReference>
-      <AssemblyReference>System.Data</AssemblyReference>
-      <AssemblyReference>System</AssemblyReference>
-      <AssemblyReference>System.Core</AssemblyReference>
-      <AssemblyReference>System.Xml</AssemblyReference>
-      <AssemblyReference>System.Xml.Linq</AssemblyReference>
-      <AssemblyReference>UiPath.Core</AssemblyReference>
-      <AssemblyReference>UiPath.Core.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
-      <AssemblyReference>UiPath.UIAutomation.Activities</AssemblyReference>
-      <AssemblyReference>System.ServiceModel</AssemblyReference>
-      <AssemblyReference>System.ComponentModel.Composition</AssemblyReference>
-    </sco:Collection>
-  </TextExpression.ReferencesForImplementation>
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"${_pkgBuildRootActivityAttr(fw)}>
+${_pkgBuildRootActivityChildren(fw)}
+${_pkgBuildTextExpressionBlocks(fw)}
   <Sequence DisplayName="${escapeXml(displayName)}">
     ${vars}${activities}
   </Sequence>
@@ -4773,7 +4739,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         return { content: rawXaml, wasFullStub: true };
       }
       const existingEntry = xamlEntries.find(e => (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "") === wfName);
-      return { content: compliancePass(generateStubWithInvokePreservation(`${wfName}.xaml`, existingEntry?.content, { reason: `Compliance transform failed — ${compErrMessage}` }), `${wfName}.xaml`, true), wasFullStub: true };
+      return { content: compliancePass(generateStubWithInvokePreservation(`${wfName}.xaml`, existingEntry?.content, { reason: `Compliance transform failed — ${compErrMessage}` }, tf), `${wfName}.xaml`, true), wasFullStub: true };
     }
 
     function tryGenerateOrStub(
@@ -4803,7 +4769,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           const existingEntryForStub = xamlEntries.find(e => (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "").toLowerCase() === wfName.toLowerCase());
           const stubXaml = generateStubWithInvokePreservation(`${wfName}.xaml`, existingEntryForStub?.content, {
             reason: `Generator could not safely produce this workflow: ${err.message}`,
-          });
+          }, tf);
           const stubCompliant = compliancePass(stubXaml, `${wfName}.xaml`);
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, stubCompliant);
           collectedQualityIssues.push({
@@ -5832,7 +5798,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             processInvocations = `
         <ui:LogMessage DisplayName="Log Process Placeholder" Level="Info" Message="[&quot;Process transaction logic goes here&quot;]" />`;
           }
-          const processXaml = buildXaml("Process", `${projectName} - Process Transaction`, processInvocations, processVariablesBlock);
+          const processXaml = buildXaml("Process", `${projectName} - Process Transaction`, processInvocations, processVariablesBlock, tf);
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/Process.xaml`, compliancePass(processXaml, "Process.xaml", true));
           console.log(`[UiPath] ${processAlreadyExists ? "Rebuilt" : "Generated"} Process.xaml wiring ${invokedInProcess.size} sub-workflow(s) for REFramework`);
         }
@@ -6003,7 +5969,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       mainActivities += `
         <ui:LogMessage Level="Info" Message="[&quot;Process completed successfully&quot;]" DisplayName="Log Completion" />`;
 
-      let mainXaml = buildXaml("Main", `${projectName} - Main Workflow`, mainActivities, mainVariablesBlock);
+      let mainXaml = buildXaml("Main", `${projectName} - Main Workflow`, mainActivities, mainVariablesBlock, tf);
       const selfRefBefore = mainXaml;
       mainXaml = mainXaml.replace(/<ui:InvokeWorkflowFile[^>]*WorkflowFileName\s*=\s*"(?:[.\/\\]*(?:lib[.\/\\])?)?Main\.xaml"[^>]*\/>/gi, "");
       if (mainXaml !== selfRefBefore) {
@@ -6101,7 +6067,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           if (!generated) {
             const existingEntryForRef = xamlEntries.find(e => (e.name.split("/").pop() || e.name).toLowerCase() === ref.toLowerCase());
-            const stubXaml = generateStubWithInvokePreservation(ref, existingEntryForRef?.content, { reason: `Missing referenced workflow — auto-generated scaffold stub` });
+            const stubXaml = generateStubWithInvokePreservation(ref, existingEntryForRef?.content, { reason: `Missing referenced workflow — auto-generated scaffold stub` }, tf);
             syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${ref}`, compliancePass(stubXaml, ref, true));
             existingFiles.add(ref);
             existingFilesNormalized.add(ref.replace(/\.xaml$/i, "").toLowerCase());
@@ -6644,6 +6610,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     }
     const projectJson: Record<string, any> = {
       name: projectName,
+      projectId: generateUuid(),
       description: pkg.description || "",
       main: "Main.xaml",
       dependencies: deps,
@@ -6657,9 +6624,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         netFrameworkLazyLoading: false,
         isPausable: true,
         isAttended: false,
-        requiresUserInteraction: false,
+        requiresUserInteraction: tf === "Windows",
         supportsPersistence: false,
-        workflowSerialization: "DataContract",
+        workflowSerialization: "NewtonsoftJson",
         excludedLoggedData: [
           "Private:*",
           "*password*",
@@ -6673,7 +6640,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       designOptions: {
         projectProfile: "Development",
         outputType: "Process",
-        libraryOptions: { includeOriginalXaml: false, privateWorkflows: [] },
+        libraryOptions: { privateWorkflows: [] },
         processOptions: { ignoredFiles: [] },
         fileInfoCollection: [],
         modernBehavior: true,
@@ -6950,7 +6917,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           });
         } else {
           const existingEntryForMissing = xamlEntries.find(e => (e.name.split("/").pop() || e.name).toLowerCase() === missingFile.toLowerCase());
-          const stubXaml = generateStubWithInvokePreservation(missingFile, existingEntryForMissing?.content, { reason: `Missing invoked workflow — auto-generated stub` });
+          const stubXaml = generateStubWithInvokePreservation(missingFile, existingEntryForMissing?.content, { reason: `Missing invoked workflow — auto-generated stub` }, tf);
           const stubCompliant = compliancePass(stubXaml, missingFile, true);
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${missingFile}`, stubCompliant);
           stubsGenerated.push(missingFile);
@@ -6982,7 +6949,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           });
         } else {
           const existingEntryForManifest = xamlEntries.find(e => (e.name.split("/").pop() || e.name).toLowerCase() === mb.toLowerCase());
-          const stubXaml = generateStubWithInvokePreservation(mb, existingEntryForManifest?.content, { reason: `Archive manifest entry missing validated content — auto-generated stub` });
+          const stubXaml = generateStubWithInvokePreservation(mb, existingEntryForManifest?.content, { reason: `Archive manifest entry missing validated content — auto-generated stub` }, tf);
           const stubCompliant = compliancePass(stubXaml, mb, true);
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${mb}`, stubCompliant);
           stubsGenerated.push(mb);
@@ -8189,7 +8156,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           const stubXaml = generateStubWithInvokePreservation(corruptedFile, corruptedContent, {
             reason: `Final validation remediation — original XAML had well-formedness violations`,
             arguments: extractedArgs.length > 0 ? extractedArgs : undefined,
-          });
+          }, tf);
           let stubCompliant: string;
           try {
             stubCompliant = compliancePass(stubXaml, corruptedFile, true);
@@ -9631,7 +9598,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               const originalContentForPreservation = entry.content;
               const stubXaml = generateStubWithInvokePreservation(fileName, originalContentForPreservation, {
                 reason: `Original XAML failed XML well-formedness validation: ${wellFormed.errors.join("; ")}`,
-              });
+              }, tf);
               sanitized = stubXaml;
               syncXamlWrite(deferredWrites, xamlEntries, path, sanitized);
               outcomeRemediations.push({
@@ -10075,6 +10042,20 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
 
     const finalProjectJsonStr = JSON.stringify(projectJson, null, 2);
     archive.append(finalProjectJsonStr, { name: `${libPath}/project.json` });
+
+    const entryPointsJson = JSON.stringify({
+      "$schema": "https://cloud.uipath.com/draft/2024-12/entry-point",
+      entryPoints: projectJson.entryPoints,
+    }, null, 2);
+    archive.append(entryPointsJson, { name: `${libPath}/entry-points.json` });
+
+    const projectUiproj = JSON.stringify({
+      projectName,
+      projectType: "Process",
+      description: pkg.description || "",
+      mainFile: "Main.xaml",
+    }, null, 2);
+    archive.append(projectUiproj, { name: `${libPath}/project.uiproj` });
 
     {
       for (const entry of postGateXamlEntries) {
