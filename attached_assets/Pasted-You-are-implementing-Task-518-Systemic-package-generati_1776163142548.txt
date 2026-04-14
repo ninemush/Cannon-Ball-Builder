@@ -1,0 +1,229 @@
+You are implementing **Task #518 - Systemic package generation quality fix** in CannonBall.
+
+Your job is to make the package-generation pipeline more systemic and less symptom-driven. Do not make narrow local fixes that only address one observed run. Implement the changes below so they generalize across the app and reduce structural invalidity, stubs, and handoff-only outcomes.
+
+## Objective
+
+Fix the three systemic gaps now blocking package quality:
+
+1. **CLI validation is currently a dead end**
+
+   * UiPath CLI validation runs after iterative LLM correction, so CLI defects are logged but never acted on.
+   * `cliDefectsToHealingInput()` already exists in `server/uipath-cli-validator.ts` but is not wired into the correction flow.
+   * The iterative corrector currently only sees internal quality-gate violations.
+
+2. **Emission approval is bottlenecked on namespace lookup**
+
+   * `catalog/run-emission-triage.js` still checks namespace mappings by scraping hardcoded entries from `xaml-compliance.ts`.
+   * The catalog service already exposes DLL-derived namespace data via `getAllPackageNamespaceEntries()`.
+   * There are about **227 activities** with `propertiesComplete: true` and `emissionApproved: false` that are safe approval candidates blocked only by this namespace lookup gap.
+
+3. **The AI still generates XAML too blindly**
+
+   * The enrichment prompt gives schema and filtered catalog context, but no concrete XAML structural patterns.
+   * We already have completed project XAML and Studio baselines. Use them to teach structural patterns, not business logic.
+
+---
+
+## Critical design constraints
+
+### A. Do NOT run the iterative corrector twice
+
+Do **not** implement “CLI runs after correction and then invoke a second correction pass.”
+
+Reason:
+
+* the iterative corrector verifies fixes using internal quality-gate revalidation
+* CLI defect resolution is not visible to the internal QG
+* this would trigger the corrector’s “revert if no improvement” logic and undo valid CLI-driven fixes
+* it would also double token cost
+
+### B. Reorder the pipeline instead
+
+The correct design is:
+
+1. run internal/meta validation
+2. run **CLI analyze-only before iterative correction**
+3. convert CLI defects with `cliDefectsToHealingInput()`
+4. merge CLI-derived defects into the existing `qgViolationsForIterative`
+5. run the existing iterative LLM correction **once**
+6. rebuild outputs
+7. run final CLI validation (`analyze + pack`) as the final verification gate
+8. all downstream `cliValidationResult` consumers must use the **final post-correction result**
+
+### C. Keep emission expansion safe
+
+Only approve candidates that satisfy all of:
+
+* `propertiesComplete: true`
+* package namespace metadata exists from DLL extraction
+* package/activity already satisfies the rest of triage safety conditions
+
+Do **not** approve the incomplete pool.
+
+### D. Keep XAML prompt additions compact
+
+The enrichment stage has a 45-second timeout and already carries substantial context.
+Add only **2-3 focused structural snippets**, under roughly **1000 tokens total**.
+Do not paste long full workflows.
+Do not add presentation/view-state clutter such as `sap:HintSize` or `sap2010:WorkflowViewState`.
+
+---
+
+## Implementation tasks
+
+### 1. Reorder pipeline and merge CLI defects into the existing corrector input
+
+Update the package pipeline so that CLI validation becomes actionable.
+
+#### Required behavior
+
+* Move the CLI analyze-only phase from its current post-correction position to **before** the iterative corrector.
+* Convert CLI defects to healing input via `cliDefectsToHealingInput()`.
+* Merge those defects into the same `qgViolationsForIterative` array that already feeds the corrector.
+* Run the existing iterative corrector **once** on the merged defect set.
+* After correction completes, run full CLI validation (`analyze + pack`) as the final verification stage.
+* Ensure all final reporting uses the **post-correction** CLI result, not the pre-correction one.
+
+#### Files to inspect/update
+
+* `server/uipath-pipeline.ts`
+* `server/uipath-cli-validator.ts`
+* `server/meta-validation/iterative-llm-corrector.ts`
+* `server/dhg-generator.ts`
+
+#### Important requirement
+
+Preserve current safety behavior of the corrector. Do not weaken revert logic globally just to make CLI defects “work.” Instead, make CLI defects part of the same pre-correction input set.
+
+---
+
+### 2. Expand emission approval using catalog-derived namespace data
+
+Remove the manual namespace lookup bottleneck in triage.
+
+#### Required behavior
+
+* Update `catalog/run-emission-triage.js` so criterion-2 namespace resolution is based on catalog service data from `getAllPackageNamespaceEntries()`, not regex scraping from `xaml-compliance.ts`.
+* For candidates with DLL-derived namespace data and `propertiesComplete: true`, allow criterion-2 to pass automatically.
+* Re-run triage and update `catalog/activity-catalog.json`.
+* Verify runtime resolution still works through `getPackageNamespaceMap()` in `server/xaml/xaml-compliance.ts`.
+
+#### Safety requirements
+
+* Do not approve activities lacking `propertiesComplete: true`
+* Do not broaden approval beyond namespace-blocked safe candidates
+* Keep any existing guards that prevent obviously unsafe approvals
+
+#### Files to inspect/update
+
+* `catalog/run-emission-triage.js`
+* `catalog/activity-catalog.json`
+* `server/catalog/catalog-service.ts`
+* `server/xaml/xaml-compliance.ts`
+* `server/catalog/prompt-guidance-filter.ts`
+
+---
+
+### 3. Add compact XAML structure references to the enrichment prompt
+
+The goal is to improve structural emission priors, not to have the model copy full workflows.
+
+#### Required prompt additions
+
+Create a short **“Correct XAML Structure Reference”** section in the enrichment prompt using:
+
+1. **One compact Studio baseline envelope excerpt**
+
+   * from `server/xaml-references/studio-baselines/windows-vb/Main.xaml`
+   * show canonical document envelope only:
+
+     * root `<Activity>`
+     * essential namespace declarations
+     * `VisualBasic.Settings`
+     * `TextExpression.NamespacesForImplementation`
+     * `TextExpression.ReferencesForImplementation`
+
+2. **2-3 activity-level structural patterns from completed projects**
+   Prefer these families:
+
+   * correctly nested `If / Then / Else`
+   * `InvokeWorkflowFile` with correct typed argument binding shape
+   * typed `ForEach` with `TypeArgument` and proper body nesting
+
+#### Requirements for snippet prep
+
+* strip view-state / presentation-only attributes
+* keep total examples under about 1000 tokens combined
+* use snippets to teach structure, nesting, argument shape, and typing
+* do not include long business-specific content
+* do not overfit the prompt with large examples
+
+#### Files to inspect/update
+
+* `server/uipath-prompts.ts`
+* `server/ai-xaml-enricher.ts`
+* `server/xaml-references/metadata.json`
+* `server/xaml-references/studio-baselines/windows-vb/Main.xaml`
+* `server/xaml-references/COE22788_SAP/Workflows_Misc/Process.xaml`
+* `server/xaml-references/COE21024_Perform/Workflows_Misc/Process.xaml`
+* `server/catalog/xaml-template-builder.ts`
+
+---
+
+### 4. Validate the combined impact end-to-end
+
+This task is not done unless the effect is measured.
+
+#### Run a before/after validation comparison and log:
+
+* pre-correction CLI defect count
+* post-correction CLI defect count
+* emission-gate blocked/stub count
+* handoff block count
+* approved activity count in catalog
+* overall pipeline duration
+* confirmation that enrichment did not hit the 45-second timeout
+
+#### Expected outcome
+
+* CLI defects are now actionable before finalization
+* namespace-blocked safe candidates become emission-approved
+* enrichment prompt has compact structural examples
+* generated packages show fewer structural failures, fewer stubs, and fewer handoff-only outcomes than baseline
+
+---
+
+## Out of scope
+
+Do not drift into these:
+
+* rewriting the tree assembler or full XAML generator architecture
+* adding new activity families
+* approving activities without `propertiesComplete: true`
+* changing the AI model
+* expanding prompt content beyond compact structural XAML examples
+* deterministic mode-selection redesign
+
+---
+
+## Coding expectations
+
+* implement this as a **systemic pipeline refinement**, not scattered one-off patches
+* prefer small, explicit helper functions where sequencing changed
+* preserve backward compatibility for existing diagnostics/reporting wherever possible
+* add concise comments where ordering or defect-merging behavior would otherwise be non-obvious
+
+---
+
+## Deliverables
+
+When finished, provide:
+
+1. a concise summary of architectural changes made
+2. the exact files changed
+3. the new pipeline order
+4. before/after metrics from the validation run
+5. any residual risks or follow-up tasks discovered during implementation
+
+Implement now.
