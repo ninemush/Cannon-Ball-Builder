@@ -1,4 +1,11 @@
 import { createHash } from "crypto";
+
+class RebuildIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RebuildIntegrityError";
+  }
+}
 import AdmZip from "adm-zip";
 import { storage } from "./storage";
 import { documentStorage } from "./document-storage";
@@ -44,6 +51,20 @@ import {
   type EntryWorkflowMetadata,
 } from "./meta-validation";
 import { classifyComplexity, estimateComplexityFromContext, type ComplexityTier, type ComplexityClassification } from "./complexity-classifier";
+import {
+  createManifest,
+  initializeManifestFromSpec,
+  updateManifestEntriesByWorkflow,
+  updateManifestEntriesByActivityType,
+  markWorkflowStubbed,
+  markWorkflowDropped,
+  markStepDegraded,
+  recordPruningDecision,
+  finalizeManifest,
+  reconcileManifestWithArtifact,
+  type TraceabilityManifest,
+  type ManifestEntry,
+} from "./traceability-manifest";
 import { recordPipelineHealth, computePipelineHealthFromResult } from "./pipeline-health";
 import { runFinalArtifactValidation, type FinalQualityReport } from "./final-artifact-validation";
 import { flushTrace, getCurrentRunId } from "./llm-trace-collector";
@@ -389,6 +410,8 @@ export interface PipelineOutcomeReport {
   cliAnalyzerDefectCount?: number;
   cliPackSuccess?: boolean;
   cliProjectType?: import("./uipath-cli-validator").UiPathProjectType;
+  traceabilityManifest?: TraceabilityManifest;
+  reachabilityPruning?: Array<{ file: string; action: "removed" | "retained"; reason: string }>;
 }
 
 export interface PipelineResult {
@@ -428,6 +451,7 @@ export interface PipelineResult {
   criticalActivityContractDiagnostics?: import("./required-property-diagnostics").RequiredPropertyDiagnosticsResult;
   cliValidationMode?: import("./uipath-cli-validator").CliValidationMode;
   cliValidationResult?: import("./uipath-cli-validator").CliValidationResult;
+  traceabilityManifest?: TraceabilityManifest;
 }
 
 export interface DhgResult {
@@ -606,6 +630,7 @@ function buildDhgFromBuildResult(
   emergencyFallbackActive?: boolean,
   emergencyFallbackReason?: string,
   cliValidationResultForDhg?: import("./uipath-cli-validator").CliValidationResult,
+  traceabilityManifest?: TraceabilityManifest,
 ): DhgResult {
   const sddContent = ctx.sdd?.content || "";
   const workflows = pkg.workflows || [];
@@ -801,6 +826,7 @@ function buildDhgFromBuildResult(
       cliProjectType: cliValidationResultForDhg?.compatibility.projectType,
       cliAnalyzerDefectCount: cliValidationResultForDhg?.analyzeResult?.defects.length,
       cliPackSuccess: cliValidationResultForDhg?.packResult?.success,
+      traceabilityManifest: traceabilityManifest || undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
@@ -854,6 +880,7 @@ export interface SpecGenerationResult {
   emergencyFallbackActive?: boolean;
   emergencyFallbackReason?: string;
   effectiveMode?: GenerationMode;
+  traceabilityManifest?: TraceabilityManifest;
 }
 
 export async function generateWorkflowSpecs(
@@ -979,6 +1006,19 @@ export async function generateWorkflowSpecs(
 
     const enrichedPkg = enrichPackageWithContext(pkg, ctx, artifacts, aiSkills);
 
+    const traceabilityManifest = createManifest();
+    if (enrichedPkg.workflows && enrichedPkg.workflows.length > 0) {
+      initializeManifestFromSpec(traceabilityManifest, enrichedPkg.workflows.map((w: any) => ({
+        name: w.name || "Main",
+        steps: (w.rootSequence?.children || []).filter((c: any) => c.kind === "activity").map((c: any) => ({
+          activity: c.displayName || c.template || "",
+          activityType: c.template || "unknown",
+          properties: c.properties || {},
+        })),
+      })));
+      console.log(`[Pipeline] Traceability manifest initialized at decomposition with ${traceabilityManifest.entries.length} step(s) across ${enrichedPkg.workflows.length} workflow(s)`);
+    }
+
     tracker.start("spec_generation_done", "Spec generation complete");
     tracker.complete("spec_generation_done", "WorkflowSpecs ready for XAML emission");
     await periodicTraceFlush();
@@ -1010,6 +1050,7 @@ export async function generateWorkflowSpecs(
       emergencyFallbackActive,
       emergencyFallbackReason: emergencyFallbackActive ? emergencyFallbackReason : undefined,
       effectiveMode: mode,
+      traceabilityManifest,
     };
   } finally {
     tracker.cleanup();
@@ -1088,6 +1129,23 @@ export async function compilePackageFromSpecs(
   const enriched = specResult.enrichedPkg;
   const fp = specResult.fingerprint;
 
+  const traceabilityManifest = specResult.traceabilityManifest || createManifest();
+  if (traceabilityManifest.entries.length === 0 && enriched.workflows && enriched.workflows.length > 0) {
+    initializeManifestFromSpec(traceabilityManifest, enriched.workflows.map((w: any) => ({
+      name: w.name || "Main",
+      steps: (w.rootSequence?.children || w.steps || [])
+        .filter((c: any) => c.kind === "activity" || c.activity)
+        .map((c: any) => ({
+          activity: c.displayName || c.activity || "",
+          activityType: c.template || c.activityType || "unknown",
+          properties: c.properties || {},
+        })),
+    })));
+    console.log(`[Pipeline] Traceability manifest late-initialized with ${traceabilityManifest.entries.length} step(s) across ${enriched.workflows.length} workflow(s)`);
+  } else if (traceabilityManifest.entries.length > 0) {
+    console.log(`[Pipeline] Traceability manifest carried from decomposition: ${traceabilityManifest.entries.length} step(s)`);
+  }
+
   if (emergencyFallbackActive) {
     if (!enriched.internal) enriched.internal = {};
     enriched.internal.emergencyFallbackActive = true;
@@ -1119,7 +1177,7 @@ export async function compilePackageFromSpecs(
       }
       buildResult = await buildNuGetPackage(enriched, ver, ideaId, mode, options?.onPipelineProgress ? (event) => {
         options.onPipelineProgress!(event);
-      } : undefined, _pipelineProfile, options?.complexityTier);
+      } : undefined, _pipelineProfile, options?.complexityTier, traceabilityManifest);
     } catch (err) {
       throw err;
     }
@@ -1239,8 +1297,6 @@ export async function compilePackageFromSpecs(
     let finalPackageBuffer = buildResult.buffer;
     let mvInputTokens = 0;
     let mvOutputTokens = 0;
-    let canonicalRebuildFailed = false;
-    let canonicalRebuildErrorMsg = "";
     const hasNupkg = buildResult.buffer && buildResult.buffer.length > 0;
 
     if (hasNupkg) {
@@ -1386,10 +1442,12 @@ export async function compilePackageFromSpecs(
               finalPackageBuffer = rebuilt;
               console.log(`[Pipeline] Rebuilt .nupkg with ${applicationResult.applied} correction(s) applied (${finalPackageBuffer.length} bytes)`);
             } else {
-              canonicalRebuildFailed = true;
-              canonicalRebuildErrorMsg =
+              const rebuildErrorMsg =
                 `Canonical nupkg rebuild failed after ${applicationResult.applied} meta-validation correction(s). ` +
-                `Cannot produce a structurally valid package with corrected XAML.`;
+                `Cannot produce a structurally valid package with corrected XAML. ` +
+                `Artifact integrity cannot be guaranteed — hard failing to prevent stale artifact delivery.`;
+              console.error(`[Pipeline] ${rebuildErrorMsg}`);
+              throw new RebuildIntegrityError(rebuildErrorMsg);
             }
           }
 
@@ -1550,15 +1608,11 @@ export async function compilePackageFromSpecs(
                   finalPackageBuffer = rebuilt;
                   console.log(`[Pipeline] Rebuilt .nupkg after iterative LLM correction (${finalPackageBuffer.length} bytes)`);
                 } else {
-                  console.warn(`[Pipeline] Failed to rebuild .nupkg after iterative LLM correction — reverting XAML to pre-iterative state`);
-                  finalXamlEntries = xamlEntries.map((e: any) => ({ ...e }));
-                  iterativeLlmApplied = 0;
-                  pipelineWarnings.push({
-                    code: "ITERATIVE_LLM_REBUILD_FAILED",
-                    message: "Iterative LLM corrections applied but .nupkg rebuild failed — corrections reverted to maintain package consistency",
-                    stage: "remediating",
-                    recoverable: true,
-                  });
+                  const iterativeRebuildError =
+                    `Iterative LLM corrections applied but .nupkg rebuild failed — ` +
+                    `artifact integrity cannot be guaranteed. Hard failing to prevent stale artifact delivery.`;
+                  console.error(`[Pipeline] ${iterativeRebuildError}`);
+                  throw new RebuildIntegrityError(iterativeRebuildError);
                 }
               }
 
@@ -1596,6 +1650,7 @@ export async function compilePackageFromSpecs(
               console.log(`[Pipeline] CLI defect metrics: pre-correction=${preCorrectCliDefectCount}, diagnostic-only=${cliDiagnosticOnly.length}`);
             }
           } catch (iterErr: unknown) {
+            if (iterErr instanceof RebuildIntegrityError) throw iterErr;
             const errMsg = iterErr instanceof Error ? iterErr.message : String(iterErr);
             console.warn(`[Pipeline] Iterative LLM correction failed: ${errMsg}`);
             pipelineWarnings.push({
@@ -1672,6 +1727,7 @@ export async function compilePackageFromSpecs(
           console.log(`[Pipeline] Meta-validation ${mvSkipStatus} (mode=${mvMode}, score=${confidenceResult.score.toFixed(2)}${bypassReason ? `, bypass=${bypassReason}` : ""})`);
         }
       } catch (err: unknown) {
+        if (err instanceof RebuildIntegrityError) throw err;
         const errMsg = err instanceof Error ? err.message : String(err);
         console.warn(`[Pipeline] Meta-validation failed: ${errMsg}`);
         pipelineWarnings.push({
@@ -1681,10 +1737,6 @@ export async function compilePackageFromSpecs(
           recoverable: true,
         });
       }
-    }
-    if (canonicalRebuildFailed) {
-      console.error(`[Pipeline] ${canonicalRebuildErrorMsg}`);
-      throw new Error(canonicalRebuildErrorMsg);
     }
     tracker.complete("validation", "Validation and remediation complete");
     await periodicTraceFlush();
@@ -1843,9 +1895,73 @@ export async function compilePackageFromSpecs(
       tracker.complete("final_artifact_validation", "Final validation fell back to intermediate signals");
     }
 
+    if (buildResult.outcomeReport) {
+      const remediations = buildResult.outcomeReport.remediations || [];
+      for (const r of remediations) {
+        const wfName = (r.file || "").replace(/\.xaml$/i, "");
+        if (r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE" || r.remediationCode === "STUB_WORKFLOW_BLOCKING") {
+          markWorkflowStubbed(traceabilityManifest, wfName, r.reason || r.remediationCode);
+        } else if (r.level === "activity" && r.remediationCode === "DEGRADED_ACTIVITY_MISSING_PROPERTY") {
+          const actTag = r.originalTag || "";
+          if (actTag) {
+            updateManifestEntriesByActivityType(traceabilityManifest, wfName, actTag, {
+              status: "degraded",
+              reason: r.reason || "Activity degraded due to missing property",
+              developerAction: `Review degraded ${actTag} activity in ${wfName}.xaml and add missing properties`,
+            });
+          } else {
+            const matchedEntry = traceabilityManifest.entries.find(
+              e => e.assignedWorkflow === wfName &&
+                   e.status === "preserved" &&
+                   r.originalDisplayName &&
+                   e.assignedActivity === r.originalDisplayName
+            );
+            if (matchedEntry) {
+              matchedEntry.status = "degraded";
+              matchedEntry.reason = r.reason || "Activity degraded due to missing property";
+              matchedEntry.developerAction = `Review degraded activity "${r.originalDisplayName}" in ${wfName}.xaml and add missing properties`;
+            } else {
+              updateManifestEntriesByWorkflow(traceabilityManifest, wfName, {
+                status: "degraded",
+                reason: r.reason || "Activity degraded due to missing property",
+                developerAction: `Review degraded activity in ${wfName}.xaml and add missing properties`,
+              });
+            }
+          }
+        }
+      }
+      buildResult.outcomeReport.traceabilityManifest = traceabilityManifest;
+
+      const pruning = buildResult.outcomeReport.reachabilityPruning || [];
+      for (const p of pruning) {
+        const wfName = p.file.replace(/\.xaml$/i, "");
+        if (p.action === "removed") {
+          markWorkflowDropped(traceabilityManifest, wfName, `Pruned: ${p.reason}`);
+        } else if (p.action === "retained") {
+          updateManifestEntriesByWorkflow(traceabilityManifest, wfName, {
+            status: "degraded",
+            reason: `Unreachable but retained: ${p.reason}`,
+            developerAction: `Wire "${wfName}.xaml" into the invocation graph or remove if unnecessary`,
+          });
+        }
+      }
+    }
+
+    reconcileManifestWithArtifact(traceabilityManifest, finalXamlEntries);
+
+    finalizeManifest(traceabilityManifest);
+    const manifestSummary = {
+      total: traceabilityManifest.entries.length,
+      preserved: traceabilityManifest.entries.filter(e => e.status === "preserved").length,
+      stubbed: traceabilityManifest.entries.filter(e => e.status === "stubbed").length,
+      degraded: traceabilityManifest.entries.filter(e => e.status === "degraded").length,
+      dropped: traceabilityManifest.entries.filter(e => e.status === "dropped").length,
+    };
+    console.log(`[Pipeline] Traceability manifest reconciled and finalized: ${manifestSummary.total} steps — ${manifestSummary.preserved} preserved, ${manifestSummary.stubbed} stubbed, ${manifestSummary.degraded} degraded, ${manifestSummary.dropped} dropped`);
+
     tracker.start("packaging_dhg_guide", "Generating Developer Handoff Guide");
     tracker.heartbeat("packaging_dhg_guide", () => "Analyzing workflows and writing guide");
-    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport, emergencyFallbackActive, emergencyFallbackReason, cliValidationResult);
+    const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport, emergencyFallbackActive, emergencyFallbackReason, cliValidationResult, traceabilityManifest);
     tracker.complete("packaging_dhg_guide", "Handoff Guide generated", {
       analysisCount: dhgResult.analysisReports.length,
     });
@@ -1965,6 +2081,7 @@ export async function compilePackageFromSpecs(
       criticalActivityContractDiagnostics: buildResult.criticalActivityContractDiagnostics,
       cliValidationMode: cliValidationResult?.mode || "custom_validated_only",
       cliValidationResult: cliValidationResult,
+      traceabilityManifest,
     };
 
     evictOldestPipelineCacheEntry();

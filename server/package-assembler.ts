@@ -178,6 +178,9 @@ export { normalizePackageName } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
   import { getPackageNamespaceMap, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
+  import { validateEnricherToAssemblerContract, validateAssemblerToComplianceContract, runEnricherToAssemblerCorrectionLadder } from "./inter-stage-validator";
+  import type { TraceabilityManifest } from "./traceability-manifest";
+  import { updateManifestEntriesByWorkflow as _manifestUpdateByWorkflow, markWorkflowStubbed as _manifestMarkStubbed } from "./traceability-manifest";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
   import { XMLParser, XMLBuilder, XMLValidator } from "fast-xml-parser";
@@ -4027,11 +4030,11 @@ function buildDeterministicScaffold(
 
 
 
-export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier): Promise<BuildResult> {
-  return runWithTraceContext(() => buildNuGetPackageImpl(pkg, version, ideaId, generationMode, onProgress, studioProfile, complexityTier));
+export async function buildNuGetPackage(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier, traceabilityManifest?: TraceabilityManifest): Promise<BuildResult> {
+  return runWithTraceContext(() => buildNuGetPackageImpl(pkg, version, ideaId, generationMode, onProgress, studioProfile, complexityTier, traceabilityManifest));
 }
 
-async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier): Promise<BuildResult> {
+async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.0", ideaId?: string, generationMode: GenerationMode = "full_implementation", onProgress?: (event: { type: "started" | "heartbeat" | "completed" | "warning" | "failed"; stage: string; message: string }) => void, studioProfile?: StudioProfile | null, complexityTier?: ComplexityTier, traceabilityManifest?: TraceabilityManifest): Promise<BuildResult> {
   resetQuoteRepairDiagnostics();
 
   if (!catalogService.isLoaded()) {
@@ -4617,6 +4620,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const apEnabled = !!pkg.internal?.autopilotEnabled || !!(_probeCacheSnapshot?.flags?.autopilot);
     const earlyStubFallbacks: string[] = [];
     const complianceFallbacks: Array<{ file: string; reason: string; wasFullStub: boolean }> = [];
+    const reachabilityPruningEvents: Array<{ file: string; action: "removed" | "retained"; reason: string }> = [];
     const collectedPreEmissionDiagnostics: CriticalActivityLoweringDiagnostics[] = [];
     resetInstanceCounter();
     const collectedSymbolDiscoveryDiagnostics: import("./declaration-registry").SymbolDiscoveryDiagnostic[] = [];
@@ -4920,6 +4924,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         return result;
       } catch (err: any) {
         earlyStubFallbacks.push(`${wfName}.xaml`);
+        if (traceabilityManifest) {
+          _manifestMarkStubbed(traceabilityManifest, wfName, `Generator failed: ${err.message}`);
+        }
         if (generationMode === "package") {
           console.log(`[UiPath Package Mode] Generator failed for ${wfName}: ${err.message} — stub injection BLOCKED by completeness policy`);
           collectedQualityIssues.push({
@@ -5133,6 +5140,102 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         if (entry.spec.arguments && entry.spec.arguments.length > 0) {
           persistedSpecArguments.set(entry.name, entry.spec.arguments);
           persistedSpecArguments.set(normalizeWorkflowName(entry.name), entry.spec.arguments);
+        }
+      }
+
+      try {
+        const interStageWorkflows = enrichmentsToProcess.map(e => {
+          if (!e.spec.variables) e.spec.variables = [];
+          const children = e.spec.rootSequence?.children || [];
+          const activityChildren = children.filter((c: any) => c.kind === "activity");
+          return {
+            name: e.name,
+            variables: e.spec.variables,
+            arguments: e.spec.arguments || [],
+            steps: activityChildren.map((c: any) => ({
+              activity: c.displayName || "",
+              activityType: c.template || "unknown",
+              properties: c.properties || {},
+              _sourceChild: c,
+            })),
+          };
+        });
+        const semanticCorrector: import("./inter-stage-validator").SemanticCorrectorFn = (
+          workflow, stepIndex, violation, step,
+        ) => {
+          if (violation.type === "undeclared_variable" && step.properties) {
+            const varMatch = violation.detail.match(/Variable "([^"]+)"/);
+            const propMatch = violation.detail.match(/property "([^"]+)"/);
+            if (varMatch && propMatch) {
+              const varName = varMatch[1];
+              const propName = propMatch[1].split(".")[0];
+              const currentVal = step.properties[propName];
+              if (typeof currentVal === "string" && currentVal.includes(`[${varName}]`)) {
+                const updated = { ...step.properties };
+                updated[propName] = currentVal.replace(`[${varName}]`, `"TODO_${varName}"`);
+                const wf = interStageWorkflows.find(w => w.name === workflow);
+                if (wf?.steps?.[stepIndex]?._sourceChild?.properties) {
+                  wf.steps[stepIndex]._sourceChild.properties[propName] = updated[propName];
+                }
+                return { repaired: true, updatedProperties: updated };
+              }
+            }
+          }
+          if (violation.type === "argument_mismatch" && step.properties) {
+            const argMatch = violation.detail.match(/argument "([^"]+)"/);
+            const targetMatch = violation.detail.match(/InvokeWorkflowFile to ([^:]+):/);
+            if (argMatch && targetMatch) {
+              const argName = argMatch[1];
+              const updated = { ...step.properties };
+              if (!updated.Arguments) updated.Arguments = {};
+              const args = updated.Arguments as Record<string, unknown>;
+              if (args[argName] === undefined || args[argName] === null || args[argName] === "") {
+                args[argName] = `"TODO_${argName}"`;
+                const wf = interStageWorkflows.find(w => w.name === workflow);
+                if (wf?.steps?.[stepIndex]?._sourceChild?.properties) {
+                  wf.steps[stepIndex]._sourceChild.properties = updated;
+                }
+                return { repaired: true, updatedProperties: updated };
+              }
+            }
+          }
+          return { repaired: false };
+        };
+        const correctionResult = runEnricherToAssemblerCorrectionLadder(interStageWorkflows, traceabilityManifest, 2, semanticCorrector);
+        if (correctionResult.totalRepairs > 0) {
+          console.log(`[Inter-Stage] Enricher→Assembler: ${correctionResult.totalRepairs} total repair(s) across ${correctionResult.rounds.length} round(s)`);
+          for (const round of correctionResult.rounds) {
+            console.log(`[Inter-Stage]   Round ${round.round}: ${round.repairsApplied} repair(s), ${round.violationsRemaining} remaining`);
+          }
+        }
+        if (correctionResult.finalUnresolvedCount > 0) {
+          console.warn(`[Inter-Stage] Enricher→Assembler: ${correctionResult.finalUnresolvedCount} unresolved violation(s) after ${correctionResult.rounds.length} correction round(s) — applying localized degradation`);
+          for (const v of correctionResult.finalViolations) {
+            dependencyWarnings.push({
+              code: "INTER_STAGE_ENRICHER_ASSEMBLER",
+              message: `[Enricher→Assembler] ${v.detail}`,
+              stage: "inter-stage-validation",
+              recoverable: v.severity === "warning",
+            });
+          }
+        }
+      } catch (interStageErr: any) {
+        console.error(`[Inter-Stage] Enricher→Assembler validation threw unexpectedly: ${interStageErr?.message || "unknown"}`);
+        dependencyWarnings.push({
+          code: "INTER_STAGE_ENRICHER_ASSEMBLER_CRASH",
+          message: `Enricher→Assembler contract validator threw: ${interStageErr?.message || "unknown"} — all enriched workflows treated as degraded`,
+          stage: "inter-stage-validation",
+          recoverable: false,
+        });
+        if (traceabilityManifest) {
+          for (const entry of traceabilityManifest.entries) {
+            if (entry.status === "preserved") {
+              entry.status = "degraded";
+              entry.reason = `Enricher→Assembler contract validation failed: ${interStageErr?.message || "unknown"}`;
+              entry.developerAction = "Review all variable declarations and argument bindings — contract gate could not verify correctness";
+              entry.corrections.push("Contract validation crashed — blanket degradation applied");
+            }
+          }
         }
       }
 
@@ -5381,6 +5484,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, spResult.content);
           generatedWorkflowNames.add(wfName);
           complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Critical activity lowering gate blocked emission`, wasFullStub: spResult.wasFullStub });
+          if (traceabilityManifest) {
+            _manifestMarkStubbed(traceabilityManifest, wfName, `Critical activity lowering gate blocked emission — structural preservation applied`);
+          }
           if (wfName !== "Main" && wfName !== "Process") {
             nonMainWorkflowNames.push(wfName);
           }
@@ -5396,7 +5502,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         }
         try {
           setActiveCallerWorkflowName(wfName);
-          const { xaml, variables, symbolDiscoveryDiagnostics: wfSymbolDiag } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
+          const { xaml: rawXaml, variables, symbolDiscoveryDiagnostics: wfSymbolDiag } = assembleWorkflowFromSpec(spec, enrichEntry.processType);
+          let xaml = rawXaml;
           const wfContractDiags = getAndClearContractDiagnostics();
           if (wfContractDiags.length > 0) {
             for (const cd of wfContractDiags) {
@@ -5439,6 +5546,47 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           let compliant: string;
           let complianceFailed = false;
+          {
+            const preCompEntry = { name: `${wfName}.xaml`, content: xaml };
+            const preCompResult = validateAssemblerToComplianceContract([preCompEntry], traceabilityManifest);
+            if (preCompResult.repairsApplied > 0) {
+              xaml = preCompEntry.content;
+              console.log(`[Inter-Stage] Pre-compliance gate for "${wfName}": ${preCompResult.repairsApplied} deterministic repair(s) applied`);
+            }
+            if (preCompResult.unresolvedCount > 0) {
+              for (const v of preCompResult.violations) {
+                if (v.severity === "error") {
+                  console.warn(`[Inter-Stage] Pre-compliance gate for "${wfName}": unresolved ${v.type} — ${v.detail}`);
+                  if (v.type === "structural_violation" && v.detail.includes("Malformed XML")) {
+                    const xmlDeclEnd = xaml.indexOf("?>");
+                    if (xmlDeclEnd > 0) {
+                      const afterDecl = xaml.substring(xmlDeclEnd + 2).trim();
+                      const firstElem = afterDecl.indexOf("<");
+                      if (firstElem > 0) {
+                        xaml = xaml.substring(0, xmlDeclEnd + 2) + "\n" + afterDecl.substring(firstElem);
+                        console.log(`[Inter-Stage] Pre-compliance: stripped malformed content before first element in "${wfName}"`);
+                      }
+                    }
+                  }
+                  if (v.type === "variable_ref_missing") {
+                    const varMatch = v.detail.match(/Variable "([^"]+)"/);
+                    if (varMatch) {
+                      const missingVar = varMatch[1];
+                      const seqVarsPattern = /(<Sequence\.Variables>)([\s\S]*?)(<\/Sequence\.Variables>)/;
+                      const svMatch = seqVarsPattern.exec(xaml);
+                      if (svMatch) {
+                        const varDecl = `\n      <Variable x:TypeArguments="x:String" Name="${missingVar}" Default="" />`;
+                        xaml = xaml.substring(0, svMatch.index + svMatch[1].length) +
+                          svMatch[2] + varDecl +
+                          xaml.substring(svMatch.index + svMatch[1].length + svMatch[2].length);
+                        console.log(`[Inter-Stage] Pre-compliance: injected placeholder variable "${missingVar}" in "${wfName}"`);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
           try {
             compliant = compliancePass(xaml, `${wfName}.xaml`);
           } catch (compErr: any) {
@@ -5447,6 +5595,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             const spResult = tryStructuralPreservationOrStub(xaml, wfName, compErr.message);
             compliant = spResult.content;
             complianceFallbacks.push({ file: `${wfName}.xaml`, reason: compErr.message, wasFullStub: spResult.wasFullStub });
+            if (traceabilityManifest) {
+              _manifestMarkStubbed(traceabilityManifest, wfName, `Compliance pass failed: ${compErr.message}`);
+            }
           }
           {
             const wfTraces = collectedRequiredPropertyTraces.filter(t => t.workflowFile === `${wfName}.xaml`);
@@ -5484,6 +5635,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           syncXamlWrite(deferredWrites, xamlEntries, `${libPath}/${wfName}.xaml`, spResult.content);
           generatedWorkflowNames.add(wfName);
           complianceFallbacks.push({ file: `${wfName}.xaml`, reason: `Tree assembly failed — ${err.message}`, wasFullStub: spResult.wasFullStub });
+          if (traceabilityManifest) {
+            _manifestMarkStubbed(traceabilityManifest, wfName, `Tree assembly failed: ${err.message}`);
+          }
           if (wfName !== "Main" && wfName !== "Process") {
             nonMainWorkflowNames.push(wfName);
           }
@@ -6384,6 +6538,50 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
       _wiringDiag_wiringTimeHash = computeWorkflowSetHash(deferredWrites, xamlEntries);
 
+      try {
+        const assemblerComplianceEntries = xamlEntries.filter(e => e.name.endsWith(".xaml"));
+        if (assemblerComplianceEntries.length > 0) {
+          const complianceResult = validateAssemblerToComplianceContract(assemblerComplianceEntries, traceabilityManifest);
+          if (complianceResult.repairsApplied > 0) {
+            console.log(`[Inter-Stage] Assembler→Compliance: ${complianceResult.repairsApplied} deterministic repair(s) applied`);
+            for (const entry of assemblerComplianceEntries) {
+              if (deferredWrites.has(entry.name)) {
+                deferredWrites.set(entry.name, entry.content);
+              }
+            }
+          }
+          if (complianceResult.unresolvedCount > 0) {
+            console.warn(`[Inter-Stage] Assembler→Compliance: ${complianceResult.unresolvedCount} unresolved violation(s) — continuing with localized degradation`);
+            for (const v of complianceResult.violations) {
+              dependencyWarnings.push({
+                code: "INTER_STAGE_ASSEMBLER_COMPLIANCE",
+                message: `[Assembler→Compliance] ${v.detail}`,
+                stage: "inter-stage-validation",
+                recoverable: v.severity === "warning",
+              });
+            }
+          }
+        }
+      } catch (interStageErr: any) {
+        console.error(`[Inter-Stage] Assembler→Compliance validation threw unexpectedly: ${interStageErr?.message || "unknown"}`);
+        dependencyWarnings.push({
+          code: "INTER_STAGE_ASSEMBLER_COMPLIANCE_CRASH",
+          message: `Assembler→Compliance contract validator threw: ${interStageErr?.message || "unknown"} — XAML structural integrity unverified`,
+          stage: "inter-stage-validation",
+          recoverable: false,
+        });
+        if (traceabilityManifest) {
+          for (const entry of traceabilityManifest.entries) {
+            if (entry.status === "preserved") {
+              entry.status = "degraded";
+              entry.reason = `Assembler→Compliance contract validation failed: ${interStageErr?.message || "unknown"}`;
+              entry.developerAction = "Review xmlns declarations, variable scope, and XAML structure — contract gate could not verify correctness";
+              entry.corrections.push("Contract validation crashed — blanket degradation applied");
+            }
+          }
+        }
+      }
+
       if (mainHadFallback || processHadFallback) {
         console.log(`[Structural Dedup] ${mainHadFallback ? "Main.xaml" : ""}${mainHadFallback && processHadFallback ? " and " : ""}${processHadFallback ? "Process.xaml" : ""} had fallback — skipping reachability pruning to preserve child workflows`);
         const { reachable: fbReachable, graph } = buildReachabilityGraph(deferredWrites, xamlEntries, libPath);
@@ -6427,6 +6625,53 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                   : `no spec scaffold metadata available — assembly used fallback wiring which could not reach this workflow`;
               console.warn(`[Structural Dedup] DIAGNOSTIC: "${retained}" unreachable — reason: ${reason}`);
               _wiringDiag_perWorkflowRejections.set(basename, `DIAGNOSTIC-ONLY: ${reason}`);
+              reachabilityPruningEvents.push({ file: basename, action: "retained", reason: `Spec-decomposed but unreachable: ${reason}` });
+              if (traceabilityManifest) {
+                const wfBasenameForManifest = basename.replace(/\.xaml$/i, "");
+                const matchingEntries = traceabilityManifest.entries.filter(e => e.assignedWorkflow === wfBasenameForManifest);
+                if (matchingEntries.length > 0) {
+                  for (const me of matchingEntries) {
+                    if (me.status === "preserved") {
+                      me.status = "degraded";
+                      me.reason = `Workflow unreachable from Main.xaml — retained with TODO anchor`;
+                      me.developerAction = `Wire InvokeWorkflowFile to "${basename}" in Process.xaml or Main.xaml, or remove if unnecessary`;
+                      me.corrections.push("Reachability: retained but unreachable");
+                    }
+                  }
+                } else {
+                  traceabilityManifest.entries.push({
+                    stepId: `${wfBasenameForManifest}:orphan:retained`,
+                    sourceDescription: `Workflow "${basename}" from spec decomposition`,
+                    assignedWorkflow: wfBasenameForManifest,
+                    assignedActivity: "",
+                    activityType: "workflow",
+                    status: "degraded",
+                    reason: `Unreachable from Main.xaml — retained with TODO anchor`,
+                    corrections: ["Reachability: retained but unreachable"],
+                    developerAction: `Wire InvokeWorkflowFile to "${basename}" or remove if unnecessary`,
+                    placeholderInserted: `TODO anchor in Process/Main.xaml`,
+                    editLocation: `${basename}`,
+                  });
+                }
+              }
+              if (!alreadyReferenced) {
+                const wfBasename = basename.replace(/\.xaml$/i, "");
+                const todoComment = `\n      <!-- TODO: Wire unreachable workflow "${wfBasename}.xaml" — generated from spec but not invoked. Add InvokeWorkflowFile or remove if unnecessary. -->`;
+                const targetPath = deferredWrites.has(processPath) ? processPath : `${libPath}/Main.xaml`;
+                const targetXaml = deferredWrites.get(targetPath);
+                if (targetXaml) {
+                  const closingSeqMatch = targetXaml.lastIndexOf("</Sequence>");
+                  if (closingSeqMatch > 0) {
+                    const updatedXaml = targetXaml.substring(0, closingSeqMatch) + todoComment + "\n    " + targetXaml.substring(closingSeqMatch);
+                    deferredWrites.set(targetPath, updatedXaml);
+                    const entryIdx = xamlEntries.findIndex(e => e.name === targetPath);
+                    if (entryIdx >= 0) {
+                      xamlEntries[entryIdx].content = updatedXaml;
+                    }
+                    console.log(`[Structural Dedup] Injected TODO anchor for unreachable workflow "${wfBasename}" into ${targetPath.split("/").pop()}`);
+                  }
+                }
+              }
               dependencyWarnings.push({
                 code: "SPEC_WORKFLOW_UNREACHABLE_POST_ASSEMBLY",
                 message: `"${retained}" was generated from spec decomposition but is still unreachable after assembly — ${reason}`,
@@ -6446,6 +6691,35 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                 stage: "structural-deduplication",
                 recoverable: true,
               });
+            }
+            for (const removed of removedFiles) {
+              reachabilityPruningEvents.push({ file: removed, action: "removed", reason: `Unreachable from Main.xaml entry-point graph — no InvokeWorkflowFile reference chain` });
+              if (traceabilityManifest) {
+                const removedBase = removed.replace(/\.xaml$/i, "").replace(/^.*[/\\]/, "");
+                const matchingEntries = traceabilityManifest.entries.filter(e => e.assignedWorkflow === removedBase);
+                if (matchingEntries.length > 0) {
+                  for (const me of matchingEntries) {
+                    me.status = "dropped";
+                    me.reason = `Workflow removed — unreachable from Main.xaml, not spec-decomposed`;
+                    me.developerAction = `Workflow "${removed}" was pruned. If needed, re-add and wire via InvokeWorkflowFile`;
+                    me.corrections.push("Reachability: removed as orphan");
+                  }
+                } else {
+                  traceabilityManifest.entries.push({
+                    stepId: `${removedBase}:orphan:removed`,
+                    sourceDescription: `Workflow "${removed}" (orphaned)`,
+                    assignedWorkflow: removedBase,
+                    assignedActivity: "",
+                    activityType: "workflow",
+                    status: "dropped",
+                    reason: `Unreachable from Main.xaml — removed as orphan`,
+                    corrections: ["Reachability: removed as orphan"],
+                    developerAction: `Re-add "${removed}" and wire via InvokeWorkflowFile if needed`,
+                    placeholderInserted: "",
+                    editLocation: "",
+                  });
+                }
+              }
             }
             console.log(`[Structural Dedup] Removed ${removedFiles.length} truly orphaned file(s): ${removedFiles.join(", ")}`);
           } else {
@@ -8672,6 +8946,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       qualityWarnings: dhgQualityWarnings,
       totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
       studioCompatibility: dhgStudioCompatibility,
+      reachabilityPruning: reachabilityPruningEvents.length > 0 ? reachabilityPruningEvents : undefined,
       emissionGateViolations: emissionGateResult.violations.length > 0 ? {
         totalViolations: emissionGateResult.summary.totalViolations,
         stubbed: emissionGateResult.summary.stubbed,

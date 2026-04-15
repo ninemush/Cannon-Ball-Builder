@@ -3,6 +3,7 @@ import type {
   RemediationEntry,
   PerWorkflowStudioCompatibility,
 } from "./uipath-pipeline";
+import type { TraceabilityManifest, ManifestEntry } from "./traceability-manifest";
 import type { DhgAnalysisResult, SddArtifactCrossReference } from "./xaml/dhg-analyzers";
 import type { FinalQualityReport } from "./final-artifact-validation";
 import type { WorkflowStatusClassifierResult, WorkflowStatusClassification } from "./workflow-status-classifier";
@@ -117,6 +118,7 @@ export interface DhgContext {
   cliProjectType?: UiPathProjectType;
   cliAnalyzerDefectCount?: number;
   cliPackSuccess?: boolean;
+  traceabilityManifest?: TraceabilityManifest;
 }
 
 interface WorkflowTierClassification {
@@ -401,7 +403,43 @@ export function generateDhgFromOutcomeReport(
   md += `**Quality Warnings:** ${report.qualityWarnings.length}\n`;
   md += `\n---\n\n`;
 
-  if (wfClassifications.length > 0) {
+  if (context.traceabilityManifest && context.traceabilityManifest.entries.length > 0) {
+    const manifest = context.traceabilityManifest;
+    md += `### Step-Level Traceability\n\n`;
+    md += `| # | Source Step | Workflow | Activity | Status | Reason | Developer Action | Placeholder/Remediation | Where to Edit |\n`;
+    md += `|---|-----------|----------|----------|--------|--------|-----------------|------------------------|---------------|\n`;
+    manifest.entries.forEach((entry: ManifestEntry, i: number) => {
+      const statusLabel = entry.status === "preserved" ? "Preserved"
+        : entry.status === "stubbed" ? "Stubbed"
+        : entry.status === "degraded" ? "Degraded"
+        : "Dropped";
+      const devAction = entry.status === "preserved"
+        ? "None — fully implemented"
+        : (entry.developerAction || "—");
+      const placeholder = entry.placeholderInserted || "—";
+      const editLoc = entry.editLocation || "—";
+      const sourceDesc = entry.sourceDescription.length > 60
+        ? entry.sourceDescription.substring(0, 57) + "..."
+        : entry.sourceDescription;
+      const reasonText = entry.reason.length > 50
+        ? entry.reason.substring(0, 47) + "..."
+        : entry.reason;
+      const activityLabel = entry.assignedActivity
+        ? `${entry.assignedActivity} (${entry.activityType})`
+        : entry.activityType;
+      md += `| ${i + 1} | ${sourceDesc} | \`${entry.assignedWorkflow}.xaml\` | ${activityLabel} | ${statusLabel} | ${reasonText} | ${devAction} | ${placeholder} | \`${editLoc}\` |\n`;
+    });
+    md += `\n`;
+
+    const summary = {
+      total: manifest.entries.length,
+      preserved: manifest.entries.filter((e: ManifestEntry) => e.status === "preserved").length,
+      stubbed: manifest.entries.filter((e: ManifestEntry) => e.status === "stubbed").length,
+      degraded: manifest.entries.filter((e: ManifestEntry) => e.status === "degraded").length,
+      dropped: manifest.entries.filter((e: ManifestEntry) => e.status === "dropped").length,
+    };
+    md += `**Traceability Summary:** ${summary.total} steps — ${summary.preserved} preserved, ${summary.degraded} degraded, ${summary.stubbed} stubbed, ${summary.dropped} dropped\n\n`;
+  } else if (wfClassifications.length > 0) {
     const hasSddSteps = context.sddBusinessStepsByWorkflow && context.sddBusinessStepsByWorkflow.size > 0;
     const stepsLabel = hasSddSteps ? "Business Steps (SDD)" : "Total Steps";
     md += `### Per-Workflow Preservation Summary\n\n`;
