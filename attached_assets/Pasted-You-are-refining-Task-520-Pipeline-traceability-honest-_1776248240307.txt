@@ -1,0 +1,204 @@
+You are refining Task #520 - Pipeline traceability, honest degradation, and artifact integrity for CannonBall.
+
+Update the task so it fully reflects CannonBall’s actual product goal and avoids an accidental shift toward rigid blocking.
+
+Core product goal
+
+CannonBall’s goal is to produce, every single time, a:
+
+Studio-stable package
+with as much real business logic preserved as possible
+with localized TODO placeholders only where necessary
+and an honest, complete, actionable Developer Handoff Guide
+
+CannonBall is not trying to be a rigid compiler that blocks whenever uncertainty exists.
+
+CannonBall accepts that AI plus rules-based logic will not cover 100% of real-world scenarios. That is expected. The fallback is:
+
+preserve the workflow and business intent wherever possible
+complete the 80% CannonBall can do well
+localize the unresolved portion to the smallest possible scope
+mark those gaps clearly with TODO - Update this with XXX
+record them precisely in the DHG with specific developer actions
+
+This 80/20 outcome is still massively valuable and is the real product target.
+
+Critical clarification: do NOT reinterpret this as “block package generation”
+
+I do not want the pipeline to become more rigid or fail-fast by default.
+
+I am not saying package generation should be blocked whenever CannonBall cannot fully complete all business logic.
+
+What I am saying is:
+
+activity-level incompleteness is acceptable
+package-level structural instability is not acceptable
+
+In other words:
+
+CannonBall may degrade business logic locally
+CannonBall may insert activity-level TODO placeholders
+CannonBall may produce degraded or stubbed activities with clear handoff guidance
+but CannonBall must not deliver a package that fails to open in Studio or opens with broad structural/package-authoring defects
+
+So the correct philosophy is:
+
+Prefer localized degradation over global failure.
+Prefer preserving executable business logic over rigid blocking.
+Prefer honest TODO handoff over silent logic loss.
+Hard fail only when the package is not Studio-stable/openable, the artifact cannot be trusted, or there is a known high-confidence silent runtime corruption that cannot be localized into a developer-actionable handoff.
+
+Non-negotiable package quality standard
+
+CannonBall may degrade unresolved business logic at the smallest possible activity scope with explicit TODO placeholders and DHG guidance, but it must not deliver packages with foundational Studio-authoring defects.
+
+Packages must:
+
+open in UiPath Studio every single time
+be free of broad structural errors
+be free of missing variables that break authoring
+be free of broken/orphaned flows that make the package unstable
+be free of invalid or inconsistent arguments that make the package noisy/broken in Studio
+be free of missing namespace declarations / broken xmlns usage
+be free of malformed XML/XAML
+be free of missing essential files like Main.xaml
+be free of missing dependencies or other foundational package defects that make Studio load unreliable
+
+Acceptable fallback:
+
+localized activity-level stubs or degraded activities
+explicit TODO placeholders
+TODO text that describes the missing business logic clearly
+TODO text that specifies the exact developer action required
+matching DHG entries with exact edit guidance
+
+Unacceptable output:
+
+package fails to open in Studio
+package opens with tons of structural/authoring errors
+package-wide instability is used as the fallback mechanism
+
+Short phrasing to incorporate directly into the task:
+
+CannonBall may degrade unresolved business logic at the smallest possible activity scope with explicit TODO placeholders and DHG guidance, but it must not deliver packages with foundational Studio-authoring defects. Packages must open in UiPath Studio every time and must be free of broad structural errors such as malformed XAML, missing variables, broken flows, invalid arguments, missing essential dependencies, or namespace inconsistencies.
+
+What to change in Task #520
+
+Refine the task so it becomes a traceability, honest-degradation, and artifact-integrity layer, not a rigid hard-gating system.
+
+Reposition inter-stage contracts
+
+Inter-stage contracts should not primarily exist to stop the pipeline.
+
+They should exist to:
+
+detect silent drift between stages
+trigger targeted repair
+localize degradation when repair is not possible
+update the traceability manifest and DHG honestly
+prevent silent logic loss
+preserve package Studio stability
+
+Use hard failure only when continuing would produce:
+
+a non-openable/non-Studio-stable package
+an artifact that does not match the reported corrected state
+a known, high-confidence silent runtime corruption that cannot be localized into an explicit TODO / degraded / stubbed handoff
+Reposition reachability behavior
+
+Do not treat unresolved invoke-path issues as automatic stage-fail conditions if the package can still remain Studio-stable and the missing linkage can be preserved visibly.
+
+Better behavior:
+
+first attempt deterministic correction
+if correction succeeds, log it and continue
+if correction fails, do not silently delete the workflow
+preserve the affected workflow/business intent visibly using localized TODO comments/placeholders and DHG guidance
+mark the affected steps honestly in the traceability manifest
+hard fail only if the unresolved issue makes the package non-openable, structurally unstable, or artifact-trustworthy delivery impossible
+Keep rebuild integrity as a hard gate
+
+This should remain strict.
+
+If the final .nupkg does not match the corrected XAML state CannonBall reports, the artifact is untrustworthy.
+
+So:
+
+no stale artifact delivery
+no continue-anyway path
+no fallback to pre-correction artifact while reporting corrected state
+Reposition the manifest
+
+The traceability manifest should not just classify preserved / stubbed / degraded / dropped.
+
+It should support the actual 80/20 product goal.
+
+For each step, track:
+
+what CannonBall completed fully
+what CannonBall completed partially
+what TODO placeholder/remediation was inserted
+what exact developer action is required
+where to edit
+why the step was not fully completed
+Keep dropped rare
+
+A step should be marked dropped only when:
+
+there is truly no surviving implementation in the final package
+and no explicit stub / placeholder / remediation remains
+
+If there is a TODO placeholder, Comment/LogMessage, degraded activity, or explicit developer-visible anchor, that should usually be stubbed or degraded, not dropped.
+
+Enforce the smallest-scope fallback ladder
+
+Make this explicit in the task:
+
+preserve full real logic if possible
+preserve logic with placeholder properties if necessary
+preserve workflow shape with localized TODO comments/logs
+stub only the smallest unsalvageable unit
+hard fail only if Studio stability, artifact trust, or known non-localizable silent runtime corruption is broken
+
+Do not let the system default to whole-workflow stubbing or pipeline blocking when a smaller fallback is possible.
+
+Additional refinement to add
+
+Acknowledge that much of the degradation machinery already exists.
+
+The implementation focus for #520 should primarily be:
+
+adding the step-level traceability manifest
+making inter-stage drift visible and repairable
+preventing silent workflow deletion
+making the DHG step-level and action-oriented
+closing the rebuild integrity continue-anyway escape route
+
+It should not be framed as “build a new degradation engine from scratch.”
+
+Requested update to the task text
+
+Please rewrite Task #520 so it reflects all of the above.
+
+The updated task should make clear:
+
+CannonBall should preserve as much real business logic as possible
+CannonBall should localize unresolved work to the smallest possible activity scope
+CannonBall should produce a package that opens in Studio every single time
+CannonBall should not ship packages with broad structural/package-authoring defects
+activity-level TODO handoff is acceptable
+package-level instability is not acceptable
+traceability and contracts exist to prevent silent loss and ensure DHG honesty, not to make the pipeline rigid
+rebuild integrity remains a true hard gate
+Deliverables for this refinement
+
+When done, provide:
+
+the rewritten task text
+a short explanation of what changed in the framing
+the exact wording used to distinguish:
+acceptable activity-level degradation
+unacceptable package-level instability
+a note on which hard-fail cases remain and why they are justified
+
+Refine now.

@@ -1,0 +1,354 @@
+Implement **Task #520 - Pipeline traceability and inter-stage contracts** as a **trustworthiness layer** for CannonBall, not as a narrow patch for the last failed runs.
+
+The purpose of this task is to guarantee three things across the full pipeline:
+
+1. **Business logic traceability**
+   Every SDD/PDD process step must be traceable from source design through final emitted package, with an honest final disposition.
+
+2. **Inter-stage contract enforcement**
+   Each stage must validate that its output is valid input for the next stage. Silent drift between stages is not acceptable.
+
+3. **Artifact integrity**
+   The final delivered `.nupkg` must be provably identical, at the XAML-entry level, to the corrected working set that the pipeline claims it produced.
+
+This is not the same as previous structural-healing work. Prior tasks improved defect repair inside stages. This task adds the **connective guarantees between stages**.
+
+---
+
+## Core implementation standard
+
+Do **not** implement this as a loose collection of warnings, counters, or best-effort diagnostics.
+
+Implement it as a **contract-and-traceability layer** with the following properties:
+
+* every process step gets a durable manifest record
+* every stage handoff has explicit validation rules
+* every repair/degradation updates the manifest
+* silent workflow deletion is forbidden
+* stale-artifact delivery is forbidden
+* the DHG must reflect the actual final artifact, not intermediate intent
+
+---
+
+## Critical design constraints
+
+### A. The manifest must be durable across the whole pipeline
+
+The step-level traceability manifest must be created early and survive all the way to final DHG generation.
+
+For each step, track at minimum:
+
+* stable step identifier
+* source description
+* assigned workflow
+* assigned activity or implementation locus if known
+* current status
+* reason for status
+* notable corrections/degradations applied
+
+Allowed final statuses:
+
+* `preserved`
+* `stubbed`
+* `degraded`
+* `dropped`
+
+Do not invent more statuses unless absolutely necessary.
+
+### B. “Dropped” must mean truly unimplemented in the final artifact
+
+A step is not “dropped” just because an intermediate stage struggled with it.
+Only mark `dropped` if the final package has no corresponding implementation and no explicit stub/remediation path preserving developer visibility.
+
+If a step becomes a Comment/LogMessage remediation or equivalent explicit placeholder, that is `stubbed`, not `dropped`.
+
+### C. Do not allow silent logic deletion
+
+This is non-negotiable.
+
+If reachability pruning or invoke mismatch would remove a workflow or logic path:
+
+* either correct it deterministically
+* or fail the stage clearly
+* but do **not** silently delete it and continue
+
+### D. Rebuild integrity is a hard gate, not a warning
+
+If corrected XAML cannot be proven to exist in the rebuilt archive, the pipeline must fail honestly.
+
+Do not preserve any “continue anyway” path that can deliver a stale or mismatched artifact.
+
+### E. Stage contracts must validate handoff compatibility, not just local well-formedness
+
+Do not stop at “valid JSON” or “well-formed XML.”
+
+Examples:
+
+* enricher output must be logically valid for the assembler
+* raw XAML must be structurally viable for compliance, not just parse as XML
+* invoke references must resolve to real workflow targets
+
+### F. This task must not rewrite the pipeline architecture
+
+Work within the current stage structure.
+Do not drift into Task #373 territory.
+
+---
+
+## Implementation tasks
+
+### 1. Build the step-level traceability manifest
+
+Create a pipeline-wide manifest initialized during spec decomposition.
+
+#### Required behavior
+
+* Create one manifest entry per SDD/PDD process step, keyed by a stable step ID if available, otherwise by a durable derived identifier.
+* Carry this manifest through enrichment, assembly, validation, repair, packaging, and DHG generation.
+* Update each step entry when the step is:
+
+  * mapped to a workflow
+  * mapped to an activity or logical implementation point
+  * preserved as real logic
+  * degraded by placeholder properties or partial repair
+  * stubbed via Comment/LogMessage or equivalent explicit remediation
+  * dropped because no final implementation or explicit stub survives
+
+#### Important requirements
+
+* The manifest must not rely on fragile string matching alone once a step has been assigned. Preserve stable links where possible.
+* If a single source step expands into multiple implementation activities, allow one-to-many linkage.
+* If multiple source steps collapse into one implementation block, record that explicitly rather than losing attribution.
+
+#### Files to inspect/update
+
+* `server/uipath-spec-decomposer.ts`
+* `server/uipath-pipeline.ts`
+* `server/package-assembler.ts`
+* `server/dhg-generator.ts`
+
+---
+
+### 2. Add inter-stage contract validation at the enricher → assembler handoff
+
+This is the first major contract boundary.
+
+#### Validate before assembly begins
+
+At minimum, validate:
+
+* every variable referenced in any expression is declared in the spec variable set
+* every cross-workflow argument reference has compatible direction and type
+* every activity template or activity type exists in the catalog
+* there are no obviously impossible scope relationships
+* there are no broken references that will deterministically explode in assembly
+
+#### Correction behavior
+
+* If violations are found, run a targeted correction pass with only the relevant violations and context
+* Allow at most **2 correction rounds**
+* If still unresolved, do not let them silently cascade downstream
+* Record the affected steps in the traceability manifest as `degraded` or `stubbed` as appropriate
+
+#### Important requirement
+
+This validation must be a real handoff gate. It cannot be only informational logging.
+
+#### Files to inspect/update
+
+* `server/ai-xaml-enricher.ts`
+* `server/catalog/spec-validator.ts`
+* `server/uipath-pipeline.ts`
+* `server/meta-validation/iterative-llm-corrector.ts`
+
+---
+
+### 3. Add inter-stage contract validation at the assembler → compliance handoff
+
+This is the second major contract boundary.
+
+#### Validate after raw XAML assembly and before compliance transforms
+
+At minimum, validate:
+
+* every xmlns prefix used in element/attribute names has a declaration
+* every variable referenced in expressions is declared in XAML variable scopes
+* emitted workflow/activity hierarchy still reflects intended structure
+* no silent flattening/reordering has broken the spec’s intended control structure
+* emitted XAML is not only well-formed XML but plausibly Studio-valid structural XAML
+
+#### Correction behavior
+
+* Feed violations back to the assembler or targeted repair logic before compliance runs
+* Do not let compliance become a speculative fixer for fundamentally broken assembler output
+
+#### Important requirement
+
+This is not just XML parsing. This is a handoff contract for “assembler output is suitable for compliance processing.”
+
+#### Files to inspect/update
+
+* `server/workflow-tree-assembler.ts`
+* `server/package-assembler.ts`
+* `server/uipath-pipeline.ts`
+* `server/uipath-quality-gate.ts`
+* `server/emission-gate.ts`
+
+---
+
+### 4. Convert reachability pruning from silent deletion to contract-enforced recovery
+
+This is a critical business-logic preservation issue.
+
+#### Required behavior
+
+When the reachability graph finds an unreachable workflow:
+
+* first attempt deterministic recovery by resolving the intended target
+* use conservative filename/path correction such as exact or high-confidence fuzzy match
+* if a valid correction is found, apply it and log the correction
+* if no safe correction exists, fail the stage with a clear error
+
+#### Forbidden behavior
+
+* do not silently delete generated workflows
+* do not downgrade a true logic-loss event to a quiet warning
+
+#### Manifest behavior
+
+* if invoke-path correction occurs, record it in the traceability manifest
+* if a workflow becomes orphaned and the stage fails, record which source steps were affected
+
+#### Files to inspect/update
+
+* `server/package-assembler.ts`
+* `server/uipath-pipeline.ts`
+* any reachability/pruning logic touched in current pipeline
+
+---
+
+### 5. Add rebuild integrity guarantee
+
+This is a hard trust requirement.
+
+#### Required behavior
+
+After any correction pass that modifies XAML:
+
+* rebuild the package
+* read back the corresponding archive entries
+* compare corrected working-set content against rebuilt archive content
+* verify equality per file, preferably using hashes plus content equality when needed
+
+If any corrected file fails read-back integrity:
+
+* fail the pipeline clearly
+* do not deliver the artifact
+* do not allow a “canonicalRebuildFailed but continue anyway” path
+
+#### Important requirement
+
+The DHG and final reporting must refer only to the verified final artifact state, not to unverified intermediate corrected copies.
+
+#### Files to inspect/update
+
+* `server/package-assembler.ts`
+* `server/final-artifact-validation.ts`
+* `server/uipath-pipeline.ts`
+
+---
+
+### 6. Integrate the traceability manifest into the DHG
+
+Replace the current workflow-level preservation summary with a step-level table.
+
+#### Required DHG output
+
+Each row should show at minimum:
+
+* source step description
+* target workflow
+* target activity or implementation locus
+* final status: preserved / stubbed / degraded / dropped
+* reason / notes
+
+#### Important requirement
+
+The DHG must reflect the final verified artifact state.
+Do not report a step as preserved if it was later stubbed, pruned, or lost.
+
+#### Files to inspect/update
+
+* `server/dhg-generator.ts`
+
+---
+
+## What good implementation looks like
+
+A good implementation of #520 does **not** merely add more logging.
+
+It should make these outcomes impossible or explicit:
+
+### Must become impossible
+
+* silently losing a workflow due to invoke mismatch
+* delivering a stale `.nupkg` after corrections were supposedly applied
+* claiming business logic was preserved without any step-level evidence
+
+### Must become explicit
+
+* which steps survived cleanly
+* which degraded and why
+* which were stubbed and where
+* which were truly dropped
+* which stage introduced the degradation or loss
+* whether enrichment again produced 0/N refinements during reruns
+
+---
+
+## Out of scope
+
+Do not drift into:
+
+* pipeline architecture rewrite
+* quality-dimension redesign from Task #410
+* prompt redesign
+* catalog expansion
+* sentinel/escaping defect-class fixes already covered by #519
+* UI work beyond the DHG traceability table
+
+---
+
+## Additional implementation guidance
+
+### 1. Prefer hard guarantees over warnings
+
+If a condition threatens artifact truthfulness or logic preservation, it should be a gate or a clearly classified degradation, not a buried diagnostic.
+
+### 2. Keep correction targeted
+
+For contract violations, do not trigger broad speculative healing if a narrow correction pass can address the exact mismatch.
+
+### 3. Preserve explainability
+
+Every degradation, stub, drop, invoke correction, and rebuild verification failure should have enough structured metadata that the DHG and pipeline logs can explain what happened.
+
+### 4. Do not overclaim preservation
+
+If you cannot prove a step survived in the final artifact, do not mark it preserved.
+
+---
+
+## Deliverables
+
+When finished, provide:
+
+1. a concise summary of architectural changes made
+2. the exact files changed
+3. the handoff contracts added and how they are enforced
+4. the traceability manifest structure
+5. the rebuild integrity verification method
+6. before/after behavior on a representative failing case
+7. any residual risks or follow-up tasks discovered
+
+Implement now.

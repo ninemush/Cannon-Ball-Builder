@@ -1,0 +1,253 @@
+You are refining **Task #520 - Pipeline traceability and inter-stage contracts** for CannonBall.
+
+Before you update the task, anchor on the actual product goal:
+
+## CannonBall’s goal
+
+CannonBall is **not** trying to be a rigid compiler that blocks whenever uncertainty exists.
+
+CannonBall’s goal is to produce, **every single time**, a:
+
+* **Studio-stable package**
+* with **as much real business logic preserved as possible**
+* with **localized TODO placeholders only where necessary**
+* and an **honest, complete, accurate Developer Handoff Guide**
+
+We accept that AI plus rules-based logic will not cover 100% of real-world scenarios. That is expected. The fallback is **not** hard blocking and **not** replacing large sections with stubs by default. The fallback is:
+
+* preserve the workflow and business intent wherever possible
+* complete the 80% CannonBall can do well
+* localize the unresolved 20% or less
+* mark those gaps clearly with `TODO - Update this with XXX`
+* record them precisely in the DHG
+
+This 80/20 outcome is still massively valuable and is the real product target.
+
+## Therefore, refine #520 with this philosophy
+
+### Do NOT make #520 a hard-gating / fail-fast task by default
+
+The current draft leans too far toward rigid blocking.
+
+That is **not** the CannonBall goal.
+
+Instead, #520 should become a **traceability, integrity, and honest-degradation** task with this principle:
+
+> Prefer localized degradation over global failure.
+> Prefer preserving executable business logic over rigid blocking.
+> Fail only when artifact trust or Studio stability is broken.
+
+### The purpose of #520 should be:
+
+1. prevent **silent business logic loss**
+2. ensure **every process step has a final disposition**
+3. guarantee the **DHG is honest**
+4. guarantee the **delivered artifact matches the reported artifact**
+5. avoid silent deletion, silent drift, and stale-artifact delivery
+6. but still allow the pipeline to continue with localized TODO placeholders and explicit developer handoff when full automation is not possible
+
+---
+
+## Required changes to the task framing
+
+### 1. Reposition inter-stage contracts
+
+Inter-stage contracts should **not** primarily exist to stop the pipeline.
+
+They should exist to:
+
+* detect silent drift between stages
+* trigger targeted repair
+* localize degradation when repair is not possible
+* update the traceability manifest and DHG honestly
+
+Use hard failure only when continuing would make the artifact untrustworthy or non-openable.
+
+### 2. Reposition reachability pruning
+
+The current draft says failed invoke-path recovery should fail the stage.
+
+Refine that.
+
+Better behavior:
+
+* first try deterministic invoke correction
+* if correction succeeds, log it and continue
+* if correction does not succeed, do **not** silently delete the workflow
+* instead preserve the affected workflow/business intent via explicit localized remediation and record the unresolved link clearly in the traceability manifest and DHG
+* only hard fail if the unresolved invoke/path issue makes the package structurally non-openable or makes the artifact/reporting relationship untrustworthy
+
+The key rule is:
+
+* **never silently delete logic**
+* **prefer visible degraded preservation over hard stop**
+* **hard fail only for trust/openability failures**
+
+### 3. Reposition rebuild integrity
+
+This one should remain a hard gate.
+
+Why:
+
+* if the final `.nupkg` does not match the corrected XAML state the pipeline reports, CannonBall is lying
+* that violates the core trust model
+
+So keep rebuild integrity as a hard requirement:
+
+* no stale artifact delivery
+* no continue-anyway path if artifact contents cannot be verified
+
+This is one of the few places where a hard fail is absolutely correct.
+
+### 4. Reposition the traceability manifest
+
+The manifest should not just exist to classify `preserved / stubbed / degraded / dropped`.
+
+It should support the 80/20 product goal.
+
+For each step, track:
+
+* what CannonBall completed fully
+* what CannonBall completed partially
+* what TODO placeholders were inserted
+* what exact developer action is still required
+* where in the workflow/package that action lives
+* why the step could not be completed fully
+
+This should make the DHG action-oriented, not just diagnostic.
+
+### 5. Minimize the use of “dropped”
+
+Be careful with the `dropped` status.
+
+A step should be marked `dropped` **only** when:
+
+* there is truly no surviving implementation
+* and no explicit stub / placeholder / localized remediation remains in the final package
+
+If a step is preserved via explicit TODO placeholder or remediation anchor, it should usually be `stubbed` or `degraded`, not `dropped`.
+
+The goal is to avoid silent disappearance and preserve visibility for developers.
+
+### 6. Prefer the smallest possible localized fallback
+
+The task should explicitly say:
+
+When a stage cannot fully repair a problem, fallback should occur at the **smallest possible scope**:
+
+1. preserve full real logic if possible
+2. preserve logic with placeholder properties if necessary
+3. preserve workflow shape with localized TODO comments/logs
+4. stub only the smallest unsalvageable unit
+5. hard fail only if Studio stability or artifact trust breaks
+
+Do **not** let the system default to whole-workflow stubbing or pipeline blocking when a smaller fallback is possible.
+
+---
+
+## Specific refinements to the task language
+
+Please update #520 so it reflects the following:
+
+### Update the “What & Why”
+
+Reframe it away from rigid contracts and toward:
+
+* preserving business logic through stage transitions
+* preventing silent loss
+* ensuring every unresolved part is visible and actionable
+* guaranteeing the final artifact matches what the DHG/report says
+
+Make explicit that:
+
+* CannonBall’s target is a Studio-stable, mostly complete implementation draft
+* unresolved logic should become localized TODO handoff items, not global failure, wherever possible
+
+### Update the “Done looks like”
+
+The revised done state should emphasize:
+
+* every SDD/PDD step has a final disposition
+* no process step is silently lost
+* unresolved steps are preserved as explicit TODO/stub/degraded items with exact DHG guidance
+* the final package is Studio-stable
+* the DHG is exact, step-level, and actionable
+* artifact integrity is guaranteed
+* pipeline failure happens only for trust/openability failures, not merely because full automation was impossible
+
+### Update the contract-validation tasks
+
+Refine them so:
+
+* contract violations first trigger targeted repair
+* unresolved issues then become localized degraded/stubbed outcomes with manifest updates
+* hard stop is reserved for cases where continuing would silently lose logic, corrupt the package, or deliver an untrustworthy artifact
+
+### Update the reachability task
+
+Refine it so:
+
+* no silent workflow deletion is ever allowed
+* correction is attempted first
+* if correction fails, preserve business intent visibly and record it in DHG/manifest
+* hard fail only if the package can no longer be honestly delivered as Studio-stable or artifact-consistent
+
+### Update the DHG integration task
+
+Strengthen it so the DHG becomes explicitly developer-action-oriented.
+
+Each row should include not just:
+
+* source step
+* workflow
+* target activity
+* final status
+* reason
+
+but also:
+
+* **developer action required**
+* **placeholder / remediation inserted**
+* **where to edit**
+
+This is critical. The DHG should help a developer finish the last 20% quickly.
+
+---
+
+## Non-negotiable philosophy to add to the task
+
+Please add language that makes this explicit:
+
+* CannonBall should prefer **honest degraded preservation** over rigid blocking
+* CannonBall should prefer **localized TODO handoff** over silent logic loss
+* CannonBall should prefer **smallest-scope fallback** over whole-workflow stubbing
+* CannonBall should only hard fail when:
+
+  * the package is not Studio-stable/openable, or
+  * the final artifact cannot be trusted to match the reported corrected state
+
+---
+
+## Keep these constraints
+
+Do not drift into:
+
+* rewriting the pipeline architecture
+* changing the activity catalog
+* changing prompts/enrichment strategy
+* folding in defect-class fixes that belong to #519
+* broad UI work beyond DHG improvements
+
+---
+
+## Deliverable for this refinement
+
+Update the text of **Task #520** so it reflects the philosophy above.
+
+When done, provide:
+
+1. the rewritten task text
+2. a short explanation of what changed in the framing
+3. a note on where the task still uses hard failure and why those cases are justified
+
+Refine now.
