@@ -578,8 +578,8 @@
       "feedStatus": "active"
     },
     "UiPath.MobileAutomation.Activities": {
-      "preferred": "25.10.0",
-      "lastVerifiedAt": "2026-04-15T15:40:11.623Z",
+      "preferred": "25.10.1",
+      "lastVerifiedAt": "2026-04-16T16:07:43.810Z",
       "verificationSource": "uipath-official-feed",
       "discoveredAt": "2026-03-25T19:07:01.899Z",
       "feedStatus": "active"
@@ -890,7 +890,7 @@
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-04-16T12:49:13.293Z",
+  "lastRefreshedAt": "2026-04-16T16:07:51.395Z",
   "lastVerifiedAt": "2026-04-15T15:40:11.623Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"

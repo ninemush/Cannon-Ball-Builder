@@ -1,0 +1,29 @@
+Under the stated goal, structurally_invalid should effectively be impossible as a final package status. Here's why it keeps happening anyway:
+
+The architectural contradiction
+The pipeline's current behavior violates its own stated philosophy in a fundamental way. The goal says:
+
+"The fallback is not hard blocking. The fallback is: preserve the workflow, complete the 80%, localize the 20%, mark gaps with TODO."
+
+But the code does the opposite in practice. When a minor issue occurs — a colon character in a placeholder, an unquoted string, a missing optional property — the system escalates catastrophically instead of localizing the problem:
+
+A TODO: colon breaks XML parsing → the compliance transform crashes → the entire workflow is replaced with a stub
+An unquoted English phrase triggers 5 "undeclared variable" errors → each one is classified as an execution-blocking accuracy error
+A missing Target property on GetCredential → counted as a contract integrity defect
+Then at the very end, the final-artifact-validation adds up all these inflated defect counts and says "15 execution-blocking defects → structurally_invalid." But the reality is: the underlying business logic was fine. The pipeline's own remediation mechanics created the damage.
+
+Why do fixes keep missing?
+Because every fix so far has targeted a specific symptom — this sentinel pattern, that expression edge case — without addressing the policy contradiction at the center:
+
+The pipeline has "hard block" semantics baked into its quality gate, but the product goal demands "soft degrade" semantics.
+
+As long as the quality gate can classify self-inflicted issues (a colon in a placeholder the pipeline itself generated) as "execution-blocking," the system will keep producing structurally_invalid outcomes. You fix one emission path, another one surfaces next run.
+
+What would actually align with the goal?
+The pipeline should operate with a simple invariant: no pipeline-generated artifact can cause a structurally_invalid verdict. That means:
+
+Never emit text that breaks XML. If you're writing a TODO placeholder, it must be XML-safe by construction — not "sweep it later and hope."
+Never classify your own placeholders as blocking defects. If the pipeline itself inserted a TODO_CredentialAsset, the quality gate should not then flag it as "execution-blocking."
+Degrade at the smallest possible unit. A bad property → stub that property. A bad activity → stub that activity. Never stub an entire workflow because one property was wrong.
+The only valid structurally_invalid outcome should be: Main.xaml itself cannot be assembled. Everything else is handoff_only at worst.
+The task I proposed addresses the immediate emission bugs (the colon, the unquoted literals, the missing registry entry). But you're pointing at something deeper — the quality gate's scoring policy needs to stop treating pipeline-generated placeholders as if they were structural failures. That's the policy change that would make structurally_invalid truly rare.
