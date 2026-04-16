@@ -1,4 +1,5 @@
 import type { TraceabilityManifest } from "./traceability-manifest";
+import { catalogService } from "./catalog/catalog-service";
 
 export interface InterStageViolation {
   type: "undeclared_variable" | "argument_mismatch" | "scope_violation" | "xmlns_missing" | "structural_violation" | "variable_ref_missing" | "argument_type_mismatch" | "argument_direction_mismatch";
@@ -231,6 +232,160 @@ function getDefaultValueForType(type: string): string {
     case "datetime": return "DateTime.Now";
     default: return "Nothing";
   }
+}
+
+const NAMING_CONVENTION_TYPE_MAP: Record<string, string> = {
+  "bool": "Boolean", "str": "String", "int": "Int32",
+  "dt": "DataTable", "dbl": "Double", "dec": "Decimal",
+  "obj": "Object", "ts": "TimeSpan", "drow": "DataRow",
+  "qi": "Object", "qid": "Object", "arr": "Object",
+  "dict": "Object", "lst": "Object", "list": "Object",
+};
+
+function inferVariableTypeFromName(varName: string): string | null {
+  const prefixMatch = varName.match(/^([a-z]+)_/);
+  if (prefixMatch) {
+    const prefix = prefixMatch[1];
+    return NAMING_CONVENTION_TYPE_MAP[prefix] || null;
+  }
+  return null;
+}
+
+function inferOutputVarType(activityType: string | undefined, varName: string): string {
+  if (activityType && catalogService.isLoaded()) {
+    const catalogType = catalogService.getActivityOutputType(activityType);
+    if (catalogType) return catalogType;
+  }
+
+  return inferVariableTypeFromName(varName) || "String";
+}
+
+function collectOutputVarsFromSteps(
+  steps: Array<{ activity: string; activityType?: string; properties?: Record<string, unknown> }>,
+): Array<{ varName: string; varType: string; activityType: string }> {
+  const results: Array<{ varName: string; varType: string; activityType: string }> = [];
+
+  function walkNode(node: Record<string, unknown>) {
+    const outputVar = node.outputVar as string | undefined;
+    const actType = (node.activityType || node.template || node.activity || "") as string;
+    if (outputVar && typeof outputVar === "string" && outputVar.trim().length > 0) {
+      const inferredType = inferOutputVarType(actType, outputVar);
+      results.push({ varName: outputVar, varType: inferredType, activityType: actType });
+    }
+
+    const childKeys = ["children", "tryChildren", "catchChildren", "finallyChildren",
+      "thenChildren", "elseChildren", "bodyChildren"];
+    for (const key of childKeys) {
+      const children = node[key];
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          if (child && typeof child === "object") {
+            walkNode(child as Record<string, unknown>);
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(node.steps)) {
+      for (const step of node.steps) {
+        if (step && typeof step === "object") {
+          walkNode(step as Record<string, unknown>);
+        }
+      }
+    }
+  }
+
+  for (const step of steps) {
+    walkNode(step as unknown as Record<string, unknown>);
+  }
+
+  return results;
+}
+
+export function reconcileSpecLevelVariables(
+  workflows: Array<{
+    name: string;
+    variables?: Array<{ name: string; type?: string; scope?: string }>;
+    arguments?: Array<{ name: string; direction: string; type: string }>;
+    steps?: Array<{
+      activity: string;
+      activityType?: string;
+      properties?: Record<string, unknown>;
+    }>;
+    rootSequence?: Record<string, unknown>;
+  }>,
+): number {
+  let autoDeclarations = 0;
+
+  for (const wf of workflows) {
+    const wfName = wf.name || "Main";
+    if (!wf.variables) wf.variables = [];
+
+    const declaredVars = new Set<string>();
+    for (const v of wf.variables) declaredVars.add(v.name);
+    if (wf.arguments) {
+      for (const a of wf.arguments) declaredVars.add(a.name);
+    }
+
+    const outputVars: Array<{ varName: string; varType: string; activityType: string }> = [];
+
+    if (wf.steps) {
+      outputVars.push(...collectOutputVarsFromSteps(wf.steps));
+    }
+
+    if (wf.rootSequence) {
+      const rootChildren = wf.rootSequence.children;
+      if (Array.isArray(rootChildren)) {
+        outputVars.push(...collectOutputVarsFromSteps(rootChildren as any));
+      }
+    }
+
+    for (const ov of outputVars) {
+      if (!declaredVars.has(ov.varName)) {
+        wf.variables.push({ name: ov.varName, type: ov.varType, scope: "workflow" });
+        declaredVars.add(ov.varName);
+        autoDeclarations++;
+        console.log(`[Spec-Reconciliation] Auto-declared output variable "${ov.varName}" (type: ${ov.varType}) from activity "${ov.activityType}" in ${wfName}`);
+      }
+    }
+
+    function walkNodesForExprRefs(nodes: any[]) {
+      for (const node of nodes) {
+        if (node.properties) {
+          const allProps = collectAllProperties(node.properties);
+          for (const { value: propVal } of allProps) {
+            const strVal = extractStringValue(propVal);
+            if (!strVal) continue;
+            const refs = extractVariableReferences(strVal);
+            for (const varRef of refs) {
+              if (!declaredVars.has(varRef) && !isBuiltInVariable(varRef) && isHighConfidenceVariableName(varRef)) {
+                const namingType = inferVariableTypeFromName(varRef);
+                if (!namingType) continue;
+                wf.variables!.push({ name: varRef, type: namingType, scope: "workflow" });
+                declaredVars.add(varRef);
+                autoDeclarations++;
+                console.log(`[Spec-Reconciliation] Auto-declared expression-referenced variable "${varRef}" (type: ${namingType}) in ${wfName}`);
+              }
+            }
+          }
+        }
+        for (const childKey of ["children", "tryChildren", "catchChildren", "finallyChildren", "thenChildren", "elseChildren", "body"]) {
+          const childArr = node[childKey];
+          if (Array.isArray(childArr)) {
+            walkNodesForExprRefs(childArr);
+          }
+        }
+      }
+    }
+
+    if (wf.steps) walkNodesForExprRefs(wf.steps);
+    if (wf.rootSequence) {
+      const rootChildren = wf.rootSequence.children;
+      if (Array.isArray(rootChildren)) walkNodesForExprRefs(rootChildren);
+    }
+  }
+
+  return autoDeclarations;
 }
 
 export function validateEnricherToAssemblerContract(
@@ -522,27 +677,34 @@ export function validateAssemblerToComplianceContract(
 
     for (const varRef of referencedVarsInXaml) {
       if (!declaredVarsInXaml.has(varRef) && !isBuiltInVariable(varRef)) {
+        let resolved = false;
         if (isHighConfidenceVariableName(varRef)) {
-          const repaired = tryInjectVariableDeclaration(entry, varRef);
-          if (repaired) {
+          resolved = tryInjectVariableDeclaration(entry, varRef);
+          if (resolved) {
             repairsApplied++;
             declaredVarsInXaml.add(varRef);
             console.log(`[Inter-Stage] Auto-injected variable declaration for "${varRef}" in ${baseName}`);
+          }
+        }
+        if (!resolved) {
+          const degraded = degradeUndeclaredVariableReferences(entry, varRef);
+          if (degraded) {
+            repairsApplied++;
+            console.log(`[Inter-Stage] Degraded references to undeclared variable "${varRef}" in ${baseName} — replaced with TODO placeholder`);
+            violations.push({
+              type: "variable_ref_missing",
+              workflow: baseName,
+              detail: `Variable "${varRef}" referenced in ${baseName}.xaml — could not safely auto-declare; expressions replaced with TODO placeholder [DEGRADED]`,
+              severity: "warning",
+            });
           } else {
             violations.push({
               type: "variable_ref_missing",
               workflow: baseName,
-              detail: `Variable "${varRef}" referenced in expressions but not declared in ${baseName}.xaml — no Sequence.Variables block found for injection`,
+              detail: `Variable "${varRef}" referenced in expressions but not declared in ${baseName}.xaml — could not auto-declare or degrade`,
               severity: "warning",
             });
           }
-        } else {
-          violations.push({
-            type: "variable_ref_missing",
-            workflow: baseName,
-            detail: `Variable "${varRef}" referenced in expressions but not declared in ${baseName}.xaml — name does not match variable naming conventions`,
-            severity: "warning",
-          });
         }
       }
     }
@@ -648,12 +810,22 @@ function extractStringValue(val: unknown): string | null {
   return null;
 }
 
+const LOG_PREFIX_EXCLUSIONS = new Set([
+  "INFO", "WARN", "ERROR", "FATAL", "TRACE", "DEBUG",
+  "RecordOutcome", "START", "END", "STEP", "RESULT",
+  "STATUS", "LOG", "AUDIT", "METRIC", "EVENT",
+]);
+
 function extractVariableReferences(expr: string): string[] {
+  const strippedExpr = expr.replace(/"(?:[^"\\]|\\.)*"/g, (m) => " ".repeat(m.length));
+
   const refs: string[] = [];
   const bracketPattern = /\[([A-Za-z_]\w*)\]/g;
   let m;
-  while ((m = bracketPattern.exec(expr)) !== null) {
-    refs.push(m[1]);
+  while ((m = bracketPattern.exec(strippedExpr)) !== null) {
+    const candidate = m[1];
+    if (LOG_PREFIX_EXCLUSIONS.has(candidate)) continue;
+    refs.push(candidate);
   }
   return refs;
 }
@@ -863,20 +1035,219 @@ function extractReferencedVariablesFromXaml(xml: string): Set<string> {
       }
     }
   }
+
+  const outArgPattern = /<OutArgument[^>]*>\[([A-Za-z_]\w*)\]<\/OutArgument>/g;
+  while ((m = outArgPattern.exec(xml)) !== null) {
+    vars.add(m[1]);
+  }
+  const outArgAttrPattern = /<OutArgument[^>]*x:TypeArguments="[^"]*"[^>]*>\[([A-Za-z_]\w*)\]/g;
+  while ((m = outArgAttrPattern.exec(xml)) !== null) {
+    vars.add(m[1]);
+  }
+
   return vars;
 }
 
+const SIMPLE_TYPE_TO_XAML: Record<string, string> = {
+  "String": "x:String", "Boolean": "x:Boolean", "Int32": "x:Int32",
+  "Int64": "x:Int64", "Double": "x:Double", "Decimal": "x:Decimal",
+  "Object": "x:Object", "DataTable": "scg2:DataTable", "DataRow": "scg2:DataRow",
+  "DateTime": "s:DateTime", "TimeSpan": "s:TimeSpan",
+  "System.String": "x:String", "System.Boolean": "x:Boolean", "System.Int32": "x:Int32",
+  "System.Int64": "x:Int64", "System.Double": "x:Double", "System.Decimal": "x:Decimal",
+  "System.Object": "x:Object", "System.Data.DataTable": "scg2:DataTable",
+  "System.Data.DataRow": "scg2:DataRow", "System.DateTime": "s:DateTime",
+  "System.TimeSpan": "s:TimeSpan",
+};
+
+function inferXamlTypeFromCatalogContext(varName: string, xmlContent: string): string | null {
+  const outArgPattern = new RegExp(
+    `<OutArgument[^>]*>\\s*\\[?${varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]?\\s*</OutArgument>`,
+    "g"
+  );
+  let oam;
+  while ((oam = outArgPattern.exec(xmlContent)) !== null) {
+    const preceding = xmlContent.substring(Math.max(0, oam.index - 300), oam.index);
+    const actTagMatch = preceding.match(/<((?:[a-z]+:)?([A-Z]\w+))\s/g);
+    if (actTagMatch && actTagMatch.length > 0) {
+      const lastTag = actTagMatch[actTagMatch.length - 1];
+      const classMatch = lastTag.match(/<(?:[a-z]+:)?([A-Z]\w+)/);
+      if (classMatch) {
+        const actClassName = classMatch[1];
+        const outputType = catalogService.getActivityOutputType(actClassName);
+        if (outputType && SIMPLE_TYPE_TO_XAML[outputType]) {
+          return SIMPLE_TYPE_TO_XAML[outputType];
+        }
+      }
+    }
+  }
+
+  const attrPattern = new RegExp(
+    `(\\w+)="${varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`,
+    "g"
+  );
+  let am;
+  while ((am = attrPattern.exec(xmlContent)) !== null) {
+    const propName = am[1];
+    const preceding = xmlContent.substring(Math.max(0, am.index - 300), am.index);
+    const actTagMatch = preceding.match(/<((?:[a-z]+:)?([A-Z]\w+))\s/g);
+    if (actTagMatch && actTagMatch.length > 0) {
+      const lastTag = actTagMatch[actTagMatch.length - 1];
+      const classMatch = lastTag.match(/<(?:[a-z]+:)?([A-Z]\w+)/);
+      if (classMatch) {
+        const actClassName = classMatch[1];
+        const clrType = catalogService.getPropertyClrType(actClassName, propName);
+        if (clrType && SIMPLE_TYPE_TO_XAML[clrType]) {
+          return SIMPLE_TYPE_TO_XAML[clrType];
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function inferXamlTypeForVariable(varName: string, xmlContext?: string): string | null {
+  if (xmlContext) {
+    const catalogType = inferXamlTypeFromCatalogContext(varName, xmlContext);
+    if (catalogType) return catalogType;
+  }
+
+  const inferredType = inferVariableTypeFromName(varName);
+  if (inferredType && SIMPLE_TYPE_TO_XAML[inferredType]) return SIMPLE_TYPE_TO_XAML[inferredType];
+  return null;
+}
+
 function tryInjectVariableDeclaration(entry: { content: string }, varName: string): boolean {
+  const existingArgs = new Set<string>();
+  const argPattern = /<x:Property\s[^>]*?Name="([^"]+)"/g;
+  let argMatch;
+  while ((argMatch = argPattern.exec(entry.content)) !== null) {
+    existingArgs.add(argMatch[1]);
+  }
+  if (existingArgs.has(varName)) return true;
+
+  const xamlType = inferXamlTypeForVariable(varName, entry.content);
+  if (!xamlType) {
+    console.log(`[XAML-Reconciliation] Skipping variable "${varName}" — no high-confidence type inference available (no catalog context or naming convention match)`);
+    return false;
+  }
+
   const sequenceVarsPattern = /(<Sequence\.Variables>)([\s\S]*?)(<\/Sequence\.Variables>)/;
   const match = sequenceVarsPattern.exec(entry.content);
   if (match) {
-    const variableDecl = `\n      <Variable x:TypeArguments="x:String" Name="${varName}" />`;
+    const variableDecl = `\n      <Variable x:TypeArguments="${xamlType}" Name="${varName}" />`;
     entry.content = entry.content.substring(0, match.index + match[1].length) +
       match[2] + variableDecl +
       entry.content.substring(match.index + match[1].length + match[2].length);
     return true;
   }
   return false;
+}
+
+function degradeUndeclaredVariableReferences(entry: { content: string }, varName: string): boolean {
+  const escapedName = varName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let modified = false;
+
+  const typedArgPattern = new RegExp(
+    `<(Out|In)Argument\\s+x:TypeArguments="([^"]*)"[^>]*>\\s*\\[?${escapedName}\\]?\\s*</(Out|In)Argument>`,
+    'g'
+  );
+  let tam;
+  const typedArgMatches: Array<{ full: string; typeArg: string; pos: number }> = [];
+  while ((tam = typedArgPattern.exec(entry.content)) !== null) {
+    typedArgMatches.push({ full: tam[0], typeArg: tam[2], pos: tam.index });
+  }
+
+  for (let i = typedArgMatches.length - 1; i >= 0; i--) {
+    const m = typedArgMatches[i];
+    const isStringType = m.typeArg === "x:String" || m.typeArg === "s:String";
+
+    if (isStringType) {
+      const replacement = m.full.replace(
+        new RegExp(`\\[?${escapedName}\\]?`),
+        `"TODO: undeclared variable ${varName}"`
+      );
+      entry.content = entry.content.substring(0, m.pos) + replacement + entry.content.substring(m.pos + m.full.length);
+      modified = true;
+    } else {
+      const preceding = entry.content.substring(Math.max(0, m.pos - 500), m.pos);
+      const actTagMatch = preceding.match(/<((?:[a-z]+:)?[A-Z]\w+)\s[^>]*$/);
+      if (actTagMatch) {
+        const actTag = actTagMatch[1];
+        const fullTagStart = preceding.lastIndexOf("<" + actTag);
+        if (fullTagStart >= 0) {
+          const absStart = Math.max(0, m.pos - 500) + fullTagStart;
+          const afterStart = entry.content.substring(absStart);
+
+          const closeTagPattern = new RegExp(`</${actTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`);
+          const closeMatch = closeTagPattern.exec(afterStart);
+          if (closeMatch) {
+            const fullActivity = afterStart.substring(0, closeMatch.index + closeMatch[0].length);
+            const dnMatch = fullActivity.match(/DisplayName="([^"]*)"/);
+            const displayName = dnMatch ? dnMatch[1] : actTag;
+            const stub =
+              `<ui:Comment DisplayName="[DEGRADED] ${displayName} — undeclared typed variable ${varName}">\n` +
+              `  <ui:Comment.Body>\n` +
+              `    <InArgument x:TypeArguments="x:String">"Activity ${actTag} referenced undeclared variable '${varName}' (type: ${m.typeArg}) and was replaced with a developer handoff stub."</InArgument>\n` +
+              `  </ui:Comment.Body>\n` +
+              `</ui:Comment>\n` +
+              `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${displayName} requires developer implementation — undeclared variable ${varName} (${m.typeArg})&quot;" />`;
+            entry.content = entry.content.substring(0, absStart) + stub + entry.content.substring(absStart + fullActivity.length);
+            modified = true;
+            continue;
+          }
+        }
+      }
+      const replacement = m.full.replace(
+        new RegExp(`\\[?${escapedName}\\]?`),
+        `Nothing`
+      );
+      entry.content = entry.content.substring(0, m.pos) + replacement + entry.content.substring(m.pos + m.full.length);
+      modified = true;
+    }
+  }
+
+  const bracketPattern = new RegExp(`\\[${escapedName}\\]`, 'g');
+  if (bracketPattern.test(entry.content)) {
+    entry.content = entry.content.replace(bracketPattern, `"TODO: undeclared variable ${varName}"`);
+    modified = true;
+  }
+
+  const STRING_ATTR_CONTEXTS = new Set([
+    "Subject", "Body", "Message", "Text", "To", "Value", "Content",
+    "DisplayName", "FileName", "FilePath", "FolderPath", "Url", "MailFolder",
+    "Account", "Password", "Input", "Output", "Result",
+  ]);
+  const attrPattern = new RegExp(`(\\w+)="${escapedName}"`, 'g');
+  let attrMatch;
+  const attrReplacements: Array<{ full: string; propName: string; pos: number }> = [];
+  while ((attrMatch = attrPattern.exec(entry.content)) !== null) {
+    attrReplacements.push({ full: attrMatch[0], propName: attrMatch[1], pos: attrMatch.index });
+  }
+  for (let i = attrReplacements.length - 1; i >= 0; i--) {
+    const ar = attrReplacements[i];
+    if (STRING_ATTR_CONTEXTS.has(ar.propName) || ar.propName.endsWith("Name") || ar.propName.endsWith("Text") || ar.propName.endsWith("Path")) {
+      const replacement = `${ar.propName}="TODO: undeclared variable ${varName}"`;
+      entry.content = entry.content.substring(0, ar.pos) + replacement + entry.content.substring(ar.pos + ar.full.length);
+      modified = true;
+    } else {
+      const preceding = entry.content.substring(Math.max(0, ar.pos - 400), ar.pos);
+      const actTagMatch = preceding.match(/<((?:[a-z]+:)?([A-Z]\w+))\s/g);
+      const actClassName = actTagMatch ? actTagMatch[actTagMatch.length - 1].match(/<(?:[a-z]+:)?([A-Z]\w+)/)?.[1] || "" : "";
+      const isString = actClassName ? catalogService.isPropertyStringTyped(actClassName, ar.propName) : true;
+      if (isString) {
+        const replacement = `${ar.propName}="TODO: undeclared variable ${varName}"`;
+        entry.content = entry.content.substring(0, ar.pos) + replacement + entry.content.substring(ar.pos + ar.full.length);
+        modified = true;
+      } else {
+        entry.content = entry.content.substring(0, ar.pos) + `${ar.propName}="Nothing"` + entry.content.substring(ar.pos + ar.full.length);
+        modified = true;
+      }
+    }
+  }
+
+  return modified;
 }
 
 function validateXamlStructure(xml: string, baseName: string): InterStageViolation[] {

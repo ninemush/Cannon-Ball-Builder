@@ -1,4 +1,5 @@
 import type { QualityGateViolation } from "../uipath-quality-gate";
+import { catalogService } from "../catalog/catalog-service";
 
 export interface ExpressionLocation {
   file: string;
@@ -1546,6 +1547,9 @@ export function lintXamlExpressions(
           "VB_KEYWORD_AS_VARIABLE",
           "CSHARP_LAMBDA_VARIABLE",
         ]);
+
+        let hasUnfixableIssue = false;
+        const unfixableViolationIndices: number[] = [];
         for (const issue of result.issues) {
           let severity: "warning" | "error" = issue.autoFixed ? "warning" : "error";
           let check: string;
@@ -1559,11 +1563,14 @@ export function lintXamlExpressions(
             check = "EXPRESSION_SYNTAX";
           } else {
             check = "EXPRESSION_SYNTAX_UNFIXABLE";
+            hasUnfixableIssue = true;
           }
           if (!issue.autoFixed && !DEDICATED_CHECK_CODES.has(issue.code) && isLiteralDefaultFalsePositive(loc, issue)) {
             severity = "warning";
             check = "EXPRESSION_SYNTAX";
+            hasUnfixableIssue = false;
           }
+          const vIdx = violations.length;
           violations.push({
             category: "accuracy",
             severity,
@@ -1571,6 +1578,132 @@ export function lintXamlExpressions(
             file: loc.file,
             detail: `Line ${loc.line}: ${issue.message} in expression: ${loc.expression.substring(0, 80)}${loc.expression.length > 80 ? "..." : ""}`,
           });
+          if (check === "EXPRESSION_SYNTAX_UNFIXABLE") {
+            unfixableViolationIndices.push(vIdx);
+          }
+        }
+
+        if (hasUnfixableIssue && !result.corrected) {
+          const propContextMatch = loc.context.match(/(\w+)=/);
+          const propName = propContextMatch ? propContextMatch[1] : "";
+
+          const activityTagMatch = loc.context.match(/<((?:[a-z]+:)?([A-Z]\w+))/);
+          const activityClassName = activityTagMatch ? activityTagMatch[2] : "";
+
+          const KNOWN_NON_STRING_PROPERTIES = new Set([
+            "Condition", "TimeoutMS", "NumberOfRetries", "RetryInterval",
+            "DelayBefore", "DelayAfter", "MaxIterations", "Count", "Index",
+            "Timeout", "WaitForReady",
+          ]);
+
+          let isNonStringContext = KNOWN_NON_STRING_PROPERTIES.has(propName);
+
+          if (!isNonStringContext && activityClassName && propName) {
+            const isStringTyped = catalogService.isPropertyStringTyped(activityClassName, propName);
+            if (!isStringTyped) {
+              isNonStringContext = true;
+            }
+          }
+
+          if (isNonStringContext) {
+            const escapedExpr = loc.expression.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            const activitySelfClosePattern = new RegExp(
+              `(<(?:[a-z]+:)?[A-Z]\\w+\\s[^>]*?)${escapedExpr}([^>]*?/>)`,
+            );
+            const activityOpenClosePattern = new RegExp(
+              `(<(?:[a-z]+:)?[A-Z]\\w+\\s[^>]*?)${escapedExpr}([^>]*?>[\\s\\S]*?</(?:[a-z]+:)?[A-Z]\\w+>)`,
+            );
+
+            let stubApplied = false;
+            const selfCloseMatch = activitySelfClosePattern.exec(patchedContent);
+            if (selfCloseMatch) {
+              const fullMatch = selfCloseMatch[0];
+              const dnMatch = fullMatch.match(/DisplayName="([^"]*)"/);
+              const displayName = dnMatch ? dnMatch[1] : "Unknown Activity";
+              const tagMatch = fullMatch.match(/<((?:[a-z]+:)?[A-Z]\w+)/);
+              const actTag = tagMatch ? tagMatch[1] : "Activity";
+              const stub =
+                `<ui:Comment DisplayName="[DEGRADED] ${displayName} — unfixable expression in ${propName}">\n` +
+                `  <ui:Comment.Body>\n` +
+                `    <InArgument x:TypeArguments="x:String">"Activity ${actTag} had unfixable expression in non-string property ${propName}: ${loc.expression.substring(0, 120).replace(/"/g, '&quot;').replace(/&/g, '&amp;').replace(/</g, '&lt;')}"</InArgument>\n` +
+                `  </ui:Comment.Body>\n` +
+                `</ui:Comment>\n` +
+                `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${displayName} requires developer implementation — unfixable expression in ${propName}&quot;" />`;
+              patchedContent = patchedContent.replace(fullMatch, stub);
+              stubApplied = true;
+            }
+
+            if (!stubApplied) {
+              const openCloseMatch = activityOpenClosePattern.exec(patchedContent);
+              if (openCloseMatch) {
+                const fullMatch = openCloseMatch[0];
+                const dnMatch = fullMatch.match(/DisplayName="([^"]*)"/);
+                const displayName = dnMatch ? dnMatch[1] : "Unknown Activity";
+                const tagMatch = fullMatch.match(/<((?:[a-z]+:)?[A-Z]\w+)/);
+                const actTag = tagMatch ? tagMatch[1] : "Activity";
+                const stub =
+                  `<ui:Comment DisplayName="[DEGRADED] ${displayName} — unfixable expression in ${propName}">\n` +
+                  `  <ui:Comment.Body>\n` +
+                  `    <InArgument x:TypeArguments="x:String">"Activity ${actTag} had unfixable expression in non-string property ${propName}: ${loc.expression.substring(0, 120).replace(/"/g, '&quot;').replace(/&/g, '&amp;').replace(/</g, '&lt;')}"</InArgument>\n` +
+                  `  </ui:Comment.Body>\n` +
+                  `</ui:Comment>\n` +
+                  `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${displayName} requires developer implementation — unfixable expression in ${propName}&quot;" />`;
+                patchedContent = patchedContent.replace(fullMatch, stub);
+                stubApplied = true;
+              }
+            }
+
+            if (stubApplied) {
+              for (const vi of unfixableViolationIndices) {
+                violations[vi].severity = "warning";
+                violations[vi].check = "EXPRESSION_SYNTAX_DEGRADED";
+                violations[vi].detail += " [DEGRADED: activity replaced with stub]";
+              }
+              violations.push({
+                category: "accuracy",
+                severity: "warning",
+                check: "EXPRESSION_SYNTAX",
+                file: loc.file,
+                detail: `Line ${loc.line}: Unfixable expression in non-string property "${propName}" — containing activity replaced with Comment+LogMessage stub`,
+              });
+            }
+          } else {
+            const safeOriginal = loc.expression.substring(0, 100).replace(/"/g, "'").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+            const todoExpr = `&quot;TODO: Original expression was: ${safeOriginal}&quot;`;
+
+            const escapedExpr = loc.expression.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            patchedContent = patchedContent.replace(
+              new RegExp(`\\[${escapedExpr}\\]`, "g"),
+              `[${todoExpr}]`
+            );
+
+            const exprAttrPattern = new RegExp(
+              `(Expression(?:Text)?=")${escapedExpr}(")`,
+              "g"
+            );
+            patchedContent = patchedContent.replace(exprAttrPattern, `$1${todoExpr}$2`);
+
+            const attrValuePattern = new RegExp(
+              `((?:Subject|Body|Message|Text|To|Value|Content)=")${escapedExpr}(")`,
+              "g"
+            );
+            patchedContent = patchedContent.replace(attrValuePattern, `$1${todoExpr}$2`);
+
+            for (const vi of unfixableViolationIndices) {
+              violations[vi].severity = "warning";
+              violations[vi].check = "EXPRESSION_SYNTAX_DEGRADED";
+              violations[vi].detail += " [DEGRADED: replaced with TODO placeholder]";
+            }
+            violations.push({
+              category: "accuracy",
+              severity: "warning",
+              check: "EXPRESSION_SYNTAX",
+              file: loc.file,
+              detail: `Line ${loc.line}: Unfixable expression replaced with TODO placeholder: ${loc.expression.substring(0, 60)}${loc.expression.length > 60 ? "..." : ""}`,
+            });
+          }
         }
       }
 

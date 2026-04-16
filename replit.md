@@ -50,8 +50,10 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **Unified Declaration Registry**: A single `DeclarationRegistry` class is the source of truth for all variable and argument declarations.
 - **Canonical Type Inference**: A single shared `inferTypeFromPrefix()` function maps variable naming convention prefixes to UiPath XAML types.
 - **DHG Tier Classification**: Classifies workflow tiers for the Developer Handoff Guide.
-- **Undeclared Variable Auto-Repair**: Auto-declares variables with recognized naming prefixes.
+- **Undeclared Variable Auto-Repair**: Auto-declares variables with recognized naming prefixes. Includes spec-level `reconcileSpecLevelVariables()` (catalog-backed type inference then naming-convention fallback) and XAML-level `extractReferencedVariablesFromXaml` with `<OutArgument>` binding scanning and type-aware `tryInjectVariableDeclaration`.
 - **Canonical Pipeline**: The UiPath generation pipeline follows: Spec Generation → XAML Emission → Compliance Normalization → Validation → Pre-Correction CLI Analyze → Iterative LLM Correction (merged internal + CLI defects) → Rebuild → Final CLI Validation (analyze + pack) → Emission Gate → Final Normalization → Packaging + DHG.
+- **Sentinel Remediation Sweep**: `sweepResidualSentinels()` in `emission-gate.ts` detects and replaces residual `__BLOCKED_TYPED_PROPERTY__` sentinels with Comment+LogMessage stubs or TODO placeholders after `cleanSentinelExpressions`.
+- **False Variable Extraction Prevention**: `extractVariableReferences` strips VB.NET string literals and excludes log-prefix brackets (`[INFO]`, `[WARN]`, `[ERROR]`, etc.) from variable name extraction.
 - **Emission Contract Hardening**: Prevents string values from entering VB expression context for critical required properties.
 - **Infrastructure Workflow Dedup**: Canonicalizes workflow names to prevent duplicate workflows.
 - **Authoritative Namespace Injection**: A single authoritative pass injects missing namespace declarations after all XAML files are generated.
@@ -75,7 +77,7 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **Automation Pattern Classification**: Classifies automation patterns to determine appropriate REFramework usage.
 - **Role-Based Deterministic Scaffold**: Generates structured Main.xaml + role-based sub-workflows when AI enrichment fails.
 - **Demand-Driven Dependencies**: Dynamically determines and includes necessary UiPath package dependencies.
-- **VB.NET Expression Linter**: Scans VB.NET expressions for syntax errors and provides auto-correction.
+- **VB.NET Expression Linter**: Scans VB.NET expressions for syntax errors and provides auto-correction. Unfixable expressions (`EXPRESSION_SYNTAX_UNFIXABLE`) are replaced with TODO placeholder strings or Comment+LogMessage stubs (with type-safety guardrail for non-string property contexts).
 - **Type Compatibility Validator**: Cross-references variable types against catalog property clrTypes with auto-repair. Includes UiPath enum-string compatibility rules for 11 enum types (NClickType, NMouseButton, LogLevel, ProcessingStatus, ErrorType, PathType, QueueItemPriority, CredentialType, SymmetricAlgorithms, KeyedHashAlgorithms, EOrderByDate) enabling String↔Enum conversions in type checking.
 - **Selector Quality Scorer**: Extracts UI context from SDD and scores generated selectors.
 - **Workflow Analyzer Compliance Engine**: Static analysis for 11+ Workflow Analyzer rules with auto-correction.

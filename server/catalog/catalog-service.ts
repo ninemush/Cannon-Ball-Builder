@@ -591,6 +591,42 @@ class CatalogService {
     return names;
   }
 
+  getActivityOutputType(activityClassName: string): string | null {
+    const schema = this.getActivitySchema(activityClassName);
+    if (!schema) return null;
+
+    for (const prop of schema.activity.properties) {
+      if (prop.direction === "Out" && (prop.name === "Result" || prop.name === "Value" || prop.name === "Exists" || prop.name === "Output")) {
+        if (prop.typeArguments) {
+          const typeArg = prop.typeArguments;
+          if (typeArg === "x:Boolean" || typeArg === "x:String" || typeArg === "x:Int32" || typeArg === "x:Int64" || typeArg === "x:Double" || typeArg === "x:Object") {
+            return typeArg.replace("x:", "");
+          }
+          if (typeArg.startsWith("s:")) return typeArg.replace("s:", "System.");
+          if (typeArg.startsWith("scg2:")) return typeArg.replace("scg2:", "");
+          return typeArg;
+        }
+        if (prop.clrType) {
+          const clr = prop.clrType.replace(/^System\./, "");
+          const CLR_TO_SIMPLE: Record<string, string> = {
+            "String": "String", "Boolean": "Boolean", "Int32": "Int32",
+            "Int64": "Int64", "Double": "Double", "Decimal": "Decimal",
+            "Object": "Object", "DateTime": "DateTime",
+          };
+          return CLR_TO_SIMPLE[clr] || clr;
+        }
+      }
+    }
+    return null;
+  }
+
+  isPropertyStringTyped(activityClassName: string, propertyName: string): boolean {
+    const clrType = this.getPropertyClrType(activityClassName, propertyName);
+    if (!clrType) return true;
+    const stringTypes = new Set(["System.String", "String", "string"]);
+    return stringTypes.has(clrType);
+  }
+
   getAllActivityClassNames(): string[] {
     if (!this.loaded || !this.catalog) return [];
     const names: string[] = [];

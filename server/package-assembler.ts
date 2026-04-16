@@ -178,7 +178,7 @@ export { normalizePackageName } from "./uipath-shared";
   import { metadataService as _metadataService } from "./catalog/metadata-service";
   import { getPackageNamespaceMap, validateXmlWellFormedness, injectMissingNamespaceDeclarations, collectUsedPackages, resolvePackageNamespaceInfo, injectInArgumentTypeArguments, resolveActivityToPackage, deriveRequiredDeclarationsForXaml, insertBeforeClosingCollectionTag } from "./xaml/xaml-compliance";
   import type { ComplexityTier } from "./complexity-classifier";
-  import { validateEnricherToAssemblerContract, validateAssemblerToComplianceContract, runEnricherToAssemblerCorrectionLadder } from "./inter-stage-validator";
+  import { validateEnricherToAssemblerContract, validateAssemblerToComplianceContract, runEnricherToAssemblerCorrectionLadder, reconcileSpecLevelVariables } from "./inter-stage-validator";
   import type { TraceabilityManifest } from "./traceability-manifest";
   import { updateManifestEntriesByWorkflow as _manifestUpdateByWorkflow, markWorkflowStubbed as _manifestMarkStubbed } from "./traceability-manifest";
   import { generateDhgFromOutcomeReport, type DhgContext } from "./dhg-generator";
@@ -5201,6 +5201,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           }
           return { repaired: false };
         };
+        const specReconciled = reconcileSpecLevelVariables(interStageWorkflows);
+        if (specReconciled > 0) {
+          console.log(`[Spec-Reconciliation] Auto-declared ${specReconciled} missing output variable(s) before inter-stage validation`);
+        }
+
         const correctionResult = runEnricherToAssemblerCorrectionLadder(interStageWorkflows, traceabilityManifest, 2, semanticCorrector);
         if (correctionResult.totalRepairs > 0) {
           console.log(`[Inter-Stage] Enricher→Assembler: ${correctionResult.totalRepairs} total repair(s) across ${correctionResult.rounds.length} round(s)`);

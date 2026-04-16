@@ -742,6 +742,126 @@ function cleanSentinelExpressions(
   return result;
 }
 
+function sweepResidualSentinels(
+  fileName: string,
+  content: string,
+  violations: EmissionViolation[],
+): string {
+  let result = content;
+
+  const RESIDUAL_SENTINEL_PATTERN = /\b(__BLOCKED_\w+|HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|PLACEHOLDER_\w+)\b/g;
+
+  const matches: Array<{ index: number; token: string }> = [];
+  let rsm;
+  while ((rsm = RESIDUAL_SENTINEL_PATTERN.exec(result)) !== null) {
+    const surroundingCtx = result.substring(Math.max(0, rsm.index - 100), rsm.index + rsm[0].length + 100);
+    const alreadyCleaned = /TODO: implement this expression/.test(surroundingCtx)
+      || /\[DEGRADED\]/.test(surroundingCtx)
+      || /\[STUBBED\]/.test(surroundingCtx)
+      || /\[HANDOFF\]/.test(surroundingCtx)
+      || /\[WORKFLOW-HANDOFF\]/.test(surroundingCtx)
+      || /DisplayName="\[/.test(surroundingCtx);
+    if (alreadyCleaned) continue;
+    matches.push({ index: rsm.index, token: rsm[0] });
+  }
+
+  if (matches.length === 0) return result;
+
+  const INFRASTRUCTURE_TAGS = new Set([
+    "InArgument", "OutArgument", "InOutArgument", "DelegateInArgument",
+    "Variable", "Sequence", "Flowchart", "FlowStep", "FlowDecision",
+    "FlowSwitch", "ActivityAction", "ActivityBuilder", "Activity",
+    "TextExpression", "Literal", "VisualBasicValue", "VisualBasicReference",
+  ]);
+
+  for (let mi = matches.length - 1; mi >= 0; mi--) {
+    const m = matches[mi];
+    const lineNum = findLineNumber(result, m.index);
+
+    const precedingContent = result.substring(Math.max(0, m.index - 500), m.index);
+    const activityTagMatch = precedingContent.match(/<((?:[a-z]+:)?[A-Z]\w+)\s[^>]*$/);
+
+    if (activityTagMatch) {
+      const actTag = activityTagMatch[1];
+      const bareTag = actTag.includes(":") ? actTag.split(":").pop()! : actTag;
+
+      if (!INFRASTRUCTURE_TAGS.has(bareTag)) {
+        const fullTagStart = precedingContent.lastIndexOf("<" + actTag);
+        if (fullTagStart >= 0) {
+          const absStart = Math.max(0, m.index - 500) + fullTagStart;
+
+          const selfCloseCheck = result.substring(absStart).match(new RegExp(`^<${actTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s[^>]*?/>`));
+          if (selfCloseCheck) {
+            const dnMatch = selfCloseCheck[0].match(/DisplayName="([^"]*)"/);
+            const displayName = dnMatch ? dnMatch[1] : actTag;
+            const stub =
+              `<ui:Comment DisplayName="[DEGRADED] ${escapeXml(displayName)} — residual sentinel remediation">\n` +
+              `  <ui:Comment.Body>\n` +
+              `    <InArgument x:TypeArguments="x:String">"This activity (${escapeXml(actTag)}) contained residual sentinel '${escapeXml(m.token)}' and was replaced with a developer handoff stub."</InArgument>\n` +
+              `  </ui:Comment.Body>\n` +
+              `</ui:Comment>\n` +
+              `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${escapeXml(displayName)} requires developer implementation — sentinel ${escapeXml(m.token)}&quot;" />`;
+
+            result = result.substring(0, absStart) + stub + result.substring(absStart + selfCloseCheck[0].length);
+            violations.push({
+              file: fileName,
+              line: lineNum,
+              type: "sentinel-expression",
+              detail: `Residual sentinel "${m.token}" in activity "${displayName}" — activity replaced with Comment+LogMessage stub`,
+              resolution: "degraded",
+              context: "residual-sentinel-sweep",
+            });
+            continue;
+          }
+
+          const closeTagPattern = new RegExp(`</${actTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>`);
+          const afterStart = result.substring(absStart);
+          const closeMatch = closeTagPattern.exec(afterStart);
+          if (closeMatch) {
+            const fullActivity = afterStart.substring(0, closeMatch.index + closeMatch[0].length);
+            const dnMatch = fullActivity.match(/DisplayName="([^"]*)"/);
+            const displayName = dnMatch ? dnMatch[1] : actTag;
+            const stub =
+              `<ui:Comment DisplayName="[DEGRADED] ${escapeXml(displayName)} — residual sentinel remediation">\n` +
+              `  <ui:Comment.Body>\n` +
+              `    <InArgument x:TypeArguments="x:String">"This activity (${escapeXml(actTag)}) contained residual sentinel '${escapeXml(m.token)}' and was replaced with a developer handoff stub."</InArgument>\n` +
+              `  </ui:Comment.Body>\n` +
+              `</ui:Comment>\n` +
+              `<ui:LogMessage Level="Warn" Message="&quot;[DEGRADED] ${escapeXml(displayName)} requires developer implementation — sentinel ${escapeXml(m.token)}&quot;" />`;
+
+            result = result.substring(0, absStart) + stub + result.substring(absStart + fullActivity.length);
+            violations.push({
+              file: fileName,
+              line: lineNum,
+              type: "sentinel-expression",
+              detail: `Residual sentinel "${m.token}" in activity "${displayName}" — activity replaced with Comment+LogMessage stub`,
+              resolution: "degraded",
+              context: "residual-sentinel-sweep",
+            });
+            continue;
+          }
+        }
+      }
+    }
+
+    const tokenEscaped = m.token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tokenPos = result.indexOf(m.token, Math.max(0, m.index - 10));
+    if (tokenPos >= 0) {
+      result = result.substring(0, tokenPos) + "TODO: implement this expression" + result.substring(tokenPos + m.token.length);
+      violations.push({
+        file: fileName,
+        line: lineNum,
+        type: "sentinel-expression",
+        detail: `Residual sentinel "${m.token}" replaced with TODO placeholder`,
+        resolution: "corrected",
+        context: "residual-sentinel-sweep",
+      });
+    }
+  }
+
+  return result;
+}
+
 export interface NormalizationInvariantViolation {
   pattern: string;
   detail: string;
@@ -926,6 +1046,8 @@ export function runEmissionGate(
     if (typeResult.blocked) anyBlocked = true;
 
     content = cleanSentinelExpressions(fileName, content, violations);
+
+    content = sweepResidualSentinels(fileName, content, violations);
 
     const ampDetect = detectRawAmpersands(content);
     if (ampDetect.count > 0) {

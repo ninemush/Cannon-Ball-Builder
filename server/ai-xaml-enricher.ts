@@ -213,6 +213,41 @@ BLOCKED ACTIVITY: ui:InvokeCode is BLOCKED. If you need to parse JSON, use Newto
 
 VARIABLE PRE-DECLARATION: ALL variables MUST be listed in the top-level "variables" array BEFORE they appear in any activity. Every variable referenced in any expression must have a corresponding entry in "variables" with its correct type. Variables MUST use type prefixes (str_, int_, bool_, dt_, dbl_, dec_, obj_, ts_, drow_).
 
+CRITICAL — OUTPUT VARIABLE DECLARATION: If you set "outputVar" on ANY activity, that variable MUST also appear in the "variables" array with the correct type. The pipeline will reject undeclared output variables.
+Common output variable patterns:
+  - ElementExists (outputVar: "bool_ElementExists") → variables must include { "name": "bool_ElementExists", "type": "Boolean" }
+  - GetText / NGetText (outputVar: "str_ExtractedText") → variables must include { "name": "str_ExtractedText", "type": "String" }
+  - PathExists / FileExists (outputVar: "bool_FileExists") → variables must include { "name": "bool_FileExists", "type": "Boolean" }
+  - GetAsset (outputVar: "str_AssetValue") → variables must include { "name": "str_AssetValue", "type": "String" }
+
+✗ BAD — outputVar set but variable NOT declared (CAUSES structurally_invalid):
+  {
+    "kind": "activity", "template": "ElementExists",
+    "outputVar": "bool_ElementExists",
+    "properties": { "selector": "<html ... />" }
+  }
+  // variables array does NOT contain bool_ElementExists → STUDIO-BLOCKING ERROR
+
+✓ GOOD — outputVar set AND variable declared:
+  // In "variables" array:
+  { "name": "bool_ElementExists", "type": "Boolean" }
+  // In activity node:
+  {
+    "kind": "activity", "template": "ElementExists",
+    "outputVar": "bool_ElementExists",
+    "properties": { "selector": "<html ... />" }
+  }
+
+MAIL ACTIVITY PROPERTY EXPRESSIONS: For SendOutlookMailMessage, SendSmtpMailMessage, and similar mail activities, the Subject and Body properties MUST be VB.NET string expressions, NOT bare identifiers.
+✗ BAD — bare word as mail Subject (CAUSES EXPRESSION_SYNTAX_UNFIXABLE):
+  "Subject": "Subject"
+  "Body": "Body"
+✓ GOOD — proper string literal or variable reference:
+  "Subject": { "type": "literal", "value": "Birthday Greeting" }
+  "Body": { "type": "literal", "value": "Happy Birthday!" }
+  "Subject": { "type": "variable", "name": "str_EmailSubject" }
+  "Body": { "type": "variable", "name": "str_EmailBody" }
+
 {
   "name": "<WorkflowName>",
   "description": "<purpose>",

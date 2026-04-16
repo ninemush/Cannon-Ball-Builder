@@ -7179,4 +7179,196 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       expect(result.has("UiPath.FakePackage.Hypothetical")).toBe(true);
     });
   });
+
+  describe("Defect class fixes — Run 470/471/464/467/469 regressions", () => {
+    it("spec-level variable reconciliation auto-declares outputVar from activity steps", async () => {
+      const { reconcileSpecLevelVariables } = await import("../inter-stage-validator");
+      const workflows = [{
+        name: "TestWorkflow",
+        variables: [] as any[],
+        arguments: [],
+        steps: [
+          {
+            activity: "Element Exists",
+            activityType: "ElementExists",
+            properties: { selector: "<html />" },
+            outputVar: "bool_ElementExists",
+          },
+          {
+            activity: "Get Text",
+            activityType: "GetText",
+            properties: {},
+            outputVar: "str_ExtractedText",
+          },
+        ],
+      }];
+      const count = reconcileSpecLevelVariables(workflows);
+      expect(count).toBe(2);
+      expect(workflows[0].variables).toHaveLength(2);
+      const boolVar = workflows[0].variables.find((v: any) => v.name === "bool_ElementExists");
+      expect(boolVar).toBeDefined();
+      expect(boolVar!.type).toBe("Boolean");
+      const strVar = workflows[0].variables.find((v: any) => v.name === "str_ExtractedText");
+      expect(strVar).toBeDefined();
+      expect(strVar!.type).toBe("String");
+    });
+
+    it("spec-level reconciliation does not duplicate already-declared variables", async () => {
+      const { reconcileSpecLevelVariables } = await import("../inter-stage-validator");
+      const workflows = [{
+        name: "TestWorkflow",
+        variables: [{ name: "bool_ElementExists", type: "Boolean" }] as any[],
+        arguments: [],
+        steps: [{
+          activity: "Element Exists",
+          activityType: "ElementExists",
+          properties: {},
+          outputVar: "bool_ElementExists",
+        }],
+      }];
+      const count = reconcileSpecLevelVariables(workflows);
+      expect(count).toBe(0);
+      expect(workflows[0].variables).toHaveLength(1);
+    });
+
+    it("spec-level reconciliation walks nested tree nodes (rootSequence children)", async () => {
+      const { reconcileSpecLevelVariables } = await import("../inter-stage-validator");
+      const workflows = [{
+        name: "TestWorkflow",
+        variables: [] as any[],
+        arguments: [],
+        rootSequence: {
+          kind: "sequence",
+          children: [
+            {
+              kind: "tryCatch",
+              tryChildren: [{
+                kind: "activity",
+                template: "ElementExists",
+                outputVar: "bool_CheckResult",
+                properties: {},
+              }],
+              catchChildren: [],
+            },
+          ],
+        },
+      }];
+      const count = reconcileSpecLevelVariables(workflows as any);
+      expect(count).toBe(1);
+      expect(workflows[0].variables[0].name).toBe("bool_CheckResult");
+      expect(workflows[0].variables[0].type).toBe("Boolean");
+    });
+
+    it("XAML-level reconciliation extracts OutArgument binding references", async () => {
+      const xaml = `<Activity>
+        <Sequence>
+          <Sequence.Variables>
+            <Variable x:TypeArguments="x:String" Name="str_Existing" />
+          </Sequence.Variables>
+          <ui:ElementExists DisplayName="Check Element">
+            <ui:ElementExists.Result>
+              <OutArgument x:TypeArguments="x:Boolean">[bool_ElementExists]</OutArgument>
+            </ui:ElementExists.Result>
+          </ui:ElementExists>
+        </Sequence>
+      </Activity>`;
+      const { validateAssemblerToComplianceContract } = await import("../inter-stage-validator");
+      const entries = [{ name: "Test.xaml", content: xaml }];
+      const result = validateAssemblerToComplianceContract(entries);
+      const remaining = result.violations.filter((v: any) => v.detail.includes("bool_ElementExists") && v.type === "variable_ref_missing");
+      expect(remaining.length).toBe(0);
+    });
+
+    it("false variable extraction from log brackets is eliminated", async () => {
+      const { validateEnricherToAssemblerContract } = await import("../inter-stage-validator");
+      const workflows = [{
+        name: "TestWorkflow",
+        variables: [{ name: "str_Result", type: "String" }],
+        arguments: [],
+        steps: [{
+          activity: "Log Message",
+          activityType: "LogMessage",
+          properties: {
+            Message: '"[INFO] Processing record [WARN] check completed [RecordOutcome] done"',
+          },
+        }],
+      }];
+      const result = validateEnricherToAssemblerContract(workflows);
+      const logPrefixViolations = result.violations.filter((v: any) =>
+        v.detail.includes('"INFO"') || v.detail.includes('"WARN"') || v.detail.includes('"RecordOutcome"')
+      );
+      expect(logPrefixViolations.length).toBe(0);
+    });
+
+    it("sentinel sweep replaces residual __BLOCKED_ tokens with degradation stubs", async () => {
+      const { runEmissionGate } = await import("../emission-gate");
+      const xamlWithSentinel = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+        <Sequence DisplayName="Main">
+          <ui:Assign DisplayName="Set Value" Value="__BLOCKED_TYPED_PROPERTY__" />
+        </Sequence>
+      </Activity>`;
+      const entries = [{ name: "Test.xaml", content: xamlWithSentinel }];
+      const result = runEmissionGate(entries, "baseline");
+      const finalContent = entries[0].content;
+      expect(finalContent).not.toContain("__BLOCKED_TYPED_PROPERTY__");
+      const hasDegradation = result.violations.some((v: any) =>
+        v.resolution === "degraded" || v.resolution === "corrected"
+      );
+      expect(hasDegradation).toBe(true);
+    });
+
+    it("emission gate sentinel leak check does not flag already-cleaned sentinels in DEGRADED context", () => {
+      const cleanedXaml = `<ui:Comment DisplayName="[DEGRADED] __BLOCKED_TYPED_PROPERTY__ stub" />`;
+      const violations = checkNormalizationInvariants(cleanedXaml, "test.xaml");
+      const leaks = violations.filter(v => v.pattern === "sentinel-leak");
+      expect(leaks.length).toBe(0);
+    });
+
+    it("XAML degradation for undeclared vars in non-string typed contexts uses activity stub not string placeholder", async () => {
+      const { validateAssemblerToComplianceContract } = await import("../inter-stage-validator");
+      const booleanOutArgXaml = `<?xml version="1.0" encoding="utf-8"?>
+<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+  <Flowchart DisplayName="Main">
+    <ui:PathExists DisplayName="Check File" Input="C:\\test.txt">
+      <ui:PathExists.Result>
+        <OutArgument x:TypeArguments="x:Boolean">[FileExists]</OutArgument>
+      </ui:PathExists.Result>
+    </ui:PathExists>
+  </Flowchart>
+</Activity>`;
+      const archiveEntries = [{ name: "Test.xaml", content: booleanOutArgXaml }];
+      validateAssemblerToComplianceContract(archiveEntries as any);
+      const resultContent = archiveEntries[0].content;
+      expect(resultContent).not.toContain('"TODO: undeclared variable FileExists"');
+      const hasDegradation = resultContent.includes("[DEGRADED]") || resultContent.includes("Nothing");
+      expect(hasDegradation).toBe(true);
+    });
+
+    it("naming convention type inference maps prefixes correctly", async () => {
+      const { reconcileSpecLevelVariables } = await import("../inter-stage-validator");
+      const workflows = [{
+        name: "Test",
+        variables: [] as any[],
+        steps: [
+          { activity: "A1", properties: {}, outputVar: "bool_Flag" },
+          { activity: "A2", properties: {}, outputVar: "str_Name" },
+          { activity: "A3", properties: {}, outputVar: "int_Count" },
+          { activity: "A4", properties: {}, outputVar: "dt_Data" },
+          { activity: "A5", properties: {}, outputVar: "dbl_Amount" },
+          { activity: "A6", properties: {}, outputVar: "obj_Result" },
+        ],
+      }];
+      reconcileSpecLevelVariables(workflows as any);
+      const typeMap: Record<string, string> = {};
+      for (const v of workflows[0].variables) {
+        typeMap[(v as any).name] = (v as any).type;
+      }
+      expect(typeMap["bool_Flag"]).toBe("Boolean");
+      expect(typeMap["str_Name"]).toBe("String");
+      expect(typeMap["int_Count"]).toBe("Int32");
+      expect(typeMap["dt_Data"]).toBe("DataTable");
+      expect(typeMap["dbl_Amount"]).toBe("Double");
+      expect(typeMap["obj_Result"]).toBe("Object");
+    });
+  });
 });
