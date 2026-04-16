@@ -38,8 +38,8 @@
       "feedStatus": "active"
     },
     "UiPath.Persistence.Activities": {
-      "preferred": "1.8.1",
-      "lastVerifiedAt": "2026-04-15T15:40:11.623Z",
+      "preferred": "1.9.0",
+      "lastVerifiedAt": "2026-04-16T12:48:49.234Z",
       "verificationSource": "uipath-official-feed",
       "feedStatus": "active"
     },
@@ -890,7 +890,7 @@
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-04-15T15:40:11.623Z",
+  "lastRefreshedAt": "2026-04-16T12:49:13.293Z",
   "lastVerifiedAt": "2026-04-15T15:40:11.623Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"

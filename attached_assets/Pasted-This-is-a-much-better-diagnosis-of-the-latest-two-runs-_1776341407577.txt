@@ -1,0 +1,32 @@
+This is a much better diagnosis of the latest two runs and I agree that #524 is the right next task.
+
+What is now right:
+
+* it identifies the actual current blockers from runs 472–473 rather than continuing to optimize the previous failure picture
+* it correctly treats the REFramework `Main` naming collision as both an upstream prompt issue and a downstream defensive wiring issue
+* it correctly identifies `TODO:` placeholder syntax as an XML-safety problem causing a massively disproportionate cascade
+* it correctly identifies that the sentinel cleanup is still happening too narrowly or at the wrong stage boundary
+
+I would approve this direction with the following refinements:
+
+1. Do not frame the placeholder fix too narrowly as only `TODO:` → `TODO -`
+   Please implement a small canonical placeholder-sanitization utility for all XAML-emitting code paths. `TODO:` normalization should be one required rule, but the broader goal is that placeholder text must be XML-safe by construction in both attribute and text contexts.
+
+2. For REFramework infrastructure-name collisions, prefer automatic rename + logic preservation over rejection
+   The pipeline should deterministically rename reserved-name collisions like `Main` wherever possible, preserve the business logic, and avoid package-blocking behavior. Reject only if safe remapping truly cannot preserve meaning.
+
+3. Be careful with “merge Main steps into Process.xaml”
+   The important rule is that a generated custom `Main` must never be wired as a child under REFramework `Process.xaml`. The implementation should safely rename and remap that orchestration logic into the REFramework structure while preserving sequencing and scope, rather than assuming a naive merge is always safe.
+
+4. Sentinel remediation should prefer the smallest safe scope
+   Do not always jump straight to replacing the whole containing activity. If a residual sentinel can be resolved with a contract-compatible property-level placeholder, prefer that; only degrade to an activity stub when property-level recovery is not safe.
+
+5. Add explicit regression coverage for:
+
+* generated workflow named `Main`
+* generated workflow named `Process`
+* placeholder tokens in XML attribute positions
+* placeholder tokens in XML text positions
+* residual sentinel after tree assembly but before compliance
+
+With those refinements, I think #524 is the right next implementation task.

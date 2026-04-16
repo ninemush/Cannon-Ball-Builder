@@ -78,3 +78,9 @@ id = "JURGlBlxjqjxVTvBOO571"
 uri = "file://server/investigations/required-property-fallback-trace.md"
 type = "text"
 title = "Required-Property Fallback Runtime Trace — Investigation Report"
+
+[[outputs]]
+id = "aDKaLJpTZbwFUt0NWis3d"
+uri = "file://.local/tasks/forensic-analysis-runs-472-473.md"
+type = "text"
+title = "Forensic Analysis Report: Runs 472-473"
