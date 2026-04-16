@@ -1,5 +1,5 @@
 import archiver from "archiver";
-import { sweepUnsafePlaceholders as sweepUnsafePlaceholdersUtil } from "./lib/placeholder-sanitizer";
+import { sweepUnsafePlaceholders as sweepUnsafePlaceholdersUtil, makeTodoTextPlaceholder, assertCanonicalPlaceholdersInXaml } from "./lib/placeholder-sanitizer";
 import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityChildren as _pkgBuildRootActivityChildren, buildTextExpressionBlocks as _pkgBuildTextExpressionBlocks } from "./xaml/xaml-studio-references";
   import AdmZip from "adm-zip";
   import { createHash } from "crypto";
@@ -127,7 +127,12 @@ import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityCh
         );
         if (node && node.properties) {
           for (const propName of result.missingRequiredProperties) {
-            node.properties[propName] = `[TODO: Provide ${propName}]`;
+            const canonical = makeTodoTextPlaceholder(
+              `Provide ${propName}`,
+              `package-assembler:applyDegradationToSpec:${result.sourceStep}`,
+              `Missing required property ${propName} on ${result.detectedIntent}`,
+            );
+            node.properties[propName] = `[${canonical.value}]`;
           }
           if (!node.annotations) node.annotations = {};
           node.annotations["sap2010:Annotation.AnnotationText"] =
@@ -269,11 +274,11 @@ const REQUIRED_PROPERTY_FALLBACK_REGISTRY: Record<string, Record<string, Require
   },
   "LogMessage": {
     "Level": { value: "Info", tier: "contract-valid" },
-    "Message": { value: "TODO - Add log message", tier: "structural-openability" },
+    "Message": { value: makeTodoTextPlaceholder("Add log message", "package-assembler:defaults:LogMessage.Message", "structural-openability default").value, tier: "structural-openability" },
   },
   "ui:LogMessage": {
     "Level": { value: "Info", tier: "contract-valid" },
-    "Message": { value: "TODO - Add log message", tier: "structural-openability" },
+    "Message": { value: makeTodoTextPlaceholder("Add log message", "package-assembler:defaults:ui-LogMessage.Message", "structural-openability default").value, tier: "structural-openability" },
   },
   "CreateFormTask": {
     "TaskTitle": { value: "TODO_FormTaskTitle", tier: "structural-openability" },
@@ -4886,6 +4891,13 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       const preComplianceSweep = sweepUnsafePlaceholdersUtil(rawXaml, fileName);
       if (preComplianceSweep.fixes.length > 0) {
         rawXaml = preComplianceSweep.content;
+      }
+      // Task #527 RC1: build-time assertion — reject any placeholder outside
+      // the canonical closed vocabulary; coerce residuals to safe canonical form.
+      const canonicalGuard = assertCanonicalPlaceholdersInXaml(rawXaml, fileName);
+      if (canonicalGuard.repairs.length > 0) {
+        rawXaml = canonicalGuard.content;
+        console.log(`[Canonical Placeholder Guard] ${fileName}: coerced ${canonicalGuard.repairs.length} non-canonical placeholder(s) to safe form`);
       }
       const preCatalogSnapshot = catalogService.isLoaded() ? snapshotCatalogValidProperties(rawXaml) : null;
       let compliant = makeUiPathCompliant(rawXaml, tf);

@@ -300,7 +300,11 @@ describe("workflow-contract-integrity", () => {
         d => d.defectType === "placeholder_sentinel_in_property"
       );
       expect(placeholderDefects.length).toBeGreaterThan(0);
+      // Severity is preserved; Task #527 RC5 adds origin tagging so the
+      // final-artifact verdict can exclude pipeline-fallback defects from
+      // the structurally_invalid count without losing the severity signal.
       expect(placeholderDefects[0].severity).toBe("execution_blocking");
+      expect(placeholderDefects[0].origin).toBe("pipeline-fallback");
     });
 
     it("detects TODO sentinel", () => {

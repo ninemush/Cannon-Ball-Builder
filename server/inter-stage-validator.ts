@@ -1,5 +1,6 @@
 import type { TraceabilityManifest } from "./traceability-manifest";
 import { catalogService } from "./catalog/catalog-service";
+import { makeTodoTextPlaceholder } from "./lib/placeholder-sanitizer";
 
 export interface InterStageViolation {
   type: "undeclared_variable" | "argument_mismatch" | "scope_violation" | "xmlns_missing" | "structural_violation" | "variable_ref_missing" | "argument_type_mismatch" | "argument_direction_mismatch";
@@ -1164,9 +1165,10 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
     const isStringType = m.typeArg === "x:String" || m.typeArg === "s:String";
 
     if (isStringType) {
+      const canonical = makeTodoTextPlaceholder(`undeclared variable ${varName}`, `inter-stage-validator:${entry.name}:typed-arg`, "undeclared variable remediation").value;
       const replacement = m.full.replace(
         new RegExp(`\\[?${escapedName}\\]?`),
-        `"TODO - undeclared variable ${varName}"`
+        `"${canonical}"`
       );
       entry.content = entry.content.substring(0, m.pos) + replacement + entry.content.substring(m.pos + m.full.length);
       modified = true;
@@ -1210,7 +1212,8 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
 
   const bracketPattern = new RegExp(`\\[${escapedName}\\]`, 'g');
   if (bracketPattern.test(entry.content)) {
-    entry.content = entry.content.replace(bracketPattern, `"TODO - undeclared variable ${varName}"`);
+    const canonical = makeTodoTextPlaceholder(`undeclared variable ${varName}`, `inter-stage-validator:${entry.name}:bracket`, "undeclared variable remediation").value;
+    entry.content = entry.content.replace(bracketPattern, `"${canonical}"`);
     modified = true;
   }
 
@@ -1228,7 +1231,8 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
   for (let i = attrReplacements.length - 1; i >= 0; i--) {
     const ar = attrReplacements[i];
     if (STRING_ATTR_CONTEXTS.has(ar.propName) || ar.propName.endsWith("Name") || ar.propName.endsWith("Text") || ar.propName.endsWith("Path")) {
-      const replacement = `${ar.propName}="TODO - undeclared variable ${varName}"`;
+      const canonical = makeTodoTextPlaceholder(`undeclared variable ${varName}`, `inter-stage-validator:${entry.name}:attr-${ar.propName}`, "undeclared variable remediation").value;
+      const replacement = `${ar.propName}="${canonical}"`;
       entry.content = entry.content.substring(0, ar.pos) + replacement + entry.content.substring(ar.pos + ar.full.length);
       modified = true;
     } else {
@@ -1237,7 +1241,8 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
       const actClassName = actTagMatch ? actTagMatch[actTagMatch.length - 1].match(/<(?:[a-z]+:)?([A-Z]\w+)/)?.[1] || "" : "";
       const isString = actClassName ? catalogService.isPropertyStringTyped(actClassName, ar.propName) : true;
       if (isString) {
-        const replacement = `${ar.propName}="TODO - undeclared variable ${varName}"`;
+        const canonical = makeTodoTextPlaceholder(`undeclared variable ${varName}`, `inter-stage-validator:${entry.name}:attr-typed-${ar.propName}`, "undeclared variable remediation").value;
+        const replacement = `${ar.propName}="${canonical}"`;
         entry.content = entry.content.substring(0, ar.pos) + replacement + entry.content.substring(ar.pos + ar.full.length);
         modified = true;
       } else {

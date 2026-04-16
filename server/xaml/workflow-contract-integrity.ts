@@ -1,5 +1,6 @@
 import { extractDeclaredVariables, findUndeclaredVariables } from "./vbnet-expression-linter";
 import { emitInvokeContractTrace } from "../pipeline-trace-collector";
+import { isCanonicalPlaceholder, lookupPipelineFallbackProvenance } from "../lib/placeholder-sanitizer";
 
 export type ContractDefectType =
   | "unknown_target_argument"
@@ -31,6 +32,20 @@ export interface ContractIntegrityDefect {
   severity: ContractDefectSeverity;
   detectionMethod: string;
   notes: string;
+  /**
+   * Task #527 RC5: origin provenance for defect classification.
+   *
+   * - "pipeline-fallback": the offending value is a canonical safe placeholder
+   *   from the pipeline's own fallback/handoff vocabulary (TODO - ..., TODO_...,
+   *   PLACEHOLDER_...). These do NOT count toward structurally_invalid verdicts.
+   * - "genuine": the defect reflects a real integrity failure (malformed XML,
+   *   undeclared symbol, bad contract binding, etc.). Counts toward the
+   *   structurally_invalid threshold.
+   *
+   * When absent, treated as "genuine" for backward compatibility.
+   */
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export type NormalizationType =
@@ -1184,6 +1199,47 @@ export function validateContractIntegrity(
   validateMixedLiteralExpressionSyntax(entries, defects);
   validateInvokePropertySerialization(entries, defects);
   applyNormalizations(entries, defects, normalizations);
+
+  // Task #527 RC5: classify origin per defect using the canonical closed
+  // placeholder vocabulary. Deterministic membership test — not retrospective
+  // string matching on arbitrary content. Defects whose offending value is
+  // exactly a canonical pipeline-fallback placeholder are tagged as
+  // "pipeline-fallback" and are excluded from the structurally_invalid
+  // threshold by the final verdict logic.
+  for (const d of defects) {
+    if (d.origin) continue;
+    const raw = (d.offendingValue || "").trim();
+    // Unwrap VB bracketed form and surrounding quotes to get the bare token.
+    const inner = raw.replace(/^[\[\s"]+|[\]\s"]+$/g, "").trim();
+    // Task #527 RC5: primary classification uses construction-time
+    // provenance — the value is looked up in the placeholder-sanitizer's
+    // value->provenance index, which was populated when the canonical
+    // placeholder constructor ran. This carries origin from construction
+    // point through to verdict without retrospective shape matching.
+    const constructedProvenance = lookupPipelineFallbackProvenance(inner);
+    if (constructedProvenance) {
+      d.origin = constructedProvenance.origin;
+      d.originReason = `construction-time provenance from ${constructedProvenance.source} (${constructedProvenance.reason})`;
+      // NOTE: severity is intentionally preserved. The final-artifact
+      // verdict logic (see final-artifact-validation.ts) consults `origin`
+      // explicitly and excludes pipeline-fallback defects from the
+      // structurally_invalid count, while still surfacing them in the
+      // defect list with their original severity for handoff reporting.
+      continue;
+    }
+    // Secondary classification: values that match the canonical vocabulary
+    // shape but were not registered in the provenance index. This covers
+    // placeholders produced before the index was wired — during rollout
+    // of construction-time provenance — and is documented as a transitional
+    // fallback. Once every emission site uses canonical constructors, this
+    // branch becomes unreachable.
+    if (isCanonicalPlaceholder(inner)) {
+      d.origin = "pipeline-fallback";
+      d.originReason = "canonical-vocabulary shape match (transitional fallback; no construction-time provenance entry)";
+    } else {
+      d.origin = "genuine";
+    }
+  }
 
   const hasIssues = defects.length > 0;
 

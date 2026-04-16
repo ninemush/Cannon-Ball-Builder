@@ -1662,6 +1662,38 @@ function isVbExpression(val: string): boolean {
   if (trimmed === "True" || trimmed === "False" || trimmed === "Nothing" || trimmed === "null") return true;
   if (/^[0-9]+(\.[0-9]+)?$/.test(trimmed)) return true;
   if (/^New\s/.test(trimmed)) return true;
+
+  // Task #527 RC2: source-boundary guard. A bare multi-word natural-language
+  // phrase (three or more alphabetic words separated by whitespace or in-
+  // word slashes, with no parentheses, member access, division operator, or
+  // other VB syntax indicators) must be treated as a string literal, not a
+  // VB expression. Without this guard, "Missing/Invalid invoice header data"
+  // is wrapped as [Missing/Invalid invoice header data] and surfaces later
+  // as a cascade of false-positive UNDECLARED_VARIABLE errors.
+  //
+  // A VB division operator requires whitespace on both sides (e.g., "a / b")
+  // — an in-word slash (e.g., "Missing/Invalid") is prose.
+  {
+    const hasDivisionOperator = /\s\/\s/.test(trimmed);
+    const hasNonSlashOperator = /[()=<>&|+*^]/.test(trimmed);
+    const hasMemberAccess = /\b\w+\.\w+/.test(trimmed);
+    const hasCallSyntax = /\b\w+\(/.test(trimmed);
+    const hasCommaOrSemi = /[,;:]/.test(trimmed);
+    if (
+      !hasDivisionOperator &&
+      !hasNonSlashOperator &&
+      !hasMemberAccess &&
+      !hasCallSyntax &&
+      !hasCommaOrSemi
+    ) {
+      const words = trimmed.split(/[\s/]+/).filter(Boolean);
+      const allAlphabetic = words.every(w => /^[A-Za-z][A-Za-z]*$/.test(w));
+      if (words.length >= 3 && allAlphabetic) {
+        return false;
+      }
+    }
+  }
+
   if (/[()=<>&|+*/^]/.test(trimmed)) return true;
   if (/\b\w+\.\w+/.test(trimmed)) {
     if (/\.(json|xml|xlsx|csv|txt|log|config|pdf|html|xaml|dll|exe|zip|png|jpg)$/i.test(trimmed)) return false;

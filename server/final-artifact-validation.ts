@@ -835,12 +835,17 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     if (entryPointHasBlockers) reasons.push("entry point (Main.xaml) has structural blockers or stub content");
     if (hasStructuralBlockers) reasons.push(`${studioBlockedCount} file(s) structurally blocked in final validation`);
     statusReason = `Structurally invalid: ${reasons.join(", ")}`;
-  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking") || allResidualDefects.some(d => d.severity === "execution_blocking") || targetValueResult.sentinelReplacements.some(d => d.severity === "execution_blocking") || targetValueResult.symbolScopeDefects.some(d => d.severity === "execution_blocking") || hasUnresolvableJsonDefects || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "execution_blocking") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "execution_blocking") || preComplianceGuardFailed || hasCriticalLoweringFailures) {
+  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking" && d.origin !== "pipeline-fallback") || allResidualDefects.some(d => d.severity === "execution_blocking") || targetValueResult.sentinelReplacements.some(d => d.severity === "execution_blocking") || targetValueResult.symbolScopeDefects.some(d => d.severity === "execution_blocking") || hasUnresolvableJsonDefects || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "execution_blocking") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "execution_blocking") || preComplianceGuardFailed || hasCriticalLoweringFailures) {
     derivedStatus = "structurally_invalid";
     const reasons: string[] = [];
     const graphBlockingCount = graphValidation.workflowGraphDefects.filter(d => d.severity === "execution_blocking").length;
     if (graphBlockingCount > 0) reasons.push(`${graphBlockingCount} execution-blocking workflow graph defect(s)`);
-    const contractBlockingCount = contractIntegrityResult.contractIntegrityDefects.filter(d => d.severity === "execution_blocking").length;
+    // Task #527 RC5: exclude pipeline-fallback origin defects from the
+    // structurally_invalid count. Pipeline-generated safe placeholder
+    // defects still appear in reports with execution_blocking severity
+    // but cannot themselves cause the artifact to be ruled structurally
+    // invalid — they represent localized degradation, not structural failure.
+    const contractBlockingCount = contractIntegrityResult.contractIntegrityDefects.filter(d => d.severity === "execution_blocking" && d.origin !== "pipeline-fallback").length;
     if (contractBlockingCount > 0) reasons.push(`${contractBlockingCount} execution-blocking contract integrity defect(s)`);
     const residualBlockingCount = allResidualDefects.filter(d => d.severity === "execution_blocking").length;
     if (residualBlockingCount > 0) reasons.push(`${residualBlockingCount} execution-blocking residual expression/invoke serialization defect(s)`);

@@ -1,5 +1,6 @@
 import type { QualityGateViolation } from "../uipath-quality-gate";
 import { catalogService } from "../catalog/catalog-service";
+import { makeTodoTextPlaceholder } from "../lib/placeholder-sanitizer";
 
 export interface ExpressionLocation {
   file: string;
@@ -1211,6 +1212,35 @@ export function findUndeclaredVariables(expression: string, declaredVars: Set<st
   if (/\bHANDOFF\b/i.test(trimmedExpr) && /placeholder|replace|TODO|binding|content/i.test(trimmedExpr)) return undeclared;
   if (/\bPLACEHOLDER_\w+/.test(trimmedExpr)) return undeclared;
 
+  // Task #527 RC2 safety net (token-level): if the entire expression is a
+  // bare multi-word natural-language phrase with zero VB syntax indicators,
+  // treat it as an implicit string literal rather than reporting every word
+  // as an undeclared variable. A VB division operator (slash with whitespace
+  // on both sides) disqualifies — an in-word slash (e.g. "Missing/Invalid")
+  // is treated as prose.
+  {
+    const raw = trimmedExpr;
+    const hasDivisionOperator = /\s\/\s/.test(raw);
+    const looksNatural =
+      raw.length > 0 &&
+      !raw.startsWith('"') && !raw.endsWith('"') &&
+      !raw.startsWith("&quot;") && !raw.endsWith("&quot;") &&
+      !hasDivisionOperator &&
+      !/[=<>&|+\-*^(){}\[\]]/.test(raw) &&
+      !/\b\w+\(/.test(raw) &&
+      !/\b\w+\.\w+/.test(raw) &&
+      !/[,;:]/.test(raw);
+    if (looksNatural) {
+      const words = raw.split(/[\s/]+/).filter(Boolean);
+      if (
+        words.length >= 3 &&
+        words.every(w => /^[A-Za-z][A-Za-z]*$/.test(w))
+      ) {
+        return undeclared;
+      }
+    }
+  }
+
   if (/^\{.*"type"\s*:\s*"literal".*"value"\s*:/.test(trimmedExpr) ||
       /^\{&quot;type&quot;/.test(trimmedExpr) ||
       /^\{type:/.test(trimmedExpr)) {
@@ -1670,7 +1700,10 @@ export function lintXamlExpressions(
             }
           } else {
             const safeOriginal = loc.expression.substring(0, 100).replace(/"/g, "'").replace(/&/g, "&amp;").replace(/</g, "&lt;");
-            const todoExpr = `&quot;TODO: Original expression was: ${safeOriginal}&quot;`;
+            // Task #527 RC1/RC5: construct canonical placeholder so provenance
+            // is recorded at emission source rather than retroactively classified.
+            const canonical = makeTodoTextPlaceholder(`Original expression was - ${safeOriginal}`, `vbnet-expression-linter:${loc.file}:${loc.line}`, "unfixable expression remediation").value;
+            const todoExpr = `&quot;${canonical}&quot;`;
 
             const escapedExpr = loc.expression.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -1708,6 +1741,61 @@ export function lintXamlExpressions(
       }
 
       const exprToCheck = result.corrected || loc.expression;
+
+      // Task #527 RC2 safety net: detect when an entire expression is a bare
+      // unquoted natural-language phrase (e.g. "Missing/Invalid invoice header data")
+      // and auto-quote it as a VB string literal instead of reporting every
+      // word as an undeclared variable. Conservative: only apply when the
+      // expression has 3+ bare words AND zero VB syntax indicators.
+      const bareNaturalLanguage = (() => {
+        const raw = exprToCheck.trim();
+        if (!raw) return null;
+        if (raw.startsWith('"') || raw.endsWith('"')) return null;
+        if (raw.startsWith('&quot;') || raw.endsWith('&quot;')) return null;
+        // Task #527 RC2: `/` with whitespace on both sides is a VB division
+        // operator — disqualifies the prose interpretation so expressions
+        // like "a / b / c" are NOT auto-quoted.
+        if (/\s\/\s/.test(raw)) return null;
+        if (/[=<>&|+\-*^(){}\[\]]/.test(raw)) return null;
+        if (/\b\w+\(/.test(raw)) return null;
+        if (/\b\w+\.\w+/.test(raw)) return null;
+        if (/[,;:]/.test(raw)) return null;
+        const words = raw.split(/[\s/]+/).filter(Boolean);
+        if (words.length < 3) return null;
+        for (const w of words) {
+          // Require purely alphabetic tokens; identifier-like tokens with
+          // digits or underscores are treated as code, not prose.
+          if (!/^[A-Za-z]+$/.test(w)) return null;
+        }
+        return raw;
+      })();
+
+      if (bareNaturalLanguage) {
+        const sanitized = bareNaturalLanguage.replace(/"/g, '""');
+        const quoted = `&quot;${sanitized}&quot;`;
+        const currentExprInContent = result.corrected
+          ? result.corrected.replace(/&(?!amp;|quot;|lt;|gt;|apos;|#\d+;|#x[\da-fA-F]+;)/g, "&amp;")
+          : loc.expression;
+        const bracketed = `[${currentExprInContent}]`;
+        if (patchedContent.includes(bracketed)) {
+          patchedContent = patchedContent.split(bracketed).join(`[${quoted}]`);
+        }
+        const escapedExpr = currentExprInContent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const attrPattern = new RegExp(`((?:Expression|ExpressionText|Message|Body|Text|Value|To|Subject|Content)=")${escapedExpr}(")`, "g");
+        patchedContent = patchedContent.replace(attrPattern, `$1${quoted}$2`);
+
+        violations.push({
+          category: "accuracy",
+          severity: "warning",
+          check: "EXPRESSION_SYNTAX",
+          file: loc.file,
+          detail: `Line ${loc.line}: Auto-quoted bare natural-language phrase as string literal: "${bareNaturalLanguage.substring(0, 80)}${bareNaturalLanguage.length > 80 ? "..." : ""}"`,
+        });
+        totalIssues++;
+        autoFixed++;
+        continue;
+      }
+
       const undeclaredVars = findUndeclaredVariables(exprToCheck, declaredVars);
 
       const VB_KEYWORDS_FOR_QUOTING = new Set([
