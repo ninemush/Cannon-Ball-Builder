@@ -1,0 +1,75 @@
+Core product goal
+
+CannonBall’s goal is to produce, every single time, a:
+
+Studio-stable package
+with as much real business logic preserved as possible
+with localized TODO placeholders only where necessary
+and an honest, complete, actionable Developer Handoff Guide
+
+CannonBall is not trying to be a rigid compiler that blocks whenever uncertainty exists.
+
+CannonBall accepts that AI plus rules-based logic will not cover 100% of real-world scenarios. That is expected. The fallback is:
+
+preserve the workflow and business intent wherever possible
+complete the 80% CannonBall can do well
+localize the unresolved portion to the smallest possible scope
+mark those gaps clearly with TODO - Update this with XXX
+record them precisely in the DHG with specific developer actions
+
+This 80/20 outcome is still massively valuable and is the real product target.
+
+Critical clarification: do NOT reinterpret this as “block package generation”
+
+I do not want the pipeline to become more rigid or fail-fast by default.
+
+I am not saying package generation should be blocked whenever CannonBall cannot fully complete all business logic.
+
+What I am saying is:
+
+activity-level incompleteness is acceptable
+package-level structural instability is not acceptable
+
+In other words:
+
+CannonBall may degrade business logic locally
+CannonBall may insert activity-level TODO placeholders
+CannonBall may produce degraded or stubbed activities with clear handoff guidance
+but CannonBall must not deliver a package that fails to open in Studio or opens with broad structural/package-authoring defects
+
+So the correct philosophy is:
+
+Prefer localized degradation over global failure.
+Prefer preserving executable business logic over rigid blocking.
+Prefer honest TODO handoff over silent logic loss.
+Hard fail only when the package is not Studio-stable/openable, the artifact cannot be trusted, or there is a known high-confidence silent runtime corruption that cannot be localized into a developer-actionable handoff.
+
+Non-negotiable package quality standard
+
+CannonBall may degrade unresolved business logic at the smallest possible activity scope with explicit TODO placeholders and DHG guidance, but it must not deliver packages with foundational Studio-authoring defects.
+
+Packages must:
+
+open in UiPath Studio every single time
+be free of broad structural errors
+be free of missing variables that break authoring
+be free of broken/orphaned flows that make the package unstable
+be free of invalid or inconsistent arguments that make the package noisy/broken in Studio
+be free of missing namespace declarations / broken xmlns usage
+be free of malformed XML/XAML
+be free of missing essential files like Main.xaml
+be free of missing dependencies or other foundational package defects that make Studio load unreliable
+
+Acceptable fallback:
+
+localized activity-level stubs or degraded activities
+explicit TODO placeholders
+TODO text that describes the missing business logic clearly
+TODO text that specifies the exact developer action required
+matching DHG entries with exact edit guidance
+
+Unacceptable output:
+
+package fails to open in Studio
+package opens with tons of structural/authoring errors
+package-wide instability is used as the fallback mechanism

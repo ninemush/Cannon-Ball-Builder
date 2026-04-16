@@ -1,0 +1,40 @@
+This is a much better forensic diagnosis. I agree that the remaining failures are now concentrated in a small set of recurring defect classes rather than vague general instability.
+
+What I agree with:
+
+* the true Studio-blocking undeclared-variable defects are the real missing output-variable declarations like `bool_ElementExists` and `str_ExtractedText`, not the false `[INFO]`-style bracket extraction warnings
+* `EXPRESSION_SYNTAX_UNFIXABLE` is a real blocker class and needs stronger auto-repair / localization
+* the sentinel strategy should change from escape-route whack-a-mole to final-pass localized degradation
+
+I also want to reinforce the architectural direction:
+
+* improve the LLM upstream with better context, examples, and explicit bad-example guidance
+* but also build the downstream safety net: detect → targeted repair → smallest-scope stub/degrade → DHG
+
+Three refinements I want in #521 before implementation:
+
+1. Split variable reconciliation into two passes
+   Please do not describe it as “pre-assembly” if it scans emitted XAML.
+   I want:
+
+* a spec/IR-level reconciliation pass before assembly
+* a XAML-level reconciliation pass after raw emission
+  This will make missing variable declaration handling much more robust.
+
+2. Infer output variable types from activity/property contract metadata first, naming convention second
+   For output variables like `bool_ElementExists`, the primary source of truth should be the activity output contract, not just the prefix. Prefix-based inference is a fallback, not the main strategy.
+
+3. Do not solve unfixable expressions by merely downgrading severity in place
+   If an expression cannot be safely repaired, localize the problem:
+
+* replace the affected property/activity with a TODO placeholder or smallest-scope stub
+* preserve Studio stability
+* record it in the DHG
+  Then it can avoid package-blocking severity.
+  A broken expression should not simply remain in emitted XAML as a warning if that risks Studio instability or authoring noise.
+
+Secondary but still worth fixing:
+
+* false variable extraction from log message brackets should still be fixed to reduce diagnostic noise, even if it is not the main Studio-blocking path.
+
+Overall direction is right: fix the source of the problem upstream, but when defects still emerge, repair once locally and then degrade honestly at the smallest possible scope.
