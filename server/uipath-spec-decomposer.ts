@@ -133,6 +133,10 @@ Based on the approved SDD and any PDD/process map context provided, generate a p
 }
 
 IMPORTANT RULES:
+- NEVER name a custom workflow "Main", "Process", "Init", "GetTransactionData", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses", "InitAllApplications", "RetryCurrentTransaction", "RetryInit", "BuildTransactionData", "CleanupAndPrep", "SendNotifications", "Finalise", or "Finalize". These are auto-generated REFramework infrastructure files. Name your orchestration workflows descriptively instead.
+  - WRONG: "Main" (collides with REFramework Main.xaml)
+  - WRONG: "Process" (collides with REFramework Process.xaml)
+  - RIGHT: "OrchestrateGreetings", "RunDispatcherPerformer", "ProcessInvoices", "ExecuteReconciliation"
 - Error handling (TryCatch, RetryScope) belongs INLINE within workflows — do NOT create separate error-handler or retry .xaml files
 - Only create a dedicated utility/helper workflow when the logic is genuinely reused by 2+ caller workflows (e.g., a shared login sequence)
 - Separate workflows ARE appropriate for: dispatcher/performer patterns, REFramework structure (Init/Process/End), Action Center / HITL boundaries, and genuinely distinct business sub-processes

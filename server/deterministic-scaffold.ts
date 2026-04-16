@@ -2,6 +2,7 @@ import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode
 import type { ProcessType } from "./catalog/catalog-service";
 import type { TreeEnrichmentResult } from "./ai-xaml-enricher";
 import { escapeXml } from "./lib/xml-utils";
+import { sanitizePlaceholderForAttribute } from "./lib/placeholder-sanitizer";
 
 export interface ProcessNodeInput {
   id?: number;
@@ -185,17 +186,17 @@ export function selectSystemActivity(system: string, description: string): Syste
 
   // GenAI activities not yet emission-approved - fall back to LogMessage TODO
   if (sysLower.includes("genai") || sysLower.includes("gen ai") || sysLower.includes("generative ai") || combined.includes("llm") || combined.includes("gpt") || combined.includes("prompt")) {
-    return { template: "LogMessage", displayName: `TODO: GenAI - ${system || "GenAI"}`, properties: { Level: "Warn", Message: `"TODO: Implement GenAI integration for ${system || "GenAI"}"` } };
+    return { template: "LogMessage", displayName: `TODO - GenAI - ${system || "GenAI"}`, properties: { Level: "Warn", Message: `"TODO - Implement GenAI integration for ${system || "GenAI"}"` } };
   }
 
   // Google Calendar activities not yet emission-approved - fall back to LogMessage TODO
   if (sysLower.includes("google calendar") || combined.includes("calendar event")) {
-    return { template: "LogMessage", displayName: `TODO: Calendar - ${system || "Google Calendar"}`, properties: { Level: "Warn", Message: `"TODO: Implement Google Calendar integration for ${system || "Google Calendar"}"` } };
+    return { template: "LogMessage", displayName: `TODO - Calendar - ${system || "Google Calendar"}`, properties: { Level: "Warn", Message: `"TODO - Implement Google Calendar integration for ${system || "Google Calendar"}"` } };
   }
 
   // Google Contacts activities not yet emission-approved - fall back to LogMessage TODO
   if (sysLower.includes("google contacts") || combined.includes("contact lookup")) {
-    return { template: "LogMessage", displayName: `TODO: Contacts - ${system || "Google Contacts"}`, properties: { Level: "Warn", Message: `"TODO: Implement Google Contacts integration for ${system || "Google Contacts"}"` } };
+    return { template: "LogMessage", displayName: `TODO - Contacts - ${system || "Google Contacts"}`, properties: { Level: "Warn", Message: `"TODO - Implement Google Contacts integration for ${system || "Google Contacts"}"` } };
   }
 
   if (sysLower.includes("gmail") || (sysLower.includes("google") && combined.includes("email"))) {
@@ -228,32 +229,32 @@ export function selectSystemActivity(system: string, description: string): Syste
 
   // Coupa activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("coupa") || sysLower.includes("erp") || sysLower.includes("procurement") || combined.includes("coupa") || combined.includes("purchase order") || combined.includes("procurement")) {
-    return { template: "HttpClient", displayName: `TODO: Procurement API - ${system || "Coupa"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "coupa").replace(/\s+/g, "").toLowerCase()}.example.com/api/purchase_orders"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - Procurement API - ${system || "Coupa"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "coupa").replace(/\s+/g, "").toLowerCase()}.example.com/api/purchase_orders"`, AcceptFormat: "JSON" } };
   }
 
   // Document Understanding activities not yet emission-approved - fall back to LogMessage TODO
   if (sysLower.includes("document understanding") || combined.includes("document understanding") || combined.includes("intelligent ocr") || sysLower.includes("ocr") || combined.includes("digitize") || combined.includes("classify document") || combined.includes("extract data from document")) {
-    return { template: "LogMessage", displayName: `TODO: Document Understanding - ${system || "DU"}`, properties: { Level: "Warn", Message: `"TODO: Implement Document Understanding for ${system || "DU"}"` } };
+    return { template: "LogMessage", displayName: `TODO - Document Understanding - ${system || "DU"}`, properties: { Level: "Warn", Message: `"TODO - Implement Document Understanding for ${system || "DU"}"` } };
   }
 
   // Integration Service activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("integration service") || combined.includes("integration service") || combined.includes("connector")) {
-    return { template: "HttpClient", displayName: `TODO: Integration Service - ${system || "Integration Service"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "integration").replace(/\s+/g, "").toLowerCase()}.example.com/api"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - Integration Service - ${system || "Integration Service"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "integration").replace(/\s+/g, "").toLowerCase()}.example.com/api"`, AcceptFormat: "JSON" } };
   }
 
   // ServiceNow activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("servicenow") || sysLower.includes("service now") || sysLower.includes("snow") || combined.includes("servicenow") || combined.includes("incident ticket") || combined.includes("snow record")) {
-    return { template: "HttpClient", displayName: `TODO: ServiceNow API - ${system || "ServiceNow"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "servicenow").replace(/\s+/g, "").toLowerCase()}.service-now.com/api/now/table/incident"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - ServiceNow API - ${system || "ServiceNow"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "servicenow").replace(/\s+/g, "").toLowerCase()}.service-now.com/api/now/table/incident"`, AcceptFormat: "JSON" } };
   }
 
   // Workday activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("workday") || combined.includes("workday") || combined.includes("hcm system")) {
-    return { template: "HttpClient", displayName: `TODO: Workday API - ${system || "Workday"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "workday").replace(/\s+/g, "").toLowerCase()}.example.com/api/workers"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - Workday API - ${system || "Workday"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "workday").replace(/\s+/g, "").toLowerCase()}.example.com/api/workers"`, AcceptFormat: "JSON" } };
   }
 
   // Salesforce activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("salesforce") || sysLower.includes("sfdc") || combined.includes("salesforce") || combined.includes("sfdc")) {
-    return { template: "HttpClient", displayName: `TODO: Salesforce API - ${system || "Salesforce"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "salesforce").replace(/\s+/g, "").toLowerCase()}.my.salesforce.com/services/data/v58.0/query"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - Salesforce API - ${system || "Salesforce"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "salesforce").replace(/\s+/g, "").toLowerCase()}.my.salesforce.com/services/data/v58.0/query"`, AcceptFormat: "JSON" } };
   }
 
   if (sysLower.includes("sharepoint")) {
@@ -262,12 +263,12 @@ export function selectSystemActivity(system: string, description: string): Syste
 
   // Jira activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("jira") || sysLower.includes("atlassian")) {
-    return { template: "HttpClient", displayName: `TODO: Jira API - ${system || "Jira"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "jira").replace(/\s+/g, "").toLowerCase()}.atlassian.net/rest/api/3/search"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - Jira API - ${system || "Jira"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "jira").replace(/\s+/g, "").toLowerCase()}.atlassian.net/rest/api/3/search"`, AcceptFormat: "JSON" } };
   }
 
   // Dynamics activities not yet emission-approved - fall back to HttpClient placeholder
   if (sysLower.includes("dynamics") || sysLower.includes("d365")) {
-    return { template: "HttpClient", displayName: `TODO: Dynamics 365 API - ${system || "Dynamics 365"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "dynamics").replace(/\s+/g, "").toLowerCase()}.crm.dynamics.com/api/data/v9.2"`, AcceptFormat: "JSON" } };
+    return { template: "HttpClient", displayName: `TODO - Dynamics 365 API - ${system || "Dynamics 365"}`, properties: { Method: "GET", Endpoint: `"https://${(system || "dynamics").replace(/\s+/g, "").toLowerCase()}.crm.dynamics.com/api/data/v9.2"`, AcceptFormat: "JSON" } };
   }
 
   if (sysLower.includes("pdf") || combined.includes("pdf") || combined.includes("read pdf") || combined.includes("extract pdf") || combined.includes("generate pdf")) {
@@ -375,8 +376,8 @@ export function buildGenericDeterministicSubWorkflowSpec(
       nodeChildren.push({
         kind: "activity" as const,
         template: "Comment",
-        displayName: `TODO: ${node.name || "Step"}`,
-        properties: { Text: `TODO: Implement ${node.name || "step"}${node.description ? " - " + node.description : ""}${node.system ? " (System: " + node.system + ")" : ""}` },
+        displayName: sanitizePlaceholderForAttribute(`TODO - ${node.name || "Step"}`, "scaffold:comment-fallback"),
+        properties: { Text: sanitizePlaceholderForAttribute(`TODO - Implement ${node.name || "step"}${node.description ? " - " + node.description : ""}${node.system ? " (System: " + node.system + ")" : ""}`, "scaffold:comment-text") },
         outputVar: null,
         outputType: null,
         errorHandling: "none" as const,

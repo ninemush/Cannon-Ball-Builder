@@ -1166,7 +1166,7 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
     if (isStringType) {
       const replacement = m.full.replace(
         new RegExp(`\\[?${escapedName}\\]?`),
-        `"TODO: undeclared variable ${varName}"`
+        `"TODO - undeclared variable ${varName}"`
       );
       entry.content = entry.content.substring(0, m.pos) + replacement + entry.content.substring(m.pos + m.full.length);
       modified = true;
@@ -1210,7 +1210,7 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
 
   const bracketPattern = new RegExp(`\\[${escapedName}\\]`, 'g');
   if (bracketPattern.test(entry.content)) {
-    entry.content = entry.content.replace(bracketPattern, `"TODO: undeclared variable ${varName}"`);
+    entry.content = entry.content.replace(bracketPattern, `"TODO - undeclared variable ${varName}"`);
     modified = true;
   }
 
@@ -1228,7 +1228,7 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
   for (let i = attrReplacements.length - 1; i >= 0; i--) {
     const ar = attrReplacements[i];
     if (STRING_ATTR_CONTEXTS.has(ar.propName) || ar.propName.endsWith("Name") || ar.propName.endsWith("Text") || ar.propName.endsWith("Path")) {
-      const replacement = `${ar.propName}="TODO: undeclared variable ${varName}"`;
+      const replacement = `${ar.propName}="TODO - undeclared variable ${varName}"`;
       entry.content = entry.content.substring(0, ar.pos) + replacement + entry.content.substring(ar.pos + ar.full.length);
       modified = true;
     } else {
@@ -1237,7 +1237,7 @@ function degradeUndeclaredVariableReferences(entry: { content: string }, varName
       const actClassName = actTagMatch ? actTagMatch[actTagMatch.length - 1].match(/<(?:[a-z]+:)?([A-Z]\w+)/)?.[1] || "" : "";
       const isString = actClassName ? catalogService.isPropertyStringTyped(actClassName, ar.propName) : true;
       if (isString) {
-        const replacement = `${ar.propName}="TODO: undeclared variable ${varName}"`;
+        const replacement = `${ar.propName}="TODO - undeclared variable ${varName}"`;
         entry.content = entry.content.substring(0, ar.pos) + replacement + entry.content.substring(ar.pos + ar.full.length);
         modified = true;
       } else {

@@ -32,6 +32,7 @@ import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
 import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
 import { DeclarationRegistry, scopeIdMatchesStackEntryExternal, type SymbolDiscoveryDiagnostic, type ExpressionContextEvidence } from "./declaration-registry";
 import { isExcludedSymbolToken } from "./shared/symbol-exclusions";
+import { sanitizePlaceholderForAttribute } from "./lib/placeholder-sanitizer";
 import { dispatchGenerator, hasGenerator, resolveTemplateName } from "./xaml/generator-registry";
 import { normalizeWorkflowTreeForGenerators, getAndClearNormalizationDiagnostics } from "./spec-ir-normalizer";
 import { buildRootActivityAttr as _buildRootActivityAttr, buildRootActivityChildren as _buildRootActivityChildren, buildTextExpressionBlocks as _buildTextExpressionBlocksShared } from "./xaml/xaml-studio-references";
@@ -298,16 +299,17 @@ function validatePropertyValue(
 }
 
 function getSafeDefaultForProperty(key: string, code: RemediationCode): string {
+  let raw: string;
   if (code === "STUB_PROPERTY_MISSING_SELECTOR") {
-    return '[TODO: Capture selector using UiExplorer]';
+    raw = '[TODO - Capture selector using UiExplorer]';
+  } else if (code === "STUB_PROPERTY_BAD_EXPRESSION") {
+    raw = '[TODO - Replace with valid expression]';
+  } else if (code === "STUB_PROPERTY_INVALID_VALUE") {
+    raw = '[TODO - Set valid value]';
+  } else {
+    raw = `[TODO - Fix ${key}]`;
   }
-  if (code === "STUB_PROPERTY_BAD_EXPRESSION") {
-    return '[TODO: Replace with valid expression]';
-  }
-  if (code === "STUB_PROPERTY_INVALID_VALUE") {
-    return '[TODO: Set valid value]';
-  }
-  return `[TODO: Fix ${key}]`;
+  return sanitizePlaceholderForAttribute(raw, `getSafeDefaultForProperty:${key}`);
 }
 
 const XAML_PROTECTED_STRUCTURAL_NAMES = new Set([
@@ -1797,13 +1799,13 @@ export function resolvePropertyValueRaw(value: PropertyValue): string {
   if (isValueIntent(value)) {
     const result = buildExpression(value as ValueIntent);
     if (result === "vb_expression" || result === "[vb_expression]") {
-      return `["TODO: Implement expression"]`;
+      return `["TODO - Implement expression"]`;
     }
     return result;
   }
   const strVal = String(value);
   if (strVal === "vb_expression") {
-    return `["TODO: Implement expression"]`;
+    return `["TODO - Implement expression"]`;
   }
   return strVal;
 }
@@ -2477,7 +2479,7 @@ export function resolveActivityTemplate(
 
         const bindingValue = callerVarName
           ? `[${callerVarName}]`
-          : `["TODO: Bind ${contractArg.name}"]`;
+          : `["TODO - Bind ${contractArg.name}"]`;
 
         if (!callerVarName) {
           _contractDiagnostics.push({
@@ -2676,7 +2678,7 @@ export function resolveActivityTemplate(
 <Rethrow DisplayName="Rethrow — blocked activity &apos;${escapeXml(node.displayName)}&apos;" />`;
     }
     return `<!-- CATALOG NOT LOADED: ${escapeXml(templateName)} — "${escapeXml(node.displayName)}" -->
-<ui:Comment Text="[TODO: Activity ${escapeXml(templateName)} requires catalog validation. Manual implementation required.]" DisplayName="${escapeXml(node.displayName)} (stub)" />`;
+<ui:Comment Text="[TODO - Activity ${escapeXml(templateName)} requires catalog validation. Manual implementation required.]" DisplayName="${escapeXml(node.displayName)} (stub)" />`;
   }
 
   return resolveDynamicTemplate(node, processType, emissionContext);
@@ -3146,7 +3148,7 @@ function resolveExcelApplicationScopeTemplate(
       .join("\n");
   }
   if (!bodyXml.trim()) {
-    bodyXml = `<ui:Comment Text="TODO: Add Excel activities here" DisplayName="Placeholder" />`;
+    bodyXml = `<ui:Comment Text="TODO - Add Excel activities here" DisplayName="Placeholder" />`;
   }
 
   return `<${tag} DisplayName="${displayName}" WorkbookPath="${serializeSafeAttributeValue(smartBracketWrap(workbookPath, _activeDeclarationLookup || undefined))}" Visible="${serializeSafeAttributeValue(visible)}">\n` +
@@ -3181,7 +3183,7 @@ function resolveUseExcelTemplate(
       .join("\n");
   }
   if (!bodyXml.trim()) {
-    bodyXml = `<ui:Comment Text="TODO: Add Excel activities here" DisplayName="Placeholder" />`;
+    bodyXml = `<ui:Comment Text="TODO - Add Excel activities here" DisplayName="Placeholder" />`;
   }
 
   return `<${tag} DisplayName="${displayName}" ExcelFile="${serializeSafeAttributeValue(smartBracketWrap(excelFile, _activeDeclarationLookup || undefined))}">\n` +
@@ -3412,7 +3414,7 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
 <ui:LogMessage Level="Error" Message="[&quot;BLOCKED: Activity &apos;${escapeXml(templateName)}&apos; failed property validation in mandatory path — business step &apos;${escapeXml(node.displayName)}&apos; requires manual implementation&quot;]" DisplayName="Log Blocked Activity (${escapeXml(node.displayName)})" />
 <Rethrow DisplayName="Rethrow — blocked activity &apos;${escapeXml(node.displayName)}&apos;" />`;
       }
-      return `<ui:Comment Text="[TODO: Re-implement ${escapeXml(templateName)} activity — ${escapeXml(node.displayName)}. ${propertyFailures.length} properties failed validation. Original properties: ${propertyFailures.map(f => f.propertyName).join(', ')}]" DisplayName="${displayName} (stub)" />`;
+      return `<ui:Comment Text="[TODO - Re-implement ${escapeXml(templateName)} activity — ${escapeXml(node.displayName)}. ${propertyFailures.length} properties failed validation. Original properties: ${propertyFailures.map(f => f.propertyName).join(', ')}]" DisplayName="${displayName} (stub)" />`;
     }
 
     let effectiveValue = value;
@@ -3551,7 +3553,7 @@ function isHighRiskTemplate(templateName: string): boolean {
 function wrapInTryCatch(innerXml: string, displayName: string, exceptionVarName: string = "exception"): string {
   const effectiveInnerXml = innerXml.trim()
     ? innerXml
-    : `<ui:Comment DisplayName="TODO: Implement try block logic" Text="This TryCatch was generated without try content — add activities here." />`;
+    : `<ui:Comment DisplayName="TODO - Implement try block logic" Text="This TryCatch was generated without try content — add activities here." />`;
   return `<TryCatch DisplayName="Try: ${escapeXml(displayName)}">
   <TryCatch.Try>
     <Sequence DisplayName="Try Block">
@@ -3596,7 +3598,7 @@ function wrapInRetryScope(innerXml: string, displayName: string, retries: number
   const safeInterval = sanitizeRetryInterval(interval);
   const effectiveInnerXml = innerXml.trim()
     ? innerXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement RetryScope body" Message="[&quot;Placeholder — RetryScope body has no activities yet&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO - Implement RetryScope body" Message="[&quot;Placeholder — RetryScope body has no activities yet&quot;]" />`;
   return `<ui:RetryScope NumberOfRetries="${retries}" RetryInterval="${safeInterval}" DisplayName="Retry: ${escapeXml(displayName)}">
   <ui:RetryScope.Condition>
     <ui:ShouldRetry />
@@ -4061,7 +4063,7 @@ function assembleTryCatchNode(
       }
     }
     const systemNote = targetSystemHints.length > 0 ? ` Target system: ${targetSystemHints.join(", ")}.` : "";
-    tryXml = `<ui:Comment DisplayName="TODO: Implement ${escapeXml(stepContext)}" Text="TryCatch step &quot;${escapeXml(stepContext)}&quot; was generated without try content — implement the business logic for this step.${escapeXml(systemNote)}" />`;
+    tryXml = `<ui:Comment DisplayName="TODO - Implement ${escapeXml(stepContext)}" Text="TryCatch step &quot;${escapeXml(stepContext)}&quot; was generated without try content — implement the business logic for this step.${escapeXml(systemNote)}" />`;
   }
 
   let catchXml = node.catchChildren.length > 0
@@ -4200,7 +4202,7 @@ function assembleIfNode(
 
   const thenContent = thenXml.trim()
     ? thenXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement Then branch" Message="[&quot;Placeholder — Then branch has no activities yet&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO - Implement Then branch" Message="[&quot;Placeholder — Then branch has no activities yet&quot;]" />`;
 
   let xml = `<If Condition="${condition}" DisplayName="${displayName}">\n`;
   xml += `  <If.Then>\n`;
@@ -4237,7 +4239,7 @@ function assembleWhileNode(
 
   const bodyContent = bodyXml.trim()
     ? bodyXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement While body" Message="[&quot;Placeholder — While body has no activities yet&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO - Implement While body" Message="[&quot;Placeholder — While body has no activities yet&quot;]" />`;
 
   return `<While Condition="${condition}" DisplayName="${displayName}">\n` +
     `  <While.Body>\n` +
@@ -4388,7 +4390,7 @@ function assembleForEachNode(
 
   const bodyContent = bodyXml.trim()
     ? bodyXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement ForEach body" Message="[&quot;Placeholder — ForEach body has no activities yet&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO - Implement ForEach body" Message="[&quot;Placeholder — ForEach body has no activities yet&quot;]" />`;
 
   const valuesInner = wrappedValues.startsWith("[") && wrappedValues.endsWith("]")
     ? `[${escapeXmlExpression(wrappedValues.slice(1, -1))}]`
@@ -4421,7 +4423,7 @@ function assembleRetryScopeNode(
 
   const bodyContent = bodyXml.trim()
     ? bodyXml
-    : `<ui:LogMessage Level="Trace" DisplayName="TODO: Implement RetryScope body" Message="[&quot;Placeholder — RetryScope body has no activities yet&quot;]" />`;
+    : `<ui:LogMessage Level="Trace" DisplayName="TODO - Implement RetryScope body" Message="[&quot;Placeholder — RetryScope body has no activities yet&quot;]" />`;
 
   const safeInterval = sanitizeRetryInterval(node.retryInterval);
   return `<ui:RetryScope NumberOfRetries="${node.numberOfRetries}" RetryInterval="${safeInterval}" DisplayName="${displayName}">\n` +
@@ -5688,17 +5690,17 @@ export function validateContainerChildModel(xaml: string, workflowName: string):
 
   patched = patched.replace(/<If\.Then>\s*<\/If\.Then>/g, () => {
     repairs.push("If.Then was empty — injected placeholder Sequence");
-    return `<If.Then><Sequence DisplayName="TODO: If.Then"><ui:Comment DisplayName="TODO" Text="If.Then was empty — implement then branch" /></Sequence></If.Then>`;
+    return `<If.Then><Sequence DisplayName="TODO - If.Then"><ui:Comment DisplayName="TODO" Text="If.Then was empty — implement then branch" /></Sequence></If.Then>`;
   });
 
   patched = patched.replace(/<If\.Else>\s*<\/If\.Else>/g, () => {
     repairs.push("If.Else was empty — injected placeholder Sequence");
-    return `<If.Else><Sequence DisplayName="TODO: If.Else"><ui:Comment DisplayName="TODO" Text="If.Else was empty — implement else branch" /></Sequence></If.Else>`;
+    return `<If.Else><Sequence DisplayName="TODO - If.Else"><ui:Comment DisplayName="TODO" Text="If.Else was empty — implement else branch" /></Sequence></If.Else>`;
   });
 
   patched = patched.replace(/<TryCatch\.Try>\s*<\/TryCatch\.Try>/g, () => {
     repairs.push("TryCatch.Try was empty — injected placeholder Sequence");
-    return `<TryCatch.Try><Sequence DisplayName="TODO: TryCatch.Try"><ui:Comment DisplayName="TODO" Text="TryCatch.Try was empty — implement try body" /></Sequence></TryCatch.Try>`;
+    return `<TryCatch.Try><Sequence DisplayName="TODO - TryCatch.Try"><ui:Comment DisplayName="TODO" Text="TryCatch.Try was empty — implement try body" /></Sequence></TryCatch.Try>`;
   });
 
   const ifThenMulti = /<If\.Then>([\s\S]*?)<\/If\.Then>/g;
@@ -5822,7 +5824,7 @@ export function validateContainerChildModel(xaml: string, workflowName: string):
         repairs.push("Transition.Action was empty — injected placeholder Sequence");
         const fixed = transSection.replace(
           /<Transition\.Action>\s*<\/Transition\.Action>/,
-          `<Transition.Action><Sequence DisplayName="TODO: Transition Action"><ui:Comment DisplayName="TODO" Text="Transition action was empty — implement transition logic" /></Sequence></Transition.Action>`
+          `<Transition.Action><Sequence DisplayName="TODO - Transition Action"><ui:Comment DisplayName="TODO" Text="Transition action was empty — implement transition logic" /></Sequence></Transition.Action>`
         );
         patched = patched.replace(transSection, fixed);
       }
@@ -5863,7 +5865,7 @@ export function validateContainerChildModel(xaml: string, workflowName: string):
     if (!block.includes("<Sequence")) {
       repairs.push("RetryScope has no Sequence body — injecting placeholder");
       const closingTag = "</ui:RetryScope>";
-      const fixed = block.replace(closingTag, `<Sequence DisplayName="TODO: RetryScope Body"><ui:Comment DisplayName="TODO" Text="RetryScope body was empty — implement retry logic" /></Sequence>\n    ${closingTag}`);
+      const fixed = block.replace(closingTag, `<Sequence DisplayName="TODO - RetryScope Body"><ui:Comment DisplayName="TODO" Text="RetryScope body was empty — implement retry logic" /></Sequence>\n    ${closingTag}`);
       patched = patched.replace(block, fixed);
     }
   }

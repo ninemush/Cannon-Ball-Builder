@@ -412,6 +412,7 @@ export interface PipelineOutcomeReport {
   cliProjectType?: import("./uipath-cli-validator").UiPathProjectType;
   traceabilityManifest?: TraceabilityManifest;
   reachabilityPruning?: Array<{ file: string; action: "removed" | "retained"; reason: string }>;
+  infrastructureRenameRecords?: Array<{ originalName: string; renamedName: string; reason: string; affectedReferences: string[] }>;
 }
 
 export interface PipelineResult {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { convertMixedLiteralBracketToConcat } from "./xaml-compliance";
+import { sanitizePlaceholderForVbExpression } from "../lib/placeholder-sanitizer";
 
 export interface JsonValueIntentDiagnostic {
   originalRaw: string;
@@ -242,7 +243,8 @@ export function buildExpression(intent: ValueIntent, options?: { clrType?: strin
   switch (intent.type) {
     case "literal": {
       if (isPlaceholderSentinel(intent.value)) {
-        throw new Error(`PLACEHOLDER sentinel "${intent.value}" cannot be emitted — resolve to a valid default or emit a blocking diagnostic`);
+        console.warn(`[Sentinel Remediation] PLACEHOLDER sentinel "${intent.value.substring(0, 40)}" in literal — gracefully degraded to TODO placeholder`);
+        return `"${sanitizePlaceholderForVbExpression("TODO - Implement value (sentinel recovered)", "expression-builder:literal-sentinel")}"`;
       }
       const isBoolType = clrType === "System.Boolean" || clrType === "Boolean";
       if (isBoolType && /^(true|false)$/i.test(intent.value)) {
@@ -266,10 +268,11 @@ export function buildExpression(intent: ValueIntent, options?: { clrType?: strin
 
     case "vb_expression": {
       if (!intent.value || intent.value === "vb_expression" || intent.value.trim() === "") {
-        return `["TODO: Implement expression"]`;
+        return `["${sanitizePlaceholderForVbExpression("TODO - Implement expression", "expression-builder:vb-fallback")}"]`;
       }
       if (isPlaceholderSentinel(intent.value)) {
-        throw new Error(`PLACEHOLDER sentinel "${intent.value}" cannot be emitted — resolve to a valid default or emit a blocking diagnostic`);
+        console.warn(`[Sentinel Remediation] PLACEHOLDER sentinel "${intent.value.substring(0, 40)}" in vb_expression — gracefully degraded to TODO placeholder`);
+        return `["${sanitizePlaceholderForVbExpression("TODO - Implement expression (sentinel recovered)", "expression-builder:vb-sentinel")}"]`;
       }
       if (isPromptProperty) {
         const escaped = intent.value.replace(/"/g, '""');

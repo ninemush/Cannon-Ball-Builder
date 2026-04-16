@@ -1,6 +1,7 @@
 import { escapeXml, escapeXmlAttributeValue } from "../lib/xml-utils";
 import { randomBytes } from "crypto";
 import { isBlockedSentinel } from "../types/uipath-package";
+import { sanitizePlaceholderForAttribute } from "../lib/placeholder-sanitizer";
 
 export function _uuid(): string {
   const bytes = randomBytes(16);
@@ -10,7 +11,7 @@ export function _uuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
-const SENTINEL_TODO_PLACEHOLDER = "TODO: implement this expression";
+const SENTINEL_TODO_PLACEHOLDER = sanitizePlaceholderForAttribute("TODO - implement this expression", "deterministic-generators:sentinel");
 
 type SentinelRemediationOutcome = "todo-placeholder" | "omit";
 

@@ -4,6 +4,7 @@ import type { PackageNamespaceInfo } from "./xaml/xaml-compliance";
 import { escapeXml, getAttributeSerializerDiagnostics, resetAttributeSerializerDiagnostics, detectRawAmpersands } from "./lib/xml-utils";
 import type { WorkflowBusinessContextMap } from "./sdd-business-context-mapper";
 import { formatBusinessContextForHandoff } from "./sdd-business-context-mapper";
+import { sweepUnsafePlaceholders, type PlaceholderSanitizationRecord } from "./lib/placeholder-sanitizer";
 
 export interface CriticalTypeDiagnostic {
   inputType: string;
@@ -627,7 +628,7 @@ function cleanSentinelExpressions(
         detail: `Sentinel expression "${sentinelToken}" found and replaced with TODO stub (remediation: TODO literal placeholder)`,
         resolution: "corrected",
       });
-      return `"TODO: implement this expression"`;
+      return `"TODO - implement this expression"`;
     } else {
       hasCompoundDegradation = true;
       violations.push({
@@ -671,7 +672,7 @@ function cleanSentinelExpressions(
     );
     result = result.replace(selfClosePattern, (_match, activityTag) => {
       if (!isActivityTag(activityTag)) {
-        return _match.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO: implement this expression"`);
+        return _match.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO - implement this expression"`);
       }
       const dnMatch = _match.match(/DisplayName="([^"]*)"/);
       return makeCompoundDegradationStub(activityTag, dnMatch ? dnMatch[1] : activityTag, "compound sentinel remediation");
@@ -683,13 +684,13 @@ function cleanSentinelExpressions(
     );
     result = result.replace(openClosePattern, (_match, activityTag) => {
       if (!isActivityTag(activityTag)) {
-        return _match.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO: implement this expression"`);
+        return _match.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO - implement this expression"`);
       }
       const dnMatch = _match.match(/DisplayName="([^"]*)"/);
       return makeCompoundDegradationStub(activityTag, dnMatch ? dnMatch[1] : activityTag, "compound sentinel remediation");
     });
 
-    result = result.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO: implement this expression"`);
+    result = result.replace(new RegExp(`"${escapedMarker}"`, "g"), `"TODO - implement this expression"`);
   }
 
   const elemPattern = /(>)([^<]*(?:HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|__BLOCKED_\w+|PLACEHOLDER_\w+)[^<]*)(<)/g;
@@ -731,12 +732,12 @@ function cleanSentinelExpressions(
     );
     result = result.replace(elemDegradePattern, (_match, activityTag) => {
       if (!isActivityTag(activityTag)) {
-        return _match.replace(new RegExp(escapedMarker, "g"), "TODO: implement this expression");
+        return _match.replace(new RegExp(escapedMarker, "g"), "TODO - implement this expression");
       }
       const dnMatch = _match.match(/DisplayName="([^"]*)"/);
       return makeCompoundDegradationStub(activityTag, dnMatch ? dnMatch[1] : activityTag, "compound sentinel in element text");
     });
-    result = result.replace(new RegExp(escapedMarker, "g"), "TODO: implement this expression");
+    result = result.replace(new RegExp(escapedMarker, "g"), "TODO - implement this expression");
   }
 
   return result;
@@ -755,7 +756,7 @@ function sweepResidualSentinels(
   let rsm;
   while ((rsm = RESIDUAL_SENTINEL_PATTERN.exec(result)) !== null) {
     const surroundingCtx = result.substring(Math.max(0, rsm.index - 100), rsm.index + rsm[0].length + 100);
-    const alreadyCleaned = /TODO: implement this expression/.test(surroundingCtx)
+    const alreadyCleaned = /TODO[-:] implement this expression/.test(surroundingCtx)
       || /\[DEGRADED\]/.test(surroundingCtx)
       || /\[STUBBED\]/.test(surroundingCtx)
       || /\[HANDOFF\]/.test(surroundingCtx)
@@ -777,6 +778,37 @@ function sweepResidualSentinels(
   for (let mi = matches.length - 1; mi >= 0; mi--) {
     const m = matches[mi];
     const lineNum = findLineNumber(result, m.index);
+
+    const attrContext = result.substring(Math.max(0, m.index - 200), m.index);
+    const attrMatch = attrContext.match(/(\w+)="([^"]*?)$/);
+    if (attrMatch) {
+      const propName = attrMatch[1];
+      const actTagForProp = attrContext.match(/<((?:[a-z]+:)?([A-Z]\w+))\s/g);
+      const actClassName = actTagForProp
+        ? actTagForProp[actTagForProp.length - 1].match(/<(?:[a-z]+:)?([A-Z]\w+)/)?.[1] || ""
+        : "";
+
+      const isStringProp = actClassName
+        ? catalogService.isPropertyStringTyped(actClassName, propName)
+        : true;
+
+      if (isStringProp || propName === "DisplayName" || propName === "Message" || propName === "Text") {
+        const tokenPos = result.indexOf(m.token, Math.max(0, m.index - 10));
+        if (tokenPos >= 0) {
+          const safeDefault = `TODO - implement ${propName}`;
+          result = result.substring(0, tokenPos) + safeDefault + result.substring(tokenPos + m.token.length);
+          violations.push({
+            file: fileName,
+            line: lineNum,
+            type: "sentinel-expression",
+            detail: `Residual sentinel "${m.token}" in property "${propName}" of "${actClassName || "unknown"}" — property-level recovery with safe default "${safeDefault}"`,
+            resolution: "corrected",
+            context: "residual-sentinel-sweep-property",
+          });
+          continue;
+        }
+      }
+    }
 
     const precedingContent = result.substring(Math.max(0, m.index - 500), m.index);
     const activityTagMatch = precedingContent.match(/<((?:[a-z]+:)?[A-Z]\w+)\s[^>]*$/);
@@ -844,10 +876,9 @@ function sweepResidualSentinels(
       }
     }
 
-    const tokenEscaped = m.token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const tokenPos = result.indexOf(m.token, Math.max(0, m.index - 10));
     if (tokenPos >= 0) {
-      result = result.substring(0, tokenPos) + "TODO: implement this expression" + result.substring(tokenPos + m.token.length);
+      result = result.substring(0, tokenPos) + "TODO - implement this expression" + result.substring(tokenPos + m.token.length);
       violations.push({
         file: fileName,
         line: lineNum,
@@ -1048,6 +1079,21 @@ export function runEmissionGate(
     content = cleanSentinelExpressions(fileName, content, violations);
 
     content = sweepResidualSentinels(fileName, content, violations);
+
+    const placeholderSweepResult = sweepUnsafePlaceholders(content, fileName);
+    if (placeholderSweepResult.fixes.length > 0) {
+      content = placeholderSweepResult.content;
+      for (const fix of placeholderSweepResult.fixes) {
+        violations.push({
+          file: fileName,
+          type: "sentinel-expression",
+          detail: `[Placeholder Safety Net] Sanitized unsafe placeholder in ${fix.contextType} context: "${fix.originalToken.substring(0, 80)}" → "${fix.replacement.substring(0, 80)}"`,
+          resolution: "corrected",
+          context: "placeholder-safety-net",
+        });
+      }
+      console.log(`[Emission Gate] Placeholder safety net: sanitized ${placeholderSweepResult.fixes.length} unsafe placeholder(s) in ${fileName}`);
+    }
 
     const ampDetect = detectRawAmpersands(content);
     if (ampDetect.count > 0) {

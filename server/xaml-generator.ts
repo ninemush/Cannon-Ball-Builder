@@ -8,6 +8,7 @@ import {
   type AnalysisReport,
 } from "./workflow-analyzer";
 import { escapeXml, escapeXmlExpression, escapeXmlTextContent, escapeXmlAttributeValue, normalizeXmlExpression, serializeSafeAttributeValue, reportAttributeSerializerBypass } from "./lib/xml-utils";
+import { sanitizePlaceholderForAttribute, sanitizePlaceholderForVbExpression } from "./lib/placeholder-sanitizer";
 import type { DeploymentResult } from "@shared/models/deployment";
 import type { AICenterSkill } from "./uipath-integration";
 import { isActivityAllowed } from "./uipath-activity-policy";
@@ -450,7 +451,7 @@ function classifyActionCenterTask(ctx: ActivityContext, combined: string): Retur
       TaskTitle: "[str_TaskTitle]",
       TaskPriority: "Normal",
       Title: "[str_TaskTitle]",
-      FormSchemaPath: '"TODO: Set form schema path"',
+      FormSchemaPath: '"TODO - Set form schema path"',
     },
     errorHandling: "catch",
     variables,
@@ -475,7 +476,7 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
     return {
       activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
       activityPackage: "UiPath.Excel.Activities",
-      properties: { WorkbookPath: "TODO: Set Excel file path" },
+      properties: { WorkbookPath: "TODO - Set Excel file path" },
       errorHandling: "retry",
       variables,
       gaps,
@@ -494,7 +495,7 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
     return {
       activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
       activityPackage: "UiPath.Excel.Activities",
-      properties: { WorkbookPath: "TODO: Set output Excel file path" },
+      properties: { WorkbookPath: "TODO - Set output Excel file path" },
       errorHandling: "retry",
       variables,
       gaps,
@@ -512,7 +513,7 @@ function classifyExcel(ctx: ActivityContext, combined: string): ReturnType<typeo
   return {
     activityType: isCrossPlatform ? "ui:UseExcel" : "ui:ExcelApplicationScope",
     activityPackage: "UiPath.Excel.Activities",
-    properties: { WorkbookPath: "TODO: Set Excel file path" },
+    properties: { WorkbookPath: "TODO - Set Excel file path" },
     errorHandling: "retry",
     variables,
     gaps,
@@ -546,8 +547,8 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
       activityType: isCrossPlatform ? "ui:SendMail" : "ui:SendSmtpMailMessage",
       activityPackage: "UiPath.Mail.Activities",
       properties: isCrossPlatform
-        ? { To: "TODO: Set recipient email", Subject: "TODO: Set email subject", Body: "TODO: Set email body" }
-        : { To: "TODO: Set recipient email", Subject: "TODO: Set email subject", Body: "TODO: Set email body", Server: "TODO: Set SMTP server", Port: "587" },
+        ? { To: "TODO - Set recipient email", Subject: "TODO - Set email subject", Body: "TODO - Set email body" }
+        : { To: "TODO - Set recipient email", Subject: "TODO - Set email subject", Body: "TODO - Set email body", Server: "TODO - Set SMTP server", Port: "587" },
       errorHandling: "retry",
       variables,
       gaps,
@@ -567,7 +568,7 @@ function classifyEmail(ctx: ActivityContext, combined: string): ReturnType<typeo
     activityPackage: "UiPath.Mail.Activities",
     properties: isCrossPlatform
       ? { Top: "10" }
-      : { Server: "TODO: Set IMAP server", Port: "993", Top: "10", Email: "TODO: Set IMAP email", Password: "TODO: Set IMAP password" },
+      : { Server: "TODO - Set IMAP server", Port: "993", Top: "10", Email: "TODO - Set IMAP email", Password: "TODO - Set IMAP password" },
     errorHandling: "retry",
     variables,
     gaps,
@@ -627,7 +628,7 @@ function classifyApi(ctx: ActivityContext, combined: string): ReturnType<typeof 
     activityType: "ui:HttpClient",
     activityPackage: "UiPath.WebAPI.Activities",
     properties: {
-      EndPoint: "TODO: Set API endpoint URL",
+      EndPoint: "TODO - Set API endpoint URL",
       Method: method,
       AcceptFormat: "JSON",
     },
@@ -662,8 +663,8 @@ function classifyDatabase(ctx: ActivityContext, combined: string): ReturnType<ty
     activityType: "ui:ExecuteQuery",
     activityPackage: "UiPath.Database.Activities",
     properties: {
-      ConnectionString: "TODO: Set database connection string",
-      Sql: "TODO: Write SQL query",
+      ConnectionString: "TODO - Set database connection string",
+      Sql: "TODO - Write SQL query",
       ProviderName: "System.Data.SqlClient",
     },
     errorHandling: "catch",
@@ -689,8 +690,8 @@ function classifyQueue(ctx: ActivityContext, combined: string): ReturnType<typeo
       activityType: "ui:AddQueueItem",
       activityPackage: "UiPath.System.Activities",
       properties: {
-        QueueName: "TODO: Set Orchestrator queue name",
-        Reference: "TODO: Set unique reference",
+        QueueName: "TODO - Set Orchestrator queue name",
+        Reference: "TODO - Set unique reference",
       },
       errorHandling: "catch",
       variables,
@@ -711,7 +712,7 @@ function classifyQueue(ctx: ActivityContext, combined: string): ReturnType<typeo
       activityType: "ui:GetTransactionItem",
       activityPackage: "UiPath.System.Activities",
       properties: {
-        QueueName: "TODO: Set Orchestrator queue name",
+        QueueName: "TODO - Set Orchestrator queue name",
       },
       errorHandling: "catch",
       variables,
@@ -748,7 +749,7 @@ function classifyFile(ctx: ActivityContext, combined: string): ReturnType<typeof
     return {
       activityType: "ui:ReadTextFile",
       activityPackage: "UiPath.System.Activities",
-      properties: { FileName: "TODO: Set input file path" },
+      properties: { FileName: "TODO - Set input file path" },
       errorHandling: "catch",
       variables,
       gaps,
@@ -767,8 +768,8 @@ function classifyFile(ctx: ActivityContext, combined: string): ReturnType<typeof
       activityType: "ui:WriteTextFile",
       activityPackage: "UiPath.System.Activities",
       properties: {
-        FileName: "TODO: Set output file path",
-        Text: "TODO: Set content to write",
+        FileName: "TODO - Set output file path",
+        Text: "TODO - Set content to write",
       },
       errorHandling: "catch",
       variables,
@@ -781,7 +782,7 @@ function classifyFile(ctx: ActivityContext, combined: string): ReturnType<typeof
     return {
       activityType: "ui:PathExists",
       activityPackage: "UiPath.System.Activities",
-      properties: { Path: "TODO: Set path to check" },
+      properties: { Path: "TODO - Set path to check" },
       errorHandling: "none",
       variables,
       gaps,
@@ -799,7 +800,7 @@ function classifyFile(ctx: ActivityContext, combined: string): ReturnType<typeof
   return {
     activityType: "ui:ReadTextFile",
     activityPackage: "UiPath.System.Activities",
-    properties: { FileName: "TODO: Set file path" },
+    properties: { FileName: "TODO - Set file path" },
     errorHandling: "catch",
     variables,
     gaps,
@@ -845,8 +846,8 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
       estimatedMinutes: 5,
     });
     const props: Record<string, string> = useDesktop
-      ? { ApplicationPath: "TODO: Set application executable path", ...autopilotProps, ...resilienceProps }
-      : { Url: "TODO: Set application URL", BrowserType: "Chrome", ...autopilotProps, ...resilienceProps };
+      ? { ApplicationPath: "TODO - Set application executable path", ...autopilotProps, ...resilienceProps }
+      : { Url: "TODO - Set application URL", BrowserType: "Chrome", ...autopilotProps, ...resilienceProps };
     return {
       activityType,
       activityPackage: "UiPath.UIAutomation.Activities",
@@ -873,7 +874,7 @@ function classifyUI(ctx: ActivityContext, combined: string): ReturnType<typeof c
       });
     }
     const typeProps: Record<string, string> = {
-      Text: "TODO: Set text to type",
+      Text: "TODO - Set text to type",
       ...autopilotProps,
       ...resilienceProps,
     };
@@ -1044,7 +1045,7 @@ function classifyMLSkill(ctx: ActivityContext, combined: string, genCtx?: XamlGe
     activityType: "ui:MLSkill",
     activityPackage: "UiPath.MLActivities",
     properties: {
-      MLSkillName: skillName || "[TODO: Set ML Skill name from AI Center]",
+      MLSkillName: skillName || sanitizePlaceholderForAttribute("TODO - Set ML Skill name from AI Center", "xaml-gen:ml-skill"),
       Input: "str_MLInput",
       Output: "str_MLOutput",
       Timeout: "120000",
@@ -1691,7 +1692,7 @@ function renderControlFlowActivity(
       elseContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Else path: ${escapeXml(enforced)}&quot;]" DisplayName="Else Path" />`;
     }
 
-    return `${needsConditionReview ? `\n          <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(enforced)}" DisplayName="Review Condition" />` : ""}
+    return `${needsConditionReview ? `\n          <ui:Comment Text="TODO - Replace default True condition with actual business logic for: ${escapeXml(enforced)}" DisplayName="Review Condition" />` : ""}
           <If DisplayName="${escapeXml(enforced)}" Condition="${serializeSafeAttributeValue(`[${String(condition)}]`)}">
             <If.Then>
               <Sequence DisplayName="Then: ${escapeXml(enforced)}">${thenContent}
@@ -1731,7 +1732,7 @@ function renderControlFlowActivity(
                 </Sequence>`;
     }
 
-    return `${needsExpressionReview ? `\n          <ui:Comment Text="TODO: Replace default Nothing expression with actual value for: ${escapeXml(enforced)}" DisplayName="Review Expression" />` : ""}
+    return `${needsExpressionReview ? `\n          <ui:Comment Text="TODO - Replace default Nothing expression with actual value for: ${escapeXml(enforced)}" DisplayName="Review Expression" />` : ""}
           <Switch x:TypeArguments="x:String" DisplayName="${escapeXml(enforced)}" Expression="${serializeSafeAttributeValue(`[${String(expression)}]`)}">
             <Switch.Cases>${caseElements}
             </Switch.Cases>
@@ -1775,7 +1776,7 @@ function renderControlFlowActivity(
       bodyContent = `\n                <ui:LogMessage Level="Info" Message="[&quot;Processing item in: ${escapeXml(enforced)}&quot;]" DisplayName="Loop Body" />`;
     }
 
-    return `${needsValuesReview ? `\n          <ui:Comment Text="TODO: Replace default empty collection with actual data source for: ${escapeXml(enforced)}" DisplayName="Review Collection" />` : ""}
+    return `${needsValuesReview ? `\n          <ui:Comment Text="TODO - Replace default empty collection with actual data source for: ${escapeXml(enforced)}" DisplayName="Review Collection" />` : ""}
           <ForEach x:TypeArguments="${escapeXml(String(itemType))}" DisplayName="${escapeXml(enforced)}" Values="${serializeSafeAttributeValue(`[${String(values)}]`)}">
             <ForEach.Body>
               <ActivityAction x:TypeArguments="${escapeXml(String(itemType))}">
@@ -1973,7 +1974,7 @@ export function renderActivity(
   }
 
   if (isCrossPlatform && (activityType === "ui:UseBrowser" || activityType === "ui:UseApplication")) {
-    const url = properties["Url"] || "TODO: Set application URL";
+    const url = properties["Url"] || "TODO - Set application URL";
     return `
           <${activityType} DisplayName="${escapeXml(enforced)}" Url="${serializeSafeAttributeValue(String(url))}"${selectorHint ? ` Selector="${serializeSafeAttributeValue(selectorHint)}"` : ""}>
             <${activityType}.Body>
@@ -2122,7 +2123,7 @@ ${argsContent}              </${activityType}.Arguments>${childElementXml}
     const targetSelector = selectorHint.replace(/<html[^>]*\/>\s*/, "");
     const useAppType = selectorHint.includes("app=") ? "ui:UseApplication" : "ui:UseBrowser";
     return `
-          <${useAppType} DisplayName="Scope: ${escapeXml(enforced)}" Url="TODO: Set target URL" Selector="${appSelector}">
+          <${useAppType} DisplayName="Scope: ${escapeXml(enforced)}" Url="TODO - Set target URL" Selector="${appSelector}">
             <${useAppType}.Body>
               <Sequence DisplayName="Actions: ${escapeXml(enforced)}">
                 <${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} Target.Selector="${escapeXml(targetSelector)}" />
@@ -2494,7 +2495,7 @@ export function generateRichXamlFromNodes(
         <ui:LogMessage Level="Info" Message="[&quot;Initialization: ${escapeXml(node.name)}&quot;]" DisplayName="Init: ${escapeXml(node.name)}" />`;
     }
     activities += `
-        <!-- TODO: Add config file reading (InitAllSettings) and variable initialization here -->`;
+        <!-- TODO - Add config file reading (InitAllSettings) and variable initialization here -->`;
     allGaps.push({
       category: "config",
       activity: "Initialization",
@@ -2626,7 +2627,7 @@ export function generateRichXamlFromNodes(
 
         if (needsConditionReview) {
           activities += `
-        <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
+        <ui:Comment Text="TODO - Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
         }
         activities += `
         <If DisplayName="Decision: ${escapeXml(node.name)}" Condition="[${escapeXml(condition)}]">
@@ -2712,7 +2713,7 @@ export function generateRichXamlFromNodes(
 
       if (needsConditionReview) {
         activities += `
-        <ui:Comment Text="TODO: Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
+        <ui:Comment Text="TODO - Replace default True condition with actual business logic for: ${escapeXml(node.name)}" DisplayName="Review Condition" />`;
       }
       activities += `
         <If DisplayName="Decision: ${escapeXml(node.name)}" Condition="[${escapeXml(condition)}]">
@@ -3699,7 +3700,7 @@ ${buildTextExpressionBlocksLocal(isCrossPlatform)}
     <TryCatch DisplayName="Safe Application Initialization">
       <TryCatch.Try>
         <Sequence DisplayName="Application Init Steps">
-          <ui:LogMessage Level="Info" Message="[&quot;TODO: Add application initialization steps (e.g., open browsers, launch desktop apps)&quot;]" DisplayName="Log Init Placeholder" />
+          <ui:LogMessage Level="Info" Message="[&quot;TODO - Add application initialization steps (e.g., open browsers, launch desktop apps)&quot;]" DisplayName="Log Init Placeholder" />
         </Sequence>
       </TryCatch.Try>
       <TryCatch.Catches>
@@ -3887,7 +3888,7 @@ export function generateBuildTransactionDataXaml(targetFramework: TargetFramewor
       <Variable x:TypeArguments="System.Data.DataTable" Name="dt_TransactionData" />
     </Sequence.Variables>
     <ui:LogMessage Level="Info" Message="[&quot;Building transaction data for dispatcher...&quot;]" DisplayName="Log Build Start" />
-    <ui:LogMessage Level="Info" Message="[&quot;TODO: Implement data retrieval logic — query source system, build DataTable with transaction items&quot;]" DisplayName="Log Build Placeholder" />
+    <ui:LogMessage Level="Info" Message="[&quot;TODO - Implement data retrieval logic - query source system, build DataTable with transaction items&quot;]" DisplayName="Log Build Placeholder" />
     <Assign DisplayName="Set Output Transaction Data">
       <Assign.To><OutArgument x:TypeArguments="System.Data.DataTable">[out_TransactionData]</OutArgument></Assign.To>
       <Assign.Value><InArgument x:TypeArguments="System.Data.DataTable">[dt_TransactionData]</InArgument></Assign.Value>
@@ -3926,7 +3927,7 @@ export function generateCleanupAndPrepXaml(targetFramework: TargetFramework = "W
     <TryCatch DisplayName="Safe Cleanup">
       <TryCatch.Try>
         <Sequence DisplayName="Cleanup Steps">
-          <ui:LogMessage Level="Info" Message="[&quot;TODO: Clean Data\\Temp and Data\\Output directories, prepare working folders&quot;]" DisplayName="Log Cleanup Placeholder" />
+          <ui:LogMessage Level="Info" Message="[&quot;TODO - Clean Data\\Temp and Data\\Output directories, prepare working folders&quot;]" DisplayName="Log Cleanup Placeholder" />
         </Sequence>
       </TryCatch.Try>
       <TryCatch.Catches>
@@ -3973,7 +3974,7 @@ export function generateSendNotificationsXaml(targetFramework: TargetFramework =
   </x:Members>${buildTextExpressionBlocksLocal(isCrossPlatform)}
   <Sequence DisplayName="Send Notifications">
     <ui:LogMessage Level="Info" Message="[&quot;Preparing notification...&quot;]" DisplayName="Log Notification Start" />
-    <ui:LogMessage Level="Info" Message="[&quot;TODO: Implement notification logic — send email/Slack/Teams notification based on exception type&quot;]" DisplayName="Log Notification Placeholder" />
+    <ui:LogMessage Level="Info" Message="[&quot;TODO - Implement notification logic - send email/Slack/Teams notification based on exception type&quot;]" DisplayName="Log Notification Placeholder" />
     <ui:LogMessage Level="Info" Message="[&quot;Notification sent successfully&quot;]" DisplayName="Log Notification Complete" />
   </Sequence>
 </Activity>`;

@@ -22,7 +22,7 @@ import {
 import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue, isBlockedSentinel } from "../types/uipath-package";
 import { gen_invoke_workflow_file } from "../xaml/deterministic-generators";
 import type { PropertyValue } from "../workflow-spec-types";
-import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity, buildAssemblyToPackageMap } from "../package-assembler";
+import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity, buildAssemblyToPackageMap, renameInfrastructureCollisions } from "../package-assembler";
 import { runFinalArtifactValidation, type PackageCompletenessViolation, type PackageCompletenessViolationsArtifact } from "../final-artifact-validation";
 import { validateWorkflowGraph } from "../xaml/workflow-graph-validator";
 import {
@@ -53,7 +53,8 @@ import { runQualityGate, type QualityGateInput } from "../uipath-quality-gate";
 import { normalizeXaml, smartBracketWrap, ensureBracketWrapped, looksLikePlainText, BARE_WORD_LITERALS_SET, CLR_NAMESPACE_TO_XAML_PREFIX, PACKAGE_NAMESPACE_MAP, GUARANTEED_ACTIVITY_PREFIX_MAP, injectMissingNamespaceDeclarations, getPrefixToXmlns, getClrNamespaceToXamlPrefix, getNamespaceMismatchDiagnostics, clearNamespaceMismatchDiagnostics, resetNamespaceCaches, insertBeforeClosingCollectionTag } from "../xaml/xaml-compliance";
 import { normalizePropertyToValueIntent } from "../xaml/expression-builder";
 import { scanXamlForRequiredPackages, ACTIVITY_REGISTRY } from "../uipath-activity-registry";
-import { checkNormalizationInvariants } from "../emission-gate";
+import { checkNormalizationInvariants, runEmissionGate } from "../emission-gate";
+import { sweepUnsafePlaceholders, sanitizePlaceholderForAttribute } from "../lib/placeholder-sanitizer";
 import { metadataService } from "../catalog/metadata-service";
 import { catalogService as catalogServiceImport } from "../catalog/catalog-service";
 import { ACTIVITY_DEFINITIONS_REGISTRY } from "../catalog/activity-definitions";
@@ -244,7 +245,7 @@ function assertPipelineOutput(
     expect(loadResult.loadable, `Studio loadability failed for ${entry.name}: ${loadResult.reason}`).toBe(true);
 
     expect(entry.content).not.toContain("[ASSEMBLY_FAILED]");
-    expect(entry.content).not.toMatch(/\[TODO: Fix/);
+    expect(entry.content).not.toMatch(/\[TODO[-:] Fix/);
   }
 
   const qgResult = runQG(xamlEntries, deps, projectName);
@@ -743,7 +744,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
         const loadResult = checkStudioLoadability(entry.content);
         expect(loadResult.loadable, `Studio loadability failed for ${entry.name}: ${loadResult.reason}`).toBe(true);
         expect(entry.content).not.toContain("[ASSEMBLY_FAILED]");
-        expect(entry.content).not.toMatch(/\[TODO: Fix/);
+        expect(entry.content).not.toMatch(/\[TODO[-:] Fix/);
       }
 
       const qgResult = runQG(xamlEntries, deps, "Travel_Request_Processing");
@@ -761,7 +762,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
       );
       const allXaml = xamlEntries.map(e => e.content).join("\n");
 
-      const hasHttpOrApi = allXaml.includes("HttpClient") || allXaml.includes("uweb:") || allXaml.includes("TODO: ") || allXaml.includes("HTTP Request");
+      const hasHttpOrApi = allXaml.includes("HttpClient") || allXaml.includes("uweb:") || allXaml.includes("TODO - ") || allXaml.includes("TODO: ") || allXaml.includes("HTTP Request");
       expect(hasHttpOrApi).toBe(true);
 
       const hasDataServiceOrTodo = allXaml.includes("uds:") || allXaml.includes("DataService") || allXaml.includes("Data Service") || allXaml.includes("QueryEntity") || allXaml.includes("CreateEntity");
@@ -804,7 +805,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
         const loadResult = checkStudioLoadability(entry.content);
         expect(loadResult.loadable, `Studio loadability failed for ${entry.name}: ${loadResult.reason}`).toBe(true);
         expect(entry.content).not.toContain("[ASSEMBLY_FAILED]");
-        expect(entry.content).not.toMatch(/\[TODO: Fix/);
+        expect(entry.content).not.toMatch(/\[TODO[-:] Fix/);
       }
 
       const qgResult = runQG(xamlEntries, deps, "Password_Reset_Automation");
@@ -896,7 +897,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
       const allXaml = xamlEntries.map(e => e.content).join("\n");
 
       for (const entry of xamlEntries) {
-        if (entry.content.includes("TODO:") || entry.content.includes("Bind Point")) {
+        if (entry.content.includes("TODO:") || entry.content.includes("TODO -") || entry.content.includes("Bind Point")) {
           const displayNameMatch = entry.content.match(/DisplayName="([^"]*TODO[^"]*)"/);
           if (displayNameMatch) {
             expect(displayNameMatch[1]).not.toBe("");
@@ -905,7 +906,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
       }
 
       expect(allXaml).not.toContain("[ASSEMBLY_FAILED]");
-      expect(allXaml).not.toMatch(/\[TODO: Fix/);
+      expect(allXaml).not.toMatch(/\[TODO[-:] Fix/);
     });
 
     it("Password reset process DHG output reflects generated vs degraded coverage accurately", () => {
@@ -918,7 +919,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
       const allXaml = xamlEntries.map(e => e.content).join("\n");
 
       for (const entry of xamlEntries) {
-        if (entry.content.includes("TODO:") || entry.content.includes("Bind Point")) {
+        if (entry.content.includes("TODO:") || entry.content.includes("TODO -") || entry.content.includes("Bind Point")) {
           const displayNameMatch = entry.content.match(/DisplayName="([^"]*TODO[^"]*)"/);
           if (displayNameMatch) {
             expect(displayNameMatch[1]).not.toBe("");
@@ -927,7 +928,7 @@ SAP GUI, Supplier Portal at https://supplier.example.com, Excel, Outlook
       }
 
       expect(allXaml).not.toContain("[ASSEMBLY_FAILED]");
-      expect(allXaml).not.toMatch(/\[TODO: Fix/);
+      expect(allXaml).not.toMatch(/\[TODO[-:] Fix/);
     });
   });
 
@@ -4927,10 +4928,12 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
         }
       });
 
-      it("blocks PLACEHOLDER sentinel from lowering", async () => {
+      it("gracefully degrades PLACEHOLDER sentinel during lowering", async () => {
         const { tryLowerStructuredExpression } = await import("../../server/required-property-enforcer");
         const result = tryLowerStructuredExpression('{"type":"literal","value":"PLACEHOLDER_something"}');
-        expect(result.lowered).toBe(false);
+        expect(result.lowered).toBe(true);
+        expect(result.result).toContain("TODO");
+        expect(result.result).not.toContain("PLACEHOLDER_");
       });
     });
 
@@ -5295,16 +5298,19 @@ describe("Typed property object boundary enforcement (Task #460)", () => {
         expect(diag.evidenceSources.length).toBeGreaterThan(0);
       });
 
-      it("records diagnostic on failed expression lowering", async () => {
+      it("records diagnostic on sentinel expression lowering (graceful degradation)", async () => {
         const { getAndClearExpressionLoweringDiagnostics } = await import("../../server/xaml/expression-builder");
         getAndClearExpressionLoweringDiagnostics();
         const { tryLowerStructuredExpression } = await import("../../server/required-property-enforcer");
-        tryLowerStructuredExpression('{"type":"literal","value":"PLACEHOLDER_missing"}');
+        const result = tryLowerStructuredExpression('{"type":"literal","value":"PLACEHOLDER_missing"}');
+        expect(result.lowered).toBe(true);
+        expect(result.result).toContain("TODO");
+        expect(result.result).not.toContain("PLACEHOLDER_");
         const diagnostics = getAndClearExpressionLoweringDiagnostics();
         expect(diagnostics.length).toBeGreaterThan(0);
         const diag = diagnostics[0];
-        expect(diag.lowered).toBe(false);
-        expect(diag.blockReason).toBeTruthy();
+        expect(diag.lowered).toBe(true);
+        expect(diag.loweredValue).toContain("TODO");
       });
     });
   });
@@ -7340,6 +7346,7 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       validateAssemblerToComplianceContract(archiveEntries as any);
       const resultContent = archiveEntries[0].content;
       expect(resultContent).not.toContain('"TODO: undeclared variable FileExists"');
+      expect(resultContent).not.toContain('"TODO - undeclared variable FileExists"');
       const hasDegradation = resultContent.includes("[DEGRADED]") || resultContent.includes("Nothing");
       expect(hasDegradation).toBe(true);
     });
@@ -7369,6 +7376,198 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       expect(typeMap["dt_Data"]).toBe("DataTable");
       expect(typeMap["dbl_Amount"]).toBe("Double");
       expect(typeMap["obj_Result"]).toBe("Object");
+    });
+  });
+
+  describe("Task #524 — Systemic pipeline failure fixes (Runs 472-473)", () => {
+    it("(a) generated workflow named 'Main' in REFramework mode is renamed to avoid collision", () => {
+      const scaffoldMeta = {
+        executionOrder: ["Main", "SubWorkflow1"],
+        workflowContracts: [
+          { name: "Main", invokes: ["SubWorkflow1"], sharedArguments: [] },
+          { name: "SubWorkflow1", invokes: [], sharedArguments: [] },
+        ],
+      };
+      const enrichments = [
+        { name: "Main", spec: { name: "Main", rootSequence: { children: [] } } },
+        { name: "SubWorkflow1", spec: { name: "SubWorkflow1", rootSequence: { children: [] } } },
+      ];
+
+      const records = renameInfrastructureCollisions(scaffoldMeta, enrichments, true);
+
+      expect(records.length).toBeGreaterThan(0);
+      expect(records[0].originalName).toBe("Main");
+      expect(records[0].renamedName).toBe("Orchestrate");
+      expect(scaffoldMeta.workflowContracts[0].name).toBe("Orchestrate");
+      expect(enrichments[0].name).toBe("Orchestrate");
+      expect(enrichments[0].spec.name).toBe("Orchestrate");
+      expect(scaffoldMeta.executionOrder).toContain("Orchestrate");
+      expect(scaffoldMeta.executionOrder).not.toContain("Main");
+      const subInvokes = scaffoldMeta.workflowContracts.find(c => c.name === "SubWorkflow1")?.invokes || [];
+      expect(subInvokes).not.toContain("Main");
+    });
+
+    it("(b) generated workflow named 'Process' in REFramework mode is renamed to avoid collision", () => {
+      const scaffoldMeta = {
+        executionOrder: ["Process", "Helper"],
+        workflowContracts: [
+          { name: "Process", invokes: ["Helper"], sharedArguments: [] },
+          { name: "Helper", invokes: [], sharedArguments: [] },
+        ],
+      };
+      const enrichments = [
+        { name: "Process", spec: { name: "Process", rootSequence: { children: [] } } },
+        { name: "Helper", spec: { name: "Helper", rootSequence: { children: [] } } },
+      ];
+
+      const records = renameInfrastructureCollisions(scaffoldMeta, enrichments, true);
+
+      expect(records.length).toBeGreaterThan(0);
+      expect(records[0].originalName).toBe("Process");
+      expect(records[0].renamedName).toBe("ProcessLogic");
+      expect(scaffoldMeta.executionOrder).toContain("ProcessLogic");
+      expect(scaffoldMeta.executionOrder).not.toContain("Process");
+      expect(enrichments[0].name).toBe("ProcessLogic");
+    });
+
+    it("(c) placeholder tokens with colons in XML attribute positions are sanitized", () => {
+      const xamlWithTodoColon = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+        <Sequence DisplayName="Main">
+          <ui:LogMessage Level="Info" Message="TODO: Set the message" DisplayName="Log Step" />
+          <Assign DisplayName="Set Value" Value="TODO: configure value" />
+        </Sequence>
+      </Activity>`;
+      const entries = [{ name: "Test.xaml", content: xamlWithTodoColon }];
+      runEmissionGate(entries, "baseline");
+      const finalContent = entries[0].content;
+      const attrPattern = /(\w+)="([^"]*)"/g;
+      let match;
+      while ((match = attrPattern.exec(finalContent)) !== null) {
+        const attrValue = match[2];
+        if (attrValue.includes("TODO")) {
+          expect(attrValue).not.toMatch(/TODO\s*:/);
+        }
+      }
+    });
+
+    it("(d) placeholder tokens in XML text-node positions are sanitized and XML structure preserved", () => {
+      const xmlWithTextNodeTodo = `<Activity>
+        <Sequence>
+          <ui:Comment>TODO: implement this logic</ui:Comment>
+        </Sequence>
+      </Activity>`;
+      const result = sweepUnsafePlaceholders(xmlWithTextNodeTodo, "Test.xaml");
+      expect(result.content).not.toMatch(/>([^<]*TODO\s*:[^<]*)</);
+      expect(result.content).toContain("</ui:Comment>");
+      expect(result.content).toContain("</Sequence>");
+      expect(result.content).toContain("</Activity>");
+      const openTags = (result.content.match(/<[^/!][^>]*[^/]>/g) || []).length;
+      const closeTags = (result.content.match(/<\/[^>]+>/g) || []).length;
+      expect(openTags).toBe(closeTags);
+    });
+
+    it("(e) residual __BLOCKED_TYPED_PROPERTY__ sentinel after tree assembly is resolved at property level when possible", () => {
+      const xamlWithSentinel = `<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="http://schemas.uipath.com/workflow/activities">
+        <Sequence DisplayName="Main">
+          <ui:LogMessage DisplayName="Log Step" Level="Info" Message="__BLOCKED_TYPED_PROPERTY__" />
+        </Sequence>
+      </Activity>`;
+      const entries = [{ name: "Test.xaml", content: xamlWithSentinel }];
+      const result = runEmissionGate(entries, "baseline");
+      const finalContent = entries[0].content;
+      expect(finalContent).not.toContain("__BLOCKED_TYPED_PROPERTY__");
+      const hasPropertyRecovery = result.violations.some((v: any) =>
+        v.context === "residual-sentinel-sweep-property" && v.resolution === "corrected"
+      );
+      const hasActivityDegradation = result.violations.some((v: any) =>
+        v.context === "residual-sentinel-sweep" && v.resolution === "degraded"
+      );
+      expect(hasPropertyRecovery || !hasActivityDegradation).toBe(true);
+      expect(finalContent).toContain("LogMessage");
+    });
+
+    it("infrastructure rename does not apply in non-REFramework mode", () => {
+      const scaffoldMeta = {
+        executionOrder: ["Main"],
+        workflowContracts: [
+          { name: "Main", invokes: [], sharedArguments: [] },
+        ],
+      };
+      const enrichments = [
+        { name: "Main", spec: { name: "Main", rootSequence: { children: [] } } },
+      ];
+      const records = renameInfrastructureCollisions(scaffoldMeta, enrichments, false);
+      expect(records.length).toBe(0);
+      expect(enrichments[0].name).toBe("Main");
+    });
+
+    it("placeholder sanitizer is idempotent — already-sanitized placeholders are not double-escaped", () => {
+      const alreadySafe = "TODO - Set the value";
+      const result1 = sanitizePlaceholderForAttribute(alreadySafe);
+      const result2 = sanitizePlaceholderForAttribute(result1);
+      expect(result1).toBe(alreadySafe);
+      expect(result2).toBe(alreadySafe);
+    });
+
+    it("infrastructure rename avoids collision with existing workflow names", () => {
+      const scaffoldMeta = {
+        executionOrder: ["Main", "Orchestrate"],
+        workflowContracts: [
+          { name: "Main", invokes: ["Orchestrate"], sharedArguments: [] },
+          { name: "Orchestrate", invokes: [], sharedArguments: [] },
+        ],
+      };
+      const enrichments = [
+        { name: "Main", spec: { name: "Main", rootSequence: { children: [] } } },
+        { name: "Orchestrate", spec: { name: "Orchestrate", rootSequence: { children: [] } } },
+      ];
+
+      const records = renameInfrastructureCollisions(scaffoldMeta, enrichments, true);
+
+      expect(records.length).toBeGreaterThan(0);
+      expect(records[0].originalName).toBe("Main");
+      expect(records[0].renamedName).not.toBe("Orchestrate");
+      expect(records[0].renamedName).toBe("Orchestrate2");
+      const allNames = scaffoldMeta.workflowContracts.map(c => c.name);
+      const uniqueNames = new Set(allNames);
+      expect(uniqueNames.size).toBe(allNames.length);
+    });
+
+    it("placeholder sanitizer handles XML-unsafe characters in attribute context", () => {
+      const unsafe = 'TODO: value with <angle> & "quotes"';
+      const result = sanitizePlaceholderForAttribute(unsafe, "test");
+      expect(result).not.toContain("TODO:");
+      expect(result).toContain("TODO -");
+      expect(result).not.toMatch(/[<>]/);
+      expect(result).not.toMatch(/&(?!amp;|lt;|gt;|quot;)/);
+      expect(result).not.toContain('"');
+    });
+
+    it("placeholder sanitizer is deterministic across repeated calls (no global regex statefulness)", () => {
+      const input = 'TODO: value with & ampersand and <bracket>';
+      const results: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        results.push(sanitizePlaceholderForAttribute(input, "repeated-call-test"));
+      }
+      for (const r of results) {
+        expect(r).not.toContain("TODO:");
+        expect(r).toContain("TODO -");
+        expect(r).not.toMatch(/&(?!amp;|lt;|gt;|quot;)/);
+        expect(r).not.toMatch(/</);
+      }
+      expect(new Set(results).size).toBe(1);
+    });
+
+    it("sweepUnsafePlaceholders catches bare ampersands in placeholder text", () => {
+      const xmlWithAmpersand = `<Activity>
+        <ui:LogMessage Message="TODO: check A &amp; B & C" />
+      </Activity>`;
+      const result = sweepUnsafePlaceholders(xmlWithAmpersand, "Test.xaml");
+      expect(result.content).not.toMatch(/TODO\s*:/);
+      const attrMatch = result.content.match(/Message="([^"]*)"/);
+      if (attrMatch) {
+        expect(attrMatch[1]).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
+      }
     });
   });
 });

@@ -452,6 +452,17 @@ export function generateDhgFromOutcomeReport(
     md += `\n`;
   }
 
+  if (report.infrastructureRenameRecords && report.infrastructureRenameRecords.length > 0) {
+    md += `### Infrastructure Name Collision Resolution\n\n`;
+    md += `The following workflows were renamed to avoid collisions with REFramework infrastructure files:\n\n`;
+    md += `| Original Name | Renamed To | Reason | Affected References |\n`;
+    md += `|---|---|---|---|\n`;
+    for (const rec of report.infrastructureRenameRecords) {
+      md += `| \`${rec.originalName}\` | \`${rec.renamedName}\` | ${rec.reason} | ${rec.affectedReferences.length} |\n`;
+    }
+    md += `\n`;
+  }
+
   sectionNum++;
   md += `## ${sectionNum}. Generated Logic (ready to use)\n\n`;
   md += `Generated XAML that is Studio-openable and does not contain handoff blocks or workflow-level stubs. May include auto-resolved property remediations or placeholders for fine-tuning.\n\n`;

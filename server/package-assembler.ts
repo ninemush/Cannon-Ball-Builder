@@ -1,4 +1,5 @@
 import archiver from "archiver";
+import { sweepUnsafePlaceholders as sweepUnsafePlaceholdersUtil } from "./lib/placeholder-sanitizer";
 import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityChildren as _pkgBuildRootActivityChildren, buildTextExpressionBlocks as _pkgBuildTextExpressionBlocks } from "./xaml/xaml-studio-references";
   import AdmZip from "adm-zip";
   import { createHash } from "crypto";
@@ -268,11 +269,11 @@ const REQUIRED_PROPERTY_FALLBACK_REGISTRY: Record<string, Record<string, Require
   },
   "LogMessage": {
     "Level": { value: "Info", tier: "contract-valid" },
-    "Message": { value: "TODO: Add log message", tier: "structural-openability" },
+    "Message": { value: "TODO - Add log message", tier: "structural-openability" },
   },
   "ui:LogMessage": {
     "Level": { value: "Info", tier: "contract-valid" },
-    "Message": { value: "TODO: Add log message", tier: "structural-openability" },
+    "Message": { value: "TODO - Add log message", tier: "structural-openability" },
   },
   "CreateFormTask": {
     "TaskTitle": { value: "TODO_FormTaskTitle", tier: "structural-openability" },
@@ -1168,6 +1169,125 @@ export function detectFinalDedupCollisions(
 
 function isCanonicalInfrastructureName(name: string): boolean {
   return CANONICAL_INFRASTRUCTURE_NAMES.has(canonicalizeWorkflowName(name));
+}
+
+export interface InfrastructureRenameRecord {
+  originalName: string;
+  renamedName: string;
+  reason: string;
+  affectedReferences: string[];
+}
+
+const INFRASTRUCTURE_RENAME_PREFIX_MAP: Record<string, string> = {
+  main: "Orchestrate",
+  process: "ProcessLogic",
+  init: "InitCustom",
+  dispatcher: "DispatcherLogic",
+  performer: "PerformerLogic",
+  finalize: "FinalizeLogic",
+  finalise: "FinaliseLogic",
+  gettransactiondata: "GetTransactionDataCustom",
+  settransactionstatus: "SetTransactionStatusCustom",
+  closeallapplications: "CloseAllAppsCustom",
+  killallprocesses: "KillAllProcessesCustom",
+  initallapplications: "InitAllAppsCustom",
+  retrycurrenttransaction: "RetryTransactionCustom",
+  retryinit: "RetryInitCustom",
+  buildtransactiondata: "BuildTransactionCustom",
+  cleanupandprep: "CleanupCustom",
+  sendnotifications: "SendNotificationsCustom",
+  initallsettings: "InitSettingsCustom",
+};
+
+function generateSafeRenameName(originalName: string): string {
+  const canonical = canonicalizeWorkflowName(originalName);
+  const prefix = INFRASTRUCTURE_RENAME_PREFIX_MAP[canonical];
+  if (prefix) return prefix;
+  return `Custom${originalName}`;
+}
+
+export function renameInfrastructureCollisions(
+  specScaffoldMeta: SpecScaffoldMetaLocal,
+  enrichmentsToProcess: Array<{ name: string; spec: any }>,
+  isReFrameworkMode: boolean,
+): InfrastructureRenameRecord[] {
+  if (!isReFrameworkMode) return [];
+
+  const records: InfrastructureRenameRecord[] = [];
+  const renameMap = new Map<string, string>();
+
+  const existingNames = new Set<string>(
+    specScaffoldMeta.workflowContracts.map(c => canonicalizeWorkflowName(c.name))
+  );
+
+  for (const contract of specScaffoldMeta.workflowContracts) {
+    const normalized = normalizeWorkflowName(contract.name);
+    if (!isCanonicalInfrastructureName(normalized)) continue;
+
+    let safeName = generateSafeRenameName(normalized);
+    if (existingNames.has(canonicalizeWorkflowName(safeName))) {
+      let suffix = 2;
+      while (existingNames.has(canonicalizeWorkflowName(`${safeName}${suffix}`))) {
+        suffix++;
+      }
+      safeName = `${safeName}${suffix}`;
+    }
+    existingNames.add(canonicalizeWorkflowName(safeName));
+    renameMap.set(contract.name, safeName);
+    renameMap.set(normalized, safeName);
+    renameMap.set(canonicalizeWorkflowName(contract.name), safeName);
+
+    const affectedRefs: string[] = [];
+
+    const oldName = contract.name;
+    contract.name = safeName;
+    affectedRefs.push(`contract.name: ${oldName} → ${safeName}`);
+
+    for (const otherContract of specScaffoldMeta.workflowContracts) {
+      if (otherContract.invokes) {
+        for (let i = 0; i < otherContract.invokes.length; i++) {
+          const invNorm = normalizeWorkflowName(otherContract.invokes[i]);
+          if (invNorm === normalized || canonicalizeWorkflowName(otherContract.invokes[i]) === canonicalizeWorkflowName(oldName)) {
+            affectedRefs.push(`${otherContract.name}.invokes[${i}]: ${otherContract.invokes[i]} → ${safeName}`);
+            otherContract.invokes[i] = safeName;
+          }
+        }
+      }
+    }
+
+    for (let i = 0; i < specScaffoldMeta.executionOrder.length; i++) {
+      const eoNorm = normalizeWorkflowName(specScaffoldMeta.executionOrder[i]);
+      if (eoNorm === normalized || canonicalizeWorkflowName(specScaffoldMeta.executionOrder[i]) === canonicalizeWorkflowName(oldName)) {
+        affectedRefs.push(`executionOrder[${i}]: ${specScaffoldMeta.executionOrder[i]} → ${safeName}`);
+        specScaffoldMeta.executionOrder[i] = safeName;
+      }
+    }
+
+    records.push({
+      originalName: oldName,
+      renamedName: safeName,
+      reason: `Workflow "${oldName}" collides with REFramework infrastructure name "${normalized}"`,
+      affectedReferences: affectedRefs,
+    });
+
+    console.log(`[Infrastructure Rename] Renamed "${oldName}" → "${safeName}" (collides with REFramework "${normalized}"). Affected references: ${affectedRefs.length}`);
+  }
+
+  if (renameMap.size > 0) {
+    for (const entry of enrichmentsToProcess) {
+      const entryNorm = normalizeWorkflowName(entry.name);
+      const newName = renameMap.get(entry.name) || renameMap.get(entryNorm) || renameMap.get(canonicalizeWorkflowName(entry.name));
+      if (newName) {
+        console.log(`[Infrastructure Rename] Remapping enrichment "${entry.name}" → "${newName}"`);
+        entry.name = newName;
+        if (entry.spec && entry.spec.name) {
+          entry.spec.name = newName;
+        }
+      }
+    }
+  }
+
+  return records;
 }
 
 import { REFRAMEWORK_INFRASTRUCTURE_FILES, REFRAMEWORK_INVOKE_TARGETS } from "./shared/reframework-constants";
@@ -4763,6 +4883,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
      * - Any field marked as normalized:true by the final normalization stage
      */
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
+      const preComplianceSweep = sweepUnsafePlaceholdersUtil(rawXaml, fileName);
+      if (preComplianceSweep.fixes.length > 0) {
+        rawXaml = preComplianceSweep.content;
+      }
       const preCatalogSnapshot = catalogService.isLoaded() ? snapshotCatalogValidProperties(rawXaml) : null;
       let compliant = makeUiPathCompliant(rawXaml, tf);
       if (compliant !== rawXaml) {
@@ -4972,6 +5096,14 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const nonMainWorkflowNames: string[] = [];
     let deferredHallucinatedRecoveries: Array<{ template: string; displayName: string; file: string }> = [];
     let mainWfName = "Main";
+    let infrastructureRenameRecords: InfrastructureRenameRecord[] = [];
+
+    if (specScaffoldMeta && enrichmentsToProcess.length > 0 && useReFramework) {
+      infrastructureRenameRecords = renameInfrastructureCollisions(specScaffoldMeta, enrichmentsToProcess, true);
+      if (infrastructureRenameRecords.length > 0) {
+        console.log(`[UiPath] Infrastructure rename: ${infrastructureRenameRecords.length} workflow(s) renamed to avoid REFramework collisions`);
+      }
+    }
 
     if (enrichmentsToProcess.length > 0) {
       const mainIdx = enrichmentsToProcess.findIndex(e => e.name === "Main");
@@ -6465,7 +6597,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           return activities.length > 0 && activities.every(a => placeholderTags.has(a));
         })();
 
-        const hasFallbackMarkers = mainContent.includes("TODO:") || mainContent.includes("STUB") ||
+        const hasFallbackMarkers = mainContent.includes("TODO:") || mainContent.includes("TODO -") || mainContent.includes("STUB") ||
           mainContent.includes("Placeholder") || mainContent.includes("stub");
 
         const varMatches = mainContent.match(/<Variable\s/g);
@@ -7513,8 +7645,8 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         return "";
       })();
       const actionDescription = wfPurpose
-        ? `TODO: Implement ${wfPurpose}${targetSystem ? ` (System: ${targetSystem})` : ""}`
-        : `TODO: Implement ${wfBaseName}${targetSystem ? ` (System: ${targetSystem})` : ""} — review SDD for workflow requirements`;
+        ? `TODO - Implement ${wfPurpose}${targetSystem ? ` (System: ${targetSystem})` : ""}`
+        : `TODO - Implement ${wfBaseName}${targetSystem ? ` (System: ${targetSystem})` : ""} - review SDD for workflow requirements`;
       outcomeRemediations.push({
         level: "workflow",
         file: fb.file,
@@ -8492,7 +8624,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           for (let k = matchingIndices.length - 1; k >= 0; k--) {
             const idx = matchingIndices[k];
             const content = xamlEntries[idx].content;
-            if (content && content.includes("<") && !content.includes("TODO: Implement")) {
+            if (content && content.includes("<") && !content.includes("TODO: Implement") && !content.includes("TODO - Implement")) {
               bestIdx = idx;
               break;
             }
@@ -8952,6 +9084,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       totalEstimatedEffortMinutes: outcomeRemediations.reduce((s, r) => s + (r.estimatedEffortMinutes || 0), 0),
       studioCompatibility: dhgStudioCompatibility,
       reachabilityPruning: reachabilityPruningEvents.length > 0 ? reachabilityPruningEvents : undefined,
+      infrastructureRenameRecords: infrastructureRenameRecords.length > 0 ? infrastructureRenameRecords : undefined,
       emissionGateViolations: emissionGateResult.violations.length > 0 ? {
         totalViolations: emissionGateResult.summary.totalViolations,
         stubbed: emissionGateResult.summary.stubbed,
