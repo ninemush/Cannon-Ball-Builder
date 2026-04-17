@@ -33,6 +33,12 @@ export {
 } from "./xaml/xaml-compliance";
 
 import { ensureBracketWrapped, smartBracketWrap, parseInvokeArgs } from "./xaml/xaml-compliance";
+import {
+  applyInvokeBindingKeyGuard,
+  buildInvokeLevelHandoffStub,
+  type InvokeBindingInput,
+  type CalleeContractView,
+} from "./xaml/invoke-binding-key-guard";
 
 export {
   type XamlGap,
@@ -2071,6 +2077,56 @@ export function renderActivity(
               <Assign.Value><InArgument x:TypeArguments="${toType}">${safeAssignValue}</InArgument></Assign.Value>
             </Assign>`;
   } else if (hasConvertedArgs || (isInvokeActivity && invokePropertyBindings.length > 0)) {
+    // Task #530: route every generic-path invoke binding through the safety
+    // stack BEFORE writing any `x:Key` into XAML. The guard catches null /
+    // undefined / empty / VB-keyword keys, attempts deterministic repair
+    // against the callee contract (when known), and signals localized
+    // degradation when repair is not viable.
+    const invokeTargetWorkflow = (() => {
+      const wfn = (properties as Record<string, unknown>)["WorkflowFileName"]
+        ?? (properties as Record<string, unknown>)["workflowFileName"]
+        ?? (properties as Record<string, unknown>)["FileName"]
+        ?? "";
+      const s = typeof wfn === "string" ? wfn : String(wfn ?? "");
+      const cleaned = s.replace(/&quot;/g, "").replace(/^"+|"+$/g, "").trim();
+      const base = cleaned.split(/[\\/]/).pop() || cleaned;
+      return base.replace(/\.xaml$/i, "");
+    })();
+
+    const calleeContract: CalleeContractView | null = (() => {
+      const reg = (globalThis as { __invokeKeyGuardCalleeContracts?: Map<string, CalleeContractView> })
+        .__invokeKeyGuardCalleeContracts;
+      if (!reg || typeof reg.get !== "function") return null;
+      return reg.get(invokeTargetWorkflow.toLowerCase()) || null;
+    })();
+
+    const guardInputs: InvokeBindingInput[] = invokePropertyBindings.map(b => ({
+      key: b.key,
+      direction: b.direction,
+      value: b.value,
+      specDeclaredName: b.key,
+      sourceIdentifier: b.value.replace(/^\[|\]$/g, "").trim(),
+    }));
+
+    const guardResult = applyInvokeBindingKeyGuard(guardInputs, {
+      invokeDisplayName: enforced,
+      targetWorkflow: invokeTargetWorkflow,
+      contract: calleeContract,
+    });
+
+    if (guardResult.requiresInvokeLevelDegradation) {
+      // Step 2 — replace the entire InvokeWorkflowFile with a localized
+      // Comment + LogMessage handoff stub. Surrounding control flow is
+      // preserved by the caller (we emit only this fragment in place of
+      // the InvokeWorkflowFile activity). DHG-side recording of intent is
+      // performed by the wiring layer using the diagnostics on the guard
+      // result; the stub itself carries `stubCause: "null-key-invoke"`.
+      innerActivity = buildInvokeLevelHandoffStub(
+        { invokeDisplayName: enforced, targetWorkflow: invokeTargetWorkflow, contract: calleeContract },
+        guardResult.diagnostics,
+      );
+    } else {
+
     let argsContent = "";
     if (convertedInputArgs) argsContent += parseInvokeArgs(convertedInputArgs, "In");
     if (convertedOutputArgs) argsContent += parseInvokeArgs(convertedOutputArgs, "Out");
@@ -2081,7 +2137,7 @@ export function renderActivity(
     while ((ckm = convertedKeyPattern.exec(argsContent)) !== null) {
       convertedKeyValues.set(ckm[1], ckm[2].trim());
     }
-    for (const binding of invokePropertyBindings) {
+    for (const binding of guardResult.resolved) {
       const argType = binding.direction === "Out" ? "OutArgument" : binding.direction === "InOut" ? "InOutArgument" : "InArgument";
       const safeValue = escapeXmlExpression(binding.value);
       if (convertedKeyValues.has(binding.key)) {
@@ -2105,6 +2161,8 @@ ${argsContent}              </${activityType}.Arguments>${childElementXml}
             </${activityType}>`;
     } else {
       innerActivity = `<${activityType} DisplayName="${escapeXml(enforced)}"${propAttrs} />`;
+    }
+
     }
   } else {
     const childElementXml = renderChildElements(activityType, childElementEmissions);

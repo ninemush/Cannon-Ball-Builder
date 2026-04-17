@@ -227,9 +227,23 @@ function parseVbDictionaryToBindings(
   while ((match = pairPattern.exec(vbExpr)) !== null) {
     const name = match[1];
     const value = match[2].trim();
+    // Task #530: upstream filter — never let a VB-keyword / null-literal /
+    // empty / whitespace key flow through into a binding. Such keys would
+    // emerge from the normalizer as `x:Key="Nothing"` etc. and trigger the
+    // contract validator's `unknown_target_argument` defect class. We log
+    // and drop the malformed pair here so the downstream emission-time
+    // guard can still apply Step-1/2/3 if other entries also fail.
+    const trimmed = name.trim();
+    if (!trimmed || /^(Nothing|True|False|Me|MyBase|MyClass|null|undefined)$/i.test(trimmed)) {
+      console.warn(
+        `[VB Dictionary Parser] Dropping malformed binding key=${JSON.stringify(name)} ` +
+          `value=${JSON.stringify(value)} — would have produced an invalid x:Key in XAML.`,
+      );
+      continue;
+    }
     bindings.push({
-      name,
-      direction: inferDirectionFromKey(name) === "OutArgument" ? "OutArgument" : directionDefault,
+      name: trimmed,
+      direction: inferDirectionFromKey(trimmed) === "OutArgument" ? "OutArgument" : directionDefault,
       type: inferTypeFromValue(value),
       value,
     });
