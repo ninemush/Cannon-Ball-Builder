@@ -4027,6 +4027,12 @@ export type DhgQualityIssue = {
   check: string;
   detail: string;
   stubbedWorkflow?: string;
+  /**
+   * Shared StubCause taxonomy (see `server/lib/stub-cause.ts`). Tasks #528,
+   * #529, #530 tag stubs they emit so downstream verdict and regression code
+   * can filter by cause without parsing free-text messages.
+   */
+  stubCause?: import("./lib/stub-cause").StubCause;
 };
 
 export type DhgOptions = {

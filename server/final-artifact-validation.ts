@@ -58,6 +58,8 @@ import {
   type CrossFamilyDriftViolation,
 } from "./critical-activity-lowering";
 import { catalogService } from "./catalog/catalog-service";
+import { drainTodoAttributeGuardDiagnostics, type TodoAttributeGuardDiagnostic } from "./lib/todo-attribute-guard";
+import type { DiagnosticSource } from "./lib/stub-cause";
 
 export interface FinalArtifactValidationInput {
   xamlEntries: { name: string; content: string }[];
@@ -141,6 +143,25 @@ export interface PackageCompletenessViolationsArtifact {
   packageViable: boolean;
 }
 
+/**
+ * Discriminated union describing one entry in the shared
+ * `final_quality_report.diagnostics` collection. Each task tags entries with
+ * its own `source` so consumers (verdict policy, regression assertions, DHG)
+ * can filter mechanically rather than parsing prose. New tasks extend this
+ * union by adding a new variant with a unique `source` literal.
+ */
+export type RunArtifactDiagnostic =
+  | (TodoAttributeGuardDiagnostic & { source: "todo-attribute-guard" })
+  | { source: Exclude<DiagnosticSource, "todo-attribute-guard">; file?: string; emitter?: string; reason: string; [k: string]: unknown };
+
+function collectRunArtifactDiagnostics(): RunArtifactDiagnostic[] {
+  const out: RunArtifactDiagnostic[] = [];
+  for (const d of drainTodoAttributeGuardDiagnostics()) {
+    out.push(d as RunArtifactDiagnostic);
+  }
+  return out;
+}
+
 export interface FinalQualityReport {
   perFileResults: PerFileValidation[];
   qualityGateResult: QualityGateResult;
@@ -193,6 +214,16 @@ export interface FinalQualityReport {
   };
   packageCompletenessViolations: PackageCompletenessViolationsArtifact;
   packageViable: boolean;
+  /**
+   * Shared run-artifact diagnostics channel introduced by Task #529. All
+   * tasks in the #528/#529/#530 batch write to and read from this single
+   * collection; each entry is origin-tagged via `source` (a
+   * `DiagnosticSource` literal) so consumers can filter by task without
+   * parsing message text. The collection is intentionally typed as
+   * `RunArtifactDiagnostic[]` (a discriminated union over per-source
+   * payloads) so future tasks can extend it without breaking the contract.
+   */
+  diagnostics: RunArtifactDiagnostic[];
   criticalActivityLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
   mailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
   quoteRepairDiagnostics?: QuoteRepairDiagnosticsReport;
@@ -983,6 +1014,7 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
     },
     packageCompletenessViolations,
     packageViable: packageCompletenessViolations.packageViable,
+    diagnostics: collectRunArtifactDiagnostics(),
     criticalActivityLoweringDiagnostics: criticalLoweringDiagnostics,
     mailFamilyLockDiagnostics: mailFamilyLockDiag,
     quoteRepairDiagnostics: _getQuoteRepairDiagnosticsSnapshot(),

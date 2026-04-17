@@ -33,6 +33,7 @@ import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
 import { DeclarationRegistry, scopeIdMatchesStackEntryExternal, type SymbolDiscoveryDiagnostic, type ExpressionContextEvidence } from "./declaration-registry";
 import { isExcludedSymbolToken } from "./shared/symbol-exclusions";
 import { sanitizePlaceholderForAttribute } from "./lib/placeholder-sanitizer";
+import { sanitizeAttributeNameKey } from "./lib/todo-attribute-guard";
 import { dispatchGenerator, hasGenerator, resolveTemplateName } from "./xaml/generator-registry";
 import { normalizeWorkflowTreeForGenerators, getAndClearNormalizationDiagnostics } from "./spec-ir-normalizer";
 import { buildRootActivityAttr as _buildRootActivityAttr, buildRootActivityChildren as _buildRootActivityChildren, buildTextExpressionBlocks as _buildTextExpressionBlocksShared } from "./xaml/xaml-studio-references";
@@ -3340,6 +3341,41 @@ function resolveDynamicTemplate(node: ActivityNode, processType: ProcessType, em
 
   for (const [key, rawValue] of Object.entries(props)) {
     if (key.startsWith("_") || key === "displayName" || key === "DisplayName") continue;
+
+    // Task #529: emitter-side guard. If the property key is not a valid XML
+    // NCName/QName, or is a TODO marker (e.g., "TODO:" or "TODO_bind"), the
+    // attribute MUST NOT be emitted in attribute-name position. Drop the
+    // attribute at smallest scope and persist a structured diagnostic so
+    // the DHG can honestly report it. The activity body and unrelated
+    // properties are preserved.
+    {
+      const keyGuard = sanitizeAttributeNameKey(key, {
+        file: _activeRemediationContext?.fileName || "unknown",
+        emitter: `workflow-tree-assembler:resolveDynamicTemplate:${templateName}`,
+        rawValue,
+        workflow: (_activeRemediationContext?.fileName || "").replace(/\.xaml$/i, ""),
+        activity: templateName,
+        // Contract-aware probe (#529 review): consult the activity catalog
+        // so that omission of a *required* contract field is recorded as
+        // `requiredFieldOmitted: true` and routed to a localized handoff.
+        isRequiredProperty: (activityName: string | undefined, propertyName: string) => {
+          if (!activityName) return false;
+          try {
+            const schema = catalogService.getActivitySchema(activityName);
+            if (!schema) return false;
+            const prop = schema.activity.properties.find(p => p.name === propertyName);
+            return !!prop?.required;
+          } catch {
+            return false;
+          }
+        },
+      });
+      if (keyGuard.omitted) {
+        const wasRequired = keyGuard.diagnostic?.requiredFieldOmitted ? " [REQUIRED]" : "";
+        console.warn(`[TODO Attribute Guard] Dropped property "${key}" on ${templateName}${wasRequired} — invalid XML attribute name (would have produced malformed XAML)`);
+        continue;
+      }
+    }
 
     if (isBlockedPropertyValue(rawValue)) {
       console.warn(`[Tree Assembler] Property "${key}" on "${templateName}" is marked as blocked — withholding from emission`);

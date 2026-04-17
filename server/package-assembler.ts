@@ -42,6 +42,8 @@ import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityCh
     type XamlValidationViolation,
     type DhgQualityIssue,
   } from "./xaml-generator";
+  import { repairTodoAttributeNamesInXaml, drainTodoAttributeGuardDiagnosticsForFile, buildEmitterTimeHandoffCommentBlock, toDhgIssuesFromGuardDiagnostics, type TodoAttributeGuardDiagnostic } from "./lib/todo-attribute-guard";
+  import type { StubCause } from "./lib/stub-cause";
   import {
     detectSystems,
     inferAutomationSubPattern,
@@ -4888,6 +4890,91 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
      * - Any field marked as normalized:true by the final normalization stage
      */
     function compliancePass(rawXaml: string, fileName: string, skipTracking?: boolean): string {
+      // Task #529: position-aware emitter-side guard against `TODO:` (or any
+      // TODO-prefixed) tokens appearing in attribute-NAME / element-NAME /
+      // namespace-prefix positions. These crash the XML parser downstream
+      // and previously triggered whole-workflow stubbing. Repair at smallest
+      // scope (drop the offending attribute) and persist a structured
+      // diagnostic to the run-artifact channel so DHG can report honestly.
+      const wfBaseForGuard = (fileName.split("/").pop() || fileName).replace(/\.xaml$/i, "");
+
+      // Step 1: drain emitter-time diagnostics (typed-assembler path) for this
+      // file from the global ledger BEFORE the buffer-side scan so we can
+      // inject visible top-of-file handoff comments for required-field
+      // omissions that occurred before any XAML existed. This guarantees
+      // dual-sink parity (DHG + diagnostics + buffer evidence) for the
+      // emitter-time path — addresses Task #529 v3 review.
+      const emitterTimeDiagnostics = drainTodoAttributeGuardDiagnosticsForFile(fileName);
+      if (emitterTimeDiagnostics.length > 0) {
+        const handoffBlock = buildEmitterTimeHandoffCommentBlock(emitterTimeDiagnostics);
+        if (handoffBlock) {
+          // Inject after XML declaration if present, else at top.
+          const xmlDeclMatch = rawXaml.match(/^<\?xml[^?]*\?>\s*/);
+          if (xmlDeclMatch) {
+            rawXaml = xmlDeclMatch[0] + handoffBlock + rawXaml.slice(xmlDeclMatch[0].length);
+          } else {
+            rawXaml = handoffBlock + rawXaml;
+          }
+        }
+      }
+
+      // Step 2: defense-in-depth pre-compliance buffer scan. Element-name
+      // / namespace-prefix violations throw `TodoAttributeGuardHardFailError`
+      // which is intercepted here, mirrored to DHG, and surfaced as a
+      // build-blocking defect rather than allowed to propagate as malformed
+      // XML into the compliance transform.
+      let todoGuardResult: { content: string; repairs: TodoAttributeGuardDiagnostic[] };
+      let hardFailDiag: TodoAttributeGuardDiagnostic | null = null;
+      try {
+        todoGuardResult = repairTodoAttributeNamesInXaml(rawXaml, {
+          file: fileName,
+          emitter: "compliancePass:pre-scan",
+          workflow: wfBaseForGuard,
+        });
+      } catch (e: any) {
+        if (e && e.code === "TODO_ATTR_GUARD_HARD_FAIL") {
+          hardFailDiag = e.diagnostic;
+          console.error(`[TODO Attribute Guard] HARD-FAIL on ${fileName}: ${hardFailDiag!.reason}`);
+          todoGuardResult = { content: rawXaml, repairs: [hardFailDiag!] };
+        } else {
+          throw e;
+        }
+      }
+      if (todoGuardResult.repairs.length > 0) {
+        rawXaml = todoGuardResult.content;
+        console.log(`[TODO Attribute Guard] ${fileName}: ${todoGuardResult.repairs.length} TODO-name guard event(s) (whole-workflow stubbing avoided)`);
+      }
+
+      // Step 3: dual-sink BOTH streams (emitter-time + buffer-scan, including
+      // any hard-fail diagnostic) into DHG through the single canonical
+      // helper. Single append path — no duplicates for hard-fail entries.
+      const allGuardDiagnostics: TodoAttributeGuardDiagnostic[] = [
+        ...emitterTimeDiagnostics,
+        ...todoGuardResult.repairs,
+      ];
+      if (allGuardDiagnostics.length > 0) {
+        const dhgIssues = toDhgIssuesFromGuardDiagnostics(allGuardDiagnostics);
+        for (let i = 0; i < dhgIssues.length; i++) {
+          const isHardFail = allGuardDiagnostics[i] === hardFailDiag;
+          collectedQualityIssues.push({
+            ...dhgIssues[i],
+            severity: isHardFail ? "blocking" : dhgIssues[i].severity,
+            stubCause: "todo-attribute",
+          });
+        }
+      }
+
+      // Hard-fail is terminal for this workflow's compliance path: throw a
+      // distinguishable error so the upstream `tryStructuralPreservationOr
+      // Stub` handler routes the workflow into the canonical stub fallback
+      // (with the DHG entry already recorded above carrying severity=blocking
+      // + stubCause=todo-attribute). The DHG entry is appended exactly once
+      // via the dual-sink loop above; no duplicate emission.
+      if (hardFailDiag) {
+        const err = new Error(`TODO Attribute Guard hard-fail in ${fileName}: ${hardFailDiag.reason}`);
+        (err as any).code = "TODO_ATTR_GUARD_HARD_FAIL_TERMINAL";
+        throw err;
+      }
       const preComplianceSweep = sweepUnsafePlaceholdersUtil(rawXaml, fileName);
       if (preComplianceSweep.fixes.length > 0) {
         rawXaml = preComplianceSweep.content;
@@ -5032,6 +5119,14 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           console.log(`[UiPath Package Mode] Structural preservation output failed compliance for "${wfName}" — stub fallback BLOCKED by completeness policy`);
         }
       }
+      // Task #529: classify stub cause so the regression suite can filter
+      // mechanically (no free-text inference). The TODO-attribute defect
+      // class is identified by the canonical XML parser error signature.
+      const isTodoAttributeCause = /Attribute\s+'TODO[\s:_\-][^']*'\s+has\s+no\s+space|TODO[\s:_\-]?[^"\s]*\s*=/i.test(compErrMessage)
+        || /XAML\s+XML\s+well-form/i.test(compErrMessage) && /TODO/i.test(compErrMessage);
+      const stubCauseTag: StubCause = isTodoAttributeCause
+        ? "todo-attribute"
+        : "pipeline-fallback-compliance-crash";
       if (generationMode === "package") {
         console.log(`[UiPath Package Mode] Full stub injection BLOCKED for "${wfName}" after compliance failure — recording as completeness violation`);
         collectedQualityIssues.push({
@@ -5039,10 +5134,19 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           file: `${wfName}.xaml`,
           check: "compliance-failure-no-stub",
           detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — stub injection prevented by package-mode completeness policy`,
+          stubCause: stubCauseTag,
         });
         return { content: rawXaml, wasFullStub: true };
       }
       const existingEntry = xamlEntries.find(e => (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "") === wfName);
+      collectedQualityIssues.push({
+        severity: "blocking",
+        file: `${wfName}.xaml`,
+        check: "compliance-failure-stub",
+        detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — replaced with Studio-openable stub`,
+        stubbedWorkflow: `${wfName}.xaml`,
+        stubCause: stubCauseTag,
+      });
       return { content: compliancePass(generateStubWithInvokePreservation(`${wfName}.xaml`, existingEntry?.content, { reason: `Compliance transform failed — ${compErrMessage}` }, tf), `${wfName}.xaml`, true), wasFullStub: true };
     }
 
