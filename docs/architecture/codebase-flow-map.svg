@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2480 2090" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="13">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="1240" y="40" text-anchor="middle" font-size="26" font-weight="700" fill="#0f172a">CannonBall — Codepath Flow</text>
+<text x="1240" y="64" text-anchor="middle" font-size="14" fill="#475569">User input → routes → pipeline stages → Orchestrator deployment  ·  three real transactions traced step-by-step</text>
+<text x="1240" y="84" text-anchor="middle" font-size="11" fill="#475569">Source: docs/architecture/codebase-flow-map.mmd  ·  Re-render: node docs/architecture/render-flow-map.mjs</text>
+<defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1e293b"/>
+    </marker>
+    <marker id="arrDashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrReturn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrSse" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9333ea"/>
+    </marker>
+  </defs>
+<rect x="40" y="206" width="240" height="1834" fill="#f8fafc" />
+<rect x="280" y="206" width="240" height="1834" fill="#ffffff" />
+<rect x="520" y="206" width="240" height="1834" fill="#f8fafc" />
+<rect x="760" y="206" width="240" height="1834" fill="#ffffff" />
+<rect x="1000" y="206" width="240" height="1834" fill="#f8fafc" />
+<rect x="1240" y="206" width="240" height="1834" fill="#ffffff" />
+<rect x="1480" y="206" width="240" height="1834" fill="#f8fafc" />
+<rect x="1720" y="206" width="240" height="1834" fill="#ffffff" />
+<rect x="1960" y="206" width="240" height="1834" fill="#f8fafc" />
+<rect x="2200" y="206" width="240" height="1834" fill="#ffffff" />
+<rect x="52" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="160" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">User</text>
+<rect x="292" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="400" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Workspace UI</text>
+<text x="400" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">workspace.tsx · ProcessMapPanel</text>
+<text x="400" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">· ArtifactHub · Chat</text>
+<rect x="532" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="640" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">POST /api/chat (SSE)</text>
+<text x="640" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1"></text>
+<text x="640" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">server/replit_integrations/chat/routes.ts</text>
+<rect x="772" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="880" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Process-map / UiPath routes</text>
+<text x="880" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">process-map-routes.ts ·</text>
+<text x="880" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">uipath-routes.ts</text>
+<rect x="1012" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="1120" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Run Manager</text>
+<text x="1120" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">uipath-run-manager.ts ·</text>
+<text x="1120" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">executeRun + sseListeners</text>
+<rect x="1252" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="1360" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Build Pipeline</text>
+<text x="1360" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">uipath-pipeline.ts ·</text>
+<text x="1360" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">runBuildPipeline → 9 stages</text>
+<rect x="1492" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="1600" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">LLM Service</text>
+<text x="1600" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">server/lib/llm.ts · Claude /</text>
+<text x="1600" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">OpenAI / Gemini</text>
+<rect x="1732" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="1840" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Storage</text>
+<text x="1840" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">document-storage ·</text>
+<text x="1840" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">process-map-storage ·</text>
+<text x="1840" y="188" text-anchor="middle" font-size="10.5" fill="#cbd5e1">chat/storage · runs</text>
+<rect x="1972" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="2080" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">Deploy / Provisioner</text>
+<text x="2080" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1"></text>
+<text x="2080" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">orchestrator/artifact-provisioner.ts</text>
+<text x="2080" y="188" text-anchor="middle" font-size="10.5" fill="#cbd5e1">+ uipath-auth.ts</text>
+<rect x="2212" y="110" width="216" height="84" rx="10" ry="10" fill="#0f172a" stroke="#0f172a"/>
+<text x="2320" y="138" text-anchor="middle" font-size="14" font-weight="700" fill="#f8fafc">UiPath Orchestrator</text>
+<text x="2320" y="160" text-anchor="middle" font-size="10.5" fill="#cbd5e1">external · OData · Identity ·</text>
+<text x="2320" y="174" text-anchor="middle" font-size="10.5" fill="#cbd5e1">Jobs</text>
+<line x1="160" y1="206" x2="160" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="400" y1="206" x2="400" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="640" y1="206" x2="640" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="880" y1="206" x2="880" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="1120" y1="206" x2="1120" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="1360" y1="206" x2="1360" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="1600" y1="206" x2="1600" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="1840" y1="206" x2="1840" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="2080" y1="206" x2="2080" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="2320" y1="206" x2="2320" y2="2030" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,5"/>
+<line x1="160" y1="264" x2="400" y2="264" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="181.2" y="246" width="197.60000000000002" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="280" y="258" text-anchor="middle" font-size="11.5" fill="#0f172a">1. types message, clicks Send</text>
+<line x1="400" y1="296" x2="640" y2="296" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="277.2" y="278" width="485.6" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="520" y="290" text-anchor="middle" font-size="11.5" fill="#0f172a">2. handleSubmit() → fetch POST /api/chat  { ideaId, message, attachments }</text>
+<line x1="640" y1="328" x2="1840" y2="328" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="1125.2" y="310" width="229.60000000000002" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1240" y="322" text-anchor="middle" font-size="11.5" fill="#0f172a">3. chatStorage.createMessage(user)</text>
+<line x1="640" y1="360" x2="1600" y2="360" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="979.6" y="342" width="280.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1120" y="354" text-anchor="middle" font-size="11.5" fill="#0f172a">4. classifyIntentWithLLM(message, history)</text>
+<line x1="1600" y1="392" x2="640" y2="392" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arrReturn)"/>
+<rect x="899.6" y="374" width="440.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1120" y="386" text-anchor="middle" font-size="11.5" fill="#0f172a">5. { intent: PDD | SDD | PROCESS_MAP | UIPATH_GEN | DEPLOY | CHAT }</text>
+<line x1="640" y1="424" x2="400" y2="424" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arrSse)"/>
+<rect x="395.6" y="406" width="248.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="520" y="418" text-anchor="middle" font-size="11.5" fill="#0f172a">6. SSE  intentClassified + liveStatus</text>
+<rect x="48" y="442" width="2384" height="20" fill="#fde68a" opacity="0.55" rx="4"/>
+<text x="58" y="457" font-size="12" font-weight="700" fill="#78350f">alt — branch on intent</text>
+<text x="62" y="482" font-size="12" font-style="italic" fill="#854d0e">[ intent ∈ { PDD, SDD, PROCESS_MAP }  →  document generation ]</text>
+<line x1="640" y1="506" x2="1600" y2="506" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="998.8" y="488" width="242.4" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1120" y="500" text-anchor="middle" font-size="11.5" fill="#0f172a">7. generateDocumentStreaming(prompt)</text>
+<line x1="1600" y1="538" x2="640" y2="538" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arrReturn)"/>
+<rect x="1056.4" y="520" width="127.2" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1120" y="532" text-anchor="middle" font-size="11.5" fill="#0f172a">8. streamed tokens</text>
+<line x1="640" y1="570" x2="1840" y2="570" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="1112.4" y="552" width="255.20000000000002" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1240" y="564" text-anchor="middle" font-size="11.5" fill="#0f172a">9. documentStorage.createDocument(...)</text>
+<line x1="640" y1="602" x2="400" y2="602" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arrSse)"/>
+<rect x="427.6" y="584" width="184.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="520" y="596" text-anchor="middle" font-size="11.5" fill="#0f172a">10. SSE  token + docTrigger</text>
+<line x1="60" y1="616" x2="2440" y2="616" stroke="#fbbf24" stroke-width="1" stroke-dasharray="6,5"/>
+<text x="62" y="640" font-size="12" font-style="italic" fill="#854d0e">[ intent = UIPATH_GEN  →  trigger build pipeline ]</text>
+<line x1="640" y1="664" x2="400" y2="664" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arrSse)"/>
+<rect x="434" y="646" width="172" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="520" y="658" text-anchor="middle" font-size="11.5" fill="#0f172a">11. SSE  triggerUiPathGen</text>
+<line x1="400" y1="696" x2="880" y2="696" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="438.79999999999995" y="678" width="402.40000000000003" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="640" y="690" text-anchor="middle" font-size="11.5" fill="#0f172a">12. startUiPathGeneration() → POST /api/ideas/:id/uipath-runs</text>
+<line x1="880" y1="728" x2="1120" y2="728" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="901.2" y="710" width="197.60000000000002" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1000" y="722" text-anchor="middle" font-size="11.5" fill="#0f172a">13. executeRun(ideaId, runId)</text>
+<line x1="1120" y1="760" x2="1360" y2="760" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="1067.6" y="742" width="344.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1240" y="754" text-anchor="middle" font-size="11.5" fill="#0f172a">14. runBuildPipeline(spec, pipelineProgressCallback)</text>
+<path d="M 1360 780 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="792" font-size="11.5" fill="#0f172a">15. 1 · classifyComplexity()              [LLM]</text>
+<path d="M 1360 812 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="824" font-size="11.5" fill="#0f172a">16. 2 · generateDecomposedSpec()          [LLM]</text>
+<path d="M 1360 844 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="856" font-size="11.5" fill="#0f172a">17. 3 · runAiEnrichment()                 [LLM]</text>
+<path d="M 1360 876 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="888" font-size="11.5" fill="#0f172a">18. 4 · generateXamlFromSpec()            [deterministic]</text>
+<path d="M 1360 908 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="920" font-size="11.5" fill="#0f172a">19. 5 · analyzeAndFix() — workflow-analyzer.ts</text>
+<path d="M 1360 940 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="952" font-size="11.5" fill="#0f172a">20. 6 · runMetaValidation() — repair ladder [LLM]</text>
+<path d="M 1360 972 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="984" font-size="11.5" fill="#0f172a">21. 7 · generateDhg()</text>
+<path d="M 1360 1004 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="1396" y="1016" font-size="11.5" fill="#0f172a">22. 8 · buildNuGetPackage() — uipath-cli pack</text>
+<line x1="1360" y1="1048" x2="1120" y2="1048" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arrReturn)"/>
+<rect x="1112.4" y="1030" width="255.20000000000002" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1240" y="1042" text-anchor="middle" font-size="11.5" fill="#0f172a">23. { nupkgBuffer, dhg, traceability }</text>
+<rect x="1248" y="1064" width="464" height="20" fill="#bae6fd" opacity="0.7" rx="4"/>
+<text x="1258" y="1079" font-size="12" font-weight="700" fill="#075985">loop — for every stage</text>
+<line x1="1360" y1="1108" x2="1120" y2="1108" stroke="#64748b" stroke-width="1.8" stroke-dasharray="5,4" marker-end="url(#arrDashed)"/>
+<rect x="1106" y="1090" width="268" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1240" y="1102" text-anchor="middle" font-size="11.5" fill="#0f172a">24. pipelineProgressCallback(stageEvent)</text>
+<line x1="1120" y1="1140" x2="400" y2="1140" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arrSse)"/>
+<rect x="549.2" y="1122" width="421.6" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="760" y="1134" text-anchor="middle" font-size="11.5" fill="#0f172a">25. SSE stage event via /api/ideas/:id/uipath-runs/:runId/stream</text>
+<path d="M 400 1160 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="436" y="1172" font-size="11.5" fill="#0f172a">26. UiPathProgressPanel renders live status</text>
+<line x1="1120" y1="1214" x2="1840" y2="1214" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="1320.4" y="1196" width="319.20000000000005" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1480" y="1208" text-anchor="middle" font-size="11.5" fill="#0f172a">27. persist run + artifacts (storage.uipathRuns)</text>
+<line x1="60" y1="1228" x2="2440" y2="1228" stroke="#fbbf24" stroke-width="1" stroke-dasharray="6,5"/>
+<text x="62" y="1252" font-size="12" font-style="italic" fill="#854d0e">[ intent = DEPLOY  →  ask for confirmation ]</text>
+<line x1="640" y1="1276" x2="400" y2="1276" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arrSse)"/>
+<rect x="347.6" y="1258" width="344.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="520" y="1270" text-anchor="middle" font-size="11.5" fill="#0f172a">28. SSE  deployStatus → user confirms in ArtifactHub</text>
+<rect x="20" y="206" width="2440" height="1102" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5" opacity="0.55"/>
+<rect x="20" y="206" width="2440" height="28" rx="8" fill="#93c5fd" opacity="0.85"/>
+<text x="34" y="225" font-size="13" font-weight="700" fill="#0f172a">TRACE A — Chat-driven build &amp; deploy</text>
+<line x1="160" y1="1376" x2="400" y2="1376" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="123.6" y="1358" width="312.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="280" y="1370" text-anchor="middle" font-size="11.5" fill="#0f172a">29. clicks  &quot;Approve To-Be&quot;  in ProcessMapPanel</text>
+<line x1="400" y1="1408" x2="880" y2="1408" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="451.6" y="1390" width="376.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="640" y="1402" text-anchor="middle" font-size="11.5" fill="#0f172a">30. useMutation → POST /api/ideas/:id/process-map/approve</text>
+<line x1="880" y1="1440" x2="1840" y2="1440" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="1235.6" y="1422" width="248.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1360" y="1434" text-anchor="middle" font-size="11.5" fill="#0f172a">31. processMapStorage.approve(ideaId)</text>
+<path d="M 880 1460 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="916" y="1472" font-size="11.5" fill="#0f172a">32. evaluateTransition(ideaId)  +  cascadeInvalidateAndTransition()</text>
+<line x1="880" y1="1504" x2="400" y2="1504" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arrSse)"/>
+<rect x="496.4" y="1486" width="287.2" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="640" y="1498" text-anchor="middle" font-size="11.5" fill="#0f172a">33. SSE  stageChange  (idea moves to Build)</text>
+<rect x="850" y="1518" width="300" height="48" rx="4" fill="#fef3c7" stroke="#a16207" stroke-width="1"/>
+<text x="1000" y="1536" text-anchor="middle" font-size="11.5" fill="#3f2d09">If gating allows, this handler enqueues a UIPATH_GEN run</text>
+<text x="1000" y="1550" text-anchor="middle" font-size="11.5" fill="#3f2d09">→ continues at TRACE A · step 14 (executeRun → runBuildPipeline)</text>
+<rect x="20" y="1318" width="2440" height="270" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5" opacity="0.55"/>
+<rect x="20" y="1318" width="2440" height="28" rx="8" fill="#86efac" opacity="0.85"/>
+<text x="34" y="1337" font-size="13" font-weight="700" fill="#0f172a">TRACE B — Process-map approval auto-trigger (To-Be approved)</text>
+<line x1="160" y1="1656" x2="400" y2="1656" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="136.4" y="1638" width="287.2" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="280" y="1650" text-anchor="middle" font-size="11.5" fill="#0f172a">34. clicks  &quot;Deploy&quot;  on a generated .nupkg</text>
+<line x1="400" y1="1688" x2="880" y2="1688" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="438.79999999999995" y="1670" width="402.40000000000003" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="640" y="1682" text-anchor="middle" font-size="11.5" fill="#0f172a">35. POST /api/uipath/deploy  { runId, folderId, releaseName }</text>
+<line x1="880" y1="1720" x2="2080" y2="1720" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="1355.6" y="1702" width="248.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1480" y="1714" text-anchor="middle" font-size="11.5" fill="#0f172a">36. deployAllArtifacts(runId, target)</text>
+<path d="M 2080 1740 h 28 v 14 h -28" fill="none" stroke="#1e293b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="2116" y="1752" font-size="11.5" fill="#0f172a">37. getAccessToken() — uipath-auth.ts</text>
+<line x1="2080" y1="1784" x2="2320" y2="1784" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="2011.6" y="1766" width="376.8" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="2200" y="1778" text-anchor="middle" font-size="11.5" fill="#0f172a">38. provisionQueues / provisionAssets   (POST /odata/...)</text>
+<line x1="2080" y1="1816" x2="2320" y2="1816" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="2018" y="1798" width="364" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="2200" y="1810" text-anchor="middle" font-size="11.5" fill="#0f172a">39. uploadPackage(.nupkg → Orchestrator Storage Bucket)</text>
+<line x1="2080" y1="1848" x2="2320" y2="1848" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="2037.2" y="1830" width="325.6" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="2200" y="1842" text-anchor="middle" font-size="11.5" fill="#0f172a">40. createOrUpdateRelease(folder, packageVersion)</text>
+<line x1="2080" y1="1880" x2="2320" y2="1880" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<rect x="2104.4" y="1862" width="191.20000000000002" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="2200" y="1874" text-anchor="middle" font-size="11.5" fill="#0f172a">41. startJob(release, robot)</text>
+<line x1="2320" y1="1912" x2="2080" y2="1912" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arrReturn)"/>
+<rect x="2126.8" y="1894" width="146.4" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="2200" y="1906" text-anchor="middle" font-size="11.5" fill="#0f172a">42. { jobId, status }</text>
+<line x1="2080" y1="1944" x2="880" y2="1944" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arrReturn)"/>
+<rect x="1394" y="1926" width="172" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="1480" y="1938" text-anchor="middle" font-size="11.5" fill="#0f172a">43. { releaseKey, jobId }</text>
+<line x1="880" y1="1976" x2="400" y2="1976" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arrReturn)"/>
+<rect x="502.79999999999995" y="1958" width="274.40000000000003" height="16" rx="3" fill="#ffffff" opacity="0.92"/>
+<text x="640" y="1970" text-anchor="middle" font-size="11.5" fill="#0f172a">44. 200 OK → ArtifactHub shows &quot;Deployed&quot;</text>
+<rect x="20" y="1598" width="2440" height="402" rx="8" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5" opacity="0.55"/>
+<rect x="20" y="1598" width="2440" height="28" rx="8" fill="#fca5a5" opacity="0.85"/>
+<text x="34" y="1617" font-size="13" font-weight="700" fill="#0f172a">TRACE C — Direct deploy from Artifact Hub</text>
+<rect x="40" y="2020" width="2400" height="50" fill="#ffffff" stroke="#cbd5e1" rx="6"/>
+<text x="54" y="2040" font-size="13" font-weight="700" fill="#0f172a">Arrow legend</text>
+<line x1="170" y1="2048" x2="230" y2="2048" stroke="#1e293b" stroke-width="1.8" stroke-dasharray="" marker-end="url(#arr)"/>
+<text x="240" y="2052" font-size="12" fill="#0f172a">function call / HTTP request</text>
+<line x1="530" y1="2048" x2="590" y2="2048" stroke="#64748b" stroke-width="1.8" stroke-dasharray="5,4" marker-end="url(#arr)"/>
+<text x="600" y="2052" font-size="12" fill="#0f172a">internal callback / dataflow</text>
+<line x1="890" y1="2048" x2="950" y2="2048" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="6,3" marker-end="url(#arr)"/>
+<text x="960" y="2052" font-size="12" fill="#0f172a">return value / response</text>
+<line x1="1250" y1="2048" x2="1310" y2="2048" stroke="#9333ea" stroke-width="1.8" stroke-dasharray="2,3" marker-end="url(#arr)"/>
+<text x="1320" y="2052" font-size="12" fill="#0f172a">Server-Sent Event back to UI</text>
+</svg>

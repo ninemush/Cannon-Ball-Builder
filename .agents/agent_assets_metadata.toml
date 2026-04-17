@@ -84,3 +84,15 @@ id = "aDKaLJpTZbwFUt0NWis3d"
 uri = "file://.local/tasks/forensic-analysis-runs-472-473.md"
 type = "text"
 title = "Forensic Analysis Report: Runs 472-473"
+
+[[outputs]]
+id = "ichDf5GKwKGtL0_4GJDmb"
+uri = "file://docs/architecture/codebase-flow-map.png"
+type = "image"
+title = "CannonBall Codepath Flow (PNG, high-DPI sequence diagram)"
+
+[[outputs]]
+id = "jq8LI2DZ1eEhBsnvm_EhO"
+uri = "file://docs/architecture/codebase-flow-map.pdf"
+type = "pdf"
+title = "CannonBall Codepath Flow (PDF)"

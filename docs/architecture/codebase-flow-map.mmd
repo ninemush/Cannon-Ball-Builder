@@ -1,0 +1,83 @@
+%% CannonBall — Codepath Flow (sequence trace)
+%% Re-render with: npx -p @mermaid-js/mermaid-cli mmdc -i codebase-flow-map.mmd -o codebase-flow-map.png -w 2400
+%%
+%% Three end-to-end transactions are traced:
+%%   A. Chat-driven build & deploy   (steps A1 … A26)
+%%   B. Process-map approval auto-trigger   (steps B1 … B6)
+%%   C. Direct deploy from Artifact Hub   (steps C1 … C7)
+
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as Workspace UI<br/>workspace.tsx<br/>+ ProcessMapPanel<br/>+ ArtifactHub
+    participant Chat as POST /api/chat<br/>chat/routes.ts (SSE)
+    participant PM as Process-map / UiPath routes<br/>process-map-routes.ts<br/>uipath-routes.ts
+    participant RM as uipath-run-manager.ts<br/>executeRun + sseListeners
+    participant PIPE as uipath-pipeline.ts<br/>runBuildPipeline → 9 stages
+    participant LLM as server/lib/llm.ts<br/>(Claude · OpenAI · Gemini)
+    participant DB as Storage<br/>document-storage · process-map-storage · chat/storage
+    participant DEP as orchestrator/artifact-provisioner.ts<br/>+ uipath-auth.ts
+    participant ORCH as UiPath Orchestrator<br/>(external)
+
+    rect rgb(239,246,255)
+    Note over User,ORCH: TRACE A — Chat-driven build & deploy
+    User->>UI: types message, clicks Send
+    UI->>Chat: handleSubmit() → fetch POST /api/chat<br/>{ ideaId, message, attachments }
+    Chat->>DB: chatStorage.createMessage(user)
+    Chat->>LLM: classifyIntentWithLLM(message, history)
+    LLM-->>Chat: { intent: PDD | SDD | PROCESS_MAP | UIPATH_GEN | DEPLOY | CHAT }
+    Chat-->>UI: SSE intentClassified + liveStatus
+    alt intent = PDD/SDD/PROCESS_MAP
+        Chat->>LLM: generateDocumentStreaming(prompt)
+        LLM-->>Chat: streamed tokens
+        Chat->>DB: documentStorage.createDocument(...)
+        Chat-->>UI: SSE token + docTrigger
+    else intent = UIPATH_GEN
+        Chat-->>UI: SSE triggerUiPathGen
+        UI->>PM: startUiPathGeneration() → POST /api/ideas/:id/uipath-runs
+        PM->>RM: executeRun(ideaId, runId)
+        RM->>PIPE: runBuildPipeline(spec, pipelineProgressCallback)
+        PIPE->>PIPE: 1. classifyComplexity() (LLM)
+        PIPE->>PIPE: 2. generateDecomposedSpec() (LLM)
+        PIPE->>PIPE: 3. runAiEnrichment() (LLM)
+        PIPE->>PIPE: 4. generateXamlFromSpec() (deterministic)
+        PIPE->>PIPE: 5. analyzeAndFix() — workflow-analyzer.ts
+        PIPE->>PIPE: 6. runMetaValidation() (LLM repair ladder)
+        PIPE->>PIPE: 7. generateDhg()
+        PIPE->>PIPE: 8. buildNuGetPackage() — uipath-cli pack
+        PIPE-->>RM: { nupkgBuffer, dhg, traceability }
+        loop every stage
+            PIPE-->>RM: pipelineProgressCallback(stageEvent)
+            RM-->>UI: SSE stage event via /api/ideas/:id/uipath-runs/:runId/stream
+            UI-->>UI: UiPathProgressPanel renders live status
+        end
+        RM->>DB: persist run + artifacts (storage.uipathRuns)
+    else intent = DEPLOY
+        Chat-->>UI: SSE deployStatus → user confirms in ArtifactHub
+    end
+    end
+
+    rect rgb(240,253,244)
+    Note over User,ORCH: TRACE B — Process-map approval auto-trigger (To-Be approved)
+    User->>UI: clicks "Approve To-Be" in ProcessMapPanel
+    UI->>PM: useMutation → POST /api/ideas/:id/process-map/approve
+    PM->>DB: processMapStorage.approve(ideaId)
+    PM->>PM: evaluateTransition(ideaId) + cascadeInvalidateAndTransition()
+    PM-->>UI: SSE stageChange (idea moves to Build)
+    Note over PM,RM: If gating allows, the same handler enqueues a UIPATH_GEN run<br/>→ continues at TRACE A step 14 (executeRun → runBuildPipeline)
+    end
+
+    rect rgb(254,242,242)
+    Note over User,ORCH: TRACE C — Direct deploy from Artifact Hub
+    User->>UI: clicks "Deploy" on a generated .nupkg
+    UI->>PM: POST /api/uipath/deploy { runId, folderId, releaseName }
+    PM->>DEP: deployAllArtifacts(runId, target)
+    DEP->>DEP: getAccessToken() — uipath-auth.ts
+    DEP->>ORCH: provisionQueues / provisionAssets (POST /odata/...)
+    DEP->>ORCH: uploadPackage(.nupkg → Orchestrator Storage Bucket)
+    DEP->>ORCH: createOrUpdateRelease(folder, packageVersion)
+    DEP->>ORCH: startJob(release, robot)
+    ORCH-->>DEP: jobId + status
+    DEP-->>PM: { releaseKey, jobId }
+    PM-->>UI: 200 OK → ArtifactHub shows "Deployed"
+    end
