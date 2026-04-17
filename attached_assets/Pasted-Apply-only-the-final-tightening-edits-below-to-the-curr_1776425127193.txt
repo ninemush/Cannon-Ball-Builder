@@ -1,0 +1,122 @@
+Apply only the final tightening edits below to the current #528 / #529 / #530 task texts. Do not rewrite the tasks from scratch, do not broaden scope, and do not change sequencing. Preserve the current implementation order and intent. This is a precision refinement pass only.
+
+Goal of this pass:
+Close the last shallow-implementation loopholes, remove stale/count-specific wording, and make the acceptance criteria mechanically testable.
+
+Global instructions
+
+* Do not change the dependency chain: #529 first, #530 second, #528 third.
+* Do not weaken the shared remediation invariant.
+* Do not add new scope beyond what is listed below.
+* Keep the current structure and wording unless a specific edit below says to change it.
+* Wherever a requirement is made machine-testable, prefer persisted artifact assertions over narrative justification.
+* Produce the updated task text only.
+
+Edits to apply
+
+1. #528: remove stale hardcoded category-count wording
+   Replace any wording that hardcodes “nine other defect categories”, “nine sibling arms”, or similar fixed-count phrasing with wording tied to the live `||` cascade in `server/final-artifact-validation.ts`.
+   Preferred wording:
+   “the remaining structurally-invalid trigger categories in the current `||` cascade”
+   and
+   “the remaining sibling arms in the live `||` cascade”.
+
+2. #528: make the ordering-rule test explicitly test-harness-only
+   Where the task currently says to mutate ordering and assert failure, make it explicit that this must be done through a dedicated test helper/harness, not by patching production source.
+   Add this requirement:
+   “The ordering-rule enforcement test must use a dedicated test harness/helper that invokes the verdict pipeline in the wrong order; it must not require editing production source to make the test meaningful.”
+
+3. #528: keep hard-structural-fact checks primary and explicit
+   Preserve the current distinction between defect-count-based escalation and hard structural facts, but tighten it so implementation cannot satisfy the requirement with weaker substitutes.
+   Explicitly require:
+
+* malformed XML check uses the same `fast-xml-parser` re-parse path used by `compliancePass`
+* Studio-openability check uses `server/uipath-cli-validator.ts`
+* provenance filtering never bypasses or replaces either of those checks
+
+4. #528: keep the live-cascade PR prerequisite
+   Retain the current PR prerequisite that the implementer must enumerate the live `||` cascade in the PR description and map every disjunct one-to-one to coverage in the task.
+   Tighten the wording so PR review fails if that enumeration is absent or stale relative to source at review time.
+
+5. #528: keep shared stub-cause taxonomy as single source of truth
+   Retain the shared `StubCause` taxonomy requirement and make clear that #528 imports it rather than redefining it.
+   Make sure the text says the shared type is defined exactly once and reused by #528, #529, and #530.
+
+6. #529: anchor “contract-safe by activity definition” to machine-readable source only
+   Keep the current rule, but make it even stricter:
+
+* “contract-safe by activity definition” must be determined only from a machine-readable source
+* acceptable sources remain:
+  (a) callee `<x:Members>` for workflow-file invokes
+  (b) activity contract registry for built-in activities
+* if neither source proves the attribute is optional with a defined default, omission is forbidden
+
+7. #529: make the diagnostics channel explicitly shared across all three tasks
+   Keep the current requirement that diagnostics are persisted to `final_quality_report.diagnostics`, and tighten it:
+
+* all three tasks must write to and read from the same shared diagnostics collection
+* no parallel diagnostics channels may be introduced
+* each entry must carry source metadata so tests can filter by task without parsing message text
+
+8. #529: cohort regression must remain hard pass/fail
+   Keep the cohort regression section as hard pass/fail.
+   Do not weaken it back to “document outcomes”.
+   Retain these conditions:
+
+* every cohort run remains Studio-openable
+* no cohort run loses package emission entirely
+* any verdict change must be accompanied by pre-fix vs post-fix artifact-backed diff for reviewer inspection
+
+9. #530: keep Step 1 strictly non-guessing
+   Retain the current tightening that positional matching is allowed only when both sides preserve canonical order.
+   Do not relax this.
+   Make clear that if those conditions are not both true, position is not a valid discriminator.
+
+10. #530: explicitly forbid callee retargeting
+    Keep the current rule:
+    Step-1 repair may fix only the binding key for the already-intended callee.
+    It may not retarget `InvokeWorkflowFile.WorkflowFileName` to a different workflow.
+
+11. #530: explicitly forbid fake repair by deletion/deduplication/omission
+    Keep the current forbidden fake repair list:
+
+* deleting unresolved binding
+* collapsing duplicate unresolved bindings
+* silently omitting the argument
+  State clearly that any of these is silent data loss and a regression.
+
+12. #530: make Step-1 value preservation explicit
+    Keep the current rule that Step-1 repair is key-only.
+    It may not rewrite, normalize, re-quote, coerce, collapse, or otherwise alter the bound value/expression.
+
+13. #530: anchor severity-1 remediation-failure logging to persisted artifacts
+    Keep the requirement that every Step-3 hit is written to:
+
+* the structured DHG entry for the affected workflow
+* the shared `final_quality_report.diagnostics` collection
+  Do not allow console-only logging.
+  Tests must be able to retrieve this from persisted run artifacts.
+
+14. #530: keep shared StubCause type as single source of truth
+    Retain the requirement that `StubCause` is defined exactly once in a shared module and imported by #528 and #529.
+    No duplicate union declarations or duplicated string literals elsewhere.
+
+15. #530: make downgrade justification artifact-backed
+    Retain the current rule for run `3c7c5d6e`:
+    if verdict downgrades from `completed_with_warnings` to `handoff_only` or `openable_with_warnings`, the PR must attach:
+
+* pre-fix vs post-fix defect diff
+* exact newly unmasked genuine defect records
+* all sourced from persisted run artifacts
+  Narrative-only justification is insufficient.
+
+16. Final cleanup instruction
+    After applying the edits above, do one cleanup pass for internal consistency:
+
+* no stale fixed-count wording where live-source wording is now required
+* no duplicate or conflicting definitions of the same mechanism
+* no acceptance criterion that can be satisfied only by prose when a persisted artifact check is already required
+* no places where “handoff_only / openable_with_warnings / studio_stable / structurally_invalid” are used informally instead of being anchored to source-of-truth enum names
+
+Output:
+Return the fully updated #528 / #529 / #530 task text only, with these refinements applied and nothing else.

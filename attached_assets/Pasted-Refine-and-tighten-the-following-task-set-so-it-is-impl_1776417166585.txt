@@ -1,0 +1,321 @@
+Refine and tighten the following task set so it is implementation-ready, internally consistent, and fully aligned to CannonBall’s actual goal:
+
+**CannonBall goal**
+Produce a **Studio-stable, openable UiPath package every time**, with **maximum real business logic preserved**, and only **smallest-scope localized TODO / handoff placeholders** where genuinely necessary.
+For the targeted defect class, **whole-workflow stubbing is a remediation failure** unless the workflow is genuinely unrepresentable after smallest-scope local repair attempts.
+
+I want you to review and refine these three tasks together as a coordinated batch:
+
+* **#529 first**
+* **#530 second**
+* **#528 third**
+
+Please do all of the following in one pass:
+
+### 1) Critically review the task set
+
+Evaluate whether these three tasks, as written, are the right implementation set and sequence for the evidence we have from runs 53b42526 and 0a2318f3, while keeping the broader CannonBall goal in mind.
+
+Check for:
+
+* sequencing mistakes
+* overlap or duplication
+* missing acceptance criteria
+* weak wording that could let implementation drift
+* regression risk to currently-passing runs
+* places where “repair-first, smallest-scope degradation” is not explicit enough
+* places where a task could accidentally mask real defects instead of fixing them
+
+### 2) Refine the task text where needed
+
+Tighten wording only where it materially improves implementation quality.
+Do **not** casually broaden scope.
+Preserve the intent and structure, but strengthen weak areas.
+
+### 3) Return the result in this exact format
+
+For each task:
+
+* **Verdict:** keep / adjust / split / merge / defer
+* **What is strong**
+* **What is risky or incomplete**
+* **Exact refinements to apply**
+
+Then provide:
+
+* **Final recommended order**
+* **Dependency chain**
+* **Must-have regression fixtures**
+* **Explicit no-regression assertions**
+* **Any wording that should be made stricter before implementation starts**
+
+### Important guardrails
+
+* Stay focused on the latest task texts below only.
+* Do not drift back to earlier tasks unless needed for a dependency observation.
+* Do not write implementation code.
+* Do not propose a new architecture.
+* Assume the policy contradiction work is intentionally included in **#528** and should not be split out unless there is a compelling reason.
+* Be precise and opinionated. I want an expert review, not a generic summary.
+
+---
+
+#528 - Origin-aware verdict policy across all defect categories
+Implementation order: THIRD. Lands after both #529 (compliance-crash TODO: attribute) and #530 (null-key invoke binding) have merged and been validated. This is a verdict / scoring / provenance policy fix, not a deterministic emitter fix. It must not precede the deterministic root-cause fixes — sequencing is enforced via hard task dependencies because the policy could otherwise reclassify active emitter defects as "pipeline-fallback" and mask them.
+
+Remediation invariant (shared across #528, #529, #530): For the targeted defect class, whole-workflow stubbing is considered a failure of remediation unless the workflow is genuinely unrepresentable after smallest-scope local repair attempts. Whole-workflow stubs that result from the targeted bug class on inputs where smallest-scope repair was viable are regressions, not acceptable outcomes. For this task specifically, the bounded compliance-crash cascade softening must enforce this invariant — softening is not a substitute for smallest-scope local repair.
+
+What & Why
+Task #527 introduced a provenance ledger that tags pipeline-injected placeholders with origin: "pipeline-fallback", and wired that origin into the structurally_invalid verdict for contract integrity defects only. Nine other defect categories still trigger structurally_invalid without consulting origin, including the pre-compliance guard. As a result, after #529 and #530 fix their respective deterministic emitter defects, residual safe pipeline-fallback artifacts (canonical TODO_* / PLACEHOLDER_* tokens in handoff positions, smallest-scope localized degradations from #530's repair stack) can still escalate the run to structurally_invalid purely on token presence.
+
+The invariant — refined
+The original framing was "no pipeline-generated artifact can cause a structurally_invalid verdict." That phrasing is too broad: it could be read as exempting genuinely broken pipeline output. The correct invariant is:
+
+No pipeline-generated artifact that is Studio-safe after sanitization and smallest-scope localized degradation can by itself cause a structurally_invalid verdict.
+
+Provenance-aware scoring softens safe, intentional fallback artifacts. It does not soften:
+
+Malformed XML the pipeline wrote (still a structural failure even if pipeline-originated)
+Broken activity structure / non-openable package state
+Broken invoke contracts where repair was not possible (after #530's repair stack ran)
+Missing Main.xaml or missing .nupkg
+Contract violations against user-supplied values
+Pipeline provenance is not a blanket exemption. A pipeline-generated artifact can still participate in a genuine structural failure outcome if it leaves the package in a non-Studio-safe state.
+
+Evidence
+Runtime evidence (Dev heliumdb, verified April 16 2026):
+
+Run 53b42526-961d-45eb-a1ff-7e44279d53d6:
+Verdict: structurally_invalid
+statusReason: "Structurally invalid: 15 execution-blocking contract integrity defect(s), pre-compliance guard failed: 1 sentinel violation(s) detected"
+preComplianceGuardPassed: false; preComplianceGuardViolationCount: 1
+5 workflows stubbed entirely from compliance-crash cascade
+DHG reports ~635 minutes of manual developer effort from these stubs
+Run 0a2318f3-1b3b-4cd6-8219-dba1a798dc5a (same idea): same shape — 39 execution-blocking contract integrity defects + pre-compliance guard failed + 1 sentinel violation + 5 workflow-level stubs.
+Idea d3274c92 (PO Invoice Recon): every recent Dev full_implementation run is structurally_invalid or failed.
+Cohort: 11 of 71 Dev full_implementation runs are structurally_invalid. After #529 + #530 land, the deterministic causes for the contract defects and compliance crashes are gone. This task addresses the residual escalation paths.
+Code evidence (post-#527 merge):
+
+server/final-artifact-validation.ts:838 — only the contract-integrity arm filters d.origin !== "pipeline-fallback". Nine sibling arms have no origin check.
+server/final-artifact-validation.ts:832 — entryPointHasBlockers || hasStructuralBlockers has no origin awareness; the compliance-crash cascade routes here directly.
+server/final-artifact-validation.ts:289 — SENTINEL_SCAN_PATTERN matches the exact tokens the canonical constructors emit (TODO_*, PLACEHOLDER_*), so every safe pipeline-generated token surviving into an executable position trips the guard.
+server/package-assembler.ts:5046 — whole-workflow stubbing on compliance crash, no smallest-scope fallback.
+server/lib/placeholder-sanitizer.ts:55 — lookupPipelineFallbackProvenance(value) already exists; nine remaining trigger paths just don't consult it.
+Confidence: HIGH — the verdict text names the specific remaining trigger, the code branch structure confirms the unguarded categories, and provenance metadata is already produced by #527's ledger.
+
+Done looks like
+Provenance is tagged at the moment a fallback artifact is created (carried as a defect / token field, not reconstructed by retrospective string matching). Every defect category produced anywhere in the pipeline carries origin?: "pipeline-fallback" | "genuine" populated at construction time.
+The pre-compliance guard consults lookupPipelineFallbackProvenance for every sentinel violation. Pipeline-fallback values are recorded in the guard report as localized degradations, not structural-failure violations, and do not flip preComplianceGuardPassed to false on their own. Genuinely unsafe or still-structural pipeline output still flips the guard.
+Every remaining structurally_invalid trigger in final-artifact-validation.ts applies the same origin !== "pipeline-fallback" filter already used for contract integrity. Pipeline-fallback defects remain in the report at handoff severity for status-derivation purposes.
+The compliance-crash cascade softening is bounded: when a compliance crash is attributable to a localized, provenance-tagged pipeline artifact, the pipeline first attempts smallest-scope recovery (offending property or activity). It only applies local degradation if the workflow can still be re-emitted as well-formed XML. Otherwise it escalates normally — softening cannot turn a workflow that won't open in Studio into a passing verdict.
+The pre-compliance guard is provenance-aware but not blind: it distinguishes pipeline-fallback safe tokens (do not escalate) from genuinely unsafe pipeline output (still escalate). The distinction is based on provenance + Studio-safety after sanitization/local degradation, not mere token presence.
+Re-running the spec snapshot for idea d3274c92 (post-#529 + #530 + this task) produces a verdict no worse than completed_with_warnings, the package is Studio-openable (verified by server/uipath-cli-validator.ts), and the DHG honestly lists residual handoff items.
+Genuinely structural failures continue to produce structurally_invalid — the invariant is about provenance + Studio-safety, not about suppressing real failures.
+Out of scope
+The deterministic emitter fixes covered by #529 and #530.
+Changes to the quality-warning layer or DHG rendering — this task only changes verdict-assignment policy, not how defects are reported.
+The dual-dimension reporting work (separating structural readiness from business logic completion) — withdrawn from this batch.
+CLI validation on a Windows runner.
+Speculative hardening of emission paths that have not produced a sentinel.
+Tasks
+Extend origin tagging at construction time. Add an origin?: "pipeline-fallback" | "genuine" field to the defect types produced by the workflow graph validator, residual expression/invoke validator, sentinel replacement path, symbol-scope validator, required-property enforcer, expression-lowering path, and critical-activity-lowering path. Populate it at the construction site by calling lookupPipelineFallbackProvenance on the offending value. Retrospective string matching is not the primary classification method — it may exist only as a backstop with a logged warning.
+Apply the origin !== "pipeline-fallback" filter to every remaining structurally_invalid trigger clause in server/final-artifact-validation.ts, and to the per-category blocking counts reported in statusReason. Pipeline-fallback defects remain in the report at handoff severity.
+Make the pre-compliance guard provenance-aware but not blind. Before classifying a sentinel hit as a guard violation, consult lookupPipelineFallbackProvenance(offendingValue). Pipeline-fallback values are recorded as localized degradations and do not flip preComplianceGuardPassed to false on their own. Genuinely unsafe or still-structural pipeline output (e.g., malformed XML from a pipeline path, unrepaired broken invoke contracts) still flips the guard.
+Bounded compliance-crash cascade softening. When compliancePass fails on content with pipeline-fallback provenance, attempt smallest-scope recovery (offending property → offending activity → smallest enclosing structural container) before degrading further. Apply local degradation only if the workflow can still be re-emitted as well-formed XML. Otherwise escalate normally. Any stub produced by this path carries pipeline-fallback provenance.
+Mixed-case regression coverage. Add unit tests for at least:
+Pipeline-fallback only: every category, with provenance-tagged safe defects → must produce a verdict no worse than handoff_only and the package must be Studio-openable.
+Genuine only: real structural defects (malformed XML not from pipeline paths, contract violations against user-supplied values, missing entry point, etc.) → must still produce structurally_invalid.
+Mixed safe-fallback + genuine: at least one genuine structural defect alongside any number of pipeline-fallback defects → must still produce structurally_invalid. Softening must not mask a genuine defect.
+End-to-end regression with stored fixtures. Use the spec snapshots from runs 53b42526 and 0a2318f3 as fixtures (post-#529 + #530 state). Assert no structurally_invalid verdict, package Studio-openable via uipath-cli-validator, DHG accurate for residual items.
+Relevant files
+server/final-artifact-validation.ts:289,829-925
+server/lib/placeholder-sanitizer.ts:10-160
+server/xaml/workflow-contract-integrity.ts:38-47,1195-1240
+server/xaml/workflow-graph-validator.ts
+server/xaml/vbnet-expression-linter.ts
+server/required-property-enforcer.ts:1800-1995
+server/package-assembler.ts:4880-5100
+server/emission-gate.ts
+server/uipath-cli-validator.ts
+server/**tests**/task-527-pipeline-root-causes.test.ts
+server/**tests**/workflow-contract-integrity.test.ts
+Dependencies
+Eliminate TODO: attribute emission that crashes compliance transform [1st]
+Repair generic-path invoke binding so null keys never reach XAML [2nd]
+
+#529 - Eliminate TODO: attribute emission that crashes compliance transform
+Implementation order: FIRST. This is the highest-leverage deterministic root-cause fix in the three-task batch (#529 → #530 → #528). It un-stubs five entire workflows whose pre-stub content the DHG already records as fully implemented, and it removes 9 of the 15 execution-blocking contract defects in run 53b42526 automatically (those defects are caller invoke bindings against now-stubbed callees).
+
+Remediation invariant (shared across #528, #529, #530): For the targeted defect class, whole-workflow stubbing is considered a failure of remediation unless the workflow is genuinely unrepresentable after smallest-scope local repair attempts. Whole-workflow stubs that result from the targeted bug class on inputs where smallest-scope repair was viable are regressions, not acceptable outcomes.
+
+What & Why
+The compliance-pass XML parser crashes with "XML well-formedness error at line 101, col 43: Attribute 'TODO:' has no space in starting. (code: InvalidAttr)". An emission path is producing TODO: (with a trailing colon) as an XML attribute name, not as an attribute value or text node. XML attribute names cannot contain : outside a namespace prefix, so the parser rejects the element and compliancePass throws. package-assembler.ts:5046 then replaces the entire workflow with generateStubWithInvokePreservation. This single emission bug is the upstream cause of:
+
+5 entirely stubbed workflows in run 53b42526 (CoupaLogin, InvoiceDataExtraction, POValidationAndAction, ActionCenterExceptionHandler, ExceptionResolutionMain)
+~9 of the 15 execution-blocking contract integrity defects in Main.xaml / ExceptionResolutionMain.xaml / DispatcherMain.xaml (caller invoke bindings against now-stubbed callees)
+426 occurrences of "Compliance transform failed" in the DHG of that run
+5 of the 12 executable-path defects (the todo_marker entries whose values begin "STUB: <Workflow> — Compliance transform failed")
+~635 minutes of the 10.6 hours of manual developer effort projected in the DHG
+This is a deterministic root-cause emitter fix, not a verdict-policy fix. It must remain focused on locating and removing the exact emission path that produces the malformed attribute, not on softening downstream classification.
+
+#527 introduced canonical placeholder constructors (makeTodoTextPlaceholder produces TODO - {description}; makeTodoTokenPlaceholder produces TODO_{TOKEN}) and declared that no other TODO-prefixed form may be emitted. An emission path in the XAML serializer was not migrated — it is still writing TODO: into an attribute-name position. The task is to locate that path, route it through the canonical constructors (or remove it), and verify the compliance transform succeeds on inputs that previously crashed.
+
+Evidence
+Runtime evidence (verified April 16 2026 from Dev heliumdb, uipath_generation_runs):
+
+Run 53b42526-961d-45eb-a1ff-7e44279d53d6: DHG contains the exact XML parser error text above.
+426 occurrences of "Compliance transform failed" and 441 of "XAML XML well-form" — all traceable to the same root cause.
+Every stubbed workflow's stub-reason field reads "Compliance transform failed — XAML XML well-form...".
+Error coordinates (line 101, col 43) are deterministic across runs with the same input — stable emission path, not timing/ordering.
+Run 0a2318f3-1b3b-4cd6-8219-dba1a798dc5a (earlier same day): same 5 stubs, same error signature.
+Cohort scan (Dev, full_implementation): 4 additional runs already in completed_with_warnings carry compliance crashes (3c7c5d6e, 94b599f5, 9fb2f60e, 47192fd9, with 1-12 crashes each). These un-stub on this fix as well, surfacing the real workflows for honest validation.
+Code evidence:
+
+server/lib/placeholder-sanitizer.ts:84 declares SAFE_DESCRIPTION_CHARS = /^[A-Za-z0-9 _-().,/]+$/ — no colon permitted. normalizeDescription at line 87 actively strips colons. These guarantees hold only for values constructed through the canonical constructors.
+server/package-assembler.ts:4890 defines compliancePass; :5023 records the crash reason; :5046 performs the whole-workflow stubbing on crash. The crash is not caught closer to the emission site.
+The TODO: token is not produced by any of the three canonical constructors — it is a legacy emission in a not-yet-migrated path.
+Confidence: HIGH — exact error text, exact coordinates, exact invariant violated, exact canonical replacement all known.
+
+Done looks like
+No emission path in the pipeline produces TODO: in an XML attribute-name position (or any position the parser could read as one). Every TODO emission goes through makeTodoTextPlaceholder for text/attribute-value contexts or makeTodoTokenPlaceholder for VB identifier contexts.
+compliancePass succeeds on the spec snapshot that produced run 53b42526. No compliance-transform crashes for the five named workflows.
+None of those five workflows is replaced with a full-workflow stub on re-run. Their preserved business logic reaches the output package as real logic or smallest-scope localized degradation — never as a whole-workflow stub from this bug class.
+The package is Studio-openable end-to-end on the regression fixture: validated by passing server/uipath-cli-validator.ts (or the equivalent fast-xml-parser well-formedness check used in compliancePass) on every emitted XAML in the package.
+The DHG accurately records any residual localized handoff items in the previously-affected workflows — no false "fully implemented" or false "stubbed."
+A position-aware lint guard (post-emission scan over the XAML buffer before compliancePass) prevents regression: it flags TODO (or any non-canonical TODO-prefixed token) appearing in an XML attribute-name position, an element-name position, or any namespace-prefix position. Raw TODO: text appearing inside legitimate user/business string content (attribute values, text nodes) is allowed — the guard is position-aware, not substring-based.
+Verification confirms the emitter path is actually corrected or rerouted through the canonical constructor — not merely that the output string changed (e.g., assert the canonical constructor's call site is exercised in the test, not just that TODO - appears in the buffer).
+Out of scope
+Fixing other compliance-crash causes unrelated to TODO: attribute names. If the regression test surfaces additional well-formedness errors, those become separate tasks with their own evidence.
+Verdict-policy changes — those belong to #528.
+Null-key invoke binding emission — covered by #530.
+Removing or rewriting the whole-workflow stubbing path itself.
+Tasks
+Locate the TODO: attribute-name emission path. Add a pre-compliancePass guard that scans the emitted XAML buffer for TODO in an attribute-name / element-name / namespace-prefix position and throws a distinguishable error including the emitter call stack. Re-run the stored spec for 53b42526 locally to trigger it. Identify the exact helper, template string, or serializer that produces the bad token.
+Route the offending emission through canonical constructors. Replace the raw TODO: with the appropriate canonical form depending on context — makeTodoTextPlaceholder(description, source, reason).value for text/attribute-value positions, or skip the attribute entirely when the context doesn't admit a valid placeholder. Preserve the surrounding workflow and any unrelated activities — smallest-scope change only.
+Add position-aware emitter-side enforcement. Introduce a shared assertion at the emission helper layer that forbids writing any TODO-prefixed token into an attribute-name, element-name, or namespace-prefix position. Wire it into all XAML emitter entry points so future regressions fail fast at the emission site rather than downstream. Do not block the same tokens appearing in legitimate value/text-node positions.
+Regression test against stored spec snapshots. Snapshot the spec inputs for runs 53b42526 and 0a2318f3 as fixtures. Assert: compliance pass succeeds on both; no workflow is stubbed on compliance-crash grounds; the emitter path that previously produced the bad token is reached and routed through the canonical constructor (verified by spying on the constructor call site, not just the output buffer); the resulting package passes uipath-cli-validator Studio-openability checks; the DHG records any residual localized handoff items honestly.
+Cohort regression check. Re-run the spec snapshots for the 4 currently-passing runs that carry compliance crashes (3c7c5d6e, 94b599f5, 9fb2f60e, 47192fd9). Document the post-fix verdict for each. Surfacing latent contract defects in those runs is the correct outcome (those runs were shipping packages with stubbed workflows pretending to be real implementations), but the cohort must be tracked so reviewers can distinguish "true defect surfaced" from "regression introduced by the fix."
+Relevant files
+server/package-assembler.ts:4880-5100
+server/package-assembler.ts:5023,5046
+server/lib/placeholder-sanitizer.ts:84-160
+server/xaml
+server/emission-gate.ts
+server/uipath-cli-validator.ts
+server/**tests**/task-527-pipeline-root-causes.test.ts
+
+#530 - Repair generic-path invoke binding so null keys never reach XAML
+Implementation order: SECOND. Lands after #529 (compliance-crash TODO: attribute) is merged and validated. After #529, the 9 caller-binding defects against previously-stubbed callees disappear automatically; this task addresses the remaining 6 execution-blocking defects in run 53b42526 whose root cause is null-key invoke serialization. This is a deterministic root-cause emitter fix, not a verdict-policy fix.
+
+Remediation invariant (shared across #528, #529, #530): For the targeted defect class, whole-workflow stubbing is considered a failure of remediation unless the workflow is genuinely unrepresentable after smallest-scope local repair attempts. Whole-workflow stubs that result from the targeted bug class on inputs where smallest-scope repair was viable are regressions, not acceptable outcomes.
+
+What & Why
+Every InvokeWorkflowFile binding that contract-integrity validation flags as execution-blocking in run 53b42526-961d-45eb-a1ff-7e44279d53d6 shares the same shape: propertyName: "Nothing", targetArgument: "Nothing", referencedSymbol: "Nothing", with the caller's intended value in offendingValue. Direct inspection of the emitter and validator confirms:
+
+x:Key= is the canonical attribute for invoke argument names — confirmed against production baselines in server/xaml-references/COE21024_Dispatch/Main.xaml:183-186. The validator reads it correctly via the regex at server/xaml/workflow-contract-integrity.ts:266.
+The REFramework hardcoded templates in server/xaml-generator.ts:3358-3363 (and the mirror at 3413-3418) emit invokes correctly. Run 53b42526's Main.xaml was not produced by these scaffold templates.
+It was produced by the generic invoke-emission path (around server/xaml-generator.ts:2084-2097 and its upstream caller), which allowed a binding entry whose key was null/undefined to serialize as the VB.NET null literal "Nothing" into the XAML attribute. The validator then parsed that literal back and correctly reported no such argument exists on the callee.
+After #529 lands, this is the last execution-blocking structural defect class standing between idea d3274c92 and a Studio-openable package with real business logic.
+
+Evidence
+Runtime evidence (Dev heliumdb, run 53b42526-961d-45eb-a1ff-7e44279d53d6):
+
+{
+"file": "lib/net45/Main.xaml",
+"notes": "Binding "Nothing" does not match any declared argument in "SetTransactionStatus"",
+"severity": "execution_blocking",
+"workflow": "Main",
+"defectType": "unknown_target_argument",
+"activityType": "InvokeWorkflowFile",
+"propertyName": "Nothing",
+"offendingValue": ""Successful"",
+"targetArgument": "Nothing",
+"targetWorkflow": "SetTransactionStatus",
+"detectionMethod": "contract_comparison",
+"referencedSymbol": "Nothing"
+}
+
+2 × unknown_target_argument with literal values ("Successful", "Failed") against SetTransactionStatus.
+4 × conflicting_argument_serialization ("N duplicate bindings for Nothing") on Main.xaml and DispatcherMain.xaml — same null-key shape, producing collisions when multiple bindings collapse on the Nothing sentinel.
+Cohort scan: 11 of 11 structurally_invalid runs carry the null-key signature in final_quality_report. 1 of 48 completed_with_warnings runs also carries it — 3c7c5d6e-b78a-4698-bb74-20e4f811ba67 (idea 70f71d88, 2026-04-11). This run today produces a functional .nupkg with the malformed binding written as a warning. The repair-first / localized-degradation behavior in this task ensures it cannot regress to a missing-package state.
+Code-path evidence:
+
+Validator extraction (correctly reads x:Key): server/xaml/workflow-contract-integrity.ts:266:
+/<(?:In|Out|InOut)Argument\b[^>]*\bx:Key="([^"]+)"[^>]*>([^<]*)</(?:In|Out|InOut)Argument>/g
+
+Reference baseline: server/xaml-references/COE21024_Dispatch/Main.xaml:183-186 uses x:Key="in_ConfigFile".
+Generic emission path: server/xaml-generator.ts:2084-2097 accepts binding.key and passes it through escapeXml(binding.key) into the x:Key attribute. If binding.key is null/undefined or the literal "Nothing" upstream, it propagates into the XAML.
+DHG evidence: Row 173 — [Valid data path] Set transaction item Successful with final outcome (SetTransactionStatus) | Preserved | None — fully implemented. The pipeline correctly identified the spec intent; only the emission-side binding construction is dropping the key name.
+
+Confidence: HIGH for direction (generic-path null-key bug). The exact upstream site needs one trace — candidates include the spec-to-tree mapper's invoke-argument builder, the contract reconciliation step, or a branch in the invoke emission itself.
+
+Done looks like
+The upstream site where generic-path invoke bindings acquire null/undefined/Nothing-literal keys is located and fixed. The fix preserves caller intent (the literal in offendingValue is passed through to the correct argument).
+Re-emitting run 53b42526's spec snapshot produces:
+Zero unknown_target_argument defects with propertyName === "Nothing"
+Zero conflicting_argument_serialization defects with referencedSymbol === "Nothing"
+Zero emitted x:Key="Nothing" (or "", whitespace-only, VB-keyword) attributes anywhere in the package
+Main.xaml's invoke of SetTransactionStatus emits with x:Key="in_Status">"Successful" (and the symmetric "Failed" path) plus x:Key="in_TransactionItem">[qi_TransactionItem]
+The package is Studio-openable on the regression fixture: validated by server/uipath-cli-validator.ts (or equivalent well-formedness check) on every emitted XAML.
+The 1 currently-passing run carrying the null-key signature (3c7c5d6e) does not flip to failed after this task lands. It either becomes cleaner (real keys resolve) or, in the worst case, has a single invoke degraded to a localized handoff stub — never a missing or unopenable package.
+Repair-first behavior — the safety stack
+When the generic invoke emitter resolves a binding key that is null, undefined, empty, whitespace-only, equal to Nothing, or otherwise not a valid callee argument name, the pipeline must perform these steps in order:
+
+Step 1 — Deterministic repair first
+Attempt to recover the intended key from:
+
+The callee contract's declared argument set (preferred source of truth)
+Spec intent / binding metadata carried alongside the binding
+A unique unambiguous argument match by direction + type + position, if one exists
+Preserve the original offending value and caller intent throughout. Tag the repaired key's provenance so #528 can record it correctly.
+
+Step 2 — If repair fails, degrade only the single invoke
+Do not fail the whole package. Instead:
+
+Replace only the affected InvokeWorkflowFile activity with a localized Comment + LogMessage handoff stub
+Preserve the surrounding workflow and control-flow structure (TryCatch, State, Sequence, etc.)
+Preserve all unrelated activities and all unrelated workflows
+Record the original caller intent and the manual fix required in the DHG handoff trace
+Step 3 — Hard-fail only as a last resort
+Hard-fail the package only when the broken invoke is in a structurally non-localizable position and no safe local replacement exists (e.g., the invoke is the sole child of a required structural container with no admissible substitute). This must be rare; instrument the codepath so we can observe how often it triggers.
+
+Emission-time guard
+Keep the emission-time guard, but its default response is deterministic repair → invoke-level degradation → not whole-package failure. The guard must still emit a diagnostic containing:
+
+Invoke display name
+Target workflow name
+Offending value
+Attempted key
+Which step (1/2/3) was taken
+When the callee contract is known at emission time, the emitted x:Key is validated against the declared callee argument set before the XAML is written. Keyword / null / empty / unresolved keys are caught at this layer.
+
+Out of scope
+The compliance-crash TODO: attribute bug — covered by #529.
+The REFramework hardcoded scaffold templates (they're correct as written).
+Any change to callee-side argument signature publishing — callees emit <x:Members> correctly.
+Any change to the validator's extraction regex — it reads x:Key correctly.
+Verdict-policy changes — those belong to #528.
+Tasks
+Trace upstream. Starting from server/xaml-generator.ts:2084-2097, walk backward to identify where binding.key is populated for the generic invoke-emission path. Candidates: spec-to-tree mapper, contract reconciliation pass, invoke-arg canonicalization. Identify the exact site where a null/undefined/"Nothing"-literal name enters the binding collection.
+Fix at the upstream site. Resolve the binding key from the spec's declared intent or the callee contract's declared argument list; never let a null propagate past this point. Preserve caller semantic intent.
+Add the repair-first safety stack described above (deterministic repair → invoke-level degradation → hard-fail last). Wire it into the generic activity emitter.
+Add emission-time validation against callee contract when the callee contract is known. Reject keyword / null / empty / unresolved keys before they reach XAML.
+Regression test against stored spec snapshots. Re-emit for runs 53b42526 and 0a2318f3:
+Zero propertyName === "Nothing" defects
+Zero referencedSymbol === "Nothing" duplicate-binding defects
+All affected workflows preserved as real logic or smallest-scope localized degradation
+Package passes uipath-cli-validator Studio-openability checks
+Targeted regression for the at-risk passing run. Snapshot the spec for run 3c7c5d6e and assert that post-fix verdict is at least completed_with_warnings (i.e., does not flip to failed), the package is Studio-openable, and any localized invoke-level degradation is honestly recorded in the DHG.
+Relevant files
+server/xaml-generator.ts:2084-2098
+server/xaml-generator.ts:3358-3363,3413-3418
+server/xaml/workflow-contract-integrity.ts:260-276,536-552
+server/xaml-references/COE21024_Dispatch/Main.xaml:181-238
+server/spec-to-tree-mapper.ts
+server/required-property-enforcer.ts
+server/uipath-cli-validator.ts
+server/**tests**/workflow-contract-integrity.test.ts
+Dependencies
+Eliminate TODO: attribute emission that crashes compliance transform [1st]
+
+Return only the refined recommendation and task-text refinements.

@@ -1,0 +1,71 @@
+Review the latest versions of Tasks #528, #529, and #530 below and tighten them for implementation readiness without changing their intent, order, or scope. Keep the sequencing fixed as:
+
+1. #529 first
+2. #530 second
+3. #528 third
+
+Your job is to refine, not redesign.
+
+Non-negotiable goals:
+
+* CannonBall must produce a Studio-stable package every time.
+* Smallest-scope localized degradation is acceptable.
+* Silent data loss is not acceptable.
+* Whole-workflow stubbing for the targeted defect class is a remediation failure unless the workflow is genuinely unrepresentable after smallest-scope local repair attempts.
+* Policy softening must never mask genuine structural failures.
+
+What I want from you:
+
+1. Review the current task texts for internal contradictions, ambiguous wording, hidden implementation loopholes, or assertions that are not testable.
+2. Tighten the wording where needed so an implementer cannot satisfy the task in a shallow or misleading way.
+3. Preserve the current architecture and batch structure. Do not split the tasks unless absolutely unavoidable.
+4. Preserve the current dependency chain.
+5. Make sure every acceptance criterion is measurable and backed by a concrete test assertion.
+6. Ensure verdict vocabulary is anchored to the actual enum names in code, not informal wording.
+7. Ensure all guardrails are implementation-safe and do not introduce new paths for silent omission, whole-workflow stubbing, or “passing by reclassification.”
+8. Ensure every “smallest-scope degradation” path requires honest DHG reporting with enough detail for a developer to complete the last 20%.
+
+Specific things to verify and tighten:
+
+* In #528:
+
+  * Verify the count of remaining defect categories exactly matches the actual `||` cascade in `server/final-artifact-validation.ts`.
+  * Ensure provenance filtering applies only to defect-count-based escalation paths, never to hard structural facts.
+  * Ensure hard structural facts are evaluated before origin filtering.
+  * Ensure the softened compliance-crash path is explicitly forbidden from producing whole-workflow stubs.
+  * Ensure mixed-case tests prove that genuine defects still force `structurally_invalid`.
+  * Ensure the final verdict assertions use the real enum names from source.
+* In #529:
+
+  * Ensure the investigative guard does not survive as duplicate scaffolding after the permanent enforcement lands.
+  * Ensure omission of an attribute is allowed only when contract-safe by activity definition.
+  * Ensure required fields are never silently omitted.
+  * Ensure the permanent guard emits machine-readable diagnostics that are asserted in tests.
+  * Ensure the canonical constructor call site is explicitly verified in regression tests, not just inferred from output text.
+* In #530:
+
+  * Ensure deterministic repair is strictly non-guessing.
+  * Ensure the repair-first stack is explicit and enforceable: deterministic repair → invoke-level degradation → hard-fail last.
+  * Ensure Step 3 is only allowed when even the smallest viable local degradation would still leave the workflow non-openable or require whole-workflow stubbing.
+  * Ensure invalid key unit coverage includes: `null`, `undefined`, empty string, whitespace-only, and VB keywords `Nothing`, `True`, `False`, `Me`, `MyBase`, `MyClass`.
+  * Ensure regression tests assert zero Step-3 hits on the named fixtures.
+  * Ensure invoke-level degradation produces an actionable DHG entry, not a vague handoff note.
+
+Output format:
+
+* Give me:
+
+  1. A concise overall assessment of whether the batch is implementation-ready
+  2. A list of final refinements, grouped by task (#528 / #529 / #530)
+  3. Exact replacement wording for any section you think should be changed
+  4. A final “approved as-is” or “approved with these edits” conclusion
+
+Do not re-argue the architecture. Assume the strategic direction is already decided. Focus only on making these tasks airtight and implementation-safe.
+
+Here are the current task texts to review:
+
+[PASTE TASK #528 HERE]
+
+[PASTE TASK #529 HERE]
+
+[PASTE TASK #530 HERE]

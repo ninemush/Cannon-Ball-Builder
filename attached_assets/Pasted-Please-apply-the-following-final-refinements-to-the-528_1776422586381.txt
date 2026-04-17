@@ -1,0 +1,228 @@
+Please apply the following final refinements to the #528 / #529 / #530 batch exactly as written. These are tightening edits, not a restructuring. Preserve the current task order and dependency chain: **#529 first, #530 second, #528 third**.
+
+## Global instruction
+
+Do **not** broaden scope. Do **not** merge or split tasks. Do **not** relax the remediation invariant. Make only the refinements below and then return the fully updated task texts.
+
+---
+
+## 1) Global cleanup and consistency
+
+1. Clean up any duplicated or mis-nested task sections so each task appears exactly once, under its own heading, with one consistent set of:
+
+* Implementation order
+* What & Why
+* Evidence
+* Done looks like
+* Out of scope
+* Tasks
+* Relevant files
+* Dependencies
+
+2. Keep verdict vocabulary anchored to the actual enum names in `server/final-artifact-validation.ts:820-906`. If the enum names differ from the narrative text, update the narrative text to match code exactly everywhere in #528, #529, and #530.
+
+3. Introduce a **shared machine-readable stub-cause taxonomy** across all three tasks so regression assertions like “zero whole-workflow stubs from this defect class” are enforceable without string inference. Add a shared field such as:
+
+* `stubCause: "todo-attribute" | "null-key-invoke" | "pipeline-fallback-compliance-crash" | "other"`
+  Use this consistently in #528, #529, and #530.
+
+4. Define one shared anti-silent-loss rule across the three tasks:
+
+* Silent data loss means a previously-emitted activity/invoke disappears, is omitted, or is replaced without either:
+
+  * preserved executable logic, or
+  * smallest-scope localized handoff plus DHG entry.
+* Silent data loss is a regression and blocks merge.
+
+---
+
+## 2) Refinements for #529
+
+Keep the task as the highest-leverage deterministic emitter fix. Apply these tightenings:
+
+### A. Investigative guard lifecycle
+
+In the task that adds the pre-compliancePass investigative guard, make explicit that once the offending emission site is identified and the permanent fix is in place, that guard must either:
+
+* become the permanent position-aware enforcement layer, or
+* be removed entirely.
+
+No standalone investigative scaffolding may ship. No duplicate overlapping guard layers with different semantics may remain.
+
+### B. Contract-safe omission must be source-of-truth based
+
+Where the task currently says omission is allowed only when “contract-safe by activity definition,” tighten this so it is determined from a **machine-readable source of truth**, not judgement. Acceptable sources, in order:
+
+1. the activity’s published `<x:Members>` declaration in the callee XAML when the target is a workflow-file invoke
+2. the built-in activity contract registry / activity contract definition for UiPath activities
+
+If neither source marks the field optional with a defined default, omission is forbidden.
+
+### C. No “skip required field and hope”
+
+If omission would violate the activity contract, the implementation must not omit the field silently. It must either:
+
+* emit a contract-safe canonical value, or
+* degrade only the offending activity to a smallest-scope localized handoff (`Comment + LogMessage`)
+
+Whole-workflow stubbing remains forbidden for this defect class.
+
+### D. Guard diagnostics must be persisted structurally
+
+Strengthen the diagnostics requirement so every guard action is persisted in a **machine-readable run artifact / diagnostics channel**, not only rendered in the DHG. Tests must be able to assert the diagnostics without parsing prose.
+
+Diagnostics must include:
+
+* source emitter
+* XAML context type
+* original offending token
+* replacement chosen or degradation path taken
+
+### E. Cohort regression must be hard pass/fail
+
+For the 4 currently-passing runs carrying compliance crashes (`3c7c5d6e`, `94b599f5`, `9fb2f60e`, `47192fd9`), convert the cohort check from “document the outcome” into hard pass/fail conditions:
+
+* every run must remain package-emitting
+* every run must remain Studio-openable
+* verdict deltas are acceptable only when justified as “true defect surfaced,” not regression
+* PR must include a structured pre/post diff of verdict, defect counts by category, and stubbed-workflow list for each cohort run
+
+---
+
+## 3) Refinements for #530
+
+Keep the task as the deterministic null-key invoke fix with repair-first behavior. Apply these tightenings:
+
+### A. Step 1 must be strictly non-guessing
+
+Tighten the deterministic repair language so there is **no heuristic guessing**. Repair is allowed only when exactly one valid candidate exists under explicit rules. In particular:
+
+* “by position” may be used only when both:
+
+  1. the source spec preserves an explicit ordered argument list, and
+  2. the callee declares arguments in the same canonical order
+* If either condition fails, position is **not** a discriminator.
+
+Explicitly forbid:
+
+* name-similarity scoring
+* type-similarity ranking
+* “closest match”
+* positional fallback outside the strict condition above
+* any other best-guess strategy
+
+### B. Forbid fake repair by deletion
+
+Add that deterministic repair must **not** resolve the defect by:
+
+* deleting the unresolved binding
+* collapsing duplicate unresolved bindings
+* omitting the argument silently
+
+If a valid key cannot be recovered under Step 1, the implementation must proceed to Step 2 localized degradation.
+
+### C. Step 3 hard-fail criterion must be narrower
+
+Tighten Step 3 so hard-fail is allowed only when the smallest viable local degradation would itself:
+
+* leave the workflow non-openable, or
+* require whole-workflow stubbing
+
+Otherwise Step 1 or Step 2 must absorb the case.
+
+### D. Severity-1 logging must have a concrete sink
+
+Anchor the Step-3 severity-1 remediation failure logging to a machine-readable persisted sink, not stdout. It must be queryable in tests from persisted run artifacts / diagnostics.
+
+### E. Add explicit invalid-key unit matrix
+
+Keep the unit test, but make it explicit that it must cover these exact invalid forms:
+
+* `null`
+* `undefined`
+* `""`
+* whitespace-only
+* `Nothing`
+* `True`
+* `False`
+* `Me`
+* `MyBase`
+* `MyClass`
+
+### F. Add measurable stub-cause tagging
+
+Where the task asserts “zero whole-workflow stubs from this defect class,” require use of the shared `stubCause` field, not free-text inference.
+
+### G. At-risk passing run downgrade rule
+
+For run `3c7c5d6e`, if the verdict drops from its current state to a lower openable/handoff verdict, that is allowed only if the PR explicitly proves a previously-masked genuine defect was surfaced. Otherwise the downgrade is a regression.
+
+### H. Step-3 budget is zero
+
+Keep the zero-budget assertion, but phrase it as a hard merge blocker:
+
+* any Step-3 hit on named fixtures is a regression unless proven to be a genuine structural impossibility
+
+---
+
+## 4) Refinements for #528
+
+Keep this as the third, policy-level task only. Apply these tightenings:
+
+### A. Resolve the internal contradiction in Done looks like
+
+Where the task currently speaks broadly about “every remaining structurally_invalid trigger,” refine it so the language clearly distinguishes:
+
+* **defect-count-based escalation paths**: provenance filtering applies
+* **hard structural facts**: provenance filtering never applies
+
+Make this distinction consistent everywhere in:
+
+* What & Why
+* Done looks like
+* Tasks
+* regression expectations
+
+### B. Hard PR prerequisite for category enumeration
+
+Require that before implementation starts, the implementer reads the actual `||` cascade in `server/final-artifact-validation.ts` and produces a one-to-one enumeration in the PR description mapping each disjunct to a category covered by the task.
+If the count differs from the task text, the task text must be amended before implementation proceeds. No silent omissions.
+
+### C. Ordering rule must be mechanically tested
+
+Keep the ordering rule, but elevate it from prose to a hard acceptance condition:
+
+* hard structural facts must be evaluated before provenance-based defect-count filtering
+* provenance must never bypass malformed XML, failed Studio-openability, missing entry point, or package viability failure
+
+Add an explicit regression test that proves this ordering is enforced, not just described.
+
+### D. Tighten “genuinely unsafe” in the pre-compliance guard
+
+Define “genuinely unsafe” concretely. A sentinel hit must still flip the guard when any of these holds:
+
+* the XAML fails well-formedness re-parse after sanitization
+* the token appears in a forbidden structural position (attribute-name / element-name / namespace-prefix)
+* the token appears in an invoke binding key position
+* the surrounding activity contract marks the field required and no contract-safe substitution was made
+
+Anything else is localized degradation, not a guard violation.
+
+### E. No whole-workflow stubs from the softened path
+
+Strengthen Task 4 so the softened compliance-crash path is forbidden from producing whole-workflow stubs. If smallest-scope recovery cannot restore well-formedness and openability, the path escalates directly to genuine structural failure and the verdict becomes structurally invalid. It does **not** emit a whole-workflow stub from this softened path.
+
+### F. Verdict wording must use actual enum names
+
+Replace any remaining informal verdict phrasing with the actual verified enum names from source.
+
+---
+
+## 5) Final deliverable format
+
+After applying all refinements:
+
+1. Return the **fully rewritten final text** for #528, #529, and #530.
+2. Keep the order **#529 → #530 → #528**.
+3. Preserve all existing evidence and intent unless explicitly tightened above.
+4. Do not summarize only. Return the task texts ready to implement.

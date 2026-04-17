@@ -1,0 +1,279 @@
+Refine and update the proposed follow-on tasks **#528, #529, and #530** into a coherent implementation plan that is tightly aligned to CannonBall’s actual product goal.
+
+## Core goal
+
+CannonBall must produce a **Studio-stable, Studio-openable package every single time**, with **as much real business logic preserved as possible**, and only **smallest-scope localized TODO / handoff placeholders** where the system genuinely cannot complete the logic. The DHG must remain honest, precise, and actionable.
+
+Do **not** optimize for cosmetic score improvement.
+Do **not** optimize for suppressing errors by reclassification alone.
+Optimize for:
+
+1. **Studio-openable package integrity**
+2. **Preservation of real business logic**
+3. **Smallest-scope degradation only**
+4. **Accurate provenance and honest DHG**
+5. **Preventing whole-workflow stub cascades caused by pipeline defects**
+6. **Ensuring pipeline-generated safe fallback artifacts do not by themselves trigger structurally_invalid**
+
+---
+
+## Evaluation of the three tasks
+
+### #529
+
+This should be treated as the **highest-priority task** and implemented first.
+
+Reason:
+
+* it targets a concrete deterministic emission bug
+* it is directly causing compliance-transform crashes
+* it is wiping entire workflows over minor placeholder-formatting issues
+* fixing it directly supports Studio-openability and business logic preservation
+
+### #530
+
+This should be implemented **immediately after #529**.
+
+Reason:
+
+* it targets a real structural emitter defect
+* null / `Nothing` invoke-binding keys are causing execution-blocking contract failures
+* this is exactly the kind of deterministic defect that should never survive emission
+
+### #528
+
+This is directionally correct and necessary, but it is broader and riskier. It should be **narrowed and sequenced after #529 and #530**.
+
+Reason:
+
+* provenance-aware verdict policy is needed
+* but we must not use verdict softening to mask active emitter defects
+* first fix the deterministic root causes creating preventable structural damage
+* then fix the policy contradiction so **safe** pipeline-generated fallback artifacts do not escalate into `structurally_invalid`
+
+---
+
+## Required implementation order
+
+Revise the plan so the implementation order is explicitly:
+
+1. **#529 first** — eliminate TODO / placeholder emission that crashes compliance transform
+2. **#530 second** — eliminate null-key / `Nothing` invoke binding defects
+3. **#528 third** — apply origin-aware verdict policy after the above emitter defects are fixed
+
+Add explicit dependencies:
+
+* **#528 depends on #529 being landed and validated**
+* **#528 should preferably also depend on #530 being landed and validated**
+
+---
+
+## Global refinement requirements across all three tasks
+
+### A. Preserve the distinction between root-cause fixes and policy fixes
+
+Make this explicit in the revised tasks:
+
+* **#529 and #530 are deterministic root-cause emitter fixes**
+* **#528 is a verdict / scoring / provenance policy fix**
+
+Do not blur these categories together.
+
+### B. Require Studio-openability in all regression coverage
+
+For all three tasks, every regression or integration test must assert not only a softer verdict, but also:
+
+* the package is **Studio-openable**
+* the affected workflows are preserved as **real logic or smallest-scope localized degradation**
+* no full-workflow stub cascade occurs from the targeted bug class
+* the DHG accurately records any remaining localized degradation
+
+### C. Enforce smallest-scope degradation
+
+Across all three tasks, state this explicitly:
+
+* if the defect is localized to a property, expression, or activity, remediation must remain localized
+* whole-workflow stubbing is allowed only when the workflow is genuinely unrepresentable or non-openable after all safe local repairs have been attempted
+* pipeline defects like placeholder formatting or invoke-key serialization must never wipe an otherwise-valid workflow
+
+---
+
+## Required refinements to #529
+
+Keep #529 as the first implementation task, but refine it with the following:
+
+### 1. Keep the fix emission-focused
+
+The task should remain focused on locating and removing the exact TODO / placeholder emission path that causes compliance-transform XML crashes.
+
+### 2. Tighten regression expectations
+
+Add these requirements:
+
+* the five previously affected workflows must be preserved as **real logic or smallest-scope localized degradation**, not emitted as full-workflow stubs
+* the regression must assert **compliance transform success** and **Studio-openability**
+* the test must verify the bad emission path is actually removed or rerouted through the canonical placeholder constructor path
+* do not rely only on string replacement checks; verify the emitter path is corrected
+
+### 3. Avoid overbroad substring assertions
+
+Do **not** phrase the test as “no `TODO:` anywhere” unless scoped correctly. A user/business string may legitimately contain that sequence as raw content.
+
+Instead require:
+
+* no unsafe placeholder emission from deterministic pipeline code
+* no placeholder form that can affect XML well-formedness or placeholder semantics
+* no `TODO:` in any emitted position capable of breaking XML or being interpreted as an XML namespace prefix
+
+---
+
+## Required refinements to #530
+
+Keep #530 as the second implementation task, but **soften the hard guard**.
+
+### 1. Replace hard package-fail behavior with repair-first localized degradation
+
+The current idea of “throw on invalid x:Key” is too aggressive for CannonBall.
+
+Update #530 so that when the generic invoke emitter resolves an argument binding key that is:
+
+* null
+* undefined
+* empty
+* whitespace-only
+* equal to `Nothing`
+* or otherwise not a valid callee argument name
+
+the pipeline must do this in order:
+
+#### Step 1: Deterministic repair first
+
+Attempt to recover the intended key from:
+
+* the callee contract
+* spec intent / binding metadata
+* a unique unambiguous argument match, if one exists
+
+Preserve the original offending value and caller intent.
+
+#### Step 2: If repair fails, degrade only the single invoke
+
+Do **not** fail the whole package.
+
+Instead:
+
+* replace only the affected `InvokeWorkflowFile` activity with a localized `Comment + LogMessage` handoff stub
+* preserve the surrounding workflow and control-flow structure
+* preserve all unrelated activities and workflows
+* preserve the DHG trace of original caller intent and the manual fix required
+
+#### Step 3: Only hard-fail as a last resort
+
+Hard-fail only if the broken invoke is in a truly non-localizable structural position and no safe local replacement is possible.
+
+### 2. Keep an emission guard, but change its failure mode
+
+The emission-time guard should still detect invalid resolved keys before writing XAML.
+
+It must still emit a diagnostic containing:
+
+* invoke display name
+* target workflow
+* offending value
+* attempted key
+
+But its default response must be:
+
+* deterministic repair attempt
+* then invoke-level degradation
+* not whole-package failure
+
+### 3. Strengthen validation when callee contract is known
+
+When the callee contract is known at emission time:
+
+* emitted `x:Key` must be validated against the declared callee argument set
+* reject keyword / null / empty / unresolved keys before they reach XAML
+
+### 4. Tighten regression expectations
+
+Require assertions for:
+
+* zero emitted `x:Key` values equal to `Nothing`
+* zero `propertyName === "Nothing"`
+* zero `targetArgument === "Nothing"`
+* zero `referencedSymbol === "Nothing"`
+* preserved invoke semantics for the affected workflows
+* no whole-package failure caused solely by null-key invoke-binding defects
+
+---
+
+## Required refinements to #528
+
+Keep #528 as the third task, but narrow and tighten it.
+
+### 1. Refine the invariant
+
+Change the invariant from:
+
+> “no pipeline-generated artifact can cause a structurally_invalid verdict”
+
+to:
+
+> “no pipeline-generated artifact that is Studio-safe after sanitization and smallest-scope localized degradation can by itself cause a structurally_invalid verdict”
+
+This distinction is critical.
+
+### 2. Make provenance non-blanket
+
+State explicitly:
+
+* pipeline-generated provenance is **not** a blanket exemption
+* if a pipeline-generated artifact still leaves malformed XML, broken activity structure, broken invoke contract, missing Main.xaml, or non-openable package state, it may still participate in a genuine structural failure outcome
+* provenance-aware scoring must only soften **safe, intentional fallback artifacts**, not real structural breakage
+
+### 3. Preserve artifact-origin tagging at creation time
+
+Keep and strengthen this requirement:
+
+* provenance must be attached **at the moment a fallback artifact is created**
+* it must be carried through the pipeline into quality gate and final verdict logic
+* retrospective string matching must **not** be the primary origin-classification method
+
+### 4. Pre-compliance guard must become provenance-aware, but not blind
+
+Refine the pre-compliance guard behavior so that:
+
+* pipeline-generated safe fallback tokens do not by themselves flip `preComplianceGuardPassed` to false
+* but genuinely unsafe or still-structural pipeline output may still do so
+* the distinction must be based on provenance + Studio-safety after sanitization/local degradation, not mere token presence
+
+### 5. Compliance-crash cascade softening must be bounded
+
+Refine the “close the compliance-crash cascade” section so that:
+
+* if compliance crash is attributable to a localized, provenance-tagged pipeline artifact, attempt smallest-scope recovery first
+* only apply local degradation if the workflow can still be re-emitted as well-formed XML
+* otherwise escalate normally
+
+### 6. Add mixed-case tests
+
+Require at least these cases:
+
+* pipeline-fallback-only safe defects → must not produce `structurally_invalid`
+* genuine structural defects → must still produce `structurally_invalid`
+* mixed safe-fallback + genuine structural defects → must still produce `structurally_invalid`
+
+---
+
+## Final requested output
+
+Please return all of the following:
+
+1. **Revised task text for #528, #529, and #530** with the above refinements incorporated
+2. **Explicit dependency and execution order recommendation**
+3. **Any wording you would tighten further to reduce ambiguity during implementation**
+4. **A recommendation on whether any of the three should be split into smaller implementation tasks before coding**
+5. **A concise explanation of which one should be implemented first and why**
+
+The desired outcome is a plan that improves real package quality and Studio-openability first, and only then adjusts verdict policy so safe, localized pipeline fallback is scored correctly.

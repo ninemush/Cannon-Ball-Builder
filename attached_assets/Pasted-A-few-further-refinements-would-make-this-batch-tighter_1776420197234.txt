@@ -1,0 +1,59 @@
+A few further refinements would make this batch tighter and safer.
+
+The batch is already strong. I would only add these:
+
+1. Pin handoff_only to the actual enum in #528 and #530
+
+You still have one lingering informal verdict term in a couple places. Replace every instance of handoff_only with the real code-backed terminal state, likely completed_with_warnings, and cite the source-of-truth file once in the task. That removes ambiguity for implementation and tests.
+
+2. Make the “zero whole-workflow stubs” rule explicit in every regression block
+
+You have the shared invariant, which is good. I would also restate it in each task’s regression section as a hard assertion:
+
+for the targeted defect class, zero whole-workflow stubs on the named fixtures
+That makes it much harder for an implementer to satisfy the narrative while still letting a workflow-level stub slip through.
+3. Tighten #529’s build-time assertion wording
+
+Right now it says reject placeholders outside the canonical vocabulary, converting to a safe canonical form. I would refine that to:
+
+convert only when conversion is context-safe
+otherwise degrade at the smallest valid scope
+That avoids someone doing an over-broad blind replacement that creates a different invalid artifact.
+4. Add a “no silent omission of required contract fields” rule to #529
+
+You already tightened “skip the attribute entirely,” which is good. I would make it explicit:
+
+omission of a required field must produce either a contract-safe canonical value or a localized activity handoff
+never silent omission
+That aligns with your DHG-first philosophy.
+5. In #530, require preservation of caller intent in the DHG when invoke-level degradation happens
+
+You already say preserve original caller intent. I would make the DHG requirement explicit:
+
+if invoke-level degradation occurs, DHG must record the intended callee, intended argument mapping, offending value, and exact manual fix needed
+That keeps the last 20% actionable.
+6. In #528, forbid provenance softening from changing XML/openability checks
+
+This is important. Add one line clarifying:
+
+provenance-aware policy may soften verdict classification, but it must not bypass XML well-formedness checks, Studio-openability checks, or structural representability checks
+That prevents policy logic from becoming a hidden bypass.
+7. Add a post-batch acceptance criterion for the full sequence
+
+Because these are interdependent, add one cross-task acceptance check after #528:
+
+re-run the named fixtures after #529 + #530 + #528 together
+assert Studio-openable package
+assert no structurally_invalid verdict from safe pipeline fallbacks
+assert no targeted-defect-class whole-workflow stubs
+assert DHG accurately reflects any remaining localized degradation
+8. Small wording cleanup in #528
+
+This sentence is good but I would sharpen it:
+
+“Pipeline-fallback defects remain in the report at handoff severity.”
+Change to:
+“Pipeline-fallback defects remain fully reported, but are excluded from structurally_invalid blocking counts unless they leave the package non-openable after sanitization and smallest-scope degradation.”
+That ties reporting and verdict logic together more cleanly.
+
+If you want the most important single refinement, it is this: replace every remaining informal verdict phrase with the actual enum name and add explicit zero-whole-workflow-stub assertions inside each task’s regression section. That would make the batch much harder to mis-implement.

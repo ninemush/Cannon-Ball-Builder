@@ -1,0 +1,244 @@
+Please refine the current task batch **#528, #529, #530** one more time and return the **fully updated task text** for each task, not commentary.
+
+Keep the batch order exactly as:
+
+1. **#529 first**
+2. **#530 second**
+3. **#528 third**
+
+Do not create new tasks.
+Do not broaden scope beyond the items below.
+Do not re-argue the philosophy. Apply the refinements directly into the task text so the batch is implementation-ready.
+
+CannonBall goal remains the governing standard:
+
+* every package must be **Studio-stable and openable**
+* preserve **real business logic** wherever possible
+* use **smallest-scope localized handoff / TODO degradation**
+* do **not** allow fixable pipeline defects to escalate into whole-workflow stubs or structurally_invalid outcomes
+
+## Apply these refinements exactly
+
+### Global refinement across all three tasks
+
+Strengthen the shared remediation invariant so it appears in narrative, acceptance, and regression expectations:
+
+* For the **targeted defect class**, **whole-workflow stubbing is a remediation failure unless the workflow is genuinely unrepresentable or non-openable after all smaller-scope repair attempts**.
+* If a whole-workflow stub still occurs for the targeted defect class on a fixture where smaller-scope repair was viable, that is a **regression**.
+* Regression sections for each task must explicitly assert **zero whole-workflow stubs from that defect class on the named fixtures**.
+
+---
+
+## Refinements for #528
+
+### 1) Tighten provenance filtering so it cannot be misread as bypassing hard structural facts
+
+The task currently says to apply the `origin !== "pipeline-fallback"` filter to every remaining structurally_invalid trigger clause.
+
+Refine that so the task explicitly distinguishes:
+
+* **defect-count-based escalation paths**, where provenance filtering applies
+* **hard structural facts**, where provenance filtering does **not** apply
+
+Hard structural facts include:
+
+* malformed XML after sanitization
+* failed Studio-openability / CLI validation
+* missing entry point / missing Main.xaml
+* package viability / structural representability failure
+* workflow still not well-formed after smallest-scope recovery
+
+State clearly:
+
+* provenance-aware filtering may soften **scored defects**
+* it must **not** soften or bypass hard structural facts
+
+### 2) Verify and use the real verdict enum names consistently
+
+The task currently uses verdict labels like `handoff_only`, `completed_with_warnings`, `studio_stable`, `openable_with_warnings`.
+
+Refine the task so that:
+
+* implementation must first verify the **actual verdict enum / terminal status names** from the codebase source of truth
+* the final task text and tests must use those exact names consistently
+* if `handoff_only` is not a real terminal status, replace it with the actual one everywhere
+
+Do not leave informal verdict language in the final tasks.
+
+### 3) Keep provenance construction-time only
+
+Make this even sharper:
+
+* provenance must be attached **at artifact / fallback creation time**
+* verdict logic must consume carried provenance
+* retrospective string matching may exist only as a **logged backstop**
+* retrospective string matching must **never** be the primary basis for verdict classification
+
+### 4) Forbid whole-workflow stubs from the softened compliance-crash path
+
+Tighten the compliance-crash softening section so it says explicitly:
+
+* this softened path is **forbidden** from resolving to a provenance-tagged whole-workflow stub
+* if smallest-scope recovery cannot produce well-formed, Studio-openable XAML, the case escalates as a **genuine structural failure**
+* do not let the softened path silently end in a workflow stub
+
+### 5) Tighten mixed-case regression wording
+
+Make the regression section explicitly assert:
+
+* if a fixture contains **at least one genuine structural defect**, then the final verdict must still be `structurally_invalid` (or the exact verified enum)
+* pipeline-fallback defects must not mask genuine structural failures
+
+### 6) Add a post-batch acceptance block
+
+At the end of #528, add a **post-batch acceptance** section for the full combined batch (**#529 + #530 + #528 together**) requiring:
+
+* named fixtures are Studio-openable
+* no structurally_invalid verdict caused by safe pipeline fallbacks
+* zero whole-workflow stubs from the three targeted defect classes on the named fixtures
+* DHG accurately reflects remaining localized degradation
+
+---
+
+## Refinements for #529
+
+### 1) Tighten the investigative-guard lifecycle
+
+The task currently says the investigative guard may be folded into permanent enforcement or removed.
+
+Refine that to:
+
+* the investigative guard must **not ship as standalone scaffolding**
+* once the bad emission path is found and fixed, it must either:
+
+  * become the permanent position-aware emitter-side enforcement, or
+  * be removed
+* no duplicate overlapping guard layers with different semantics should remain
+
+### 2) Tighten safe conversion behavior
+
+The task already says conversion must be context-safe.
+
+Refine it further:
+
+* conversion to a canonical form is allowed **only when context-safe**
+* otherwise degrade at the smallest valid scope
+* do **not** do blanket or blind replacement
+
+### 3) Add explicit diagnostic requirement on any permanent guard rewrite
+
+If the permanent guard converts a token or blocks an emission, require it to record:
+
+* source emitter
+* context type
+* original token / offending form
+* replacement chosen or degradation path taken
+
+This should be explicit in the task, not implied.
+
+### 4) Strengthen required-field omission rule
+
+You already tightened skip behavior. Tighten further:
+
+* omission of a required field is allowed only when omission is provably contract-safe
+* otherwise the implementation must emit either:
+
+  * a contract-safe canonical value, or
+  * a smallest-scope localized activity handoff
+* **silent omission is forbidden**
+
+### 5) Keep the constructor-call-site spy as a hard regression requirement
+
+Ensure the regression section explicitly says:
+
+* spying on `makeTodoTextPlaceholder` / `makeTodoTokenPlaceholder` is a required proof
+* output-buffer-only checks are insufficient
+
+### 6) Explicit zero-whole-workflow-stub assertion
+
+Add to #529 regression expectations:
+
+* zero whole-workflow stubs from the TODO-attribute defect class on the named fixtures
+* localized activity-level handoff is acceptable
+* workflow-level stubbing is a regression
+
+---
+
+## Refinements for #530
+
+### 1) Make deterministic repair strictly non-guessing
+
+The repair step currently allows recovery from a unique unambiguous argument match.
+
+Tighten it to:
+
+* deterministic repair may use a callee contract / spec-intent / unique unambiguous match
+* **only if exactly one valid candidate exists**
+* if multiple candidates exist, do **not** guess
+* proceed to invoke-level localized degradation instead
+
+### 2) Keep Step 3 extremely narrow
+
+You already tightened Step 3. Tighten once more:
+
+* Step 3 is allowed only when the **smallest viable local degradation would itself still leave the workflow non-openable or would require whole-workflow stubbing**
+* otherwise Step 1 or Step 2 must absorb the case
+* Step 3 must remain effectively exceptional
+
+### 3) Add operational severity for Step-3 hits
+
+Require:
+
+* every Step-3 hit is logged as a **severity-1 remediation failure** for this defect class
+* the regression suite must assert **zero Step-3 hits** across the named fixtures
+* any Step-3 hit on the named fixtures is a regression unless explicitly proven to be a genuine structural impossibility
+
+### 4) Keep the explicit invalid key list in tests
+
+Ensure the unit coverage explicitly rejects:
+
+* `Nothing`
+* `True`
+* `False`
+* `Me`
+* `MyBase`
+* `MyClass`
+
+along with:
+
+* `null`
+* `undefined`
+* empty string
+* whitespace-only string
+
+### 5) Tighten DHG requirement for invoke-level degradation
+
+If invoke-level degradation occurs, require the DHG to include:
+
+* intended callee workflow
+* intended argument mapping
+* offending value(s)
+* exact manual fix required
+
+Do not allow a vague “handoff required” message.
+
+### 6) Explicit zero-whole-workflow-stub assertion
+
+Add to #530 regression expectations:
+
+* zero whole-workflow stubs from the null-key invoke defect class on the named fixtures
+* localized invoke-level handoff is acceptable
+* workflow-level stubbing is a regression
+
+---
+
+## Output format
+
+Return only:
+
+1. **Updated #529 in full**
+2. **Updated #530 in full**
+3. **Updated #528 in full**
+4. **A short dependency / execution-order summary**
+
+Do not include commentary outside the rewritten task texts.

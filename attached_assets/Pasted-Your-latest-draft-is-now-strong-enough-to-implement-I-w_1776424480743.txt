@@ -1,0 +1,25 @@
+Your latest draft is now strong enough to implement. I would only add these final refinements:
+
+First, in #528, remove the stale sentence:
+
+server/final-artifact-validation.ts:838 — ... Nine sibling arms have no origin check.
+
+You already fixed the task body to avoid hardcoding the count. The evidence section should match that discipline too. Change it to:
+
+server/final-artifact-validation.ts:838 — only the contract-integrity arm filters d.origin !== "pipeline-fallback". The remaining sibling arms in the live || cascade do not yet apply origin filtering.
+
+Second, in #528, tighten the controlled “mutate the order” test. As written, it could be misread as modifying production code. Make it explicit that this is a test-only harness / helper that simulates the wrong order, not a source edit. Add:
+
+The ordering-rule enforcement test must use a dedicated test harness/helper that invokes the verdict pipeline in the wrong order; it must not require patching production source to make the test meaningful.
+
+Third, in #529, make the permanent diagnostic channel a shared requirement rather than just “same channel #530 logs to.” Right now #529 depends a bit too much on #530 wording. Add one line:
+
+The persisted machine-readable diagnostics channel is a shared run-artifact contract used by #529, #530, and #528; all three tasks must write/read the same diagnostics collection rather than introducing parallel channels.
+
+Fourth, in #530, add one explicit assertion that Step 1 does not “repair” by changing the callee target. You already prevented key guessing, but there is still a loophole where someone could quietly retarget the invoke to a different workflow to make bindings pass. Add:
+
+Step-1 repair may not change the target workflow/callee. It may repair only the binding key for the already-intended callee. Retargeting the invoke to a different workflow is forbidden and counts as silent semantic drift.
+
+Fifth, in #530, make the “masked defect surfaced” downgrade justification machine-checkable, not just narrative. Add:
+
+If 3c7c5d6e downgrades from completed_with_warnings to handoff_only/openable_with_warnings, the PR must attach the pre-fix vs post-fix defect diff and cite the exact newly-unmasked genuine defect records from the persisted artifact. Narrative justification without artifact-backed evidence is insufficient.
