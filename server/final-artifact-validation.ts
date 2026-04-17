@@ -60,6 +60,8 @@ import {
 import { catalogService } from "./catalog/catalog-service";
 import { drainTodoAttributeGuardDiagnostics, type TodoAttributeGuardDiagnostic } from "./lib/todo-attribute-guard";
 import type { DiagnosticSource } from "./lib/stub-cause";
+import { classifyDefectOrigin } from "./lib/placeholder-sanitizer";
+import { XMLValidator } from "fast-xml-parser";
 
 export interface FinalArtifactValidationInput {
   xamlEntries: { name: string; content: string }[];
@@ -672,6 +674,40 @@ function buildEnumComplianceSummary(violations: QualityGateViolation[]): EnumCom
   };
 }
 
+/**
+ * Task #528: classify origin per defect for the structurally_invalid
+ * cascade. Reads provenance from the construction-time index in
+ * placeholder-sanitizer; the canonical-vocabulary backstop fires only
+ * for unindexed safe values and emits a warn so missed coverage shows
+ * up in CI.
+ */
+function classifyDefectsArray<T extends { origin?: "pipeline-fallback" | "genuine"; originReason?: string }>(
+  defects: T[],
+  valueExtractor: (d: T) => string | undefined,
+  category: string,
+): void {
+  let backstopHits = 0;
+  for (const d of defects) {
+    if (d.origin) continue; // already tagged at construction site
+    backstopHits++;
+    const value = valueExtractor(d);
+    if (!value) {
+      d.origin = "genuine";
+      d.originReason = `${category}: no value to classify — treated as genuine`;
+      continue;
+    }
+    const classified = classifyDefectOrigin(value, category);
+    d.origin = classified.origin;
+    d.originReason = classified.originReason;
+  }
+  if (backstopHits > 0) {
+    // Warning-path telemetry: a producer is constructing defects without
+    // setting origin at the construction site. Every category should be
+    // wired at construction time so this counter stays at zero in CI.
+    console.warn(`[final-artifact-validation] origin-tag backstop fired for category="${category}" hits=${backstopHits} — construction site missing origin tagging`);
+  }
+}
+
 export function runFinalArtifactValidation(input: FinalArtifactValidationInput): FinalQualityReport {
   const { xamlEntries, projectJsonContent, targetFramework, contextMetadata } = input;
 
@@ -828,6 +864,22 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const hasAnyStubContent = perFileResults.some(r => r.hasStubContent);
   const qgIncomplete = qualityGateResult.completenessLevel === "incomplete";
 
+  // Task #528: classify origin per defect across every category in the
+  // structurally_invalid cascade. Provenance is read from the
+  // construction-time index in placeholder-sanitizer; the canonical-
+  // vocabulary backstop fires only for unindexed safe values and
+  // emits a console.warn so missed coverage shows up in CI.
+  classifyDefectsArray(targetValueResult.symbolScopeDefects, d => d.offendingExpression || d.referencedSymbol, "symbol-scope");
+  classifyDefectsArray(targetValueResult.sentinelReplacements, d => d.originalValue, "sentinel-replacement");
+  classifyDefectsArray(targetValueResult.unresolvableJsonDefects, d => d.originalValue, "unresolvable-json");
+  classifyDefectsArray(allResidualDefects, d => d.originalValue, "residual-expression");
+  classifyDefectsArray(requiredPropertyEnforcement.unresolvedRequiredPropertyDefects, d => d.originalValue, "required-property");
+  classifyDefectsArray(requiredPropertyEnforcement.expressionLoweringFailures, d => d.originalValue, "expression-lowering");
+  // Workflow graph + critical lowering defects are hard structural facts —
+  // tagged "genuine" unconditionally for taxonomy uniformity.
+  for (const d of graphValidation.workflowGraphDefects) { if (!d.origin) { d.origin = "genuine"; d.originReason = "workflow graph integrity is a hard structural fact"; } }
+  for (const r of criticalLoweringDiagnostics.perStepResults) { if (!r.origin) { r.origin = "genuine"; r.originReason = "critical activity lowering failure is a hard structural fact"; } }
+
   const hasResidualDefects = allResidualDefects.length > 0;
   const hasSymbolScopeDefects = targetValueResult.symbolScopeDefects.length > 0;
   const hasSentinelReplacements = targetValueResult.sentinelReplacements.length > 0;
@@ -837,10 +889,28 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
   const hasInvalidSubstitutions = requiredPropertyEnforcement.invalidRequiredPropertySubstitutions.length > 0;
   const preComplianceGuardFailed = !preComplianceGuard.passed;
   const hasCriticalLoweringFailures = criticalLoweringDiagnostics.perStepResults.some(r => r.packageFatal);
+
+  // Task #528: hard structural fact — malformed XML in any emitted file
+  // after sanitization, evaluated by fast-xml-parser. Provenance is
+  // irrelevant; this always escalates to structurally_invalid.
+  let hasMalformedXml = false;
+  const malformedXmlFiles: string[] = [];
+  for (const entry of xamlEntries) {
+    try {
+      const v = XMLValidator.validate(entry.content);
+      if (v !== true) {
+        hasMalformedXml = true;
+        malformedXmlFiles.push(entry.name);
+      }
+    } catch {
+      hasMalformedXml = true;
+      malformedXmlFiles.push(entry.name);
+    }
+  }
   const hasDegradation = entryPointHasBlockers || hasStructuralBlockers || hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.hasWorkflowGraphIntegrityIssues || contractIntegrityResult.hasContractIntegrityIssues || hasResidualDefects || hasSymbolScopeDefects || hasSentinelReplacements || hasUnresolvableJsonDefects || hasRequiredPropertyDefects || hasExpressionLoweringFailures || hasInvalidSubstitutions || preComplianceGuardFailed || hasCriticalLoweringFailures;
 
-  let derivedStatus: PackageStatus;
-  let statusReason: string;
+  let derivedStatus: PackageStatus | undefined;
+  let statusReason: string = "";
 
   /**
    * Status derivation uses the defect-aware assessed terminal states.
@@ -857,42 +927,65 @@ export function runFinalArtifactValidation(input: FinalArtifactValidationInput):
    * Artifact availability is intentionally decoupled from deployability:
    * download/DHG remain available for ALL states.
    */
+  // Task #528: ORDERING RULE — hard structural facts evaluated BEFORE any
+  // provenance-aware defect-count branch.
+  //  Tier 1 (hard structural facts, never softened by provenance):
+  //   - !hasNupkg
+  //   - malformed XML in any emitted file
+  //   - entry-point blocked / structural blockers
+  //   - packageCompleteness violation (later branch)
+  //  Tier 2 (defect-count branch): applies origin filtering across every
+  //   structurally_invalid trigger category. Pipeline-fallback safe
+  //   placeholders are recorded in reports but DO NOT escalate.
   if (!input.hasNupkg) {
     derivedStatus = "structurally_invalid";
     statusReason = "No .nupkg package was produced — artifact assembly failed";
+  } else if (hasMalformedXml) {
+    derivedStatus = "structurally_invalid";
+    statusReason = `Structurally invalid: ${malformedXmlFiles.length} XAML file(s) failed XML well-formedness — ${malformedXmlFiles.slice(0, 3).join(", ")}`;
   } else if (entryPointHasBlockers || hasStructuralBlockers) {
     derivedStatus = "structurally_invalid";
     const reasons: string[] = [];
     if (entryPointHasBlockers) reasons.push("entry point (Main.xaml) has structural blockers or stub content");
     if (hasStructuralBlockers) reasons.push(`${studioBlockedCount} file(s) structurally blocked in final validation`);
     statusReason = `Structurally invalid: ${reasons.join(", ")}`;
-  } else if (graphValidation.workflowGraphDefects.some(d => d.severity === "execution_blocking") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "execution_blocking" && d.origin !== "pipeline-fallback") || allResidualDefects.some(d => d.severity === "execution_blocking") || targetValueResult.sentinelReplacements.some(d => d.severity === "execution_blocking") || targetValueResult.symbolScopeDefects.some(d => d.severity === "execution_blocking") || hasUnresolvableJsonDefects || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "execution_blocking") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "execution_blocking") || preComplianceGuardFailed || hasCriticalLoweringFailures) {
-    derivedStatus = "structurally_invalid";
-    const reasons: string[] = [];
+  } else {
+    // Tier 2: provenance-aware defect-count branch. Build counts that
+    // exclude pipeline-fallback origin from EVERY structurally_invalid
+    // trigger category (#528 — extends the #527 RC5 contract-integrity
+    // pattern uniformly).
+    const isGenuineBlocking = (d: { severity?: string; origin?: string }) =>
+      d.severity === "execution_blocking" && d.origin !== "pipeline-fallback";
+
     const graphBlockingCount = graphValidation.workflowGraphDefects.filter(d => d.severity === "execution_blocking").length;
-    if (graphBlockingCount > 0) reasons.push(`${graphBlockingCount} execution-blocking workflow graph defect(s)`);
-    // Task #527 RC5: exclude pipeline-fallback origin defects from the
-    // structurally_invalid count. Pipeline-generated safe placeholder
-    // defects still appear in reports with execution_blocking severity
-    // but cannot themselves cause the artifact to be ruled structurally
-    // invalid — they represent localized degradation, not structural failure.
-    const contractBlockingCount = contractIntegrityResult.contractIntegrityDefects.filter(d => d.severity === "execution_blocking" && d.origin !== "pipeline-fallback").length;
-    if (contractBlockingCount > 0) reasons.push(`${contractBlockingCount} execution-blocking contract integrity defect(s)`);
-    const residualBlockingCount = allResidualDefects.filter(d => d.severity === "execution_blocking").length;
-    if (residualBlockingCount > 0) reasons.push(`${residualBlockingCount} execution-blocking residual expression/invoke serialization defect(s)`);
-    const sentinelBlockingCount = targetValueResult.sentinelReplacements.filter(d => d.severity === "execution_blocking").length;
-    if (sentinelBlockingCount > 0) reasons.push(`${sentinelBlockingCount} sentinel replacement(s) applied as degradation substitutes`);
-    const scopeBlockingCount = targetValueResult.symbolScopeDefects.filter(d => d.severity === "execution_blocking").length;
-    if (scopeBlockingCount > 0) reasons.push(`${scopeBlockingCount} execution-blocking symbol scope defect(s)`);
-    if (hasUnresolvableJsonDefects) reasons.push(`${targetValueResult.unresolvableJsonDefects.length} unresolvable JSON payload(s) replaced with degradation substitutes`);
-    const reqPropBlockingCount = requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.filter(d => d.severity === "execution_blocking").length;
-    if (reqPropBlockingCount > 0) reasons.push(`${reqPropBlockingCount} unresolved required property defect(s)`);
-    const exprLoweringBlockingCount = requiredPropertyEnforcement.expressionLoweringFailures.filter(d => d.severity === "execution_blocking").length;
-    if (exprLoweringBlockingCount > 0) reasons.push(`${exprLoweringBlockingCount} expression lowering failure(s)`);
-    if (preComplianceGuardFailed) reasons.push(`pre-compliance guard failed: ${preComplianceGuard.violations.length} sentinel violation(s) detected`);
-    const loweringFatalCount = criticalLoweringDiagnostics.perStepResults.filter(r => r.packageFatal).length;
-    if (loweringFatalCount > 0) reasons.push(`${loweringFatalCount} critical activity lowering failure(s)`);
-    statusReason = `Structurally invalid: ${reasons.join(", ")} detected`;
+    const contractBlockingCount = contractIntegrityResult.contractIntegrityDefects.filter(isGenuineBlocking).length;
+    const residualBlockingCount = allResidualDefects.filter(isGenuineBlocking).length;
+    const sentinelBlockingCount = targetValueResult.sentinelReplacements.filter(isGenuineBlocking).length;
+    const scopeBlockingCount = targetValueResult.symbolScopeDefects.filter(isGenuineBlocking).length;
+    const unresolvableJsonGenuineCount = targetValueResult.unresolvableJsonDefects.filter(d => d.origin !== "pipeline-fallback").length;
+    const reqPropBlockingCount = requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.filter(isGenuineBlocking).length;
+    const exprLoweringBlockingCount = requiredPropertyEnforcement.expressionLoweringFailures.filter(isGenuineBlocking).length;
+    const guardGenuineCount = preComplianceGuard.violations.filter(v => v.classification === "genuine-structural-violation").length;
+    const loweringFatalGenuineCount = criticalLoweringDiagnostics.perStepResults.filter(r => r.packageFatal && r.origin !== "pipeline-fallback").length;
+
+    if (graphBlockingCount > 0 || contractBlockingCount > 0 || residualBlockingCount > 0 || sentinelBlockingCount > 0 || scopeBlockingCount > 0 || unresolvableJsonGenuineCount > 0 || reqPropBlockingCount > 0 || exprLoweringBlockingCount > 0 || guardGenuineCount > 0 || loweringFatalGenuineCount > 0) {
+      derivedStatus = "structurally_invalid";
+      const reasons: string[] = [];
+      if (graphBlockingCount > 0) reasons.push(`${graphBlockingCount} execution-blocking workflow graph defect(s)`);
+      if (contractBlockingCount > 0) reasons.push(`${contractBlockingCount} execution-blocking contract integrity defect(s)`);
+      if (residualBlockingCount > 0) reasons.push(`${residualBlockingCount} execution-blocking residual expression/invoke serialization defect(s)`);
+      if (sentinelBlockingCount > 0) reasons.push(`${sentinelBlockingCount} sentinel replacement(s) applied as degradation substitutes`);
+      if (scopeBlockingCount > 0) reasons.push(`${scopeBlockingCount} execution-blocking symbol scope defect(s)`);
+      if (unresolvableJsonGenuineCount > 0) reasons.push(`${unresolvableJsonGenuineCount} unresolvable JSON payload(s) (genuine, not pipeline-fallback)`);
+      if (reqPropBlockingCount > 0) reasons.push(`${reqPropBlockingCount} unresolved required property defect(s)`);
+      if (exprLoweringBlockingCount > 0) reasons.push(`${exprLoweringBlockingCount} expression lowering failure(s)`);
+      if (guardGenuineCount > 0) reasons.push(`pre-compliance guard failed: ${guardGenuineCount} genuine sentinel violation(s)`);
+      if (loweringFatalGenuineCount > 0) reasons.push(`${loweringFatalGenuineCount} critical activity lowering failure(s)`);
+      statusReason = `Structurally invalid: ${reasons.join(", ")} detected`;
+    }
+  }
+  if (derivedStatus) {
+    // already classified as structurally_invalid above — fall through to packageCompleteness pass
   } else if (hasAnyStubContent || qgIncomplete || executablePathResult.hasExecutablePathContamination || graphValidation.workflowGraphDefects.some(d => d.severity === "handoff_required") || contractIntegrityResult.contractIntegrityDefects.some(d => d.severity === "handoff_required") || allResidualDefects.some(d => d.severity === "handoff_required") || hasSymbolScopeDefects || hasSentinelReplacements || requiredPropertyEnforcement.unresolvedRequiredPropertyDefects.some(d => d.severity === "handoff_required") || requiredPropertyEnforcement.expressionLoweringFailures.some(d => d.severity === "handoff_required")) {
     derivedStatus = "handoff_only";
     const reasons: string[] = [];

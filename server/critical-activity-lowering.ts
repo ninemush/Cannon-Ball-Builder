@@ -235,6 +235,8 @@ export interface CriticalStepLoweringResult {
   degradedToHandoff?: boolean;
   activityReplacement?: "handoff_block";
   degradationClass?: "A" | "B";
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export interface CriticalActivityLoweringDiagnostics {
@@ -726,6 +728,17 @@ export function runCriticalActivityLowering(
     }
   }
 
+  // Task #528: tag origin at the construction site. Critical-activity
+  // lowering failures are hard structural facts produced by the lowering
+  // engine itself; they MUST be classified genuine here so downstream
+  // verdict tiers do not need to backfill via telemetry.
+  for (const r of perStepResults) {
+    if (!r.origin) {
+      r.origin = "genuine";
+      r.originReason = "critical activity lowering failure (construction-site tag)";
+    }
+  }
+
   const totalCriticalSteps = perStepResults.length;
   const totalLoweredSuccessfully = perStepResults.filter(r => r.loweringOutcome === "lowered").length;
   const totalRejectedForIncompleteContract = perStepResults.filter(r => r.loweringOutcome === "rejected_incomplete_contract").length;
@@ -1128,6 +1141,14 @@ export function runXamlLevelCriticalActivityLowering(
           ? `Workflow "${workflow}" mixes mail-send families with ambiguous templates: ${Array.from(mailFamilies).join(", ")} — resolve ambiguous templates to a specific mail provider`
           : `Workflow "${workflow}" uses multiple explicit mail-send families: ${Array.from(mailFamilies).join(", ")} — verify this is intentional`,
       });
+    }
+  }
+
+  // Task #528: tag origin at the construction site (pre-emission gate path).
+  for (const r of perStepResults) {
+    if (!r.origin) {
+      r.origin = "genuine";
+      r.originReason = "critical activity lowering failure (construction-site tag)";
     }
   }
 

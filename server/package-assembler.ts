@@ -5105,6 +5105,15 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       wfName: string,
       compErrMessage: string,
     ): { content: string; wasFullStub: boolean } {
+      // Task #528: bounded smallest-scope recovery. Sequence:
+      //  1. Structural preservation (already operates at the smallest
+      //     scope it can — leaf activity stubbing, then sub-tree).
+      //  2. Re-run compliance pass on the recovered content.
+      //  3. Re-validate XML well-formedness via fast-xml-parser.
+      //  Studio-openability beyond well-formedness is verified
+      //  downstream by the existing CLI validation pass (runCliValidation
+      //  in uipath-pipeline.ts). We do NOT use a regex shape substitute
+      //  for openability here.
       const spResult = preserveStructureAndStubLeaves(
         rawXaml,
         [{ file: `${wfName}.xaml`, check: "compliance-crash", detail: `Compliance transform failed: ${compErrMessage}` }],
@@ -5114,7 +5123,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         console.log(`[UiPath] Structural preservation succeeded for "${wfName}" after compliance failure: ${spResult.preservedActivities} preserved, ${spResult.stubbedActivities} stubbed`);
         try {
           const preserved = compliancePass(spResult.content, `${wfName}.xaml`, true);
-          return { content: preserved, wasFullStub: false };
+          const xmlOk = XMLValidator.validate(preserved, { allowBooleanAttributes: true }) === true;
+          if (xmlOk) {
+            return { content: preserved, wasFullStub: false };
+          }
+          console.log(`[UiPath] Bounded recovery for "${wfName}" failed XML well-formedness re-parse — escalating`);
         } catch {
           console.log(`[UiPath Package Mode] Structural preservation output failed compliance for "${wfName}" — stub fallback BLOCKED by completeness policy`);
         }
@@ -5124,9 +5137,18 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       // class is identified by the canonical XML parser error signature.
       const isTodoAttributeCause = /Attribute\s+'TODO[\s:_\-][^']*'\s+has\s+no\s+space|TODO[\s:_\-]?[^"\s]*\s*=/i.test(compErrMessage)
         || /XAML\s+XML\s+well-form/i.test(compErrMessage) && /TODO/i.test(compErrMessage);
+      // Task #528: gate `pipeline-fallback-compliance-crash` attribution
+      // on explicit provenance evidence — i.e., the raw XAML must
+      // contain a canonical pipeline-fallback placeholder shape that
+      // could plausibly be the cause. Otherwise tag as "other" so we
+      // don't over-claim provenance and over-soften the verdict.
+      const hasCanonicalPlaceholderEvidence = /\b(?:TODO|PLACEHOLDER)_[A-Za-z][A-Za-z0-9_]*\b/.test(rawXaml)
+        || /\bTODO\s+-\s+[A-Za-z]/.test(rawXaml);
       const stubCauseTag: StubCause = isTodoAttributeCause
         ? "todo-attribute"
-        : "pipeline-fallback-compliance-crash";
+        : hasCanonicalPlaceholderEvidence
+          ? "pipeline-fallback-compliance-crash"
+          : "other";
       if (generationMode === "package") {
         console.log(`[UiPath Package Mode] Full stub injection BLOCKED for "${wfName}" after compliance failure — recording as completeness violation`);
         collectedQualityIssues.push({
@@ -5136,7 +5158,29 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — stub injection prevented by package-mode completeness policy`,
           stubCause: stubCauseTag,
         });
-        return { content: rawXaml, wasFullStub: true };
+        // Task #528: no whole-workflow stub was actually emitted
+        // here — return the original rawXaml and report wasFullStub=false
+        // so downstream "whole-workflow stub" accounting stays accurate.
+        return { content: rawXaml, wasFullStub: false };
+      }
+      // Task #528: bounded compliance-crash softening. The
+      // pipeline-fallback-compliance-crash class MUST NOT degrade to a
+      // whole-workflow stub. Structural preservation was already
+      // attempted (and failed) above; here we forbid the whole-workflow
+      // stub even in non-package mode and escalate as a completeness
+      // violation. This prevents the cascade of whole-workflow erasures
+      // from a single localized fallback that hit a compliance crash.
+      if (stubCauseTag === "pipeline-fallback-compliance-crash") {
+        console.log(`[UiPath] Whole-workflow stub BLOCKED for "${wfName}" (cause=pipeline-fallback-compliance-crash) — structural preservation exhausted, escalating to completeness violation`);
+        collectedQualityIssues.push({
+          severity: "blocking",
+          file: `${wfName}.xaml`,
+          check: "compliance-failure-no-stub",
+          detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — whole-workflow stub forbidden for pipeline-fallback-compliance-crash class (Task #528)`,
+          stubCause: stubCauseTag,
+        });
+        // No whole-workflow stub emitted — wasFullStub=false.
+        return { content: rawXaml, wasFullStub: false };
       }
       const existingEntry = xamlEntries.find(e => (e.name.split("/").pop() || e.name).replace(/\.xaml$/i, "") === wfName);
       collectedQualityIssues.push({

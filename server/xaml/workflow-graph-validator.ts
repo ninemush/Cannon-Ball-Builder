@@ -21,6 +21,14 @@ export interface WorkflowGraphDefect {
   severity: WorkflowGraphSeverity;
   detectionMethod: string;
   notes: string;
+  /**
+   * Task #528: workflow graph defects represent hard structural facts
+   * (orphan workflow, broken/ambiguous reference, missing root). They
+   * are by nature "genuine" structural issues — provenance filtering
+   * does NOT apply. Field exists for taxonomy uniformity only.
+   */
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export interface WorkflowGraphExclusion {
@@ -686,6 +694,16 @@ export function validateWorkflowGraph(
       }
     }
   });
+
+  // Task #528: construction-site origin tagging at the producer's
+  // exit boundary. Workflow-graph defects are by definition genuine
+  // structural facts (orphan workflow, broken/ambiguous reference,
+  // missing root) — provenance filtering does not apply.
+  for (const d of defects) {
+    if (d.origin) continue;
+    d.origin = "genuine";
+    d.originReason = `workflow-graph defect (${d.defectType}) is a hard structural fact`;
+  }
 
   return {
     workflowGraphDefects: defects,

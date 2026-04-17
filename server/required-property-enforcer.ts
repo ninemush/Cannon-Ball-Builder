@@ -1,6 +1,8 @@
 import { catalogService, type CatalogProperty, type ActivitySchema } from "./catalog/catalog-service";
 import { isPropertyOverriddenOptional } from "./uipath-activity-registry";
 import { tryParseJsonValueIntent, buildExpression, type ValueIntent, recordExpressionLoweringDiagnostic } from "./xaml/expression-builder";
+import { classifyDefectOrigin } from "./lib/placeholder-sanitizer";
+import { XMLValidator } from "fast-xml-parser";
 
 export type SourceKind =
   | "workflowArgument"
@@ -77,6 +79,8 @@ export interface UnresolvedRequiredPropertyDefect {
   severity: "execution_blocking" | "handoff_required";
   packageModeOutcome: "structured_defect" | "degraded";
   rejectedCandidates?: RejectedCandidateRecord[];
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export interface ExpressionLoweringFix {
@@ -100,6 +104,8 @@ export interface ExpressionLoweringFailure {
   failureReason: string;
   severity: "execution_blocking" | "handoff_required";
   packageModeOutcome: "structured_defect";
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export type FallbackDecision = "source-bound" | "expression-lowered" | "fallback-applied" | "context-derived-fallback" | "blocked";
@@ -1819,6 +1825,19 @@ export interface PreComplianceGuardViolation {
   activityType: string;
   sentinelValue: string;
   sentinelCategory: "PLACEHOLDER" | "TODO" | "STUB" | "HANDOFF" | "SYNTHETIC_SENTINEL";
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
+  /**
+   * Task #528: classification verdict for this violation. A
+   * pipeline-fallback safe placeholder in an attribute-VALUE position
+   * counted by this guard is recorded as a localized degradation and
+   * does NOT flip preComplianceGuardPassed to false on its own. A
+   * genuinely unsafe pipeline output (malformed XML, prohibited
+   * position, contract-required field) flips the guard regardless of
+   * provenance.
+   */
+  classification?: "soft-localized-degradation" | "genuine-structural-violation";
+  classificationReason?: string;
 }
 
 export function runPreCompliancePackageModeGuard(
@@ -1826,34 +1845,139 @@ export function runPreCompliancePackageModeGuard(
 ): PreComplianceGuardResult {
   const violations: PreComplianceGuardViolation[] = [];
 
+  // Task #528: pre-compute well-formedness per file. A pipeline-fallback
+  // sentinel sitting in a file whose XML is malformed is "genuinely
+  // unsafe pipeline output" and still flips the guard regardless of
+  // provenance.
+  const fileWellFormedness = new Map<string, boolean>();
+  for (const entry of xamlEntries) {
+    const fileName = entry.name.split("/").pop() || entry.name;
+    try {
+      const validation = XMLValidator.validate(entry.content);
+      fileWellFormedness.set(fileName, validation === true);
+    } catch {
+      fileWellFormedness.set(fileName, false);
+    }
+  }
+
   if (!catalogService.isLoaded()) {
     const broadViolations: PreComplianceGuardViolation[] = [];
     for (const entry of xamlEntries) {
       const fileName = entry.name.split("/").pop() || entry.name;
       broadScanForSentinels(entry.content, fileName, broadViolations);
+      // Task #528: forbidden-position scan must run even on the broad
+      // (catalog-unavailable) path — these positions are unconditionally
+      // genuine and must not be classified by provenance.
+      scanForForbiddenPositionSentinels(entry.content, fileName, broadViolations);
     }
+    classifyGuardViolations(broadViolations, fileWellFormedness);
+    const genuineCount = broadViolations.filter(v => v.classification === "genuine-structural-violation").length;
     return {
-      passed: broadViolations.length === 0,
+      passed: genuineCount === 0,
       violations: broadViolations,
-      summary: broadViolations.length === 0
-        ? "Pre-compliance guard passed (catalog unavailable — broad sentinel scan used)"
-        : `Pre-compliance guard FAILED: ${broadViolations.length} sentinel value(s) found via broad scan (catalog unavailable)`,
+      summary: genuineCount === 0
+        ? `Pre-compliance guard passed (catalog unavailable — broad scan; ${broadViolations.length} pipeline-fallback safe placeholder(s) recorded as localized degradation)`
+        : `Pre-compliance guard FAILED: ${genuineCount} genuine sentinel violation(s) (of ${broadViolations.length} total; ${broadViolations.length - genuineCount} pipeline-fallback)`,
     };
   }
 
   for (const entry of xamlEntries) {
     const fileName = entry.name.split("/").pop() || entry.name;
     scanForSentinels(entry.content, fileName, violations);
+    // Task #528: forbidden-position scans — sentinels in attribute
+    // names, element local names, or namespace prefixes are ALWAYS
+    // genuine structural violations regardless of provenance.
+    scanForForbiddenPositionSentinels(entry.content, fileName, violations);
   }
+  classifyGuardViolations(violations, fileWellFormedness);
+  const genuineCount = violations.filter(v => v.classification === "genuine-structural-violation").length;
 
   return {
-    passed: violations.length === 0,
+    passed: genuineCount === 0,
     violations,
-    summary: violations.length === 0
-      ? "Pre-compliance guard passed — no sentinel values in required properties"
-      : `Pre-compliance guard FAILED: ${violations.length} sentinel value(s) found in required executable properties`,
+    summary: genuineCount === 0
+      ? `Pre-compliance guard passed — ${violations.length} pipeline-fallback safe placeholder(s) recorded as localized degradation, no genuine structural violation`
+      : `Pre-compliance guard FAILED: ${genuineCount} genuine sentinel violation(s) (of ${violations.length} total; ${violations.length - genuineCount} pipeline-fallback safe)`,
   };
 }
+
+/**
+ * Task #528: pre-compliance guard provenance-awareness. Classifies each
+ * scanned violation as either a localized degradation (do not flip the
+ * guard) or a genuine structural violation (flip the guard).
+ *
+ * Genuine if ANY of:
+ *  - File XML is not well-formed (malformed pipeline output)
+ *  - The sentinel sits in an InvokeWorkflowFile argument-binding key
+ *    position (x:Key) — i.e., #530 territory; if its repair stack did
+ *    not absorb it the guard must still flip.
+ *  - The provenance index does not classify the value as
+ *    pipeline-fallback (and the value is not a canonical placeholder).
+ *
+ * Otherwise: soft-localized-degradation (do not flip the guard).
+ */
+function classifyGuardViolations(
+  violations: PreComplianceGuardViolation[],
+  fileWellFormedness: Map<string, boolean>,
+): void {
+  for (const v of violations) {
+    // Already pre-classified by forbidden-position scanner — keep.
+    if (v.classification === "genuine-structural-violation" && v.origin === "genuine") {
+      continue;
+    }
+    const wellFormed = fileWellFormedness.get(v.file);
+    if (wellFormed === false) {
+      v.origin = "genuine";
+      v.originReason = "containing file failed XML well-formedness re-parse";
+      v.classification = "genuine-structural-violation";
+      v.classificationReason = "malformed XML — genuinely unsafe pipeline output";
+      continue;
+    }
+    if (v.propertyName === "x:Key" || /^Key$/i.test(v.propertyName)) {
+      v.origin = "genuine";
+      v.originReason = "sentinel in InvokeWorkflowFile argument binding key (x:Key) position — #530 repair did not absorb";
+      v.classification = "genuine-structural-violation";
+      v.classificationReason = "sentinel in prohibited key position";
+      continue;
+    }
+    // Task #528: required-contract fields lacking a safe canonical
+    // substitution remain genuine. We classify the property using the
+    // existing per-property classification system; "spec-required" with
+    // a sentinel value (not a safe substitute) is genuine.
+    // Task #528: required-contract spec-required fields lacking a safe
+    // canonical substitution remain genuine. Use the existing
+    // getPropertyClassification registry rather than a local heuristic.
+    const entry = getPropertyClassification(v.activityType, v.propertyName);
+    if (entry && entry.classification === "spec-required" && !isSafeCanonicalSubstitution(v.sentinelValue)) {
+      v.origin = "genuine";
+      v.originReason = `spec-required contract field "${v.activityType}.${v.propertyName}" lacks safe canonical substitution (classification registry)`;
+      v.classification = "genuine-structural-violation";
+      v.classificationReason = "required-contract field with no safe substitute";
+      continue;
+    }
+    const classified = classifyDefectOrigin(v.sentinelValue, `pre-compliance-guard:${v.file}:${v.propertyName}`);
+    v.origin = classified.origin;
+    v.originReason = classified.originReason;
+    v.classification = classified.origin === "pipeline-fallback"
+      ? "soft-localized-degradation"
+      : "genuine-structural-violation";
+    v.classificationReason = classified.origin === "pipeline-fallback"
+      ? "pipeline-fallback safe placeholder in attribute-VALUE position; file is well-formed"
+      : "value not in provenance index and not canonical placeholder shape";
+  }
+}
+
+/**
+ * A safe canonical substitution is a TODO_X / PLACEHOLDER_X / "TODO - …"
+ * canonical-vocabulary token (cf. placeholder-sanitizer.isCanonicalPlaceholder).
+ * We re-derive it locally to avoid importing the full sanitizer surface.
+ */
+function isSafeCanonicalSubstitution(raw: string): boolean {
+  const s = (raw || "").trim().replace(/^[\["]+|[\]"]+$/g, "").trim();
+  if (!s) return false;
+  return /^(TODO|PLACEHOLDER)[_ -][A-Za-z][A-Za-z0-9 _\-]*$/i.test(s);
+}
+
 
 function categorizeSentinel(value: string): PreComplianceGuardViolation["sentinelCategory"] {
   if (/^PLACEHOLDER/i.test(value) || /\bPLACEHOLDER\b/i.test(value)) return "PLACEHOLDER";
@@ -1926,6 +2050,88 @@ function scanForSentinels(
   }
 }
 
+/**
+ * Task #528: scan for sentinels in forbidden positions — attribute
+ * NAMES, element LOCAL NAMES, namespace prefix declarations. Any hit
+ * is unconditionally a genuine structural violation regardless of
+ * provenance, because these positions cannot be repaired by
+ * substituting a safe value (the structure of the document is wrong).
+ *
+ * Hits are pushed with classification pre-set so classifyGuardViolations
+ * does not relax them.
+ */
+function scanForForbiddenPositionSentinels(
+  content: string,
+  fileName: string,
+  violations: PreComplianceGuardViolation[],
+): void {
+  // Element local name: <TODO_X ...> or <ui:PLACEHOLDER_Y />
+  const elementNamePattern = /<((?:[A-Za-z_][\w-]*:)?(?:TODO|PLACEHOLDER|STUB|HANDOFF)[A-Za-z0-9_]*)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = elementNamePattern.exec(content)) !== null) {
+    violations.push({
+      file: fileName,
+      propertyName: "<element-name>",
+      activityType: m[1],
+      sentinelValue: m[1],
+      sentinelCategory: categorizeSentinel(m[1]),
+      origin: "genuine",
+      originReason: "sentinel in element local name (forbidden position)",
+      classification: "genuine-structural-violation",
+      classificationReason: "sentinel cannot legally appear in element name position",
+    });
+  }
+  // Attribute name: <Foo TODO_Bar="..." />
+  const attrNamePattern = /\s((?:TODO|PLACEHOLDER|STUB|HANDOFF)[A-Za-z0-9_]*)\s*=/g;
+  while ((m = attrNamePattern.exec(content)) !== null) {
+    violations.push({
+      file: fileName,
+      propertyName: m[1],
+      activityType: "<attribute-name>",
+      sentinelValue: m[1],
+      sentinelCategory: categorizeSentinel(m[1]),
+      origin: "genuine",
+      originReason: "sentinel in attribute name (forbidden position)",
+      classification: "genuine-structural-violation",
+      classificationReason: "sentinel cannot legally appear in attribute name position",
+    });
+  }
+  // Namespace prefix declaration: xmlns:TODO_X="..."
+  const nsPrefixPattern = /\bxmlns:((?:TODO|PLACEHOLDER|STUB|HANDOFF)[A-Za-z0-9_]*)\s*=/g;
+  while ((m = nsPrefixPattern.exec(content)) !== null) {
+    violations.push({
+      file: fileName,
+      propertyName: `xmlns:${m[1]}`,
+      activityType: "<namespace-declaration>",
+      sentinelValue: m[1],
+      sentinelCategory: categorizeSentinel(m[1]),
+      origin: "genuine",
+      originReason: "sentinel in namespace prefix (forbidden position)",
+      classification: "genuine-structural-violation",
+      classificationReason: "sentinel cannot legally appear in namespace prefix position",
+    });
+  }
+  // Task #528: x:Key attribute VALUE — invoke-binding key position. The
+  // broad scanner skips x:Key entirely; we scan it explicitly here.
+  const xKeyValuePattern = /\bx:Key\s*=\s*"([^"]+)"/g;
+  while ((m = xKeyValuePattern.exec(content)) !== null) {
+    const val = m[1];
+    if (isSentinelValue(val)) {
+      violations.push({
+        file: fileName,
+        propertyName: "x:Key",
+        activityType: "<invoke-binding-key>",
+        sentinelValue: val,
+        sentinelCategory: categorizeSentinel(val),
+        origin: "genuine",
+        originReason: "sentinel in invoke-binding key (x:Key) value position — #530 territory",
+        classification: "genuine-structural-violation",
+        classificationReason: "sentinel cannot legally appear in invoke-binding key value",
+      });
+    }
+  }
+}
+
 function broadScanForSentinels(
   content: string,
   fileName: string,
@@ -1977,6 +2183,26 @@ export function applyRequiredPropertyEnforcement(
       if (globalLoweringFailures.some(f => f.severity === "execution_blocking")) {
         enforcementResult.hasBlockingDefects = true;
       }
+    }
+
+    // Task #528: construction-site origin tagging for required-property
+    // and expression-lowering defects. We tag here at the producer's
+    // exit boundary (which is functionally construction-site for the
+    // module's external surface) so every defect leaves this producer
+    // already carrying origin metadata. The retrospective backstop in
+    // final-artifact-validation.ts only fires (and warns) when this
+    // tagging is missed.
+    for (const d of enforcementResult.unresolvedRequiredPropertyDefects) {
+      if (d.origin) continue;
+      const c = classifyDefectOrigin(d.originalValue, `required-property:${d.activityType}.${d.propertyName}`);
+      d.origin = c.origin;
+      d.originReason = c.originReason;
+    }
+    for (const f of enforcementResult.expressionLoweringFailures) {
+      if (f.origin) continue;
+      const c = classifyDefectOrigin(f.originalValue, `expression-lowering:${f.activityType}.${f.propertyName}`);
+      f.origin = c.origin;
+      f.originReason = c.originReason;
     }
 
     const guardResult = runPreCompliancePackageModeGuard(updatedEntries);

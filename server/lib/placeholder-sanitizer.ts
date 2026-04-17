@@ -168,6 +168,53 @@ export function isCanonicalPlaceholder(text: string): boolean {
   return CANONICAL_VOCABULARY_PATTERNS.some(re => re.test(text));
 }
 
+let backstopFireCount = 0;
+
+export function getDefectOriginBackstopFireCount(): number {
+  return backstopFireCount;
+}
+
+export function resetDefectOriginBackstopFireCount(): void {
+  backstopFireCount = 0;
+}
+
+/**
+ * Task #528: classify a single defect's offending value as either
+ * "pipeline-fallback" (safe canonical placeholder produced by the pipeline
+ * itself) or "genuine" (a real structural defect).
+ *
+ * Primary classification: construction-time provenance from the
+ * value->provenance index. Secondary backstop: canonical-vocabulary
+ * shape match. The backstop fires only for placeholders produced
+ * before the index was wired (transitional). Each backstop fire
+ * increments a counter and emits a console.warn so missed
+ * construction-site coverage shows up in CI.
+ */
+export function classifyDefectOrigin(rawValue: string | undefined | null, contextLabel: string = "unknown"): {
+  origin: "pipeline-fallback" | "genuine";
+  originReason: string;
+} {
+  const raw = (rawValue || "").trim();
+  if (!raw) return { origin: "genuine", originReason: "no offending value" };
+  const inner = raw.replace(/^[\[\s"]+|[\]\s"]+$/g, "").trim();
+  const constructed = lookupPipelineFallbackProvenance(inner) || lookupPipelineFallbackProvenance(raw);
+  if (constructed) {
+    return {
+      origin: constructed.origin,
+      originReason: `construction-time provenance from ${constructed.source} (${constructed.reason})`,
+    };
+  }
+  if (isCanonicalPlaceholder(inner) || isCanonicalPlaceholder(raw)) {
+    backstopFireCount++;
+    console.warn(`[Origin Backstop Fired] ${contextLabel}: canonical-vocabulary shape match without construction-time provenance entry: "${inner}"`);
+    return {
+      origin: "pipeline-fallback",
+      originReason: "canonical-vocabulary shape match (transitional fallback; no construction-time provenance entry)",
+    };
+  }
+  return { origin: "genuine", originReason: "not a pipeline-fallback canonical placeholder" };
+}
+
 /**
  * Returns a safe canonical form of a possibly-unsafe placeholder token.
  * Used by the build-time assertion sweep to convert any non-canonical

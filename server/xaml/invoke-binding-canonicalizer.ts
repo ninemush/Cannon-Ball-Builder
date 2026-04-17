@@ -1,4 +1,5 @@
 import { escapeXml, escapeXmlTextContent } from "../lib/xml-utils";
+import { classifyDefectOrigin } from "../lib/placeholder-sanitizer";
 import { tryParseJsonValueIntent, buildExpression } from "./expression-builder";
 import { extractDeclaredVariables, findUndeclaredVariables } from "./vbnet-expression-linter";
 
@@ -25,6 +26,8 @@ export interface SymbolScopeDefect {
   originalDefectClass: "undeclared_variable_reference" | "undeclared_argument_reference";
   severity: "execution_blocking" | "handoff_required";
   rationale: string;
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export interface SentinelReplacementRecord {
@@ -38,6 +41,8 @@ export interface SentinelReplacementRecord {
   originalDefectClass: "placeholder_sentinel" | "todo_sentinel" | "handoff_sentinel" | "stub_sentinel";
   severity: "execution_blocking" | "handoff_required";
   rationale: string;
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export interface UnresolvableJsonDefect {
@@ -51,6 +56,8 @@ export interface UnresolvableJsonDefect {
   originalDefectClass: "unresolvable_json_payload";
   severity: "execution_blocking";
   rationale: string;
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export interface TargetValueCanonicalizationResult {
@@ -88,6 +95,8 @@ export interface ResidualExpressionSerializationDefect {
   defectType: ResidualExpressionDefectType;
   severity: "execution_blocking" | "handoff_required";
   rationale: string;
+  origin?: "pipeline-fallback" | "genuine";
+  originReason?: string;
 }
 
 export type ResidualExpressionDefectType =
@@ -283,16 +292,21 @@ export function canonicalizeInvokeBindings(
               });
               attrsToRemove.push(name);
             } else {
-              residualDefects.push({
-                file: normalizedName,
-                workflow: workflowName,
-                activityType: invokeType,
-                propertyName: name,
-                originalValue: `attribute="${attrInfo.value}" vs body="${bodyValue}"`,
-                defectType: "unresolvable_invoke_conflict",
-                severity: "handoff_required",
-                rationale: `Conflicting binding for "${name}" — attribute and body have different values, cannot deterministically resolve — both preserved for manual resolution`,
-              });
+              {
+                const _origin = classifyDefectOrigin(attrInfo.value, "invoke-binding:unresolvable_invoke_conflict");
+                residualDefects.push({
+                  file: normalizedName,
+                  workflow: workflowName,
+                  activityType: invokeType,
+                  propertyName: name,
+                  originalValue: `attribute="${attrInfo.value}" vs body="${bodyValue}"`,
+                  defectType: "unresolvable_invoke_conflict",
+                  severity: "handoff_required",
+                  rationale: `Conflicting binding for "${name}" — attribute and body have different values, cannot deterministically resolve — both preserved for manual resolution`,
+                  origin: _origin.origin,
+                  originReason: _origin.originReason,
+                });
+              }
             }
           } else {
             let normalizedValue = attrInfo.value;
@@ -451,6 +465,7 @@ function canonicalizeResidualJsonExpressions(
         changed = true;
       } else if (JSON_EXPRESSION_PATTERN.test(originalValue)) {
         const activityContext = detectEnclosingActivity(content, match.index);
+        const _origin = classifyDefectOrigin(originalValue, "invoke-binding:json_expression_leak");
         residualDefects.push({
           file: normalizedName,
           workflow: workflowName,
@@ -460,6 +475,8 @@ function canonicalizeResidualJsonExpressions(
           defectType: "json_expression_leak",
           severity: "execution_blocking",
           rationale: `Unresolvable JSON expression payload in ${propName} — manual remediation required`,
+          origin: _origin.origin,
+          originReason: _origin.originReason,
         });
       }
     }
@@ -530,6 +547,7 @@ function scanForPlaceholderSentinels(
     const value = match[2];
     if (PLACEHOLDER_PATTERN.test(value)) {
       const activityContext = detectEnclosingActivity(content, match.index);
+      const _origin = classifyDefectOrigin(value, "invoke-binding:placeholder_in_executable");
       residualDefects.push({
         file: normalizedName,
         workflow: workflowName,
@@ -539,6 +557,8 @@ function scanForPlaceholderSentinels(
         defectType: "placeholder_in_executable",
         severity: "handoff_required",
         rationale: `Placeholder sentinel in executable property ${propName} — requires business value`,
+        origin: _origin.origin,
+        originReason: _origin.originReason,
       });
     }
   }
@@ -731,6 +751,7 @@ function canonicalizeChildElementJsonPayloads(
         }
       } else if (JSON_EXPRESSION_PATTERN.test(expressionContent)) {
         const safeValue = getSafeReplacementForProperty(propName, isTarget);
+        const _origin = classifyDefectOrigin(expressionContent, "invoke-binding:unresolvable_json_payload");
         unresolvableJsonDefects.push({
           file: normalizedName,
           workflow: workflowName,
@@ -742,6 +763,8 @@ function canonicalizeChildElementJsonPayloads(
           originalDefectClass: "unresolvable_json_payload",
           severity: "execution_blocking",
           rationale: `Unresolvable JSON payload in <${parentTag}.${propName}> replaced with platform-safe value "${safeValue}" — non-deterministic canonicalization, degradation substitute`,
+          origin: _origin.origin,
+          originReason: _origin.originReason,
         });
 
         changed = true;
@@ -948,18 +971,23 @@ function blockSentinelsInExecutableProperties(
       const safeValue = getSafeReplacementForProperty(propName, isTarget);
       const activityContext = detectEnclosingActivity(content, match.index);
 
-      sentinelReplacements.push({
-        file: normalizedName,
-        workflow: workflowName,
-        activityType: activityContext,
-        propertyName: propName,
-        originalValue: value.substring(0, 200),
-        replacementType: "degradation_substitute",
-        safeReplacementValue: safeValue,
-        originalDefectClass: sentinelClass,
-        severity: "execution_blocking",
-        rationale: `Sentinel "${value.substring(0, 80)}" in executable property ${propName} replaced with platform-safe value "${safeValue}" — not executable, degradation substitute`,
-      });
+      {
+        const _origin = classifyDefectOrigin(value, `invoke-binding:sentinel:${sentinelClass}`);
+        sentinelReplacements.push({
+          file: normalizedName,
+          workflow: workflowName,
+          activityType: activityContext,
+          propertyName: propName,
+          originalValue: value.substring(0, 200),
+          replacementType: "degradation_substitute",
+          safeReplacementValue: safeValue,
+          originalDefectClass: sentinelClass,
+          severity: "execution_blocking",
+          rationale: `Sentinel "${value.substring(0, 80)}" in executable property ${propName} replaced with platform-safe value "${safeValue}" — not executable, degradation substitute`,
+          origin: _origin.origin,
+          originReason: _origin.originReason,
+        });
+      }
 
       content = content.replace(
         `${propName}="${value}"`,
@@ -991,18 +1019,23 @@ function blockSentinelsInExecutableProperties(
 
       const safeValue = getSafeReplacementForProperty(propName, isTarget);
 
-      sentinelReplacements.push({
-        file: normalizedName,
-        workflow: workflowName,
-        activityType: parentTag,
-        propertyName: propName,
-        originalValue: expressionContent.substring(0, 200),
-        replacementType: "degradation_substitute",
-        safeReplacementValue: safeValue,
-        originalDefectClass: sentinelClass,
-        severity: "execution_blocking",
-        rationale: `Sentinel "${expressionContent.substring(0, 80)}" in child element <${parentTag}.${propName}> replaced with "${safeValue}" — degradation substitute`,
-      });
+      {
+        const _origin = classifyDefectOrigin(expressionContent, `invoke-binding:child-sentinel:${sentinelClass}`);
+        sentinelReplacements.push({
+          file: normalizedName,
+          workflow: workflowName,
+          activityType: parentTag,
+          propertyName: propName,
+          originalValue: expressionContent.substring(0, 200),
+          replacementType: "degradation_substitute",
+          safeReplacementValue: safeValue,
+          originalDefectClass: sentinelClass,
+          severity: "execution_blocking",
+          rationale: `Sentinel "${expressionContent.substring(0, 80)}" in child element <${parentTag}.${propName}> replaced with "${safeValue}" — degradation substitute`,
+          origin: _origin.origin,
+          originReason: _origin.originReason,
+        });
+      }
 
       changed = true;
       if (argWrapperMatch) {
