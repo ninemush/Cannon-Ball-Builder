@@ -32,7 +32,7 @@ import type { RemediationEntry, RemediationCode } from "./uipath-pipeline";
 import { PROPERTY_REMEDIATION_ESCALATION_THRESHOLD } from "./uipath-pipeline";
 import { DeclarationRegistry, scopeIdMatchesStackEntryExternal, type SymbolDiscoveryDiagnostic, type ExpressionContextEvidence } from "./declaration-registry";
 import { isExcludedSymbolToken } from "./shared/symbol-exclusions";
-import { sanitizePlaceholderForAttribute } from "./lib/placeholder-sanitizer";
+import { sanitizePlaceholderForAttribute, sanitizePlaceholderForVbExpression, makeTodoTextPlaceholder } from "./lib/placeholder-sanitizer";
 import { sanitizeAttributeNameKey } from "./lib/todo-attribute-guard";
 import { dispatchGenerator, hasGenerator, resolveTemplateName } from "./xaml/generator-registry";
 import { normalizeWorkflowTreeForGenerators, getAndClearNormalizationDiagnostics } from "./spec-ir-normalizer";
@@ -1783,7 +1783,7 @@ export function resolvePropertyValue(
   return resolveValueIntentToXaml(normalized, isEnumProperty);
 }
 
-function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean = false): string {
+export function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean = false): string {
   if (intent.type === "literal" && isEnumProperty) {
     return intent.value;
   }
@@ -1793,13 +1793,19 @@ function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean =
     if (val === "True" || val === "False" || val === "Nothing" || val === "null") {
       return val;
     }
+    // Numeric literals (including signed) are returned bare so typed
+    // properties (Int32, Double, ...) bind correctly. Short-circuit
+    // BEFORE linting so the linter does not auto-quote them.
+    if (/^[+-]?[0-9]+(\.[0-9]+)?$/.test(val)) {
+      return val;
+    }
   }
 
   const built = buildExpression(intent);
   const linted = lintAndFixVbExpression(built);
 
   if (intent.type === "literal") {
-    if (/^[0-9]+(\.[0-9]+)?$/.test(linted)) {
+    if (/^[+-]?[0-9]+(\.[0-9]+)?$/.test(linted)) {
       return linted;
     }
     if (linted.startsWith('"') && linted.endsWith('"')) {
@@ -1808,6 +1814,34 @@ function resolveValueIntentToXaml(intent: ValueIntent, isEnumProperty: boolean =
     if (linted.startsWith("[") && linted.endsWith("]")) {
       const inner = linted.slice(1, -1);
       return `[${escapeXmlExpression(inner)}]`;
+    }
+    // Task #539 (Step 6 / Pattern F): auto-quote SDD-orchestrator-artifact
+    // bareword literals. When a literal carries a name that LOOKS like a
+    // queue / asset / credential identifier but contains a hyphen — e.g.
+    // `BDAYGREETINGS-DailyWorkQueue` — emitting it bare into an
+    // attribute-value VB expression slot makes the linter parse it as
+    // `BDAYGREETINGS - DailyWorkQueue` (subtraction of two undeclared
+    // identifiers). Wrap such names as a quoted VB string literal so they
+    // survive linting and Studio binding.
+    //
+    // Narrowed (post-review): only fires when the literal is an
+    // identifier-shaped name containing one or more hyphens — i.e. it
+    // matches `^[A-Za-z_][A-Za-z0-9_-]*$` AND contains `-`. This
+    // explicitly excludes signed numerics (`-1`, `+3.14`), arithmetic
+    // expressions, URLs, mime/encoding tokens like `UTF-8`/`text/plain`
+    // (no — `UTF-8` matches; see below), and anything with whitespace.
+    // For `UTF-8` style tokens we additionally require at least one
+    // alphabetic character on BOTH sides of the hyphen so pure short
+    // codes like `UTF-8` (digit-trailing) are not mis-quoted; orchestrator
+    // names always have alpha runs separating their hyphens.
+    if (
+      linted.length > 0 &&
+      /^[A-Za-z_][A-Za-z0-9_-]*$/.test(linted) &&
+      linted.includes("-") &&
+      /[A-Za-z][A-Za-z0-9_]*-[A-Za-z_][A-Za-z0-9_-]*[A-Za-z_]$/.test(linted)
+    ) {
+      const quoted = `"${linted.replace(/"/g, '""')}"`;
+      return escapeXmlExpression(quoted);
     }
     return escapeXmlExpression(linted);
   }
@@ -1832,15 +1866,46 @@ export function resolvePropertyValueRaw(value: PropertyValue): string {
   if (isValueIntent(value)) {
     const result = buildExpression(value as ValueIntent);
     if (result === "vb_expression" || result === "[vb_expression]") {
-      return `["TODO - Implement expression"]`;
+      return buildCanonicalTodoExpressionAttributeValue(
+        "Implement expression",
+        "workflow-tree-assembler:resolvePropertyValueRaw:value-intent",
+      );
     }
     return result;
   }
   const strVal = String(value);
   if (strVal === "vb_expression") {
-    return `["TODO - Implement expression"]`;
+    return buildCanonicalTodoExpressionAttributeValue(
+      "Implement expression",
+      "workflow-tree-assembler:resolvePropertyValueRaw:string",
+    );
   }
   return strVal;
+}
+
+/**
+ * Task #539 (Step 1): Canonical XML-attribute-safe VB-expression placeholder.
+ *
+ * Background. Three sites in this file used to return raw bracket-wrapped
+ * placeholders of the form `["TODO - ..."]`. When the returned token was
+ * interpolated into an XML attribute value without `escapeXml`, the literal
+ * `"` characters terminated the attribute and left `TODO` as the next
+ * attribute name — producing the `Attribute 'TODO' has no space in starting`
+ * compliance crash that cascaded into whole-workflow stubbing on the named
+ * replay fixtures (runs `b2bda0c2`, `66561075`).
+ *
+ * This helper combines the canonical placeholder constructor
+ * (`makeTodoTextPlaceholder`) — for provenance tracking — with the
+ * canonical sanitizer (`sanitizePlaceholderForVbExpression`) and an explicit
+ * `escapeXml` pass on the surrounding bracket-wrapped form so the value is
+ * safe to interpolate directly into XML attribute syntax (the `"` characters
+ * become `&quot;`). Per the Task #527 contract, no other placeholder shape
+ * may be emitted.
+ */
+export function buildCanonicalTodoExpressionAttributeValue(description: string, source: string): string {
+  const canonical = makeTodoTextPlaceholder(description, source).value;
+  const safeForVb = sanitizePlaceholderForVbExpression(canonical, source);
+  return escapeXml(`["${safeForVb}"]`);
 }
 
 export function parseEmittedXmlForValidation(xml: string): {
@@ -2512,7 +2577,10 @@ export function resolveActivityTemplate(
 
         const bindingValue = callerVarName
           ? `[${callerVarName}]`
-          : `["TODO - Bind ${contractArg.name}"]`;
+          : buildCanonicalTodoExpressionAttributeValue(
+              `Bind ${contractArg.name}`,
+              "workflow-tree-assembler:caller-binding-fallback",
+            );
 
         if (!callerVarName) {
           _contractDiagnostics.push({

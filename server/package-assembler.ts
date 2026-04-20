@@ -43,6 +43,7 @@ import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityCh
     type DhgQualityIssue,
   } from "./xaml-generator";
   import { repairTodoAttributeNamesInXaml, drainTodoAttributeGuardDiagnosticsForFile, buildEmitterTimeHandoffCommentBlock, toDhgIssuesFromGuardDiagnostics, type TodoAttributeGuardDiagnostic } from "./lib/todo-attribute-guard";
+  import { assertXamlStructuralIntegrity, type XamlStructuralViolation } from "./lib/xaml-structural-assertion";
   import type { StubCause } from "./lib/stub-cause";
   import {
     detectSystems,
@@ -4975,6 +4976,27 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         (err as any).code = "TODO_ATTR_GUARD_HARD_FAIL_TERMINAL";
         throw err;
       }
+      // Task #539 (Step 1): build-time XAML structural assertion. Runs on
+      // the assembled XAML for every workflow before the compliance
+      // transform. Fails the assembler when (a) the XAML is parser-invalid
+      // in a shape that suggests placeholder-bearing attribute serialization
+      // with unescaped quote characters, or (b) a TODO/PLACEHOLDER token
+      // appears in attribute-name / element-name / namespace-prefix
+      // position. Properly XML-escaped placeholder text in attribute values
+      // is the canonical, intended emission and is intentionally ignored.
+      const structuralAssertion = assertXamlStructuralIntegrity(rawXaml, fileName);
+      if (!structuralAssertion.ok) {
+        for (const v of structuralAssertion.violations) {
+          collectedQualityIssues.push({
+            severity: "blocking",
+            file: fileName,
+            check: `xaml-structural-assertion:${v.kind}`,
+            detail: v.detail,
+            stubCause: "todo-attribute",
+          });
+          console.error(`[XAML Structural Assertion] ${fileName}: ${v.kind} — ${v.detail}`);
+        }
+      }
       const preComplianceSweep = sweepUnsafePlaceholdersUtil(rawXaml, fileName);
       if (preComplianceSweep.fixes.length > 0) {
         rawXaml = preComplianceSweep.content;
@@ -5119,6 +5141,17 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         [{ file: `${wfName}.xaml`, check: "compliance-crash", detail: `Compliance transform failed: ${compErrMessage}` }],
         { isMainXaml: wfName === "Main" || wfName === "Process" },
       );
+      if (spResult.diagnostics && spResult.diagnostics.length > 0) {
+        for (const d of spResult.diagnostics) {
+          collectedQualityIssues.push({
+            severity: "warning",
+            file: `${wfName}.xaml`,
+            check: `structural-preservation:${d.kind}`,
+            detail: `[${d.tag} @ line ${d.line}] attribute '${d.attribute}'="${d.valuePreview}" — ${d.reason}`,
+          });
+        }
+        console.log(`[UiPath] Structural preservation emitted ${spResult.diagnostics.length} wrapper-attribute diagnostic(s) for "${wfName}"`);
+      }
       if (spResult.preserved || spResult.parseableXml) {
         console.log(`[UiPath] Structural preservation succeeded for "${wfName}" after compliance failure: ${spResult.preservedActivities} preserved, ${spResult.stubbedActivities} stubbed`);
         try {
@@ -5135,8 +5168,12 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       // Task #529: classify stub cause so the regression suite can filter
       // mechanically (no free-text inference). The TODO-attribute defect
       // class is identified by the canonical XML parser error signature.
-      const isTodoAttributeCause = /Attribute\s+'TODO[\s:_\-][^']*'\s+has\s+no\s+space|TODO[\s:_\-]?[^"\s]*\s*=/i.test(compErrMessage)
-        || /XAML\s+XML\s+well-form/i.test(compErrMessage) && /TODO/i.test(compErrMessage);
+      // Task #539: extend cause-classification to also match the bare
+      // `Attribute 'TODO'` form (no separator, no trailing characters)
+      // which is what the live runs `b2bda0c2` / `66561075` actually
+      // produced — the prior regex required a separator after `TODO`.
+      const isTodoAttributeCause = /Attribute\s+'TODO(?:[\s:_\-][^']*)?'\s+has\s+no\s+space|TODO[\s:_\-]?[^"\s]*\s*=/i.test(compErrMessage)
+        || (/XAML\s+XML\s+well-form/i.test(compErrMessage) && /TODO/i.test(compErrMessage));
       // Task #528: gate `pipeline-fallback-compliance-crash` attribution
       // on explicit provenance evidence — i.e., the raw XAML must
       // contain a canonical pipeline-fallback placeholder shape that
@@ -5170,13 +5207,22 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       // stub even in non-package mode and escalate as a completeness
       // violation. This prevents the cascade of whole-workflow erasures
       // from a single localized fallback that hit a compliance crash.
-      if (stubCauseTag === "pipeline-fallback-compliance-crash") {
-        console.log(`[UiPath] Whole-workflow stub BLOCKED for "${wfName}" (cause=pipeline-fallback-compliance-crash) — structural preservation exhausted, escalating to completeness violation`);
+      // Task #539 (Step 2): additive — extend the no-whole-workflow-stub
+      // protection to also cover the `todo-attribute` cause class. This is
+      // intentionally additive, not a broader cause-policy refactor: only
+      // these two classes are protected here. Whole-workflow stubbing on a
+      // `todo-attribute` defect is the cascade #527/#528/#529/#530 set out
+      // to eliminate — once source migration (Step 1) is in place, this
+      // branch should rarely fire on the named replay fixtures, but it
+      // remains as defense-in-depth so any future emitter regression is
+      // contained at smallest scope rather than erasing real business logic.
+      if (stubCauseTag === "pipeline-fallback-compliance-crash" || stubCauseTag === "todo-attribute") {
+        console.log(`[UiPath] Whole-workflow stub BLOCKED for "${wfName}" (cause=${stubCauseTag}) — structural preservation exhausted, escalating to completeness violation`);
         collectedQualityIssues.push({
           severity: "blocking",
           file: `${wfName}.xaml`,
           check: "compliance-failure-no-stub",
-          detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — whole-workflow stub forbidden for pipeline-fallback-compliance-crash class (Task #528)`,
+          detail: `Compliance transform failed for ${wfName}: ${compErrMessage} — whole-workflow stub forbidden for ${stubCauseTag} class (Task #528 / Task #539)`,
           stubCause: stubCauseTag,
         });
         // No whole-workflow stub emitted — wasFullStub=false.

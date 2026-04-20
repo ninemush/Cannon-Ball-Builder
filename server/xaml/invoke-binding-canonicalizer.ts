@@ -239,6 +239,32 @@ export function canonicalizeInvokeBindings(
         while ((am = attrPattern.exec(attrString)) !== null) {
           const name = am[1];
           if (isSystemOrMetaAttr(name)) continue;
+          // Task #539 (Step 4 / Pattern B): the `Arguments` property on
+          // InvokeWorkflowFile is the typed `Dictionary<String, Argument>`
+          // *property*; its serialization MUST be the typed
+          // `<InvokeWorkflowFile.Arguments>` child-element block, never
+          // the attribute form `Arguments="[dict_Config]"`. The attribute
+          // form binds a runtime `Dictionary<String, Object>` value into
+          // a property whose contract is `Dictionary<String, Argument>`
+          // and is the source of the type-mismatch reported in run
+          // b2bda0c2 on Main.xaml / Init.xaml. Strip it here. We do NOT
+          // synthesize child entries from the dropped value because the
+          // callee contract drives the canonical typed-children
+          // materialization elsewhere (workflow-contract-integrity).
+          if (invokeType === "InvokeWorkflowFile" && name === "Arguments") {
+            pseudoAttrsToRemove.push({ name, value: am[2] });
+            fixes.push({
+              originalForm: `${name}="${am[2].substring(0, 200)}"`,
+              canonicalizedForm: "(removed — typed <InvokeWorkflowFile.Arguments> child-block is canonical form)",
+              normalizationType: "pseudo_property_removal",
+              file: normalizedName,
+              workflow: workflowName,
+              activityType: invokeType,
+              propertyName: name,
+              rationale: `Attribute-form Arguments="..." dropped from InvokeWorkflowFile — Pattern B no-double-emission rule (typed child block is the canonical form for the Dictionary<String, Argument> property)`,
+            });
+            continue;
+          }
           if (PSEUDO_PROPERTY_NAMES.has(name)) {
             pseudoAttrsToRemove.push({ name, value: am[2] });
             fixes.push({

@@ -41,6 +41,18 @@ export const PREFIXED_VAR_REF_REGEX = new RegExp(
 );
 
 export function inferTypeFromPrefix(varName: string): string | null {
+  // Task #539 (Pattern C): guarded retype for transaction-item variables.
+  // When a variable's name ends with `TransactionItem` (queue-item slot) but
+  // it was declared with the `obj_` prefix (System.Object), the downstream
+  // `SetTransactionStatus.TransactionItem` / `SetTransactionProgress
+  // .TransactionItem` binding is contractually `UiPath.Core.QueueItem`. The
+  // contract is unambiguous, so coerce the inferred type to `ui:QueueItem`
+  // rather than `x:Object` — eliminates the unrepairable downcast at the
+  // source. Only applies when the suffix is exact (`TransactionItem` /
+  // `Transaction_Item`) so the heuristic does not over-reach.
+  if (/^obj_/.test(varName) && /(?:^|_)TransactionItem$/i.test(varName.slice(4))) {
+    return "ui:QueueItem";
+  }
   for (const [prefix, type] of PREFIX_TYPE_MAP) {
     if (varName.startsWith(prefix)) return type;
   }

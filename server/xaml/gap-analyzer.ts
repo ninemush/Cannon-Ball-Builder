@@ -625,6 +625,14 @@ export interface StructuralPreservationResult {
     check: string;
   }>;
   preservedStructures: string[];
+  diagnostics: Array<{
+    kind: string;
+    tag: string;
+    attribute: string;
+    valuePreview: string;
+    line: number;
+    reason: string;
+  }>;
 }
 
 const STRUCTURAL_ELEMENTS = new Set([
@@ -688,6 +696,7 @@ export function preserveStructureAndStubLeaves(
     stubbedActivities: 0,
     stubbedDetails: [],
     preservedStructures: [],
+    diagnostics: [],
   };
 
   try {
@@ -702,6 +711,53 @@ export function preserveStructureAndStubLeaves(
   }
 
   const totalActivities = countActivities(xamlContent);
+
+  // Task #539 (Step 3): wrapper/container TODO-attribute strip pass with
+  // structured diagnostics. Some TODO leakage lands as an attribute on a
+  // structural wrapper (Sequence, Flowchart, If, ...). Stubbing the whole
+  // wrapper would discard real business logic; instead we strip ONLY the
+  // offending attribute and emit a diagnostic so the regression is
+  // observable in final_quality_report.diagnostics.
+  const wrapperDiagnostics: StructuralPreservationResult["diagnostics"] = [];
+  {
+    const linesForStrip = xamlContent.split("\n");
+    const todoAttrPattern = /\s([A-Za-z_][\w.:]*)="(\[?TODO[^"]*|TODO)"/g;
+    for (let li = 0; li < linesForStrip.length; li++) {
+      const ln = linesForStrip[li];
+      const tagMatch = ln.match(/<((?:ui:)?[A-Z][A-Za-z]*)[\s>]/);
+      if (!tagMatch) continue;
+      const tag = tagMatch[1];
+      if (!isStructuralTag(tag)) continue;
+      todoAttrPattern.lastIndex = 0;
+      let stripped = ln;
+      let m: RegExpExecArray | null;
+      const hits: Array<{ attr: string; val: string }> = [];
+      while ((m = todoAttrPattern.exec(ln)) !== null) {
+        hits.push({ attr: m[1], val: m[2] });
+      }
+      if (hits.length === 0) continue;
+      for (const h of hits) {
+        const escAttr = h.attr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        stripped = stripped.replace(
+          new RegExp(`\\s${escAttr}="[^"]*"`),
+          "",
+        );
+        wrapperDiagnostics.push({
+          kind: "wrapper-todo-attribute-stripped",
+          tag,
+          attribute: h.attr,
+          valuePreview: h.val.slice(0, 80),
+          line: li + 1,
+          reason:
+            "TODO placeholder leaked onto structural wrapper attribute; attribute removed to preserve container and avoid Studio attribute parse error.",
+        });
+      }
+      linesForStrip[li] = stripped;
+    }
+    if (wrapperDiagnostics.length > 0) {
+      xamlContent = linesForStrip.join("\n");
+    }
+  }
 
   const failingLineNumbers = new Set<number>();
   const issuesByLine = new Map<number, { check: string; detail: string }>();
@@ -864,13 +920,14 @@ export function preserveStructureAndStubLeaves(
   if (linesToStub.length === 0) {
     return {
       content: xamlContent,
-      preserved: blockingIssues.length === 0,
+      preserved: blockingIssues.length === 0 || wrapperDiagnostics.length > 0,
       parseableXml: true,
       totalActivities,
       preservedActivities: totalActivities,
       stubbedActivities: 0,
       stubbedDetails: [],
       preservedStructures: [...new Set(preservedStructures)],
+      diagnostics: wrapperDiagnostics,
     };
   }
 
@@ -923,6 +980,7 @@ export function preserveStructureAndStubLeaves(
         stubbedActivities: 0,
         stubbedDetails: [],
         preservedStructures: [...new Set(preservedStructures)],
+        diagnostics: wrapperDiagnostics,
       };
     }
   } catch {
@@ -935,6 +993,7 @@ export function preserveStructureAndStubLeaves(
       stubbedActivities: 0,
       stubbedDetails: [],
       preservedStructures: [...new Set(preservedStructures)],
+      diagnostics: wrapperDiagnostics,
     };
   }
 
@@ -947,6 +1006,7 @@ export function preserveStructureAndStubLeaves(
     stubbedActivities: stubbedCount,
     stubbedDetails,
     preservedStructures: [...new Set(preservedStructures)],
+    diagnostics: wrapperDiagnostics,
   };
 }
 
