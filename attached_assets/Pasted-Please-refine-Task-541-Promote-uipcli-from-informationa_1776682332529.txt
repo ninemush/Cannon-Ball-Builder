@@ -1,0 +1,322 @@
+Please refine **Task #541 — Promote uipcli from informational to authoritative across the pipeline**.
+
+This is a tightening pass, not a rewrite. Preserve the core direction, but make the task more implementation-safe, phased, reviewable, and resistant to scope creep.
+
+Use the guidance below.
+
+---
+
+## 1) Keep the core intent, but tighten the task into a staged modernization plan
+
+The core thesis is correct and should remain:
+
+* `uipcli` should become the authoritative source for Studio-openability
+* `uipcli pack` should become the shipped artifact when available
+* CLI analyzer defects should stop being silently demoted
+* hand-rolled validators that drift from Studio should gradually be retired behind CLI truth
+
+However, the current task is too broad in a few places. Refine it into a **multi-phase roadmap with hard boundaries** so reviewers can approve it safely.
+
+### Required structure
+
+Please rewrite the task so it is explicitly divided into:
+
+* **Phase 1 — Make CLI actually run and make its result authoritative**
+* **Phase 2 — Route analyzer output correctly and narrow demotion behavior**
+* **Phase 3 — Retire or downgrade hand-rolled validators only where CLI has proven coverage**
+* **Phase 4 — Build-time contract extraction and registry modernization**
+* **Phase 5 — Replay and lock in with regression fixtures**
+
+The phases should be sequential and reviewable on their own.
+Do not let later phases become implicit prerequisites for earlier ones.
+
+---
+
+## 2) Tighten Phase 1 so it is about authority, not broad framework churn
+
+The most important part of #541 is getting CLI to run on Linux and making its pack result matter.
+
+### Required refinements
+
+* Keep the point that Linux/Replit currently skips CLI for Windows projects.
+* Keep the proposal to make the default project shape CLI-runnable.
+* But tighten the framework-switch behavior:
+
+  * do **not** imply that every project should blindly flip to Portable/CrossPlatform;
+  * require an explicit capability-based framework choice:
+
+    * CrossPlatform by default **only when the emitted activities are compatible**
+    * Windows when required by emitted activity set
+* Require that when CLI is skipped due to incompatible target framework, the pipeline must emit a **machine-readable reason** and a DHG-visible explanation.
+* Make clear that **Phase 1 does not require replacing all Windows projects**. It requires:
+
+  * CLI to run whenever the emitted project shape allows it
+  * explicit, reviewable fallback when it does not
+
+### Tighten the authoritative pack rule
+
+Keep the direction, but make it precise:
+
+* When `cliValidationResult.packResult.success === true`, the shipped `.nupkg` must be the CLI-produced artifact.
+* Fallback to hand-rolled pack is allowed only when:
+
+  * CLI is unavailable, or
+  * CLI is intentionally skipped for compatibility reasons, or
+  * CLI failed before producing an artifact.
+* Require artifact provenance in the run record:
+
+  * `packArtifactSource: "uipcli" | "fallback_adm_zip"`
+
+### Tighten verdict authority
+
+Do not phrase this as “CLI overrides everything.” Make the logic precise:
+
+* `uipcli pack` success is the **primary package-openability signal**
+* hard structural facts still matter when CLI is unavailable
+* fallback heuristics are allowed only for modes like:
+
+  * `cli_unavailable`
+  * `cli_skipped_incompatible_agent`
+  * equivalent explicit modes actually present in code
+* Require the task to verify and use the **actual enum / mode names from source**, not informal names
+
+---
+
+## 3) Tighten analyzer routing so no error-severity CLI result is silently demoted
+
+This is one of the strongest parts of the task, but it needs sharper wording.
+
+### Required refinements
+
+* Preserve the principle:
+
+  * no CLI analyzer **Error** severity issue may be silently demoted to an informational warning
+* Replace vague wording like “widen the whitelist” with a stricter routing policy:
+
+  * If a CLI analyzer error can be mapped to an existing `QualityGateIssue.check`, route it into iterative correction
+  * If it cannot yet be auto-fixed, it must still surface as a localized DHG item at the analyzer-reported file/line
+* Require explicit accounting for unmapped rules:
+
+  * count of mapped rules
+  * count of unmapped rules
+  * list of unmapped ruleIds encountered during replay/corpus run
+* Add a reviewer rule:
+
+  * no solution that simply relabels CLI errors as `CLI_DIAGNOSTIC_*` warnings is acceptable
+
+### Important tightening
+
+Do **not** require mapping all ~80 analyzer rules in this task unless they are actually observed in the chosen replay/corpus scope.
+Instead, require:
+
+* full routing coverage for all CLI error rules observed in:
+
+  * the named replay fixtures, and
+  * the chosen corpus/baseline run used during implementation
+* plus a safe default behavior for unknown future ruleIds:
+
+  * localized DHG surfacing, never silent demotion
+
+---
+
+## 4) Tighten the DHG changes so they are evidence-driven, not presentation-only
+
+The DHG section changes are good, but they should be grounded in actual CLI outputs.
+
+### Required refinements
+
+* Keep the requirement that DHG “Studio Compatibility” be CLI-driven
+* But specify that workflow classification must be derived from:
+
+  * CLI pack result
+  * CLI analyzer defects grouped by file/workflow
+* Do not allow a cosmetic rewrite of the DHG header without wiring the underlying truth source
+* Require that the DHG clearly distinguishes:
+
+  * CLI ran and passed
+  * CLI ran and produced warnings/errors
+  * CLI was skipped, with reason
+  * fallback heuristic mode used, with reason
+
+### Add reviewer enforcement
+
+A PR does **not** satisfy this step if it only moves CLI metadata from footer to header without making DHG classification actually depend on CLI outputs.
+
+---
+
+## 5) Tighten Phase 2 / 3 so validator retirement is incremental and replay-backed
+
+The current wording risks too much change at once.
+
+### Required refinements
+
+* Keep the direction that hand-rolled validators should be retired where CLI subsumes them
+* But require **incremental retirement**, not wholesale shutdown
+* For each hand-rolled validator being downgraded or removed from the production path, require:
+
+  * the specific validator/check name
+  * the CLI source that replaces it
+  * at least one replay/corpus example where CLI catches the same defect class correctly
+  * confirmation that removing the hand-rolled check reduces false positives without masking real issues
+
+### Specific tightening for `vbnet-expression-linter.ts`
+
+Do not say simply “replace it with CLI.”
+Instead specify:
+
+* keep it as a pre-emission heuristic if still useful
+* retire its **post-emission blocking authority** only where CLI coverage is proven for the same defect class
+* require special attention to false-positive classes already cited, like:
+
+  * queue-name barewords / string literal misclassification
+
+### Specific tightening for package resolution
+
+Do not say “any package CLI didn’t reference gets removed” without safeguards.
+Require:
+
+* reconciliation only against the emitted project under analysis
+* no aggressive package removal that could break design-time opening for activities not exercised in the analyzer fixture
+* prefer:
+
+  * auto-add packages CLI proves are missing
+  * cautious removal only when safe and verified
+
+---
+
+## 6) Tighten Phase 4 so registry modernization is clearly separated from runtime behavior
+
+This phase is good, but it must stay clearly build-time and clearly distinct from runtime CLI authority.
+
+### Required refinements
+
+* Preserve the build-time extractor idea
+* Preserve the daily drift gate idea
+* But explicitly state:
+
+  * this is **build-time artifact generation**, not per-run runtime work
+  * runtime continues to read a checked-in/generated artifact
+* Require deterministic output:
+
+  * canonical sort
+  * stable schema
+  * reproducible generation from pinned package versions
+
+### Tighten cross-validation
+
+Keep cross-validation against `uipcli analyze`, but narrow it:
+
+* require cross-validation on a representative fixture set / activity sample
+* do not require “every activity at least once” if that becomes a blocker without good fixture coverage
+* allow phased expansion of coverage, but require the initial scope to be explicit and reviewable
+
+### Add reviewer rule
+
+This phase does **not** pass if it only adds a tool without wiring its output into the runtime registry-loading path.
+
+---
+
+## 7) Tighten Phase 5 replay requirements
+
+The replay section is important and should stay.
+
+### Required refinements
+
+* Keep BirthdayGreetings (`348a09fd`) and POInvoiceReconYY (`d3274c92`) as named regression fixtures
+* Require end-to-end replay through:
+
+  * spec/input
+  * XAML emission
+  * CLI analyze
+  * CLI pack
+* But do not overpromise “zero analyzer errors” unless that is truly achievable at this stage
+* Better acceptance wording:
+
+  * no pack errors on the named fixtures
+  * no whole-workflow stubs from the defect classes closed by prior tasks
+  * analyzer output is either:
+
+    * auto-routed to correction, or
+    * surfaced as localized DHG items
+* Require evidence bundles for both fixtures
+
+### Add reviewer rule
+
+A green replay is not sufficient unless the run records show:
+
+* whether CLI ran
+* whether CLI packed the final artifact
+* whether the shipped artifact came from CLI
+* what analyzer errors/warnings remained
+
+---
+
+## 8) Add explicit non-goals / anti-scope-creep language
+
+Please add a tighter “Out of scope” section.
+
+It should explicitly exclude, unless already named in a later phase:
+
+* rewriting the LLM enrichment stack
+* broad redesign of deterministic scaffold logic
+* Orchestrator deployment behavior
+* generic test-suite cleanup unrelated to CLI authority
+* broad verdict-policy redesign beyond using CLI pack/analyze as the primary truth source
+* Windows-runner-specific automation unless explicitly required by a later separate task
+
+Also add:
+
+* this task must not silently absorb unrelated cleanup from #542 / #543 / #544 / #539 follow-ons
+
+---
+
+## 9) Add reviewer / acceptance rules that make this safe to merge
+
+Please add a short section called **Reviewer rules** with at least these principles:
+
+* No “cosmetic CLI adoption” PRs:
+
+  * moving metadata around without changing truth sources does not count
+* No silent fallback:
+
+  * when CLI is skipped or unavailable, the reason must be machine-readable and DHG-visible
+* No silent demotion of CLI error-severity analyzer findings
+* No unconditional framework flipping to CrossPlatform without activity-compatibility gating
+* No unconditional global package additions/removals in the resolver
+* No broad validator retirement without replay-backed proof of replacement coverage
+
+---
+
+## 10) Tighten the final “Done looks like” block
+
+Please rewrite “Done looks like” so it is specific and mechanically checkable.
+
+It should include:
+
+* CLI runs on Linux whenever emitted project shape is compatible
+* CLI-produced `.nupkg` is shipped when pack succeeds
+* package-openability verdict is primarily CLI-pack-based when CLI runs
+* CLI analyzer error findings are either routed to correction or surfaced as localized DHG items
+* DHG Studio Compatibility is driven by CLI truth, not heuristic guesses
+* named replay fixtures demonstrate the behavior end-to-end
+* build-time registry modernization is either completed in its own phase or clearly deferred within the task
+
+---
+
+## 11) Output format
+
+Please return:
+
+1. a **refined version of Task #541**
+2. a short section titled **“What tightened in this refinement”** covering:
+
+   * scope tightened
+   * phases clarified
+   * reviewer safeguards added
+   * over-broad claims narrowed
+   * acceptance made mechanically checkable
+
+Do not weaken the task.
+Do not remove the core goal.
+Do not split it into separate tasks unless absolutely necessary.
+Tighten it so it can actually be implemented and reviewed safely.

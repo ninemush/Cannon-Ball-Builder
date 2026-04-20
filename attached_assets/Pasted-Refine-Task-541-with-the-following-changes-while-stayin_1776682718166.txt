@@ -1,0 +1,104 @@
+Refine Task #541 with the following changes, while staying fully true to the core goal: **uipcli must become the authoritative source of Studio-openability and the authoritative packer when available**. Do not weaken that principle.
+
+1. Keep the core authoritative-source goal explicit
+   Do not drift into a “CLI-aware” plan. Preserve these as load-bearing outcomes:
+
+* uipcli pack success is the primary source of truth for Studio-openability
+* when CLI is available and pack succeeds, the shipped `.nupkg` must be the CLI-produced artifact
+* CLI analyzer Error-severity findings must not be silently demoted
+* DHG Studio Compatibility must reflect CLI truth, not heuristic prediction
+
+2. Tighten framework-selection wording
+   Replace any blanket wording like “default all new projects to Portable/CrossPlatform” with capability-driven wording:
+
+* choose the most CLI-runnable framework **compatible with the emitted activity set**
+* only keep Windows when the emitted activities actually require it
+* when CLI is skipped for incompatibility, emit an explicit machine-readable skip reason into the run artifact and DHG
+  This choice must be based on emitted activity/package compatibility, not just spec wording.
+
+3. Keep verdict authority and analyzer routing in the same implementation phase
+   Do not split “CLI verdict becomes authoritative” from “CLI analyzer defects are routed usefully.” Those changes touch the same files and user experience and should land together.
+   Avoid an intermediate state where CLI can make more runs fail without improving actionability.
+
+4. Tighten package-resolution policy
+   Refine the package-resolution step so it is asymmetric:
+
+* CLI-identified missing packages may be auto-added
+* package removal must be conservative and evidence-based
+  Do **not** allow broad logic like “remove any package CLI didn’t reference” without a stronger proof standard, because that can remove design-time or transitive dependencies and break Studio-openability.
+
+5. Make unknown analyzer rules safe by default
+   Refine analyzer routing so that:
+
+* known Error-severity ruleIds are mapped to iterative correction where supported
+* unknown or unmapped Error-severity ruleIds default to **localized DHG surfacing at the reported file/line**, never silent demotion to warnings
+  Keep “no silent demotion of Error-severity CLI defects” as an explicit invariant.
+
+6. Verify real enum / mode names from source before implementation
+   Add a prerequisite step requiring the implementer to confirm the actual source names for CLI modes / status enums in:
+
+* `server/uipath-cli-validator.ts`
+* `server/uipath-pipeline.ts`
+  Do not let the task text hard-code mode names unless they are verified from source at implementation time.
+
+7. Scope analyzer-rule mapping realistically
+   Do not require blanket mapping of all Workflow Analyzer rules.
+   Instead:
+
+* require mapping for the highest-frequency and replay-relevant rules first
+* require a one-off corpus review to identify which rules are worth mapping next
+* keep unknown rules safely surfaced, not blocked on up-front total coverage
+
+8. Retire hand-rolled validators incrementally and replay-backed
+   Refine Phase 2 so hand-rolled validators are retired only where CLI coverage is proven for that defect class.
+   For each retirement candidate:
+
+* show replay-backed evidence that CLI catches the same defects or better
+* show that removing the hand-rolled validator does not create a false-negative gap
+  This especially applies to `vbnet-expression-linter.ts` and package-resolution logic.
+
+9. Add artifact provenance for shipped package source
+   Add an explicit persisted field such as `packArtifactSource: "cli" | "fallback"` to the run artifact / final quality report so future regressions can tell whether the shipped package came from CLI or the fallback path.
+
+10. Keep the named-fixture bar hard
+    Do not soften the canonical regression bar for:
+
+* BirthdayGreetings (348a09fd)
+* POInvoiceReconYY (d3274c92)
+
+For these named fixtures, acceptance should remain strict:
+
+* zero CLI pack errors
+* no dishonest “valid/openable” verdict when CLI pack fails
+* no whole-workflow stubs in the final package for the known defect classes
+* real business logic preserved
+* analyzer output either reaches zero Error-severity findings, or any remaining Error must be explicitly justified as a genuine remaining limitation with localized DHG surfacing and no structural dishonesty
+
+Do not rewrite this into a lenient “routed-or-surfaced is always enough” standard for the two canonical fixtures.
+
+11. Preserve forensic grounding from the current task text
+    Keep the concrete evidence anchors already present in #541:
+
+* run IDs
+* specific defect patterns like `BDAYGREETINGS-DailyWorkQueue`
+* `GetCredential.AssetName` / `Target`
+* Linux CLI skip due to Windows target framework
+  The refined task should remain evidence-led, not purely abstract.
+
+12. Trim duplication
+    Do not keep both a long “Reviewer rules” section and a redundant “Done looks like” section that restate the same assertions.
+    Merge them into one concise, mechanically-checkable acceptance section.
+
+13. Clean out the unnecessary out-of-scope specificity
+    Keep the anti-scope-creep intent, but do not reference unrelated follow-on task numbers in out-of-scope text. State the boundary cleanly in capability terms instead.
+
+14. Preserve the destination architecture
+    After refinement, the plan should still clearly say:
+
+* CLI analyze + CLI pack run on Linux whenever framework/activity compatibility allows
+* CLI pack result is the primary openability verdict
+* CLI-produced package is the shipped artifact when available
+* fallback paths exist only for genuine CLI-unavailable / incompatible cases
+* long-term registry/catalog modernization remains part of #541, not removed
+
+Please rewrite #541 accordingly, preserving its original intent but tightening these areas for implementation safety, reviewability, and honest acceptance.
