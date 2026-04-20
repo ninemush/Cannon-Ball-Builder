@@ -111,6 +111,44 @@ The application is built on a modern web stack to ensure scalability and a user-
 - **Emission Triage DLL-Derived Namespace Expansion**: `catalog/run-emission-triage.js` criterion-2 namespace resolution uses both hardcoded compliance entries and DLL-extracted catalog namespace data (`prefix`/`clrNamespace`/`assembly` from `activity-catalog.json`) for emission approval decisions.
 - **XAML Structure Reference Prompt Section**: Enrichment prompt includes a compact "SECTION 7: CORRECT XAML STRUCTURE REFERENCE" with Studio baseline envelope pattern, If/Then/Else nesting, InvokeWorkflowFile typed argument binding, and typed ForEach with ActivityAction body structure.
 - **Post-Implementation Verification Bundle**: A downloadable ZIP containing verification artifacts (manifest, nupkg, DHG, quality gate results, meta-validation results, pipeline diagnostics, outcome report, final quality report, spec snapshot) for reviewer inspection after pipeline tasks. Button appears when a UiPath package exists. Endpoint: `POST /api/verification-bundle/:ideaId`. Agent skill at `.agents/skills/post-implementation-verification/SKILL.md`.
+- **Remote Windows CLI Runner Dispatch (Task #549)**: `server/uipath-cli-remote-dispatch.ts` provides the pipeline-side dispatch contract that lets `uipcli` run on a remote Windows worker for Windows / WindowsLegacy projects (10 enterprise activity packages) that the Linux pipeline runner cannot validate locally. New `CliValidationMode` values (`cli_remote_windows`, `cli_remote_unreachable`, `cli_remote_misconfigured`, `cli_remote_busy_fallback`, `cli_remote_degraded_fallback`, `cli_remote_dispatch_timeout`, `cli_remote_retry_exhausted`, `cli_remote_byte_fidelity_failure`, `cli_remote_invocation_error`) plus `CliRunnerType` (`local_linux | remote_windows | none`) and `CliPackArtifactSource` (`uipcli | fallback_adm_zip | none`) surface end-to-end through `CliValidationResult`, `PipelineOutcomeReport.cliRemoteRunner`, and the DHG Studio Compatibility header. Health-state classification (`healthy / degraded / busy / unreachable / misconfigured`) is cached with a TTL via `RunnerHealthChecker` so dispatch never blocks on a per-job probe. Hash chain (`bundleHash → returnedArtifactHash → persistedArtifactHash`) is persisted on every dispatched run; mismatch forces fallback packaging with reason `cli_remote_byte_fidelity_failure` (no failed remote artifact is ever shipped). Default queue/timeout/retry policy: `maxDispatchWaitMs=60000`, `maxExecutionTimeMs=180000`, `retryCount=1`, `busyBehavior=queue`, `dispatchOnDegraded=true`. Dispatch is enabled by setting the `UIPATH_REMOTE_RUNNER_URL` env var; when unset, the pipeline cleanly falls through to the existing `cli_skipped_incompatible_agent` skip path so Linux-only deployments continue to work unchanged.
+
+## Remote Windows CLI Runner Runbook
+
+**Topology decision (Task #549 step 1):** Self-hosted Windows VM (Windows Server 2022) with `UiPath.CLI.Windows` + `UiPath.CLI.Windows.Legacy` and .NET 8 installed, exposing an HTTPS dispatch endpoint (`POST /dispatch`) and an HTTPS health endpoint (`GET /health`). Rationale: lowest cold-start latency among the four candidate options (a) self-hosted Windows VM, (b) GitHub Actions self-hosted Windows runner, (c) Azure Container Instances Windows containers, (d) hosted CI Windows runners — because the CLI step sits on the critical path of every Windows-project run, the ~1–3 s warm dispatch latency of an always-on VM is preferred over the 30–90 s cold start of on-demand container or CI options. Operational overhead of a single dedicated VM is acceptable at current run volumes, and the contract is artifact-based so a future migration to Azure Container Instances or GitHub Actions only changes the transport, not the pipeline contract.
+
+**Required environment variables (set via Replit Secrets, not in code):**
+- `UIPATH_REMOTE_RUNNER_URL` — base URL of the runner (e.g. `https://win-runner.internal/`). When unset the dispatch path is disabled and the existing skip behavior applies.
+- `UIPATH_REMOTE_RUNNER_TOKEN` — bearer token used for `Authorization: Bearer …` on `/dispatch` and `/health`.
+
+**Optional tuning variables:**
+- `UIPATH_REMOTE_CLI_VERSION` (default `25.10.0`)
+- `UIPATH_REMOTE_CLI_LEGACY_VERSION` (default `22.10.0`)
+- `UIPATH_REMOTE_DOTNET_VERSION` (default `8.0`)
+- `UIPATH_REMOTE_HEALTH_TTL_MS` (default `30000`)
+- `UIPATH_REMOTE_HEALTH_PROBE_TIMEOUT_MS` (default `5000`)
+- `UIPATH_REMOTE_MAX_DISPATCH_WAIT_MS` (default `60000`)
+- `UIPATH_REMOTE_MAX_EXECUTION_MS` (default `180000`)
+- `UIPATH_REMOTE_RETRY_COUNT` (default `1`)
+- `UIPATH_REMOTE_BUSY_BEHAVIOR` — `queue` (default) or `fallback`
+- `UIPATH_REMOTE_DISPATCH_ON_DEGRADED` — `true` (default) or `false`
+
+**Health states:**
+- `healthy` — runner accepting jobs and returning results within latency budget; dispatch proceeds.
+- `degraded` — runner responding but slow / intermittent; dispatch proceeds by default (override with `UIPATH_REMOTE_DISPATCH_ON_DEGRADED=false`).
+- `busy` — runner at capacity; pipeline queues up to `maxDispatchWaitMs` (production default — preserves CLI authority on the dispatched run; setting `UIPATH_REMOTE_BUSY_BEHAVIOR=fallback` short-circuits to the hand-rolled packer).
+- `unreachable` — network-level failure to contact the runner; pipeline falls back with reason `cli_remote_unreachable`.
+- `misconfigured` — runner reachable but reports configuration error (wrong CLI/runtime version, auth failure); pipeline falls back with reason `cli_remote_misconfigured`.
+
+**How to check runner health:** `curl -H "Authorization: Bearer $UIPATH_REMOTE_RUNNER_TOKEN" $UIPATH_REMOTE_RUNNER_URL/health` — returns `{ "state": "healthy|degraded|busy|misconfigured" }`. The pipeline-side cache TTL is `UIPATH_REMOTE_HEALTH_TTL_MS` (default 30 s) so operational state changes propagate within that window without a per-job probe.
+
+**How to restart the runner:** RDP into the Windows VM and restart the `UiPath.RemoteRunner` Windows Service (or the equivalent process). The pipeline cache will mark the runner `unreachable` until the next probe TTL window passes.
+
+**Operational metrics (documentation requirement, not a quality gate):** observed median dispatch latency, p95 latency, and approximate per-run cost band (low/medium/high) should be captured by an operator after the runner has served a representative sample of runs and added here. These are intentionally documentation-only — the pipeline does not gate on them.
+
+**Escalation path:** when health is `degraded` / `unreachable` / `misconfigured` for > 15 minutes, the on-call operator restarts the runner; if still unhealthy, swap to a standby VM by repointing `UIPATH_REMOTE_RUNNER_URL`. The pipeline never blocks on the remote runner — it gracefully degrades to the existing skip path with the corresponding `cli_remote_*` mode in the run record and DHG.
+
+**Byte-fidelity invariant:** every dispatched run records `bundleHash → returnedArtifactHash → persistedArtifactHash` on the run record. A mismatch is a hard failure: the pipeline forces `packArtifactSource = fallback_adm_zip` for that run, ships the hand-rolled artifact, and preserves the full hash chain plus runner metadata under `cliRemoteRunner.byteFidelityFailure` for forensic review. The DHG cites the failure explicitly.
 
 ## External Dependencies
 - **AI Services**: Anthropic Claude, OpenAI, Google Gemini (via Replit AI Integrations)

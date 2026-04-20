@@ -437,6 +437,18 @@ export interface PipelineOutcomeReport {
   cliAnalyzerDefectCount?: number;
   cliPackSuccess?: boolean;
   cliProjectType?: import("./uipath-cli-validator").UiPathProjectType;
+  cliRunnerType?: import("./uipath-cli-validator").CliRunnerType;
+  cliPackArtifactSource?: import("./uipath-cli-validator").CliPackArtifactSource;
+  cliRemoteRunner?: {
+    runnerHealthState: import("./uipath-cli-remote-dispatch").RunnerHealthState;
+    dispatchPolicy: import("./uipath-cli-remote-dispatch").DispatchPolicy;
+    retryAttempts: number;
+    runner?: import("./uipath-cli-remote-dispatch").RunnerMetadata;
+    hashChain?: import("./uipath-cli-remote-dispatch").HashChain;
+    fallbackReason?: import("./uipath-cli-remote-dispatch").RemoteDispatchFallbackReason;
+    byteFidelityFailure?: import("./uipath-cli-remote-dispatch").ByteFidelityFailure;
+    errorMessage?: string;
+  };
   traceabilityManifest?: TraceabilityManifest;
   reachabilityPruning?: Array<{ file: string; action: "removed" | "retained"; reason: string }>;
   infrastructureRenameRecords?: Array<{ originalName: string; renamedName: string; reason: string; affectedReferences: string[] }>;
@@ -854,6 +866,19 @@ function buildDhgFromBuildResult(
       cliProjectType: cliValidationResultForDhg?.compatibility.projectType,
       cliAnalyzerDefectCount: cliValidationResultForDhg?.analyzeResult?.defects.length,
       cliPackSuccess: cliValidationResultForDhg?.packResult?.success,
+      cliRunnerType: cliValidationResultForDhg?.cliRunnerType,
+      cliPackArtifactSource: cliValidationResultForDhg?.packArtifactSource,
+      cliRemoteRunner: cliValidationResultForDhg?.remote
+        ? {
+            runnerHealthState: cliValidationResultForDhg.remote.runnerHealthState,
+            runnerId: cliValidationResultForDhg.remote.runner?.runnerId,
+            runnerVersion: cliValidationResultForDhg.remote.runner?.runnerVersion,
+            cliVersionUsed: cliValidationResultForDhg.remote.runner?.cliVersionUsed,
+            retryAttempts: cliValidationResultForDhg.remote.retryAttempts,
+            fallbackReason: cliValidationResultForDhg.remote.fallbackReason,
+            byteFidelityFailed: !!cliValidationResultForDhg.remote.byteFidelityFailure,
+          }
+        : undefined,
       traceabilityManifest: traceabilityManifest || undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
@@ -1779,17 +1804,52 @@ export async function compilePackageFromSpecs(
       const cliCompat = checkCliCompatibility(projectJsonForCli);
 
       if (!cliCompat.isCompatible) {
-        console.log(`[Pipeline] CLI validation skipped: ${cliCompat.reason}`);
-        cliValidationResult = {
-          mode: "cli_skipped_incompatible_agent",
-          compatibility: cliCompat,
-          dotnetAvailable: false,
-          cliAvailable: false,
-          durationMs: 0,
-        };
-        tracker.complete("cli_validation", `CLI validation skipped: incompatible agent for ${cliCompat.projectType} project`, {
-          mode: "cli_skipped_incompatible_agent",
+        // Task #549: even when local agent is incompatible we still call
+        // runCliValidation so the remote Windows dispatch path (when
+        // configured) gets a chance to run before we record a hard skip.
+        //
+        // The `persistArtifact` callback below is the real persistence
+        // boundary: it stores the runner-returned `.nupkg` as the buffer
+        // that the pipeline will actually ship, and returns those exact
+        // bytes so the dispatcher hashes the shipped-artifact identity
+        // (returnedArtifactHash vs persistedArtifactHash). On a hash
+        // mismatch the dispatcher refuses the artifact and we keep
+        // finalPackageBuffer as the hand-rolled fallback.
+        let remoteShippedBuffer: Buffer | null = null;
+        cliValidationResult = await runCliValidation(
+          projectJsonForCli,
+          finalXamlEntries,
+          options?.onProgress,
+          {
+            persistArtifactOverride: async (returnedBytes: Buffer) => {
+              remoteShippedBuffer = Buffer.from(returnedBytes);
+              return remoteShippedBuffer;
+            },
+          },
+        );
+        const summary = formatCliValidationSummary(cliValidationResult);
+        console.log(`[Pipeline] CLI validation result (incompat-local path):\n${summary}`);
+        // Authoritative artifact handoff: only ship the remote runner's
+        // bytes when the remote run succeeded end-to-end (mode is
+        // cli_remote_windows AND byte-fidelity passed). On any other
+        // outcome (skip / unreachable / busy / timeout / retry exhausted
+        // / byte_fidelity_failure / invocation error) we keep the
+        // existing finalPackageBuffer (the hand-rolled fallback).
+        if (
+          cliValidationResult.mode === "cli_remote_windows" &&
+          cliValidationResult.packArtifactSource === "uipcli" &&
+          remoteShippedBuffer
+        ) {
+          finalPackageBuffer = remoteShippedBuffer;
+          console.log(
+            `[Pipeline] Shipping remote-runner .nupkg (${finalPackageBuffer.length} bytes, persistedHash=${cliValidationResult.remote?.hashChain?.persistedArtifactHash})`,
+          );
+        }
+        tracker.complete("cli_validation", `CLI validation: ${cliValidationResult.mode}`, {
+          mode: cliValidationResult.mode,
           projectType: cliCompat.projectType,
+          cliRunnerType: cliValidationResult.cliRunnerType,
+          packArtifactSource: cliValidationResult.packArtifactSource,
         });
       } else {
         cliValidationResult = await runCliValidation(projectJsonForCli, finalXamlEntries, options?.onProgress);
@@ -1884,6 +1944,11 @@ export async function compilePackageFromSpecs(
       buildResult.outcomeReport.cliProjectType = cliValidationResult.compatibility.projectType;
       buildResult.outcomeReport.cliAnalyzerDefectCount = cliValidationResult.analyzeResult?.defects.length;
       buildResult.outcomeReport.cliPackSuccess = cliValidationResult.packResult?.success;
+      buildResult.outcomeReport.cliRunnerType = cliValidationResult.cliRunnerType;
+      buildResult.outcomeReport.cliPackArtifactSource = cliValidationResult.packArtifactSource;
+      if (cliValidationResult.remote) {
+        buildResult.outcomeReport.cliRemoteRunner = { ...cliValidationResult.remote };
+      }
       const { formatCliValidationSummary: fmtSummary } = await import("./uipath-cli-validator");
       buildResult.outcomeReport.cliValidationSummary = fmtSummary(cliValidationResult);
     }

@@ -13,7 +13,20 @@ export type CliValidationMode =
   | "custom_validated_only"
   | "cli_validated"
   | "cli_skipped_incompatible_agent"
-  | "cli_failed";
+  | "cli_failed"
+  | "cli_remote_windows"
+  | "cli_remote_unreachable"
+  | "cli_remote_misconfigured"
+  | "cli_remote_busy_fallback"
+  | "cli_remote_degraded_fallback"
+  | "cli_remote_dispatch_timeout"
+  | "cli_remote_retry_exhausted"
+  | "cli_remote_byte_fidelity_failure"
+  | "cli_remote_invocation_error";
+
+export type CliRunnerType = "local_linux" | "remote_windows" | "none";
+
+export type CliPackArtifactSource = "uipcli" | "fallback_adm_zip" | "none";
 
 export interface CliAnalyzerDefect {
   ruleId: string;
@@ -60,6 +73,18 @@ export interface CliValidationResult {
   dotnetAvailable: boolean;
   cliAvailable: boolean;
   durationMs: number;
+  cliRunnerType: CliRunnerType;
+  packArtifactSource: CliPackArtifactSource;
+  remote?: {
+    runnerHealthState: import("./uipath-cli-remote-dispatch").RunnerHealthState;
+    dispatchPolicy: import("./uipath-cli-remote-dispatch").DispatchPolicy;
+    retryAttempts: number;
+    runner?: import("./uipath-cli-remote-dispatch").RunnerMetadata;
+    hashChain?: import("./uipath-cli-remote-dispatch").HashChain;
+    fallbackReason?: import("./uipath-cli-remote-dispatch").RemoteDispatchFallbackReason;
+    byteFidelityFailure?: import("./uipath-cli-remote-dispatch").ByteFidelityFailure;
+    errorMessage?: string;
+  };
 }
 
 export function detectCurrentRunner(): RunnerPlatform {
@@ -393,16 +418,38 @@ export async function runCliPack(
   }
 }
 
+export interface RunCliValidationOptions {
+  /** Optional override for the remote dispatch helper (for tests). */
+  remoteDispatchOverride?: typeof import("./uipath-cli-remote-dispatch");
+  env?: NodeJS.ProcessEnv;
+  /** Optional override for the persist-artifact step (for tests / alternative storage backends). */
+  persistArtifactOverride?: import("./uipath-cli-remote-dispatch").PersistArtifactFn;
+}
+
 export async function runCliValidation(
   projectJsonContent: string,
   xamlEntries: { name: string; content: string }[],
   onProgress?: (message: string) => void,
+  options?: RunCliValidationOptions,
 ): Promise<CliValidationResult> {
   const startTime = Date.now();
 
   const compatibility = checkCliCompatibility(projectJsonContent);
 
   if (!compatibility.isCompatible) {
+    // Task #549: when local runner is not compatible (typically Linux + Windows
+    // project), attempt remote Windows runner dispatch when configured.
+    const remoteOutcome = await tryRemoteWindowsDispatch(
+      projectJsonContent,
+      xamlEntries,
+      compatibility,
+      onProgress,
+      options,
+    );
+    if (remoteOutcome) {
+      return { ...remoteOutcome, durationMs: Date.now() - startTime };
+    }
+
     console.log(`[CLI Validator] Skipping CLI validation: ${compatibility.reason}`);
     if (onProgress) onProgress(`CLI validation skipped: incompatible agent for ${compatibility.projectType} project`);
 
@@ -412,6 +459,8 @@ export async function runCliValidation(
       dotnetAvailable: false,
       cliAvailable: false,
       durationMs: Date.now() - startTime,
+      cliRunnerType: "none",
+      packArtifactSource: "none",
     };
   }
 
@@ -426,6 +475,8 @@ export async function runCliValidation(
       dotnetAvailable: false,
       cliAvailable: false,
       durationMs: Date.now() - startTime,
+      cliRunnerType: "none",
+      packArtifactSource: "none",
     };
   }
 
@@ -440,6 +491,8 @@ export async function runCliValidation(
       dotnetAvailable: true,
       cliAvailable: false,
       durationMs: Date.now() - startTime,
+      cliRunnerType: "none",
+      packArtifactSource: "none",
     };
   }
 
@@ -459,6 +512,8 @@ export async function runCliValidation(
       dotnetAvailable: true,
       cliAvailable: true,
       durationMs: Date.now() - startTime,
+      cliRunnerType: "local_linux",
+      packArtifactSource: "none",
     };
   }
 
@@ -479,6 +534,8 @@ export async function runCliValidation(
       dotnetAvailable: true,
       cliAvailable: true,
       durationMs: Date.now() - startTime,
+      cliRunnerType: "local_linux",
+      packArtifactSource: "none",
     };
   }
 
@@ -496,6 +553,135 @@ export async function runCliValidation(
     dotnetAvailable: true,
     cliAvailable: true,
     durationMs: Date.now() - startTime,
+    cliRunnerType: "local_linux",
+    packArtifactSource: packResult.success ? "uipcli" : "none",
+  };
+}
+
+/**
+ * Task #549: dispatch the CLI step to a remote Windows runner when the local
+ * runner is incompatible (typically Linux + Windows/WindowsLegacy project) and
+ * the remote runner is configured via env vars. Returns null when no remote
+ * runner is configured (caller falls through to the existing skip path).
+ */
+async function tryRemoteWindowsDispatch(
+  projectJsonContent: string,
+  xamlEntries: { name: string; content: string }[],
+  compatibility: CliCompatibilityResult,
+  onProgress?: (message: string) => void,
+  options?: RunCliValidationOptions,
+): Promise<Omit<CliValidationResult, "durationMs"> | null> {
+  const dispatchModule = options?.remoteDispatchOverride ?? (await import("./uipath-cli-remote-dispatch"));
+  const env = options?.env ?? process.env;
+  const config = dispatchModule.loadRemoteRunnerConfig(env);
+  if (!config) return null;
+
+  // Use the module-shared, URL-keyed health checker so the TTL cache is
+  // effective across dispatched runs (per Task #549 acceptance: bounded
+  // cached health, not per-job re-probing).
+  const health = dispatchModule.getSharedHealthChecker(config, dispatchModule.defaultHealthProbe);
+
+  if (onProgress) {
+    onProgress(`CLI dispatch to remote Windows runner (${compatibility.projectType})`);
+  }
+  console.log(
+    `[CLI Validator] Remote Windows dispatch: project=${compatibility.projectType}, runner=${config.url}`,
+  );
+
+  // Real persistence-boundary byte-fidelity step: write the runner-returned
+  // bytes to a tmp file, read them back, and return the bytes that were
+  // actually round-tripped through the filesystem. The dispatcher hashes both
+  // ends and forces fallback packaging on mismatch.
+  const persistArtifact =
+    options?.persistArtifactOverride ??
+    (async (returnedBytes: Buffer) => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+      const { randomUUID } = await import("crypto");
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "uipcli-remote-"));
+      const file = path.join(dir, `dispatch-${randomUUID()}.nupkg`);
+      await fs.writeFile(file, returnedBytes);
+      return await fs.readFile(file);
+    });
+
+  const outcome = await dispatchModule.dispatchToWindowsRunner({
+    config,
+    projectJson: projectJsonContent,
+    xamlEntries,
+    projectType: compatibility.projectType,
+    cliFlavor: compatibility.requiredCliFlavor,
+    health,
+    persistArtifact,
+    onProgress,
+  });
+
+  const remoteCommon = {
+    runnerHealthState: outcome.runnerHealthState,
+    dispatchPolicy: outcome.dispatchPolicy,
+    retryAttempts: outcome.retryAttempts,
+    runner: outcome.response?.runner,
+    hashChain: outcome.hashChain,
+    fallbackReason: outcome.fallbackReason,
+    byteFidelityFailure: outcome.byteFidelityFailure,
+    errorMessage: outcome.errorMessage,
+  };
+
+  if (!outcome.ok) {
+    const fallbackToMode: Record<
+      NonNullable<typeof outcome.fallbackReason>,
+      CliValidationMode
+    > = {
+      remote_runner_not_configured: "cli_skipped_incompatible_agent",
+      cli_remote_unreachable: "cli_remote_unreachable",
+      cli_remote_misconfigured: "cli_remote_misconfigured",
+      cli_remote_busy_fallback: "cli_remote_busy_fallback",
+      cli_remote_degraded_fallback: "cli_remote_degraded_fallback",
+      cli_remote_dispatch_timeout: "cli_remote_dispatch_timeout",
+      cli_remote_retry_exhausted: "cli_remote_retry_exhausted",
+      cli_remote_byte_fidelity_failure: "cli_remote_byte_fidelity_failure",
+      cli_remote_invocation_error: "cli_remote_invocation_error",
+    };
+    const mode = outcome.fallbackReason
+      ? fallbackToMode[outcome.fallbackReason]
+      : "cli_skipped_incompatible_agent";
+
+    console.warn(
+      `[CLI Validator] Remote dispatch failed: mode=${mode}, reason=${outcome.fallbackReason}, detail=${outcome.errorMessage ?? ""}`,
+    );
+
+    // Byte-fidelity failure: the runner artifact is rejected and the pipeline
+    // ships the hand-rolled fallback artifact for this run. Surface that on
+    // the result so downstream telemetry/DHG can cite it.
+    const packArtifactSource: CliPackArtifactSource =
+      outcome.fallbackReason === "cli_remote_byte_fidelity_failure" ? "fallback_adm_zip" : "none";
+
+    return {
+      mode,
+      compatibility,
+      dotnetAvailable: false,
+      cliAvailable: false,
+      cliRunnerType: "none",
+      packArtifactSource,
+      remote: remoteCommon,
+    };
+  }
+
+  const response = outcome.response!;
+  const analyzeErrors = response.analyzeResult.defects.filter(d => d.severity === "Error").length;
+  const cliPassed =
+    (response.analyzeResult.success || analyzeErrors === 0) && response.packResult.success;
+
+  return {
+    mode: cliPassed ? "cli_remote_windows" : "cli_failed",
+    compatibility,
+    analyzeResult: response.analyzeResult,
+    packResult: response.packResult,
+    dotnetAvailable: true,
+    cliAvailable: true,
+    cliRunnerType: "remote_windows",
+    packArtifactSource: response.packResult.success ? "uipcli" : "none",
+    remote: remoteCommon,
   };
 }
 
@@ -542,6 +728,34 @@ export function formatCliValidationSummary(result: CliValidationResult): string 
       for (const e of result.packResult.errors.slice(0, 5)) {
         lines.push(`  Error: ${e}`);
       }
+    }
+  }
+
+  lines.push(`Runner Type: ${result.cliRunnerType}`);
+  lines.push(`Pack Artifact Source: ${result.packArtifactSource}`);
+  if (result.remote) {
+    lines.push(`Remote Health State: ${result.remote.runnerHealthState}`);
+    lines.push(`Remote Retry Attempts: ${result.remote.retryAttempts}`);
+    if (result.remote.runner) {
+      lines.push(
+        `Remote Runner: id=${result.remote.runner.runnerId}, version=${result.remote.runner.runnerVersion}, cli=${result.remote.runner.cliVersionUsed}, dotnet=${result.remote.runner.dotnetVersionUsed}, exit=${result.remote.runner.exitCode}, ms=${result.remote.runner.wallClockMs}`,
+      );
+    }
+    if (result.remote.hashChain) {
+      const hc = result.remote.hashChain;
+      lines.push(
+        `Hash Chain: bundle=${hc.bundleHash}${hc.returnedArtifactHash ? `, returned=${hc.returnedArtifactHash}` : ""}${hc.persistedArtifactHash ? `, persisted=${hc.persistedArtifactHash}` : ""}`,
+      );
+    }
+    if (result.remote.fallbackReason) {
+      lines.push(`Remote Fallback Reason: ${result.remote.fallbackReason}`);
+    }
+    if (result.remote.byteFidelityFailure) {
+      const bf = result.remote.byteFidelityFailure;
+      lines.push(`Byte Fidelity Failure: returned=${bf.returnedArtifactHash} vs persisted=${bf.persistedArtifactHash}`);
+    }
+    if (result.remote.errorMessage) {
+      lines.push(`Remote Error: ${result.remote.errorMessage}`);
     }
   }
 

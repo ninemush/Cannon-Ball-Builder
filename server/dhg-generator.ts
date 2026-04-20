@@ -118,6 +118,17 @@ export interface DhgContext {
   cliProjectType?: UiPathProjectType;
   cliAnalyzerDefectCount?: number;
   cliPackSuccess?: boolean;
+  cliRunnerType?: import("./uipath-cli-validator").CliRunnerType;
+  cliPackArtifactSource?: import("./uipath-cli-validator").CliPackArtifactSource;
+  cliRemoteRunner?: {
+    runnerHealthState: import("./uipath-cli-remote-dispatch").RunnerHealthState;
+    runnerId?: string;
+    runnerVersion?: string;
+    cliVersionUsed?: string;
+    retryAttempts: number;
+    fallbackReason?: import("./uipath-cli-remote-dispatch").RemoteDispatchFallbackReason;
+    byteFidelityFailed: boolean;
+  };
   traceabilityManifest?: TraceabilityManifest;
 }
 
@@ -358,14 +369,29 @@ export function generateDhgFromOutcomeReport(
   if (context.cliValidationMode) {
     const cliModeLabels: Record<string, string> = {
       "custom_validated_only": "Custom Validated Only (CLI not available)",
-      "cli_validated": "CLI Validated (authoritative)",
+      "cli_validated": "CLI Validated (authoritative, local Linux runner)",
       "cli_skipped_incompatible_agent": "CLI Skipped (incompatible agent)",
       "cli_failed": "CLI Failed",
+      "cli_remote_windows": "CLI Validated (authoritative, remote Windows runner)",
+      "cli_remote_unreachable": "CLI Skipped (remote Windows runner unreachable)",
+      "cli_remote_misconfigured": "CLI Skipped (remote Windows runner misconfigured)",
+      "cli_remote_busy_fallback": "CLI Skipped (remote Windows runner busy)",
+      "cli_remote_degraded_fallback": "CLI Skipped (remote Windows runner degraded)",
+      "cli_remote_dispatch_timeout": "CLI Skipped (remote dispatch exceeded timeout)",
+      "cli_remote_retry_exhausted": "CLI Skipped (remote dispatch retries exhausted)",
+      "cli_remote_byte_fidelity_failure": "CLI Skipped (remote artifact byte-fidelity failure)",
+      "cli_remote_invocation_error": "CLI Skipped (remote runner invocation error)",
     };
     const cliLabel = cliModeLabels[context.cliValidationMode] || context.cliValidationMode;
     md += `**CLI Validation:** ${cliLabel}`;
     if (context.cliProjectType) {
       md += ` | Project Type: ${context.cliProjectType}`;
+    }
+    if (context.cliRunnerType) {
+      md += ` | Runner: ${context.cliRunnerType}`;
+    }
+    if (context.cliPackArtifactSource) {
+      md += ` | Pack Source: ${context.cliPackArtifactSource}`;
     }
     if (context.cliAnalyzerDefectCount !== undefined) {
       md += ` | Analyzer Defects: ${context.cliAnalyzerDefectCount}`;
@@ -375,10 +401,32 @@ export function generateDhgFromOutcomeReport(
     }
     md += `\n`;
 
+    if (context.cliRemoteRunner) {
+      const r = context.cliRemoteRunner;
+      const rid = r.runnerId ? `${r.runnerId}${r.runnerVersion ? `@${r.runnerVersion}` : ""}` : "unconfigured";
+      md += `**Remote Windows Runner:** ${rid} | Health: ${r.runnerHealthState} | Retries: ${r.retryAttempts}`;
+      if (r.cliVersionUsed) md += ` | CLI: ${r.cliVersionUsed}`;
+      if (r.fallbackReason) md += ` | Fallback: ${r.fallbackReason}`;
+      if (r.byteFidelityFailed) md += ` | Byte-Fidelity: FAILED`;
+      md += `\n`;
+    }
+
     if (context.cliValidationMode === "cli_skipped_incompatible_agent") {
-      md += `\n> **Note:** CLI authoritative validation was skipped because the current runner is not compatible with the project type (${context.cliProjectType || "unknown"}). This package has been validated with custom validators only. Full CLI validation requires a ${context.cliProjectType === "CrossPlatform" ? "Linux or Windows" : "Windows"} runner.\n`;
+      md += `\n> **Note:** CLI authoritative validation was skipped because the current runner is not compatible with the project type (${context.cliProjectType || "unknown"}) and no remote Windows runner is configured. This package has been validated with custom validators only. Full CLI validation requires a ${context.cliProjectType === "CrossPlatform" ? "Linux or Windows" : "Windows"} runner.\n`;
     } else if (context.cliValidationMode === "cli_failed") {
       md += `\n> **Warning:** UiPath CLI validation failed. The package may have issues that require attention. Review the CLI analyzer defects below.\n`;
+    } else if (context.cliValidationMode === "cli_remote_byte_fidelity_failure") {
+      md += `\n> **Warning:** The .nupkg returned by the remote Windows runner did not match the persisted artifact byte-for-byte. The pipeline forced a fallback packaging path; the failed remote artifact was not shipped. The full hash chain is preserved on the run record under \`cliRemoteRunner.byteFidelityFailure\`.\n`;
+    } else if (
+      context.cliValidationMode === "cli_remote_unreachable" ||
+      context.cliValidationMode === "cli_remote_misconfigured" ||
+      context.cliValidationMode === "cli_remote_busy_fallback" ||
+      context.cliValidationMode === "cli_remote_degraded_fallback" ||
+      context.cliValidationMode === "cli_remote_dispatch_timeout" ||
+      context.cliValidationMode === "cli_remote_retry_exhausted" ||
+      context.cliValidationMode === "cli_remote_invocation_error"
+    ) {
+      md += `\n> **Note:** Remote Windows runner dispatch did not produce a CLI verdict (${context.cliRemoteRunner?.fallbackReason || "unknown reason"}). The pipeline gracefully degraded to fallback packaging. See the runbook in \`replit.md\` for the runner health-state semantics and escalation path.\n`;
     }
   }
 
