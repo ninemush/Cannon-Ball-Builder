@@ -309,6 +309,33 @@ export interface StructuralPreservationMetrics {
   preservedStructures: string[];
   studioLoadable?: boolean;
   studioLoadableNote?: string;
+  /**
+   * Task #543: per-leaf-stub diagnostics. Surfaces every silent leaf
+   * stub-out as a structured entry in the pipeline outcome report so
+   * regressions where real business logic is replaced by a stub are
+   * visible in the verification bundle.
+   */
+  leafStubs?: Array<{
+    tag: string;
+    displayName?: string;
+    activityPath: string;
+    startLine: number;
+    endLine: number;
+    originalExpressionHash: string;
+    check: string;
+    reason: string;
+  }>;
+  /**
+   * Task #543: wrapper-level TODO-attribute strip diagnostics that
+   * accompanied this leaf-stub recovery pass.
+   */
+  wrapperAttributeStrips?: Array<{
+    tag: string;
+    attribute: string;
+    valuePreview: string;
+    line: number;
+    reason: string;
+  }>;
 }
 
 export type StudioCompatibilityLevel = "studio-clean" | "studio-warnings" | "studio-blocked";

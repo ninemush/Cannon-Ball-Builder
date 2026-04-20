@@ -4759,6 +4759,11 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const crossFamilyDriftViolationsList: Array<{ clusterId: string; lockedFamily: string; violatingArtifact: string; violationType: string; detail: string; packageFatal: boolean }> = [];
     const allPolicyBlocked: Array<{ file: string; activities: string[] }> = [];
     const collectedQualityIssues: DhgQualityIssue[] = [];
+    // Task #543: declared up here (instead of right before outcome-report
+    // assembly) so `tryStructuralPreservationOrStub` — which runs much
+    // earlier in the pipeline — can append per-file metrics, including
+    // the new leaf-stub diagnostics, without TDZ errors.
+    const structuralPreservationMetrics: StructuralPreservationMetrics[] = [];
     const priorCompliantWorkflows = pkg.internal?.priorCompliantWorkflows || [];
     const priorCompliantMap = new Map<string, string>();
     if (priorCompliantWorkflows.length > 0) {
@@ -5139,7 +5144,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       const spResult = preserveStructureAndStubLeaves(
         rawXaml,
         [{ file: `${wfName}.xaml`, check: "compliance-crash", detail: `Compliance transform failed: ${compErrMessage}` }],
-        { isMainXaml: wfName === "Main" || wfName === "Process" },
+        { isMainXaml: wfName === "Main" || wfName === "Process", file: `${wfName}.xaml` },
       );
       if (spResult.diagnostics && spResult.diagnostics.length > 0) {
         for (const d of spResult.diagnostics) {
@@ -5151,6 +5156,63 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           });
         }
         console.log(`[UiPath] Structural preservation emitted ${spResult.diagnostics.length} wrapper-attribute diagnostic(s) for "${wfName}"`);
+      }
+      // Task #543: every leaf-stub event becomes a structured diagnostic
+      // (file, activity path, original-expression hash, reason) so silent
+      // stub-outs are visible in the pipeline outcome report and the
+      // verification bundle (outcome-report.json).
+      if (spResult.leafStubDiagnostics && spResult.leafStubDiagnostics.length > 0) {
+        for (const d of spResult.leafStubDiagnostics) {
+          collectedQualityIssues.push({
+            severity: "warning",
+            file: `${wfName}.xaml`,
+            check: `structural-preservation:leaf-stubbed`,
+            detail: `[${d.tag}${d.displayName ? ` "${d.displayName}"` : ""} @ ${d.activityPath}] hash=${d.originalExpressionHash} cause=${d.check} — ${d.reason}`,
+          });
+        }
+        console.log(`[UiPath] Structural preservation stubbed ${spResult.leafStubDiagnostics.length} leaf activity/activities for "${wfName}" — see outcome-report.structuralPreservationMetrics[].leafStubs`);
+      }
+      // Task #543: append per-file structural-preservation metrics so the
+      // outcome report carries the full, structured ledger of what was
+      // preserved vs. stubbed (the pipeline outcome report previously
+      // declared this array but never populated it from the runtime call
+      // sites — the leaf-stub regressions were therefore invisible).
+      if (
+        spResult.parseableXml &&
+        (
+          spResult.stubbedActivities > 0 ||
+          (spResult.diagnostics?.length ?? 0) > 0 ||
+          (spResult.leafStubDiagnostics?.length ?? 0) > 0
+        )
+      ) {
+        structuralPreservationMetrics.push({
+          file: `${wfName}.xaml`,
+          totalActivities: spResult.totalActivities,
+          preservedActivities: spResult.preservedActivities,
+          stubbedActivities: spResult.stubbedActivities,
+          preservedStructures: spResult.preservedStructures,
+          leafStubs: spResult.leafStubDiagnostics && spResult.leafStubDiagnostics.length > 0
+            ? spResult.leafStubDiagnostics.map(d => ({
+                tag: d.tag,
+                displayName: d.displayName,
+                activityPath: d.activityPath,
+                startLine: d.startLine,
+                endLine: d.endLine,
+                originalExpressionHash: d.originalExpressionHash,
+                check: d.check,
+                reason: d.reason,
+              }))
+            : undefined,
+          wrapperAttributeStrips: spResult.diagnostics && spResult.diagnostics.length > 0
+            ? spResult.diagnostics.map(d => ({
+                tag: d.tag,
+                attribute: d.attribute,
+                valuePreview: d.valuePreview,
+                line: d.line,
+                reason: d.reason,
+              }))
+            : undefined,
+        });
       }
       if (spResult.preserved || spResult.parseableXml) {
         console.log(`[UiPath] Structural preservation succeeded for "${wfName}" after compliance failure: ${spResult.preservedActivities} preserved, ${spResult.stubbedActivities} stubbed`);
@@ -7908,7 +7970,9 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       }
     }
     const outcomeAutoRepairs: AutoRepairEntry[] = [...placeholderCleanupRepairs];
-    const structuralPreservationMetrics: StructuralPreservationMetrics[] = [];
+    // Task #543: `structuralPreservationMetrics` is declared earlier (near
+    // `collectedQualityIssues`) so `tryStructuralPreservationOrStub` can
+    // append entries during emission. Do not redeclare here.
 
     function mapCheckToRemediationCode(check: string): RemediationCode {
       const codeMap: Record<string, RemediationCode> = {

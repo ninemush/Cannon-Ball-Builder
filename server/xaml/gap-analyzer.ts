@@ -633,6 +633,31 @@ export interface StructuralPreservationResult {
     line: number;
     reason: string;
   }>;
+  /**
+   * Task #543: per-leaf-stub diagnostics. Every time a leaf activity is
+   * replaced with a stub comment, an entry is emitted here so the silent
+   * stub-out becomes a visible warning rather than a hidden behavior change.
+   * The caller is responsible for tagging `file` when forwarding these to
+   * `collectedQualityIssues` / `PipelineOutcomeReport`.
+   */
+  leafStubDiagnostics: Array<{
+    kind: "leaf-stubbed";
+    /**
+     * File the leaf belongs to. Populated when the caller passes
+     * `options.file`; otherwise inferred from `blockingIssues[0].file` so
+     * each event remains self-contained for downstream regression diffing
+     * (Task #543 review follow-up).
+     */
+    file?: string;
+    tag: string;
+    displayName?: string;
+    activityPath: string;
+    startLine: number;
+    endLine: number;
+    originalExpressionHash: string;
+    check: string;
+    reason: string;
+  }>;
 }
 
 const STRUCTURAL_ELEMENTS = new Set([
@@ -685,8 +710,15 @@ function countActivities(xamlContent: string): number {
 export function preserveStructureAndStubLeaves(
   xamlContent: string,
   blockingIssues: Array<{ file: string; check: string; detail: string }>,
-  options?: { isMainXaml?: boolean },
+  options?: { isMainXaml?: boolean; file?: string },
 ): StructuralPreservationResult {
+  // Task #543: derive a file label so leaf-stub diagnostics carry their
+  // own file context rather than relying solely on the enclosing metric
+  // entry — keeps each event self-contained for cross-run diffing.
+  const sourceFile: string | undefined =
+    options?.file
+    || (blockingIssues.find(b => !!b.file)?.file)
+    || undefined;
   const unparseableResult: StructuralPreservationResult = {
     content: xamlContent,
     preserved: false,
@@ -697,6 +729,7 @@ export function preserveStructureAndStubLeaves(
     stubbedDetails: [],
     preservedStructures: [],
     diagnostics: [],
+    leafStubDiagnostics: [],
   };
 
   try {
@@ -928,6 +961,7 @@ export function preserveStructureAndStubLeaves(
       stubbedDetails: [],
       preservedStructures: [...new Set(preservedStructures)],
       diagnostics: wrapperDiagnostics,
+      leafStubDiagnostics: [],
     };
   }
 
@@ -942,10 +976,21 @@ export function preserveStructureAndStubLeaves(
 
   let result = [...lines];
   const stubbedDetails: StructuralPreservationResult["stubbedDetails"] = [];
+  const leafStubDiagnostics: StructuralPreservationResult["leafStubDiagnostics"] = [];
 
   for (const stub of deduped) {
     const indent = result[stub.startLine].match(/^(\s*)/)?.[1] || "    ";
     const stubComment = `${indent}<ui:Comment Text="${escapeXml(`[STUB_STRUCTURAL_LEAF] Original: ${stub.tag}${stub.displayName ? ` (${stub.displayName})` : ''}. Check: ${stub.check} — ${stub.detail}`)}" DisplayName="${escapeXml(`Stub: ${stub.displayName || stub.tag}`)}" />`;
+
+    // Task #543: capture the original leaf source (before the stub
+    // overwrites it) and emit a structured diagnostic so every silent
+    // stub-out is visible in the pipeline outcome report and the
+    // verification bundle. The hash makes regressions detectable across
+    // runs without leaking the (potentially large/sensitive) original
+    // expression text into logs.
+    const originalLines = result.slice(stub.startLine, stub.endLine + 1).join("\n");
+    const originalExpressionHash = computeContentHash(originalLines);
+    const activityPath = `line:${stub.startLine + 1}-${stub.endLine + 1}/${stub.tag}${stub.displayName ? `[${stub.displayName}]` : ""}`;
 
     result = [
       ...result.slice(0, stub.startLine),
@@ -958,6 +1003,19 @@ export function preserveStructureAndStubLeaves(
       displayName: stub.displayName,
       reason: stub.detail,
       check: stub.check,
+    });
+
+    leafStubDiagnostics.push({
+      kind: "leaf-stubbed",
+      file: sourceFile,
+      tag: stub.tag,
+      displayName: stub.displayName,
+      activityPath,
+      startLine: stub.startLine + 1,
+      endLine: stub.endLine + 1,
+      originalExpressionHash,
+      check: stub.check,
+      reason: stub.detail || `Leaf <${stub.tag}> replaced with stub comment because check "${stub.check}" flagged it as blocking.`,
     });
   }
 
@@ -981,6 +1039,7 @@ export function preserveStructureAndStubLeaves(
         stubbedDetails: [],
         preservedStructures: [...new Set(preservedStructures)],
         diagnostics: wrapperDiagnostics,
+        leafStubDiagnostics: [],
       };
     }
   } catch {
@@ -994,6 +1053,7 @@ export function preserveStructureAndStubLeaves(
       stubbedDetails: [],
       preservedStructures: [...new Set(preservedStructures)],
       diagnostics: wrapperDiagnostics,
+      leafStubDiagnostics: [],
     };
   }
 
@@ -1007,6 +1067,7 @@ export function preserveStructureAndStubLeaves(
     stubbedDetails,
     preservedStructures: [...new Set(preservedStructures)],
     diagnostics: wrapperDiagnostics,
+    leafStubDiagnostics,
   };
 }
 

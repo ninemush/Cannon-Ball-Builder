@@ -554,6 +554,36 @@ export function generateDhgFromOutcomeReport(
       md += `| \`${m.file}\` | ${m.totalActivities} | ${m.preservedActivities} | ${m.stubbedActivities} | ${rate}% | ${loadableLabel} | ${structures} |\n`;
     }
     md += `\n`;
+    // Task #543: surface per-leaf-stub diagnostics in the developer
+    // handoff guide so silent stub-outs are visible to the reader of the
+    // outcome report (the JSON form lives in outcome-report.json inside
+    // the verification bundle).
+    const leafStubRows: Array<{ file: string; tag: string; displayName?: string; activityPath: string; check: string; hash: string; reason: string }> = [];
+    for (const m of report.structuralPreservationMetrics) {
+      for (const ls of m.leafStubs || []) {
+        leafStubRows.push({
+          file: m.file,
+          tag: ls.tag,
+          displayName: ls.displayName,
+          activityPath: ls.activityPath,
+          check: ls.check,
+          hash: ls.originalExpressionHash,
+          reason: ls.reason,
+        });
+      }
+    }
+    if (leafStubRows.length > 0) {
+      md += `#### Leaf-Stub Diagnostics (${leafStubRows.length})\n\n`;
+      md += `Each row records a leaf activity that was replaced with a stub comment by the structural-preservation recovery pass. The hash identifies the original-expression source so regressions can be detected across runs.\n\n`;
+      md += `| # | File | Activity | Path | Cause | Hash | Reason |\n`;
+      md += `|---|------|----------|------|-------|------|--------|\n`;
+      leafStubRows.forEach((r, i) => {
+        const label = r.displayName ? `\`${r.tag}\` "${r.displayName}"` : `\`${r.tag}\``;
+        const reasonShort = (r.reason || "").length > 100 ? r.reason.slice(0, 97) + "..." : r.reason;
+        md += `| ${i + 1} | \`${r.file}\` | ${label} | \`${r.activityPath}\` | \`${r.check}\` | \`${r.hash}\` | ${reasonShort.replace(/\|/g, "\\|")} |\n`;
+      });
+      md += `\n`;
+    }
     const nonLoadable = report.structuralPreservationMetrics.filter(m => m.studioLoadable === false);
     if (nonLoadable.length > 0) {
       md += `> **⚠ ${nonLoadable.length} structurally-preserved file(s) are not Studio-loadable** despite high preservation rates. `;
