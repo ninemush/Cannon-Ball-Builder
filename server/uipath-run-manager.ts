@@ -464,25 +464,120 @@ async function executeRun(
         // earliest possible boundary, before any expensive refinement
         // or XAML emission is attempted. Errors here are fatal; warnings
         // are recorded for the run ledger.
+        //
+        // Task #560 — when `SPEC_MERGE_AUTO_REPAIR` is on, a single
+        // bounded auto-repair pass runs between the first failure and the
+        // hard run failure. It can rewire orphans into the entry workflow
+        // or prune them, and fill missing required properties from a
+        // deterministic policy or a capped LLM repair call. Repair emits
+        // distinct `spec_merge_repair` SSE events (NOT a re-emit of
+        // `spec_merge: started`) so UI streaming logic doesn't
+        // double-render.
         try {
           const { validateSpecGraphAtMerge, validateSpecResolution } = await import("./spec-graph-validator");
-          const graphResult = validateSpecGraphAtMerge(packageJson);
-          const resolutionResult = validateSpecResolution(packageJson);
-          const allErrors = [...graphResult.errors, ...resolutionResult.errors];
-          const allWarnings = [...graphResult.warnings, ...resolutionResult.warnings];
+          const { runSpecMergeRepair } = await import("./spec-merge-repair");
+          const { isAutoRepairEnabled } = await import("./lib/feature-flags");
+
+          let graphResult = validateSpecGraphAtMerge(packageJson);
+          let resolutionResult = validateSpecResolution(packageJson);
+          let allErrors = [...graphResult.errors, ...resolutionResult.errors];
+          let allWarnings = [...graphResult.warnings, ...resolutionResult.warnings];
           if (allWarnings.length > 0) {
             console.warn(`[RunManager] Run ${runId}: spec_merge validation produced ${allWarnings.length} warning(s):\n  - ${allWarnings.join("\n  - ")}`);
           }
+
+          if (allErrors.length > 0 && isAutoRepairEnabled()) {
+            const taggedErrors = [...graphResult.taggedErrors, ...resolutionResult.taggedErrors];
+            const repairAbortController = new AbortController();
+            const onRunCancelledForRepair = (event: PipelineProgressEvent) => {
+              if (event.stage === "run_manager" && event.type === "failed") {
+                repairAbortController.abort();
+              }
+            };
+            activeRun.sseListeners.add(onRunCancelledForRepair);
+
+            runLogger.stageStart("spec_merge_repair");
+            pipelineProgressCallback({
+              type: "started",
+              stage: "spec_merge_repair",
+              message: `Auto-repair starting: ${taggedErrors.length} error(s) tagged across ${new Set(taggedErrors.map(e => e.class)).size} class(es)`,
+              context: { errorClasses: taggedErrors.map(e => e.class) },
+            });
+
+            try {
+              const { repairedPackage, record } = await runSpecMergeRepair({
+                pkg: packageJson,
+                taggedErrors,
+                abortSignal: repairAbortController.signal,
+                onLog: (msg) => console.log(`[RunManager] Run ${runId}: ${msg}`),
+              });
+
+              packageJson = repairedPackage;
+              packageJson._specMergeRepairRecord = record;
+
+              // Re-validate exactly once.
+              graphResult = validateSpecGraphAtMerge(packageJson);
+              resolutionResult = validateSpecResolution(packageJson);
+              allErrors = [...graphResult.errors, ...resolutionResult.errors];
+
+              const repairOutcomeContext = {
+                schemaVersion: record.schemaVersion,
+                attempted: record.attempted,
+                succeeded: record.succeeded,
+                durationMs: record.durationMs,
+                llmCallCount: record.llmCallCount,
+                llmCallCap: record.llmCallCap,
+                cancelled: record.cancelled,
+                orphanActions: record.orphanActions,
+                requiredPropertyActions: record.requiredPropertyActions.map(a => ({
+                  workflow: a.workflow,
+                  activityType: a.activityType,
+                  property: a.property,
+                  action: a.action,
+                  source: a.source,
+                  nonDeterministic: a.nonDeterministic,
+                })),
+                unrepairableErrorCount: record.unrepairableErrors.length,
+                scaffoldOverrunSignal: record.scaffoldOverrunSignal,
+                residualErrorCount: allErrors.length,
+              };
+
+              if (allErrors.length === 0) {
+                runLogger.stageEnd("spec_merge_repair", "succeeded", repairOutcomeContext);
+                pipelineProgressCallback({
+                  type: "completed",
+                  stage: "spec_merge_repair",
+                  message: `Auto-repair succeeded: ${record.orphanActions.length} orphan action(s), ${record.requiredPropertyActions.length} property fill(s), ${record.llmCallCount} LLM call(s) of ${record.llmCallCap}`,
+                  context: repairOutcomeContext,
+                });
+              } else {
+                runLogger.stageEnd("spec_merge_repair", "failed", repairOutcomeContext, `${allErrors.length} residual error(s) after repair`);
+                pipelineProgressCallback({
+                  type: "failed",
+                  stage: "spec_merge_repair",
+                  message: `Auto-repair did not eliminate all errors: ${allErrors.length} residual`,
+                  context: repairOutcomeContext,
+                });
+              }
+            } finally {
+              activeRun.sseListeners.delete(onRunCancelledForRepair);
+            }
+          }
+
           if (allErrors.length > 0) {
             const summary = `Spec graph/resolution validation failed at spec_merge: ${allErrors.join("; ")}`;
+            const repairCtx = packageJson._specMergeRepairRecord
+              ? { repairAttempted: true, repairRecord: packageJson._specMergeRepairRecord }
+              : { repairAttempted: false };
             runLogger.stageEnd("spec_merge", "failed", {
               workflowCount: packageJson.workflows.length,
               cycles: graphResult.cycles,
               orphans: graphResult.orphans,
               unresolvedInvocations: graphResult.unresolvedInvocations,
               unknownActivities: resolutionResult.unknownActivities,
+              ...repairCtx,
             }, summary);
-            pipelineProgressCallback({ type: "failed", stage: "spec_merge", message: summary });
+            pipelineProgressCallback({ type: "failed", stage: "spec_merge", message: summary, context: repairCtx });
             throw new RunError(summary, "spec_validation");
           }
         } catch (err: any) {

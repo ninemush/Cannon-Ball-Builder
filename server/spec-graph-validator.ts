@@ -29,17 +29,77 @@ import type { UiPathPackageSpec } from "./types/uipath-package";
 import { catalogService } from "./catalog/catalog-service";
 import { normalizeWorkflowName } from "./workflow-name-utils";
 
+/**
+ * Task #560 Step 1 — structured merge-validator error tagging.
+ *
+ * Every error surfaced by the spec-merge validators is tagged with a
+ * machine-readable `class` and the upstream pipeline stage that originated
+ * the structural condition, so the run manager and the auto-repair pass
+ * can branch on shape rather than parse free-text messages.
+ *
+ * `class` values:
+ *   - "orphan"                  — workflow unreachable from entry
+ *   - "cycle"                   — invocation cycle detected
+ *   - "unresolved-invocation"   — InvokeWorkflowFile target not declared
+ *   - "unknown-activity"        — activity type not in catalog
+ *   - "unresolved-prefix"       — namespace prefix not in catalog
+ *   - "unresolved-package"      — activity has no derivable package
+ *   - "missing-required-property" — required prop absent (no catalog default)
+ *   - "argument-contract"       — invocation argument bindings unsatisfiable
+ *   - "other"                   — anything else
+ *
+ * `originatedAtStage` values:
+ *   - "scaffold" — structural shape decided by the scaffold pass
+ *     (orphans, cycles, unresolved invocations, argument-contract)
+ *   - "detail"   — structural shape decided by per-workflow detail
+ *     emission (unknown-activity, missing-required-property, prefix/package)
+ *   - "unknown"  — cannot be attributed
+ */
+export type SpecMergeErrorClass =
+  | "orphan"
+  | "cycle"
+  | "unresolved-invocation"
+  | "unknown-activity"
+  | "unresolved-prefix"
+  | "unresolved-package"
+  | "missing-required-property"
+  | "argument-contract"
+  | "other";
+
+export type SpecMergeErrorOriginStage = "scaffold" | "detail" | "unknown";
+
+export interface TaggedSpecMergeError {
+  class: SpecMergeErrorClass;
+  originatedAtStage: SpecMergeErrorOriginStage;
+  message: string;
+  /**
+   * Class-specific payload so consumers can branch without re-parsing the
+   * message. Shape varies by `class`; readers should narrow on `class`
+   * before reading fields.
+   */
+  detail?: {
+    workflow?: string;
+    target?: string;
+    caller?: string;
+    activityType?: string;
+    property?: string;
+    prefix?: string;
+  };
+}
+
 export interface SpecGraphValidationResult {
   errors: string[];
   warnings: string[];
   cycles: string[];
   orphans: string[];
   unresolvedInvocations: Array<{ caller: string; target: string }>;
+  taggedErrors: TaggedSpecMergeError[];
 }
 
 export interface SpecResolutionValidationResult {
   errors: string[];
   warnings: string[];
+  taggedErrors: TaggedSpecMergeError[];
   unknownActivities: Array<{ workflow: string; activityType: string }>;
   unresolvedInvocationTargets: Array<{ workflow: string; target: string }>;
   unresolvedPrefixes: Array<{ workflow: string; activityType: string; prefix: string }>;
@@ -184,10 +244,11 @@ export function validateSpecGraphAtMerge(pkg: UiPathPackageSpec): SpecGraphValid
   const orphans: string[] = [];
   const unresolvedInvocations: Array<{ caller: string; target: string }> = [];
 
+  const taggedErrors: TaggedSpecMergeError[] = [];
   const workflows = pkg.workflows || [];
   if (workflows.length === 0) {
     warnings.push("Spec contains zero workflows — graph validation skipped");
-    return { errors, warnings, cycles, orphans, unresolvedInvocations };
+    return { errors, warnings, cycles, orphans, unresolvedInvocations, taggedErrors };
   }
 
   const normalizedWorkflowKeys = new Set<string>();
@@ -267,16 +328,34 @@ export function validateSpecGraphAtMerge(pkg: UiPathPackageSpec): SpecGraphValid
   }
 
   for (const cycle of cycles) {
-    errors.push(`Circular invocation detected: ${cycle}`);
+    const msg = `Circular invocation detected: ${cycle}`;
+    errors.push(msg);
+    taggedErrors.push({ class: "cycle", originatedAtStage: "scaffold", message: msg });
   }
   if (orphans.length > 0) {
-    errors.push(`${orphans.length} orphan workflow(s) unreachable from entry workflow: ${orphans.join(", ")}`);
+    const summaryMsg = `${orphans.length} orphan workflow(s) unreachable from entry workflow: ${orphans.join(", ")}`;
+    errors.push(summaryMsg);
+    for (const orphanName of orphans) {
+      taggedErrors.push({
+        class: "orphan",
+        originatedAtStage: "scaffold",
+        message: `Workflow "${orphanName}" is unreachable from the entry workflow`,
+        detail: { workflow: orphanName },
+      });
+    }
   }
   for (const u of unresolvedInvocations) {
-    errors.push(`Unresolved InvokeWorkflowFile target in "${u.caller}": "${u.target}" does not match any workflow declared in the spec`);
+    const msg = `Unresolved InvokeWorkflowFile target in "${u.caller}": "${u.target}" does not match any workflow declared in the spec`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "unresolved-invocation",
+      originatedAtStage: "scaffold",
+      message: msg,
+      detail: { caller: u.caller, target: u.target },
+    });
   }
 
-  return { errors, warnings, cycles, orphans, unresolvedInvocations };
+  return { errors, warnings, cycles, orphans, unresolvedInvocations, taggedErrors };
 }
 
 /**
@@ -308,10 +387,11 @@ export function validateSpecResolution(pkg: UiPathPackageSpec): SpecResolutionVa
   const derivedPackageSet = new Set<string>();
   const unresolvedPackageDependencies: Array<{ workflow: string; activityType: string }> = [];
 
+  const taggedErrors: TaggedSpecMergeError[] = [];
   const workflows = pkg.workflows || [];
   if (workflows.length === 0) {
     warnings.push("Spec contains zero workflows — resolution validation skipped");
-    return { errors, warnings, unknownActivities, unresolvedInvocationTargets, unresolvedPrefixes, missingRequiredProperties, derivedPackages: [], unresolvedPackageDependencies, catalogChecked: false };
+    return { errors, warnings, taggedErrors, unknownActivities, unresolvedInvocationTargets, unresolvedPrefixes, missingRequiredProperties, derivedPackages: [], unresolvedPackageDependencies, catalogChecked: false };
   }
 
   const normalizedWorkflowKeys = new Set<string>(workflows.map(w => normalizeWorkflowName(w.name || "")).filter(Boolean));
@@ -443,7 +523,14 @@ export function validateSpecResolution(pkg: UiPathPackageSpec): SpecResolutionVa
   }
 
   for (const u of unresolvedInvocationTargets) {
-    errors.push(`Unresolved invocation target in "${u.workflow}": "${u.target}" does not match any workflow in the spec`);
+    const msg = `Unresolved invocation target in "${u.workflow}": "${u.target}" does not match any workflow in the spec`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "unresolved-invocation",
+      originatedAtStage: "scaffold",
+      message: msg,
+      detail: { caller: u.workflow, target: u.target },
+    });
   }
   // Wave 1 acceptance: only checks that are deterministically structural
   // at spec_merge — and that no downstream refinement can legitimately
@@ -456,24 +543,52 @@ export function validateSpecResolution(pkg: UiPathPackageSpec): SpecResolutionVa
   // post-assembly repair, so it is surfaced as a warning and left to
   // the per-activity validator at catalog/spec-validator.ts.
   for (const u of unresolvedPrefixes) {
-    errors.push(`Activity "${u.activityType}" in "${u.workflow}" uses prefix "${u.prefix}" which does not resolve to any catalog package (deterministic package-derivation failure)`);
+    const msg = `Activity "${u.activityType}" in "${u.workflow}" uses prefix "${u.prefix}" which does not resolve to any catalog package (deterministic package-derivation failure)`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "unresolved-prefix",
+      originatedAtStage: "detail",
+      message: msg,
+      detail: { workflow: u.workflow, activityType: u.activityType, prefix: u.prefix },
+    });
   }
   for (const u of unknownActivities) {
-    errors.push(`Activity "${u.activityType}" in "${u.workflow}" is not present in the activity catalog (deterministic activity-existence failure)`);
+    const msg = `Activity "${u.activityType}" in "${u.workflow}" is not present in the activity catalog (deterministic activity-existence failure)`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "unknown-activity",
+      originatedAtStage: "detail",
+      message: msg,
+      detail: { workflow: u.workflow, activityType: u.activityType },
+    });
   }
   for (const u of unresolvedPackageDependencies) {
-    errors.push(`Activity "${u.activityType}" in "${u.workflow}" has no derivable package dependency (neither catalog schema nor prefix index resolved it)`);
+    const msg = `Activity "${u.activityType}" in "${u.workflow}" has no derivable package dependency (neither catalog schema nor prefix index resolved it)`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "unresolved-package",
+      originatedAtStage: "detail",
+      message: msg,
+      detail: { workflow: u.workflow, activityType: u.activityType },
+    });
   }
   // Task #556 Wave 1 — split required-property surfacing:
   //   - no catalog default → ERROR (cannot be deterministically filled)
   //   - catalog default     → WARNING (emission will contract-default-fill)
   for (const u of missingRequiredProperties) {
     if (!u.hasCatalogDefault) {
-      errors.push(`Activity "${u.activityType}" in "${u.workflow}" is missing required property "${u.property}" and the catalog defines no default for it (deterministic required-property failure)`);
+      const msg = `Activity "${u.activityType}" in "${u.workflow}" is missing required property "${u.property}" and the catalog defines no default for it (deterministic required-property failure)`;
+      errors.push(msg);
+      taggedErrors.push({
+        class: "missing-required-property",
+        originatedAtStage: "detail",
+        message: msg,
+        detail: { workflow: u.workflow, activityType: u.activityType, property: u.property },
+      });
     } else {
       warnings.push(`Activity "${u.activityType}" in "${u.workflow}" is missing required property "${u.property}" — catalog default will be applied at emission time`);
     }
   }
 
-  return { errors, warnings, unknownActivities, unresolvedInvocationTargets, unresolvedPrefixes, missingRequiredProperties, derivedPackages: Array.from(derivedPackageSet).sort(), unresolvedPackageDependencies, catalogChecked };
+  return { errors, warnings, taggedErrors, unknownActivities, unresolvedInvocationTargets, unresolvedPrefixes, missingRequiredProperties, derivedPackages: Array.from(derivedPackageSet).sort(), unresolvedPackageDependencies, catalogChecked };
 }
