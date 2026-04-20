@@ -63,8 +63,8 @@
       "delistedAt": "2026-04-10T14:57:38.910Z"
     },
     "UiPath.IntegrationService.Activities": {
-      "preferred": "1.24.0",
-      "lastVerifiedAt": "2026-04-20T06:47:52.059Z",
+      "preferred": "1.25.0",
+      "lastVerifiedAt": "2026-04-20T12:32:15.945Z",
       "verificationSource": "uipath-official-feed",
       "feedStatus": "active"
     },
@@ -890,7 +890,7 @@
   "minimumRequiredPackages": [
     "UiPath.System.Activities"
   ],
-  "lastRefreshedAt": "2026-04-20T06:47:52.059Z",
+  "lastRefreshedAt": "2026-04-20T12:32:38.595Z",
   "lastVerifiedAt": "2026-04-20T06:47:52.059Z",
   "sourceVersion": "1.0.0",
   "snapshotVersion": "1.0.0"

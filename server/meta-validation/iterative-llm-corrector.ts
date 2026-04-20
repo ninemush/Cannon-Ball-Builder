@@ -38,6 +38,7 @@ const FIXABLE_QG_CHECKS = new Set([
 ]);
 
 const CLI_RULE_TO_CHECK: Record<string, string> = {
+  // Namespace / naming hygiene (ST-NMG-*)
   "ST-NMG-001": "cli-namespace-error",
   "ST-NMG-002": "cli-namespace-error",
   "ST-NMG-004": "cli-namespace-error",
@@ -45,22 +46,37 @@ const CLI_RULE_TO_CHECK: Record<string, string> = {
   "ST-NMG-006": "cli-namespace-error",
   "ST-NMG-008": "cli-namespace-error",
   "ST-NMG-009": "cli-namespace-error",
+  "ST-NMG-010": "cli-namespace-error",
   "ST-NMG-011": "cli-namespace-error",
   "ST-NMG-012": "cli-namespace-error",
+  "ST-NMG-014": "cli-namespace-error",
   "ST-NMG-016": "cli-namespace-error",
+  // Default/best-practice argument hygiene (ST-DBP-*)
   "ST-DBP-002": "cli-argument-error",
   "ST-DBP-006": "cli-argument-error",
+  "ST-DBP-007": "cli-argument-error",
   "ST-DBP-020": "cli-argument-error",
+  "ST-DBP-021": "cli-argument-error",
+  "ST-DBP-026": "cli-argument-error",
+  // Variable usage / declaration (ST-USG-*)
   "ST-USG-005": "cli-variable-error",
   "ST-USG-007": "cli-variable-error",
+  "ST-USG-009": "cli-variable-error",
   "ST-USG-010": "cli-variable-error",
   "ST-USG-014": "cli-variable-error",
+  "ST-USG-020": "cli-variable-error",
+  "ST-USG-026": "cli-variable-error",
   "ST-USG-028": "cli-variable-error",
+  // Expression / security (ST-USG-034, ST-SEC-*)
   "ST-USG-034": "cli-expression-error",
+  "ST-SEC-004": "cli-expression-error",
   "ST-SEC-009": "cli-expression-error",
 };
 
 const CLI_FIXABLE_RULE_IDS = new Set(Object.keys(CLI_RULE_TO_CHECK));
+
+export const CLI_FIXABLE_RULE_IDS_EXPORTED: ReadonlySet<string> = CLI_FIXABLE_RULE_IDS;
+export const CLI_RULE_TO_CHECK_EXPORTED: Readonly<Record<string, string>> = CLI_RULE_TO_CHECK;
 
 export interface QualityGateIssue {
   check: string;

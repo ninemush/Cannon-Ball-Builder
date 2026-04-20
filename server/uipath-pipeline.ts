@@ -449,6 +449,12 @@ export interface PipelineOutcomeReport {
     byteFidelityFailure?: import("./uipath-cli-remote-dispatch").ByteFidelityFailure;
     errorMessage?: string;
   };
+  // Task #541 — seven-field truth-source ledger (uipcli authority)
+  cliAuthorityLedger?: import("./cli-authority-ledger").CliAuthorityLedger;
+  cliDefectRouting?: {
+    perBucketCounts: { mapped: number; surfaced: number; blocking: number };
+    unmappedRuleIds: string[];
+  };
   traceabilityManifest?: TraceabilityManifest;
   reachabilityPruning?: Array<{ file: string; action: "removed" | "retained"; reason: string }>;
   infrastructureRenameRecords?: Array<{ originalName: string; renamedName: string; reason: string; affectedReferences: string[] }>;
@@ -491,6 +497,12 @@ export interface PipelineResult {
   criticalActivityContractDiagnostics?: import("./required-property-diagnostics").RequiredPropertyDiagnosticsResult;
   cliValidationMode?: import("./uipath-cli-validator").CliValidationMode;
   cliValidationResult?: import("./uipath-cli-validator").CliValidationResult;
+  // Task #541 — truth-source ledger surfaced on every PipelineResult
+  cliAuthorityLedger?: import("./cli-authority-ledger").CliAuthorityLedger;
+  cliDefectRouting?: {
+    perBucketCounts: { mapped: number; surfaced: number; blocking: number };
+    unmappedRuleIds: string[];
+  };
   traceabilityManifest?: TraceabilityManifest;
 }
 
@@ -879,6 +891,28 @@ function buildDhgFromBuildResult(
             byteFidelityFailed: !!cliValidationResultForDhg.remote.byteFidelityFailure,
           }
         : undefined,
+      cliAuthorityLedger: effectiveOutcomeReport.cliAuthorityLedger,
+      cliDefectRouting: effectiveOutcomeReport.cliDefectRouting,
+      cliAnalyzerDefects: cliValidationResultForDhg?.analyzeResult?.defects?.map(d => ({
+        ruleId: d.ruleId,
+        severity: d.severity,
+        file: d.file,
+        line: d.line,
+        message: d.message,
+      })),
+      // Task #541 — CLI drives per-workflow Studio classification whenever the
+      // analyzer actually produced a result, including modes where pack failed
+      // but analyze ran (so "ran with errors" is represented from CLI truth).
+      cliRanForWorkflowClassification:
+        !!cliValidationResultForDhg &&
+        cliValidationResultForDhg.mode !== "cli_skipped_incompatible_agent" &&
+        cliValidationResultForDhg.mode !== "custom_validated_only" &&
+        !!cliValidationResultForDhg.analyzeResult,
+      cliFallbackReason: cliValidationResultForDhg?.mode === "cli_skipped_incompatible_agent"
+        ? `incompatible runner for ${cliValidationResultForDhg.compatibility.projectType}`
+        : cliValidationResultForDhg?.mode === "cli_failed" && !cliValidationResultForDhg.analyzeResult
+          ? "CLI execution failed"
+          : undefined,
       traceabilityManifest: traceabilityManifest || undefined,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
@@ -1346,11 +1380,12 @@ export async function compilePackageFromSpecs(
 
     tracker.start("validation", "Running meta-validation and remediation");
     let metaValidationResult: MetaValidationResult | undefined;
+    let preCorrectCliDefectCount_outer = 0;
     let finalXamlEntries = buildResult.xamlEntries;
     let finalPackageBuffer = buildResult.buffer;
     let mvInputTokens = 0;
     let mvOutputTokens = 0;
-    const hasNupkg = buildResult.buffer && buildResult.buffer.length > 0;
+    let hasNupkg: boolean = !!(buildResult.buffer && buildResult.buffer.length > 0);
 
     if (hasNupkg) {
       try {
@@ -1591,19 +1626,39 @@ export async function compilePackageFromSpecs(
 
                   if (normalized.fixable.length > 0) {
                     qgViolationsForIterative.push(...normalized.fixable);
-                    console.log(`[Pipeline] Pre-correction CLI analyze: ${preCliResult.defects.length} defect(s) found, ${normalized.fixable.length} fixable merged into corrector input, ${normalized.diagnosticOnly.length} diagnostic-only (${preCliDuration}ms)`);
-                  } else {
-                    console.log(`[Pipeline] Pre-correction CLI analyze: ${preCliResult.defects.length} defect(s) found, none fixable (${preCliDuration}ms)`);
                   }
                   cliDiagnosticOnly = normalized.diagnosticOnly;
 
-                  for (const diag of normalized.diagnosticOnly) {
-                    pipelineWarnings.push({
-                      code: `CLI_DIAGNOSTIC_${diag.severity.toUpperCase()}`,
-                      message: `[CLI Diagnostic] ${diag.ruleId}: ${diag.message}${diag.file ? ` in ${diag.file}` : ""}`,
-                      stage: "remediating",
-                      recoverable: true,
-                    });
+                  // Task #541 — route every CLI Error severity defect through
+                  // the three-bucket policy. This replaces the old
+                  // CLI_DIAGNOSTIC_* warning demotion which silently downgraded
+                  // unfixable Errors to recoverable warnings.
+                  try {
+                    const { routeCliErrorDefectsThreeBucket } = await import("./cli-authority-ledger");
+                    const { CLI_FIXABLE_RULE_IDS_EXPORTED } = await import("./meta-validation/iterative-llm-corrector");
+                    const preRouting = routeCliErrorDefectsThreeBucket(preCliResult.defects, CLI_FIXABLE_RULE_IDS_EXPORTED);
+                    for (const d of preRouting.surfaced_as_localized_dhg_todo) {
+                      pipelineWarnings.push({
+                        code: `CLI_LOCALIZED_TODO_${d.ruleId}`,
+                        message: `[CLI ${d.ruleId}] ${d.message}${d.file ? ` in ${d.file}${d.line ? `:${d.line}` : ""}` : ""}`,
+                        stage: "remediating",
+                        recoverable: true,
+                        affectedFiles: d.file ? [d.file] : undefined,
+                      });
+                    }
+                    for (const d of preRouting.blocking_cli_error) {
+                      pipelineWarnings.push({
+                        code: `CLI_BLOCKING_ERROR_${d.ruleId}`,
+                        message: `[CLI BLOCKING ${d.ruleId}] ${d.message}${d.file ? ` in ${d.file}${d.line ? `:${d.line}` : ""}` : ""}`,
+                        stage: "remediating",
+                        recoverable: false,
+                        affectedFiles: d.file ? [d.file] : undefined,
+                      });
+                    }
+                    console.log(`[Pipeline] Pre-correction CLI analyze: ${preCliResult.defects.length} defect(s) found, ${normalized.fixable.length} fixable merged into corrector input; routing — mapped=${preRouting.perBucketCounts.mapped}, surfaced_as_dhg_todo=${preRouting.perBucketCounts.surfaced}, blocking=${preRouting.perBucketCounts.blocking} (${preCliDuration}ms)`);
+                  } catch (routeErr: unknown) {
+                    const rmsg = routeErr instanceof Error ? routeErr.message : String(routeErr);
+                    console.warn(`[Pipeline] Pre-correction CLI three-bucket routing failed: ${rmsg}`);
                   }
                 } else {
                   console.log(`[Pipeline] Pre-correction CLI analyze: no defects found (${preCliDuration}ms)`);
@@ -1794,13 +1849,51 @@ export async function compilePackageFromSpecs(
     tracker.complete("validation", "Validation and remediation complete");
     await periodicTraceFlush();
 
-    let preCorrectCliDefectCount_outer = 0;
+    // Task #541 — post-emission capability-driven framework selection.
+    // Inspect the *actually emitted* activity set; in authoritative mode,
+    // override the static_profile target framework for the project.json that
+    // CLI sees. In shadow mode, compute the recommendation but do not mutate.
+    const {
+      evaluateFrameworkSelection,
+      applyFrameworkOverride,
+      getCliAuthorityMode,
+    } = await import("./cli-authority-ledger");
+    const __cliAuthorityMode = getCliAuthorityMode();
+    let __projectJsonForCli = buildResult.projectJsonContent || "{}";
+    let __frameworkSelection: import("./cli-authority-ledger").FrameworkSelectionResult;
+    try {
+      const currentTf = (() => {
+        try { return JSON.parse(__projectJsonForCli).targetFramework; } catch { return undefined; }
+      })();
+      __frameworkSelection = evaluateFrameworkSelection(finalXamlEntries, currentTf);
+      // Override applies in BOTH shadow and authoritative modes so that CLI
+      // sees the right project type and produces useful telemetry. Only the
+      // *shipped* artifact and *production-truth* verdict are gated by mode.
+      if (__frameworkSelection.source === "post_emission_override") {
+        __projectJsonForCli = applyFrameworkOverride(
+          __projectJsonForCli,
+          __frameworkSelection.recommendedFramework,
+        );
+        console.log(`[Pipeline][cli-authority] Post-emission framework override applied (mode=${__cliAuthorityMode}): ${__frameworkSelection.reason}`);
+      } else {
+        console.log(`[Pipeline][cli-authority] Framework selection (${__frameworkSelection.source}): ${__frameworkSelection.reason}`);
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Pipeline][cli-authority] Framework selection skipped: ${errMsg}`);
+      __frameworkSelection = {
+        source: "static_profile",
+        reason: `framework selection inspector errored: ${errMsg}`,
+        recommendedFramework: "Windows",
+      };
+    }
+
     let cliValidationResult: import("./uipath-cli-validator").CliValidationResult | undefined;
     try {
       tracker.start("cli_validation", "Running UiPath CLI authoritative validation");
       const { runCliValidation, checkCliCompatibility, formatCliValidationSummary } = await import("./uipath-cli-validator");
 
-      const projectJsonForCli = buildResult.projectJsonContent || "{}";
+      const projectJsonForCli = __projectJsonForCli;
       const cliCompat = checkCliCompatibility(projectJsonForCli);
 
       if (!cliCompat.isCompatible) {
@@ -1906,6 +1999,9 @@ export async function compilePackageFromSpecs(
           console.log(`[Pipeline] CLI defect delta: pre-correction=${preCorrectCliDefectCount_outer}, post-correction=${postCorrectionCliDefectCount}, delta=${preCorrectCliDefectCount_outer - postCorrectionCliDefectCount}`);
         }
       }
+    // Task #541 — three-bucket analyzer-defect routing. Every CLI Error
+    // lands in exactly one bucket; default for unknown ruleIds is
+    // surfaced_as_localized_dhg_todo (never silent demotion).
     } catch (cliErr: unknown) {
       const errMsg = cliErr instanceof Error ? cliErr.message : String(cliErr);
       console.warn(`[Pipeline] CLI validation failed gracefully: ${errMsg}`);
@@ -1951,6 +2047,72 @@ export async function compilePackageFromSpecs(
       }
       const { formatCliValidationSummary: fmtSummary } = await import("./uipath-cli-validator");
       buildResult.outcomeReport.cliValidationSummary = fmtSummary(cliValidationResult);
+    }
+
+    // Task #541 — three-bucket analyzer-defect routing.
+    let __cliDefectRouting: import("./cli-authority-ledger").CliDefectRouting | undefined;
+    try {
+      const { routeCliErrorDefectsThreeBucket } = await import("./cli-authority-ledger");
+      const { CLI_FIXABLE_RULE_IDS_EXPORTED } = await import("./meta-validation/iterative-llm-corrector");
+      const defects = cliValidationResult?.analyzeResult?.defects || [];
+      __cliDefectRouting = routeCliErrorDefectsThreeBucket(defects, CLI_FIXABLE_RULE_IDS_EXPORTED);
+      console.log(`[Pipeline][cli-authority] Defect routing — mapped=${__cliDefectRouting.perBucketCounts.mapped}, surfaced_as_dhg_todo=${__cliDefectRouting.perBucketCounts.surfaced}, blocking=${__cliDefectRouting.perBucketCounts.blocking}, unmappedRules=${__cliDefectRouting.unmappedRuleIds.length}`);
+      // Surface localized DHG TODOs as pipelineWarnings (replaces silent
+      // CLI_DIAGNOSTIC_* demotion for Error severity defects).
+      for (const d of __cliDefectRouting.surfaced_as_localized_dhg_todo) {
+        pipelineWarnings.push({
+          code: `CLI_LOCALIZED_TODO_${d.ruleId}`,
+          message: `[CLI ${d.ruleId}] ${d.message}${d.file ? ` in ${d.file}${d.line ? `:${d.line}` : ""}` : ""}`,
+          stage: "cli_validation",
+          recoverable: true,
+          affectedFiles: d.file ? [d.file] : undefined,
+        });
+      }
+      for (const d of __cliDefectRouting.blocking_cli_error) {
+        pipelineWarnings.push({
+          code: `CLI_BLOCKING_ERROR_${d.ruleId}`,
+          message: `[CLI BLOCKING ${d.ruleId}] ${d.message}${d.file ? ` in ${d.file}${d.line ? `:${d.line}` : ""}` : ""}`,
+          stage: "cli_validation",
+          recoverable: false,
+          affectedFiles: d.file ? [d.file] : undefined,
+        });
+      }
+      if (buildResult.outcomeReport) {
+        buildResult.outcomeReport.cliDefectRouting = {
+          perBucketCounts: __cliDefectRouting.perBucketCounts,
+          unmappedRuleIds: __cliDefectRouting.unmappedRuleIds,
+        };
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Pipeline][cli-authority] Defect routing failed: ${errMsg}`);
+    }
+
+    // Task #541 — CLI-produced .nupkg becomes the shipped artifact when
+    // pack succeeded AND we are in authoritative mode. In shadow mode, the
+    // CLI artifact is computed for forensic comparison only and never ships.
+    let __packArtifactDecision: import("./cli-authority-ledger").CliArtifactReadResult = {
+      buffer: finalPackageBuffer,
+      source: "fallback_adm_zip",
+      fallbackReason: "pre_authority_swap",
+    };
+    try {
+      const { selectShippedArtifact } = await import("./cli-authority-ledger");
+      __packArtifactDecision = selectShippedArtifact(__cliAuthorityMode, cliValidationResult, finalPackageBuffer);
+      if (__cliAuthorityMode === "authoritative" && __packArtifactDecision.source === "uipcli" && __packArtifactDecision.buffer) {
+        console.log(`[Pipeline][cli-authority] Shipping CLI-produced .nupkg (${__packArtifactDecision.buffer.length} bytes) as authoritative artifact`);
+        finalPackageBuffer = __packArtifactDecision.buffer;
+        hasNupkg = finalPackageBuffer.length > 0;
+      } else if (__cliAuthorityMode === "shadow" && __packArtifactDecision.source === "uipcli" && __packArtifactDecision.buffer) {
+        // Shadow mode: legacy artifact still ships; record CLI artifact size
+        // for forensic comparison so reviewers can see CLI packed cleanly.
+        console.log(`[Pipeline][cli-authority] SHADOW: CLI-produced .nupkg captured (${__packArtifactDecision.buffer.length} bytes) for forensic comparison; legacy artifact ships in shadow mode`);
+      } else {
+        console.log(`[Pipeline][cli-authority] Shipped artifact source=${__packArtifactDecision.source}${__packArtifactDecision.fallbackReason ? ` (reason: ${__packArtifactDecision.fallbackReason})` : ""} — first-party packaging not achieved for this run`);
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Pipeline][cli-authority] Artifact selection failed: ${errMsg}`);
     }
 
     tracker.start("final_artifact_validation", "Running final artifact truth gate");
@@ -2052,6 +2214,76 @@ export async function compilePackageFromSpecs(
     };
     console.log(`[Pipeline] Traceability manifest reconciled and finalized: ${manifestSummary.total} steps — ${manifestSummary.preserved} preserved, ${manifestSummary.stubbed} stubbed, ${manifestSummary.degraded} degraded, ${manifestSummary.dropped} dropped`);
 
+    // Task #541 — verdict reconciliation hierarchy. Replaces the legacy
+    // status derivation. CLI pack outcome owns openability; finalQualityReport
+    // owns fidelity downgrades on the success path; legacy heuristic only
+    // when CLI did not run. Built BEFORE DHG so the ledger surfaces in DHG.
+    const __entryPointIsStubbed = buildResult.outcomeReport?.remediations.some(
+      r => (r.remediationCode === "STUB_WORKFLOW_BLOCKING" || r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE") && (r.file === "Main.xaml" || r.file === "Main")
+    ) ?? false;
+    const __hasStructuralBlockers = buildResult.outcomeReport?.studioCompatibility?.some(
+      sc => sc.level === "studio-blocked"
+    ) ?? false;
+    const __cliRan =
+      !!cliValidationResult &&
+      cliValidationResult.mode !== "cli_skipped_incompatible_agent" &&
+      cliValidationResult.mode !== "custom_validated_only" &&
+      !!cliValidationResult.analyzeResult;
+    const __cliAnalyzerErrorCount = cliValidationResult?.analyzeResult?.defects.filter(d => d.severity === "Error").length ?? 0;
+    const __cliRoutingHadOpenabilityBlocking = (__cliDefectRouting?.blocking_cli_error.length ?? 0) > 0;
+
+    const { reconcileVerdict, detectCliRunnerType } = await import("./cli-authority-ledger");
+    const __reconciliation = reconcileVerdict({
+      cliRan: __cliRan,
+      cliPackSuccess: cliValidationResult?.packResult?.success,
+      cliAnalyzerErrorCount: __cliAnalyzerErrorCount,
+      cliRoutingHadOpenabilityBlocking: __cliRoutingHadOpenabilityBlocking,
+      finalQualityReportStatus: finalQualityReport?.derivedStatus,
+      artifactIntegrityFailureReason: __packArtifactDecision.integrityFailureReason,
+      hasNupkg,
+      entryPointStubbed: __entryPointIsStubbed,
+      hasStructuralBlockers: __hasStructuralBlockers,
+    });
+
+    // In shadow mode, the legacy verdict path remains the production-truth
+    // value. The CLI-derived reconciliation is computed and persisted on the
+    // ledger for forensic comparison only.
+    const __legacyFinalStatus: PackageStatus = finalQualityReport
+      ? finalQualityReport.derivedStatus
+      : (!hasNupkg || __entryPointIsStubbed || __hasStructuralBlockers)
+        ? ("structurally_invalid" as PackageStatus)
+        : ("handoff_only" as PackageStatus);
+
+    const finalStatus: PackageStatus = __cliAuthorityMode === "authoritative"
+      ? __reconciliation.status
+      : __legacyFinalStatus;
+
+    if (__cliAuthorityMode === "shadow" && __reconciliation.status !== __legacyFinalStatus) {
+      console.log(`[Pipeline][cli-authority] SHADOW divergence — legacy=${__legacyFinalStatus}, cli_authoritative_would_be=${__reconciliation.status}, reason="${__reconciliation.reason}"`);
+    } else {
+      console.log(`[Pipeline][cli-authority] Verdict (${__cliAuthorityMode})=${finalStatus}, reason="${__reconciliation.reason}"`);
+    }
+
+    // Build and persist the seven-field truth-source ledger.
+    const __ledger: import("./cli-authority-ledger").CliAuthorityLedger = {
+      packArtifactSource: __packArtifactDecision.source,
+      packFallbackReason: __packArtifactDecision.fallbackReason,
+      openabilityTruthSource: __cliAuthorityMode === "authoritative"
+        ? __reconciliation.openabilityTruthSource
+        : "fallback_heuristic",
+      fidelityTruthSource: finalQualityReport ? "final_quality_report" : "fallback_heuristic",
+      frameworkSelectionSource: __frameworkSelection.source,
+      frameworkSelectionReason: __frameworkSelection.reason,
+      cliRunnerType: detectCliRunnerType(cliValidationResult),
+      runMode: __cliAuthorityMode,
+      cliShadowArtifactSizeBytes: cliValidationResult?.packResult?.nupkgBuffer?.length,
+      cliShadowArtifactFileName: cliValidationResult?.packResult?.nupkgFileName,
+    };
+    if (buildResult.outcomeReport) {
+      buildResult.outcomeReport.cliAuthorityLedger = __ledger;
+    }
+    console.log(`[Pipeline][cli-authority] Ledger: packArtifactSource=${__ledger.packArtifactSource}${__ledger.packFallbackReason ? `(${__ledger.packFallbackReason})` : ""}, openabilityTruth=${__ledger.openabilityTruthSource}, fidelityTruth=${__ledger.fidelityTruthSource}, framework=${__ledger.frameworkSelectionSource}, runner=${__ledger.cliRunnerType}, runMode=${__ledger.runMode}`);
+
     tracker.start("packaging_dhg_guide", "Generating Developer Handoff Guide");
     tracker.heartbeat("packaging_dhg_guide", () => "Analyzing workflows and writing guide");
     const dhgResult = buildDhgFromBuildResult(enriched, ctx, buildResult, finalXamlEntries, mode, finalQualityReport, emergencyFallbackActive, emergencyFallbackReason, cliValidationResult, traceabilityManifest);
@@ -2064,25 +2296,6 @@ export async function compilePackageFromSpecs(
         tracker.warn(w.stage, w.message);
       }
     }
-
-    /**
-     * Fallback status derivation when final-artifact-validation did not run.
-     * Without final validation evidence, the highest possible status is `handoff_only`.
-     * `studio_stable` can only be assigned by passing final artifact validation.
-     * `generation_finished` is transient and never emitted as a final status.
-     */
-    const finalStatus: PackageStatus = finalQualityReport
-      ? finalQualityReport.derivedStatus
-      : (() => {
-          const entryPointIsStubbed = buildResult.outcomeReport?.remediations.some(
-            r => (r.remediationCode === "STUB_WORKFLOW_BLOCKING" || r.remediationCode === "STUB_WORKFLOW_GENERATOR_FAILURE") && (r.file === "Main.xaml" || r.file === "Main")
-          ) ?? false;
-          const hasStructuralBlockers = buildResult.outcomeReport?.studioCompatibility?.some(
-            sc => sc.level === "studio-blocked"
-          ) ?? false;
-          if (!hasNupkg || entryPointIsStubbed || hasStructuralBlockers) return "structurally_invalid" as PackageStatus;
-          return "handoff_only" as PackageStatus;
-        })();
 
     if (options?.runId) {
       try {
@@ -2174,6 +2387,10 @@ export async function compilePackageFromSpecs(
       criticalActivityContractDiagnostics: buildResult.criticalActivityContractDiagnostics,
       cliValidationMode: cliValidationResult?.mode || "custom_validated_only",
       cliValidationResult: cliValidationResult,
+      cliAuthorityLedger: __ledger,
+      cliDefectRouting: __cliDefectRouting
+        ? { perBucketCounts: __cliDefectRouting.perBucketCounts, unmappedRuleIds: __cliDefectRouting.unmappedRuleIds }
+        : undefined,
       traceabilityManifest,
     };
 

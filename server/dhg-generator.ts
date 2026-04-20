@@ -129,6 +129,16 @@ export interface DhgContext {
     fallbackReason?: import("./uipath-cli-remote-dispatch").RemoteDispatchFallbackReason;
     byteFidelityFailed: boolean;
   };
+  // Task #541 — truth-source ledger surfaces in DHG header
+  cliAuthorityLedger?: import("./cli-authority-ledger").CliAuthorityLedger;
+  cliDefectRouting?: {
+    perBucketCounts: { mapped: number; surfaced: number; blocking: number };
+    unmappedRuleIds: string[];
+  };
+  // Task #541 — raw CLI analyzer defects for per-workflow Studio Compat classification
+  cliAnalyzerDefects?: Array<{ ruleId: string; severity: string; file?: string; line?: number; message: string }>;
+  cliRanForWorkflowClassification?: boolean;
+  cliFallbackReason?: string;
   traceabilityManifest?: TraceabilityManifest;
 }
 
@@ -430,6 +440,26 @@ export function generateDhgFromOutcomeReport(
     }
   }
 
+  // Task #541 — surface the truth-source ledger so a reader can see which
+  // sources actually decided this run's verdict, packaging, and routing.
+  if (context.cliAuthorityLedger) {
+    const l = context.cliAuthorityLedger;
+    md += `\n**Truth Source Ledger** (mode: \`${l.runMode}\`)\n\n`;
+    md += `| Field | Value |\n|---|---|\n`;
+    md += `| Pack artifact source | \`${l.packArtifactSource}\`${l.packFallbackReason ? ` (${l.packFallbackReason})` : ""} |\n`;
+    md += `| Openability truth | \`${l.openabilityTruthSource}\` |\n`;
+    md += `| Fidelity truth | \`${l.fidelityTruthSource}\` |\n`;
+    md += `| Framework selection | \`${l.frameworkSelectionSource}\` — ${l.frameworkSelectionReason} |\n`;
+    md += `| CLI runner | \`${l.cliRunnerType}\` |\n`;
+    if (context.cliDefectRouting) {
+      const r = context.cliDefectRouting.perBucketCounts;
+      md += `| Defect routing | mapped=${r.mapped}, surfaced=${r.surfaced}, blocking=${r.blocking}${context.cliDefectRouting.unmappedRuleIds.length > 0 ? ` (unmapped rule ids: ${context.cliDefectRouting.unmappedRuleIds.slice(0, 5).join(", ")}${context.cliDefectRouting.unmappedRuleIds.length > 5 ? "…" : ""})` : ""} |\n`;
+    }
+    if (l.runMode === "shadow") {
+      md += `\n> **Shadow mode:** the legacy verdict path remains production-truth for this run; CLI-derived values are recorded for forensic comparison.\n`;
+    }
+  }
+
   md += `\n`;
 
   const wfClassifications = classifyWorkflows(report, context);
@@ -647,15 +677,75 @@ export function generateDhgFromOutcomeReport(
   }
 
   const fqr = context.finalQualityReport;
-  const rawStudioCompatData = fqr
-    ? fqr.perFileResults.map(r => ({
-        file: r.file,
-        level: r.studioCompatibilityLevel,
-        blockers: r.blockers,
-        failureCategory: undefined as string | undefined,
-        failureSummary: r.blockers.length > 0 ? r.blockers.slice(0, 2).join("; ") : undefined,
-      }))
-    : (report.studioCompatibility || []);
+  // Task #541 — when CLI ran (and was usable), CLI per-file classification
+  // drives Studio Compatibility truth: ran+passed / ran+warnings / ran+errors.
+  // Legacy heuristic (finalQualityReport / report.studioCompatibility) is the
+  // fallback only when CLI did not run / was skipped / errored.
+  const cliDrivesStudioCompat = !!context.cliRanForWorkflowClassification && !!context.cliAnalyzerDefects;
+  let cliDrivenStudioCompat: Array<{ file: string; level: string; blockers: string[]; failureCategory?: string; failureSummary?: string }> = [];
+  if (cliDrivesStudioCompat) {
+    const defectsByFile = new Map<string, Array<{ ruleId: string; severity: string; line?: number; message: string }>>();
+    for (const d of context.cliAnalyzerDefects!) {
+      if (!d.file) continue;
+      const key = d.file.replace(/^.*[\\/]/, "").toLowerCase();
+      const arr = defectsByFile.get(key) || [];
+      arr.push({ ruleId: d.ruleId, severity: d.severity, line: d.line, message: d.message });
+      defectsByFile.set(key, arr);
+    }
+    for (const wfName of context.workflowNames) {
+      const fileBase = (wfName.endsWith(".xaml") ? wfName : `${wfName}.xaml`).replace(/^.*[\\/]/, "").toLowerCase();
+      const fileDefects = defectsByFile.get(fileBase) || [];
+      const errors = fileDefects.filter(d => (d.severity || "").toLowerCase() === "error");
+      const warnings = fileDefects.filter(d => (d.severity || "").toLowerCase() === "warning");
+      let level: string;
+      let failureCategory: string | undefined;
+      const blockers: string[] = [];
+      // Per Task #541: analyzer errors do NOT make a workflow not-Studio-loadable
+      // by themselves. Openability is owned by the CLI pack outcome and the
+      // explicit OPENABILITY_BLOCKING_CLI_RULES allow-list. Analyzer errors on
+      // a successfully-packed project surface as "openable with warnings"
+      // unless an openability-blocking rule fires (handled centrally by
+      // reconcileVerdict on the verdict, and surfaced here only when the
+      // package as a whole was already determined to be structurally invalid).
+      if (errors.length > 0) {
+        const packageWasStructurallyInvalid =
+          context.cliAuthorityLedger?.runMode === "authoritative" &&
+          context.cliAuthorityLedger?.openabilityTruthSource === "uipcli" &&
+          context.cliPackSuccess === false;
+        level = packageWasStructurallyInvalid ? "studio-blocked" : "studio-warnings";
+        failureCategory = "cli-analyzer-errors";
+        for (const e of errors.slice(0, 5)) {
+          blockers.push(`[CLI ${e.ruleId}${e.line ? `:${e.line}` : ""}] ${e.message}`);
+        }
+      } else if (warnings.length > 0) {
+        level = "studio-warnings";
+        failureCategory = "cli-analyzer-warnings";
+        for (const w of warnings.slice(0, 5)) {
+          blockers.push(`[CLI ${w.ruleId}${w.line ? `:${w.line}` : ""}] ${w.message}`);
+        }
+      } else {
+        level = "studio-clean";
+      }
+      cliDrivenStudioCompat.push({
+        file: fileBase,
+        level,
+        blockers,
+        failureCategory,
+        failureSummary: blockers.length > 0 ? blockers.slice(0, 2).join("; ") : undefined,
+      });
+    }
+  }
+  const rawStudioCompatData = cliDrivesStudioCompat
+    ? cliDrivenStudioCompat
+    : (fqr
+      ? fqr.perFileResults.map(r => ({
+          file: r.file,
+          level: r.studioCompatibilityLevel,
+          blockers: r.blockers,
+          failureCategory: undefined as string | undefined,
+          failureSummary: r.blockers.length > 0 ? r.blockers.slice(0, 2).join("; ") : undefined,
+        }))
+      : (report.studioCompatibility || []));
   const seenStudioFiles = new Set<string>();
   const studioCompatData = rawStudioCompatData
     .map(sc => ({
@@ -671,6 +761,13 @@ export function generateDhgFromOutcomeReport(
 
   if (studioCompatData.length > 0) {
     md += `### Studio Compatibility\n\n`;
+    if (cliDrivesStudioCompat) {
+      md += `_Source: **uipcli analyzer** — per-workflow ran+passed / ran+warnings / ran+errors classification._\n\n`;
+    } else if (context.cliValidationMode && context.cliValidationMode !== "cli_validated") {
+      md += `_Source: **legacy heuristic fallback** — CLI did not run (mode: \`${context.cliValidationMode}\`${context.cliFallbackReason ? `; ${context.cliFallbackReason}` : ""})._\n\n`;
+    } else {
+      md += `_Source: **legacy heuristic** — CLI per-workflow classification not available._\n\n`;
+    }
     md += `| # | Workflow | Compatibility | Failure Category | Blockers |\n`;
     md += `|---|----------|--------------|-----------------|----------|\n`;
     studioCompatData.forEach((sc, i) => {

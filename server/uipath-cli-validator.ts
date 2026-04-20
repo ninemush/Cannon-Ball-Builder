@@ -49,6 +49,11 @@ export interface CliAnalyzeResult {
 export interface CliPackResult {
   success: boolean;
   outputPath?: string;
+  // Task #541 — captured in-memory before the temp output dir is cleaned up,
+  // so downstream consumers (e.g. selectShippedArtifact) can read the bytes
+  // without relying on the temp file existing on disk.
+  nupkgBuffer?: Buffer;
+  nupkgFileName?: string;
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -401,9 +406,42 @@ export async function runCliPack(
           outputPath = nupkgMatch[1];
         }
 
+        // Task #541 — capture the .nupkg bytes BEFORE the temp output dir is
+        // cleaned up in `finally`, so downstream consumers can ship the CLI
+        // artifact authoritatively without relying on the temp file surviving.
+        let nupkgBuffer: Buffer | undefined;
+        let nupkgFileName: string | undefined;
+        if (exitCode === 0) {
+          try {
+            const candidates: string[] = [];
+            if (outputPath && existsSync(outputPath)) candidates.push(outputPath);
+            try {
+              const dirEntries = (require("fs") as typeof import("fs")).readdirSync(outputDir);
+              for (const entry of dirEntries) {
+                if (entry.toLowerCase().endsWith(".nupkg")) {
+                  candidates.push(join(outputDir, entry));
+                }
+              }
+            } catch { /* outputDir may not exist if pack failed */ }
+            for (const candidate of candidates) {
+              if (existsSync(candidate)) {
+                nupkgBuffer = readFileSync(candidate);
+                nupkgFileName = candidate.split(/[\\/]/).pop();
+                outputPath = candidate;
+                break;
+              }
+            }
+          } catch (readErr: unknown) {
+            const msg = readErr instanceof Error ? readErr.message : String(readErr);
+            console.warn(`[CLI Validator] Failed to capture pack output buffer: ${msg}`);
+          }
+        }
+
         resolve({
           success: exitCode === 0,
           outputPath,
+          nupkgBuffer,
+          nupkgFileName,
           exitCode,
           stdout: (stdout || "").substring(0, 10000),
           stderr: (stderr || "").substring(0, 10000),
