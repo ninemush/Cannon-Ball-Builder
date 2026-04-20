@@ -1,0 +1,189 @@
+Please refine the three proposed follow-on tasks **#542, #543, and #544**. This is a tightening pass, not a rewrite. Preserve their intent, but make each one implementation-safe, scoped, and reviewable.
+
+Use the following guidance.
+
+---
+
+## 1) Task #542 — Replay BirthdayGreetings & POInvoiceReconYY runs end-to-end
+
+This is the highest-priority follow-up and should remain the first recommended task after #539. Tighten it so it becomes a true acceptance-verification task, not a vague replay request.
+
+### Required refinements
+
+* Make clear that **#542 is verification of #539**, not a new remediation task.
+* Anchor it explicitly to the **hard acceptance criteria already defined in #539**, especially:
+
+  * zero whole-workflow stubs for the protected cause classes,
+  * zero `Attribute 'TODO'` / compliance-transform failures on the previously affected workflows,
+  * preservation of business logic or explicit localized DHG handoff,
+  * no silent disappearance.
+* Require that the replay use the **same captured inputs / same-input fixtures** for:
+
+  * `348a09fd` / BirthdayGreetings
+  * `d3274c92` / POInvoiceReconYY
+* Require that the verification bundle contain, at minimum:
+
+  * outcome report,
+  * quality gate results,
+  * final quality report,
+  * DHG,
+  * final emitted XAML/package artifact metadata,
+  * any diagnostics emitted by the todo-attribute repair path if exercised.
+* Tighten the Studio-openability wording:
+
+  * do not say only “opens cleanly in UiPath Studio”
+  * say that verification must be grounded in the project’s accepted verification flow and artifacts, with Studio-openability evidenced in the bundle.
+* Add a hard reviewer rule:
+
+  * #542 does not pass merely because the package status is green;
+  * the replay must be checked against #539’s workflow-level acceptance requirements.
+* Add a requirement that the replay task produce a **short evidence summary**:
+
+  * pre-fix cited failure shape,
+  * post-fix result,
+  * whether any localized degradation remains,
+  * whether any previously stubbed workflow still has reduced degradation instead of full preservation.
+
+### Tighten the “Done looks like”
+
+It should explicitly say:
+
+* both named inputs are replayed end-to-end,
+* evidence bundle attached for both,
+* #539 hard assertions are re-checked against replay outputs,
+* any remaining localized degradations are named and justified,
+* no whole-workflow stubs remain for the protected cause classes on those inputs.
+
+---
+
+## 2) Task #543 — Make leaf-stubbing more transparent
+
+This task needs the most refinement. Right now it risks becoming a broad observability initiative. Keep it narrow and tied to the exact deferred gap from #539.
+
+### Required refinements
+
+* Explicitly scope #543 to **leaf-stubbing / smallest-scope replacement transparency only**.
+* State that it is a continuation of the deferred observability part of #539, not a general diagnostics overhaul.
+* Require a structured diagnostic for every leaf-stub event with at least:
+
+  * workflow/file,
+  * stable activity path or node identifier,
+  * stub reason / cause class,
+  * whether the original node carried executable semantics,
+  * whether a DHG localized handoff entry was emitted,
+  * a stable fingerprint/hash of the original expression or node payload only if safe and already supported.
+* Prevent overreach:
+
+  * do **not** require a new observability framework,
+  * do **not** require redesign of package-assembler logging,
+  * do **not** require broader verdict-policy changes.
+* Tie it to the anti-silent-loss goal:
+
+  * every leaf stub must become visible in both machine-readable diagnostics and human-facing output.
+* Require one deliberate unit fixture where a leaf is stubbed and the test proves:
+
+  * diagnostic emitted,
+  * DHG/localized handoff emitted when behavior was lost,
+  * no silent disappearance.
+* Add a reviewer rule:
+
+  * this task is not satisfied by console logging or warning text alone;
+  * the signal must be persisted in structured run artifacts.
+
+### Tighten the “Done looks like”
+
+It should say:
+
+* every leaf-stub event is visible in structured diagnostics,
+* leaf-stub visibility is surfaced into outcome artifacts,
+* a regression test proves this on a deliberate leaf-stub fixture,
+* future silent stub-out of business logic is mechanically detectable.
+
+---
+
+## 3) Task #544 — Fix the 14 pre-existing pipeline-regression / expression-builder failures
+
+This task is worthwhile, but it must be narrowed so it does not become an open-ended cleanup bucket.
+
+### Required refinements
+
+* Keep the baseline principle:
+
+  * these failures pre-date #539 and are not regressions from it.
+* Require that the task begin by freezing the exact baseline set of 14 failures from `/tmp/baseline-failures.txt`.
+* Require explicit enumeration in the task body or PR description:
+
+  * each failing test name,
+  * failing file,
+  * failure class,
+  * whether it is fixed in this task or deferred to a named follow-up.
+* Prevent scope creep:
+
+  * this task is about restoring trust in the test baseline, not doing broad platform modernization.
+* Require a split between:
+
+  * deterministic test expectation drift,
+  * genuine product bugs revealed by tests,
+  * obsolete tests that should be replaced.
+* Tighten the acceptance rule:
+
+  * “all 14 pass, or each remaining failure is moved to a named scoped follow-up with root cause and owner”
+  * not just “documented somehow.”
+* Add a reviewer rule:
+
+  * no silent deletion of failing assertions,
+  * no converting strong assertions into vague weaker ones just to get green.
+* Require that any deferred failure become a real follow-up task with:
+
+  * task number or placeholder,
+  * root cause,
+  * why it was not fixed here,
+  * what code area owns it.
+* Add a useful ordering note:
+
+  * #544 should come **after #542**, because replay verification of #539 is more important than cleaning the historical test baseline.
+
+### Tighten the “Done looks like”
+
+It should say:
+
+* the exact 14 baseline failures are reconciled one by one,
+* the suite returns to a trustworthy green-or-explicitly-accounted baseline,
+* no assertion was weakened or removed without justification,
+* future regression detection is stronger, not weaker.
+
+---
+
+## 4) Ordering / prioritization
+
+Please update the three tasks so the recommended execution order is:
+
+1. **#542** — replay verification of #539 on the real named inputs
+2. **#543** — transparency for leaf-stubbing / silent-loss detection
+3. **#544** — restore green baseline for pre-existing failing tests
+
+Add one sentence explaining why:
+
+* #542 closes the evidence gap on the real failing inputs,
+* #543 closes the deferred transparency gap that could hide future business-logic loss,
+* #544 restores trust in the regression suite once the higher-risk pipeline verification work is closed.
+
+---
+
+## 5) Output format
+
+Return:
+
+* refined **#542**
+* refined **#543**
+* refined **#544**
+* plus a short summary titled **“What tightened in this refinement pass”** with only:
+
+  * scope tightened
+  * loopholes closed
+  * reviewer enforcement added
+  * ordering clarified
+
+Do not broaden these into Plan #541.
+Do not weaken acceptance criteria.
+Do not add new unrelated workstreams.
