@@ -893,6 +893,16 @@ export type TreeEnrichmentResult =
       status: "validation_failed";
       processType: ProcessType;
       validationErrors: string[];
+    }
+  | {
+      // Task #556 Wave 3 — typed timeout result. Previously a timed-out
+      // stream was swallowed into `null` here, collapsing timeout
+      // causality into "null_result" in the degradation report. Returning
+      // a typed status lets the caller record `reason: "timeout"` with
+      // the exact timeoutMs that expired.
+      status: "timeout";
+      processType: ProcessType;
+      timeoutMs: number;
     };
 
 export async function enrichWithAITree(
@@ -905,6 +915,12 @@ export async function enrichWithAITree(
   automationPattern?: AutomationPattern,
   skipRetry?: boolean,
   preMappedSpecs?: Map<string, { spec: any; processType: ProcessType }>,
+  // Task #556 Wave 3 — reduced-context mode. When true, the wide catalog
+  // template block and SDD-derived UI context block are suppressed so
+  // the prompt carries only the per-workflow structure + pre-mapped
+  // spec. This is the retry mode used after an initial null/timeout,
+  // narrowing the context until the LLM can return a terminal answer.
+  reducedContext?: boolean,
 ): Promise<TreeEnrichmentResult | null> {
   try {
     const nodeDescriptions = nodes
@@ -988,7 +1004,12 @@ IMPORTANT: The pre-mapped structure above is authoritative for workflow decompos
     let section2Block = "";
     const processType = classifyProcessType(sddSummary, nodeDescriptions);
 
-    if (catalogService.isLoaded()) {
+    // Task #556 Wave 3 — when `reducedContext` is set by the retry branch,
+    // suppress BOTH the wide catalog/template block and the SDD-derived
+    // UI context block. That leaves the prompt carrying only the
+    // per-workflow spec structure + pre-mapped spec, which is the
+    // "workflow-local-only" context the spec calls for.
+    if (catalogService.isLoaded() && !reducedContext) {
       try {
         const templateBlock = buildTemplateBlock(processType, true);
         if (shouldUseCompactFormat(templateBlock)) {
@@ -1001,18 +1022,24 @@ IMPORTANT: The pre-mapped structure above is authoritative for workflow decompos
       } catch (err: any) {
         console.warn(`[AI XAML Enricher Tree] Failed to build template block: ${err.message}`);
       }
+    } else if (reducedContext) {
+      console.log(`[AI XAML Enricher Tree] Reduced-context mode — skipping wide catalog/template injection`);
     }
 
     let uiContextBlock2 = "";
-    try {
-      const uiCtx2 = extractUiContext(sddSummary);
-      const uiContextStr2 = formatUiContextForPrompt(uiCtx2);
-      if (uiContextStr2) {
-        uiContextBlock2 = "\n\n" + uiContextStr2;
-        console.log(`[AI XAML Enricher Tree] Injected UI context: ${uiCtx2.applicationNames.length} apps, ${uiCtx2.fieldLabels.length} fields, ${uiCtx2.buttonTexts.length} buttons`);
+    if (!reducedContext) {
+      try {
+        const uiCtx2 = extractUiContext(sddSummary);
+        const uiContextStr2 = formatUiContextForPrompt(uiCtx2);
+        if (uiContextStr2) {
+          uiContextBlock2 = "\n\n" + uiContextStr2;
+          console.log(`[AI XAML Enricher Tree] Injected UI context: ${uiCtx2.applicationNames.length} apps, ${uiCtx2.fieldLabels.length} fields, ${uiCtx2.buttonTexts.length} buttons`);
+        }
+      } catch (err: any) {
+        console.warn(`[AI XAML Enricher Tree] UI context extraction failed: ${err.message}`);
       }
-    } catch (err: any) {
-      console.warn(`[AI XAML Enricher Tree] UI context extraction failed: ${err.message}`);
+    } else {
+      console.log(`[AI XAML Enricher Tree] Reduced-context mode — skipping SDD UI context extraction`);
     }
 
     const systemPrompt = SECTION_1_ROLE + section2Block + "\n\n" + SECTION_3_VARIABLES + "\n\n" + SECTION_4_OUTPUT + uiContextBlock2;
@@ -1189,11 +1216,19 @@ IMPORTANT: The pre-mapped structure above is authoritative for workflow decompos
     console.log(`[AI XAML Enricher Tree] Successfully produced WorkflowSpec tree: "${spec.name}", ${spec.variables.length} variables, REFramework=${spec.useReFramework}`);
     return { workflowSpec: spec, processType, status: "success" };
   } catch (err: any) {
-    if (err.name === "AbortError") {
-      console.log("[AI XAML Enricher Tree] Timed out");
-    } else {
-      console.log(`[AI XAML Enricher Tree] Error: ${err.message}`);
+    // Task #556 Wave 3 — preserve timeout causality. If the stream
+    // aborted due to our own timeout, surface a typed `timeout` result
+    // so the caller records `reason: "timeout"` with the exact
+    // timeoutMs instead of flattening to a generic "null_result".
+    if (err?.name === "AbortError") {
+      console.log(`[AI XAML Enricher Tree] Timed out after ${timeoutMs}ms`);
+      return {
+        status: "timeout",
+        processType: classifyProcessType(sddContent ? sddContent.slice(0, 8000) : "", []),
+        timeoutMs,
+      };
     }
+    console.log(`[AI XAML Enricher Tree] Error: ${err?.message || err}`);
     return null;
   }
 }

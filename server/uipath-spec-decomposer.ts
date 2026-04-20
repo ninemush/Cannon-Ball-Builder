@@ -1321,5 +1321,41 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     })),
   };
 
+  // Task #556 Wave 1 — boundary contract enforcement #1 at the ACTUAL
+  // decomposer emission point. This guarantees that ANY consumer of the
+  // decomposer output — not just the package-assembler mapping path —
+  // receives a WorkflowSpecSchema-compliant TreeWorkflowSpec for each
+  // workflow. The check runs the same spec-to-tree mapper +
+  // enforceWorkflowSpecContract that the assembler runs on consumption,
+  // so no alternate consumer path can bypass the contract. On violation
+  // it throws SpecContractViolation which propagates as a typed fatal
+  // stage failure (no silent coerce/continue).
+  try {
+    const { mapPackageSpecToTreeEnrichments } = await import("./spec-to-tree-mapper");
+    const { enforceWorkflowSpecContract, SpecContractViolation } = await import("./workflow-spec-types");
+    const mapped = mapPackageSpecToTreeEnrichments(mergedSpec);
+    for (const [wfName, entry] of Array.from(mapped.entries())) {
+      try {
+        enforceWorkflowSpecContract(entry.spec, "decomposer_output", wfName);
+      } catch (err) {
+        if (err instanceof SpecContractViolation) {
+          console.error(`[SpecDecomposer] Run ${runId}: decomposer_output contract violation for workflow "${wfName}" at emission point — propagating as fatal stage failure`);
+          throw err;
+        }
+        throw err;
+      }
+    }
+    console.log(`[SpecDecomposer] Run ${runId}: decomposer_output contract enforced at emission — ${mapped.size} workflow(s) satisfy WorkflowSpecSchema`);
+  } catch (err) {
+    // If the mapper cannot even construct a tree from the decomposer
+    // output, that itself is a contract violation at this boundary —
+    // surface it rather than silently continue.
+    const { SpecContractViolation } = await import("./workflow-spec-types");
+    if (err instanceof SpecContractViolation) {
+      throw err;
+    }
+    throw new Error(`[SpecDecomposer] decomposer_output boundary enforcement failed to map decomposed workflows: ${(err as Error)?.message || String(err)}`);
+  }
+
   return { packageSpec: mergedSpec, metrics, scaffoldMeta };
 }

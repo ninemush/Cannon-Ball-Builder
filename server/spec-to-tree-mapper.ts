@@ -5,6 +5,27 @@ import type { TreeEnrichmentResult } from "./ai-xaml-enricher";
 import { isValueIntent } from "./xaml/expression-builder";
 import { normalizeWorkflowName } from "./workflow-name-utils";
 
+/**
+ * Task #556 Wave 2 — coerce a value that the spec says should be a workflow
+ * filename string into a string. Earlier code paths sometimes passed a typed
+ * ValueIntent object (e.g. `{ type: "literal", value: "Foo.xaml" }`) into
+ * `properties.WorkflowFileName`, which then crashed downstream when callers
+ * did `raw.split(...)`. Rather than make every consumer defensive, the mapper
+ * forces this property to be a plain string at the source.
+ */
+function coerceWorkflowFileNameToString(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (raw == null) return "";
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.value === "string") return obj.value;
+    if (typeof obj.name === "string") return obj.name;
+    if (typeof obj.baseUrl === "string") return obj.baseUrl;
+  }
+  return "";
+}
+
 type FlatWorkflow = UiPathPackageSpec["workflows"][number];
 type FlatStep = FlatWorkflow["steps"][number];
 type FlatVariable = FlatWorkflow["variables"][number];
@@ -160,6 +181,20 @@ function mapStepToNode(step: FlatStep): WorkflowNode {
       retryInterval: interval,
       bodyChildren: [],
     };
+  }
+
+  // Task #556 Wave 2 — force WorkflowFileName to a plain string at the mapper
+  // boundary. This is the source of the `raw.split is not a function` crash:
+  // some upstream code paths emit ValueIntent-shaped objects for properties
+  // that downstream consumers assume are strings. Fix it once, here.
+  if (bare === "InvokeWorkflowFile" && props.WorkflowFileName !== undefined) {
+    const coerced = coerceWorkflowFileNameToString(props.WorkflowFileName);
+    if (coerced) {
+      props.WorkflowFileName = coerced;
+    } else {
+      console.warn(`[spec-to-tree-mapper] Dropping unresolvable WorkflowFileName for InvokeWorkflowFile activity "${displayName}": ${JSON.stringify(props.WorkflowFileName).substring(0, 120)}`);
+      delete props.WorkflowFileName;
+    }
   }
 
   const activityNode: ActivityNode = {

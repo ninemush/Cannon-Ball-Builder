@@ -457,6 +457,42 @@ async function executeRun(
         runLogger.stageStart("spec_merge");
         pipelineProgressCallback({ type: "started", stage: "spec_merge", message: "Validating merged package specification" });
         emitProgress("Validating merged package specification...");
+
+        // Task #556 Wave 1 — upstream spec graph + resolution validation.
+        // These passes catch structural problems (cycles, orphans,
+        // unresolved invocation targets, unknown activities) at the
+        // earliest possible boundary, before any expensive refinement
+        // or XAML emission is attempted. Errors here are fatal; warnings
+        // are recorded for the run ledger.
+        try {
+          const { validateSpecGraphAtMerge, validateSpecResolution } = await import("./spec-graph-validator");
+          const graphResult = validateSpecGraphAtMerge(packageJson);
+          const resolutionResult = validateSpecResolution(packageJson);
+          const allErrors = [...graphResult.errors, ...resolutionResult.errors];
+          const allWarnings = [...graphResult.warnings, ...resolutionResult.warnings];
+          if (allWarnings.length > 0) {
+            console.warn(`[RunManager] Run ${runId}: spec_merge validation produced ${allWarnings.length} warning(s):\n  - ${allWarnings.join("\n  - ")}`);
+          }
+          if (allErrors.length > 0) {
+            const summary = `Spec graph/resolution validation failed at spec_merge: ${allErrors.join("; ")}`;
+            runLogger.stageEnd("spec_merge", "failed", {
+              workflowCount: packageJson.workflows.length,
+              cycles: graphResult.cycles,
+              orphans: graphResult.orphans,
+              unresolvedInvocations: graphResult.unresolvedInvocations,
+              unknownActivities: resolutionResult.unknownActivities,
+            }, summary);
+            pipelineProgressCallback({ type: "failed", stage: "spec_merge", message: summary });
+            throw new RunError(summary, "spec_validation");
+          }
+        } catch (err: any) {
+          if (err instanceof RunError) throw err;
+          const msg = `Spec graph validator threw: ${err?.message || String(err)}`;
+          runLogger.stageEnd("spec_merge", "failed", undefined, msg);
+          pipelineProgressCallback({ type: "failed", stage: "spec_merge", message: msg });
+          throw new RunError(msg, "spec_validation");
+        }
+
         runLogger.stageEnd("spec_merge", "succeeded", {
           workflowCount: packageJson.workflows.length,
           decomposed: true,
@@ -576,15 +612,32 @@ async function executeRun(
 
     stopHeartbeat();
 
+    // Task #556 Wave 3/4 — refinement degradation and authority-unavailable
+    // outcomes are first-class degradation signals on the persisted run
+    // truth path. A run with either flag set is treated as degraded even
+    // when no warnings were emitted, so the UI and DHG surfaces can show
+    // the typed reason end-to-end.
+    const refinementDegradedFlag = !!pipelineResult.refinementDegraded;
+    const authorityUnavailableFlag = pipelineResult.authorityStatus === "unavailable";
     const isDegraded = pipelineResult.warnings?.length > 0 ||
       pipelineResult.status === "handoff_only" ||
       pipelineResult.status === "structurally_invalid" ||
-      pipelineResult.status === "openable_with_warnings";
+      pipelineResult.status === "openable_with_warnings" ||
+      refinementDegradedFlag ||
+      authorityUnavailableFlag;
+    const warningMessages = (pipelineResult.warnings || []).map((w: any) => typeof w === "string" ? w : w.message || JSON.stringify(w));
+    const degradationMessages: string[] = [...warningMessages];
+    if (refinementDegradedFlag && Array.isArray(pipelineResult.refinementUnavailable)) {
+      for (const ru of pipelineResult.refinementUnavailable) {
+        degradationMessages.push(`refinement_unavailable: ${ru.workflow} (${ru.reason}, timeout=${ru.timeoutMs}ms, nodes=${ru.nodeCount}, retry=${ru.reducedContextRetryAttempted})`);
+      }
+    }
+    if (authorityUnavailableFlag) {
+      degradationMessages.push(`authority_unavailable: ${pipelineResult.authorityUnavailableReason || "reason not provided"}`);
+    }
     const outcomeSummary = runLogger.buildOutcomeSummary({
       status: isDegraded ? "succeeded_degraded" : "succeeded",
-      degradations: isDegraded
-        ? (pipelineResult.warnings || []).map((w: any) => typeof w === "string" ? w : w.message || JSON.stringify(w))
-        : undefined,
+      degradations: isDegraded ? degradationMessages : undefined,
     });
     await runLogger.flush();
 
@@ -595,6 +648,16 @@ async function executeRun(
     if (pipelineResult.fallbackModeActive) {
       modeDecisionContext.emergencyFallbackActive = true;
       modeDecisionContext.emergencyFallbackReason = pipelineResult.fallbackModeReason;
+    }
+    if (refinementDegradedFlag) {
+      modeDecisionContext.refinementDegraded = true;
+      modeDecisionContext.refinementUnavailable = pipelineResult.refinementUnavailable;
+    }
+    if (pipelineResult.authorityStatus) {
+      modeDecisionContext.authorityStatus = pipelineResult.authorityStatus;
+      if (pipelineResult.authorityUnavailableReason) {
+        modeDecisionContext.authorityUnavailableReason = pipelineResult.authorityUnavailableReason;
+      }
     }
 
     const outcomeReportJson = JSON.stringify({

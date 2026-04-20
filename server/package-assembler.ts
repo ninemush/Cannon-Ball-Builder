@@ -159,6 +159,7 @@ import { buildRootActivityAttr as _pkgBuildRootActivityAttr, buildRootActivityCh
     return mutationCount;
   }
   import type { WorkflowSpec as TreeWorkflowSpec, WorkflowNode as TreeWorkflowNode } from "./workflow-spec-types";
+  import { enforceWorkflowSpecContract, SpecContractViolation } from "./workflow-spec-types";
   import { normalizeWorkflowSpec } from "./normalize-workflow-spec";
   import { analyzeAndFix, setGovernancePolicies, type AnalysisReport } from "./workflow-analyzer";
   import { detectReframeworkStructurally, analyzeStateMachine } from "./xaml/workflow-graph-validator";
@@ -4003,6 +4004,19 @@ export type BuildResult = {
   criticalOperationSpecNormalizationDiagnostics?: SpecNormalizationDiagnostics;
   specNormAdoptionTrace?: ActivePathAdoptionTraceEntry[];
   criticalActivityContractDiagnostics?: RequiredPropertyDiagnosticsResult;
+  // Task #556 Wave 3 — refinement-degraded surfacing. When per-workflow AI
+  // refinement returns a null result or fails after the reduced-context
+  // retry, the workflow falls back to its decomposed spec and the entry
+  // is recorded here so the run ledger, DHG and UI can show the user that
+  // the package is degraded rather than silently shipped.
+  refinementUnavailable?: Array<{
+    workflow: string;
+    reason: "null_result" | "exception" | "validation_failed" | "timeout";
+    timeoutMs: number;
+    nodeCount: number;
+    reducedContextRetryAttempted: boolean;
+    detail?: string;
+  }>;
 };
 
 export function fixMixedLiteralExpressionSyntax(content: string): { content: string; fixes: string[] } {
@@ -4254,6 +4268,10 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
   let allTreeEnrichments: Map<string, { spec: TreeWorkflowSpec; processType: ProcessType }> = new Map();
   let _usedAIFallback = false;
   let authoritativeDecomposedEdges: Map<string, Set<string>> | null = null;
+  // Task #556 Wave 3 — collect per-workflow refinement-unavailable records
+  // so the run ledger and DHG can show degradation rather than silently
+  // shipping with the un-refined decomposed spec.
+  const refinementUnavailableList: NonNullable<BuildResult["refinementUnavailable"]> = [];
   if (generationMode === "baseline_openable") {
     console.log(`[UiPath] baseline_openable mode — skipping AI enrichment, using flat scaffold`);
   } else {
@@ -4266,6 +4284,13 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const { mapPackageSpecToTreeEnrichments } = await import("./spec-to-tree-mapper");
         const mapped = mapPackageSpecToTreeEnrichments(pkg);
         if (mapped.size > 0) {
+          // Task #556 Wave 1 — boundary contract enforcement #1
+          // (decomposer-output → tree). Every mapped TreeWorkflowSpec
+          // must satisfy WorkflowSpecSchema before downstream code may
+          // consume it. Throws SpecContractViolation on first failure.
+          for (const [wfName, wfEntry] of Array.from(mapped.entries())) {
+            enforceWorkflowSpecContract(wfEntry.spec, "decomposer_output", wfName);
+          }
           mappedAllTreeEnrichments = mapped;
           const mainEntry = mapped.get("Main") || mapped.values().next().value;
           if (mainEntry) {
@@ -4299,7 +4324,19 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           if (onProgress) onProgress({ type: "completed", stage: "spec_mapping", message: `Mapped ${mapped.size} decomposed spec(s) — proceeding to AI enrichment refinement` });
         }
       } catch (err: any) {
-        console.log(`[UiPath] Spec-to-tree mapping failed: ${err.message} — continuing with normal enrichment`);
+        // Task #556 Wave 2 — do not swallow spec-to-tree mapping failures.
+        // Task #556 Wave 1 — when the underlying error is a typed
+        // SpecContractViolation (raised by one of the four boundary
+        // enforcement calls), rethrow as-is so the run ledger records
+        // the boundary name and error list instead of a flattened
+        // generic error. Only wrap when the error is not typed.
+        if (err instanceof SpecContractViolation) {
+          console.error(`[UiPath] Spec contract violation at boundary "${err.boundary}"${err.workflowName ? ` (${err.workflowName})` : ""}: ${err.errors.slice(0, 3).join("; ")}`);
+          throw err;
+        }
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error(`[UiPath] Spec-to-tree mapping FAILED at stage boundary: ${detail}`);
+        throw new Error(`Spec-to-tree mapping failed at stage boundary: ${detail}`);
       }
     }
 
@@ -4326,8 +4363,21 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         const nodeCount = processNodes.filter(n => n.nodeType !== "start" && n.nodeType !== "end").length;
 
         if (mappedAllTreeEnrichments && mappedAllTreeEnrichments.size > 0) {
-          const perWorkflowTimeout = isSimpleTier ? 45000 : (nodeCount >= 12 ? 60000 : 50000);
-          console.log(`[UiPath] Requesting per-workflow AI refinement for ${mappedAllTreeEnrichments.size} decomposed spec(s) (${processNodes.length} process nodes, timeout per workflow: ${perWorkflowTimeout}ms)...`);
+          // Task #556 Wave 3 — refinement timeout is now a 120s floor that
+          // scales with per-workflow node count. The previous formula
+          // (45s/50s/60s based on coarse heuristics) was shrinking the
+          // budget below what the LLM actually needed, causing systemic
+          // null-result returns. The new floor + 8s/node scale gives the
+          // LLM headroom on large workflows; the upper cap (10 minutes)
+          // protects the run from a runaway prompt.
+          const REFINE_TIMEOUT_FLOOR_MS = 120_000;
+          const REFINE_TIMEOUT_PER_NODE_MS = 8_000;
+          const REFINE_TIMEOUT_CAP_MS = 600_000;
+          const computePerWorkflowTimeout = (perWfNodeCount: number): number => {
+            const scaled = REFINE_TIMEOUT_FLOOR_MS + Math.max(0, perWfNodeCount) * REFINE_TIMEOUT_PER_NODE_MS;
+            return Math.min(REFINE_TIMEOUT_CAP_MS, Math.max(REFINE_TIMEOUT_FLOOR_MS, scaled));
+          };
+          console.log(`[UiPath] Requesting per-workflow AI refinement for ${mappedAllTreeEnrichments.size} decomposed spec(s) (${processNodes.length} process nodes, base timeout floor: ${REFINE_TIMEOUT_FLOOR_MS}ms + ${REFINE_TIMEOUT_PER_NODE_MS}ms/node, cap: ${REFINE_TIMEOUT_CAP_MS}ms)...`);
           if (onProgress) onProgress({ type: "started", stage: "ai_enrichment_tree", message: `Starting per-workflow AI refinement for ${mappedAllTreeEnrichments.size} workflow(s)` });
           const treeHeartbeat = onProgress ? setInterval(() => {
             onProgress({ type: "heartbeat", stage: "ai_enrichment_tree", message: `AI is refining decomposed workflow specs individually...` });
@@ -4340,8 +4390,31 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             for (const [wfName, wfEntry] of Array.from(mappedAllTreeEnrichments.entries())) {
               const singleSpecMap = new Map<string, { spec: any; processType: ProcessType }>();
               singleSpecMap.set(wfName, wfEntry);
+              // Task #556 Wave 3 — count nodes in this workflow's decomposed
+              // spec to derive a per-workflow timeout. Fall back to the
+              // process-node count if the spec is empty.
+              const perWfNodeCount = (() => {
+                let count = 0;
+                const walk = (nodes: any[] | undefined) => {
+                  if (!Array.isArray(nodes)) return;
+                  for (const n of nodes) {
+                    count++;
+                    for (const arr of [n.children, n.tryChildren, n.catchChildren, n.finallyChildren, n.thenChildren, n.elseChildren, n.bodyChildren]) {
+                      if (Array.isArray(arr)) walk(arr);
+                    }
+                  }
+                };
+                walk(wfEntry.spec?.rootSequence?.children);
+                return count > 0 ? count : nodeCount;
+              })();
+              const perWorkflowTimeout = computePerWorkflowTimeout(perWfNodeCount);
+              // Task #556 Wave 1 — boundary contract enforcement #2
+              // (refiner-input). Re-validate the per-workflow spec just
+              // before it is handed to the LLM so we never invoke the
+              // refiner with something that does not match the schema.
+              enforceWorkflowSpecContract(wfEntry.spec, "refiner_input", wfName);
               try {
-                const perWfResult = await enrichWithAITree(
+                let perWfResult = await enrichWithAITree(
                   processNodes,
                   processEdges,
                   sddContent,
@@ -4352,7 +4425,45 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                   true,
                   singleSpecMap,
                 );
+
+                // Task #556 Wave 3 — one reduced-context retry on null.
+                // We strip the orchestrator-artifacts and any other
+                // optional context that bloats the prompt, and retry
+                // once with the same timeout. If the retry also returns
+                // null we fall through to the unavailable-tracking
+                // branch below.
+                let reducedContextRetryAttempted = false;
+                if (perWfResult === null || (perWfResult && perWfResult.status !== "success" && perWfResult.status !== "validation_failed")) {
+                  reducedContextRetryAttempted = true;
+                  console.log(`[UiPath] Per-workflow refinement "${wfName}": initial attempt returned null/non-terminal — retrying once with reduced context`);
+                  if (onProgress) onProgress({ type: "warning", stage: "ai_enrichment_tree", message: `Refinement for "${wfName}" returned null — retrying once with reduced context` });
+                  try {
+                    perWfResult = await enrichWithAITree(
+                      processNodes,
+                      processEdges,
+                      sddContent,
+                      [],                // strip orchestrator artifacts
+                      projectName,
+                      perWorkflowTimeout,
+                      automationPattern,
+                      true,
+                      singleSpecMap,
+                      // Task #556 Wave 3 — reduced-context retry flag.
+                      // Suppresses the wide catalog/template block and
+                      // SDD-derived UI context on the retry attempt.
+                      true,
+                    );
+                  } catch (retryErr: any) {
+                    console.warn(`[UiPath] Per-workflow refinement "${wfName}": reduced-context retry threw: ${retryErr?.message || String(retryErr)}`);
+                    perWfResult = null;
+                  }
+                }
                 if (perWfResult && perWfResult.status === "success") {
+                  // Task #556 Wave 1 — boundary contract enforcement #3
+                  // (refiner-output). The LLM's returned spec must satisfy
+                  // WorkflowSpecSchema before we accept it back into the
+                  // pipeline.
+                  enforceWorkflowSpecContract(perWfResult.workflowSpec, "refiner_output", wfName);
                   const refinedSpec = perWfResult.workflowSpec;
                   refinedSpec.name = wfName;
 
@@ -4425,13 +4536,69 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
                 } else if (perWfResult && perWfResult.status === "validation_failed") {
                   failedCount++;
                   console.log(`[UiPath] Per-workflow refinement "${wfName}": validation failed — keeping original decomposed spec`);
+                  // Task #556 Wave 3 — typed refinement_unavailable record.
+                  refinementUnavailableList.push({
+                    workflow: wfName,
+                    reason: "validation_failed",
+                    timeoutMs: perWorkflowTimeout,
+                    nodeCount: perWfNodeCount,
+                    reducedContextRetryAttempted,
+                    detail: "refiner returned validation_failed",
+                  });
+                  if (onProgress) onProgress({ type: "warning", stage: "refinement_unavailable", message: `[refinement_unavailable] "${wfName}" validation_failed (timeout=${perWorkflowTimeout}ms, nodes=${perWfNodeCount}, retry=${reducedContextRetryAttempted}) — shipping un-refined decomposed spec` });
+                } else if (perWfResult && perWfResult.status === "timeout") {
+                  // Task #556 Wave 3 — typed timeout preservation.
+                  // Previously this branch was flattened into
+                  // `null_result` because the enricher swallowed
+                  // AbortError into null. The enricher now returns a
+                  // typed `{status:"timeout", timeoutMs}` so we record
+                  // the correct reason and the exact timeout that fired.
+                  failedCount++;
+                  console.log(`[UiPath] Per-workflow refinement "${wfName}": timeout after ${perWfResult.timeoutMs}ms — keeping original decomposed spec`);
+                  refinementUnavailableList.push({
+                    workflow: wfName,
+                    reason: "timeout",
+                    timeoutMs: perWfResult.timeoutMs,
+                    nodeCount: perWfNodeCount,
+                    reducedContextRetryAttempted,
+                    detail: reducedContextRetryAttempted ? `refiner timed out after ${perWfResult.timeoutMs}ms (including reduced-context retry)` : `refiner timed out after ${perWfResult.timeoutMs}ms`,
+                  });
+                  if (onProgress) onProgress({ type: "warning", stage: "refinement_unavailable", message: `[refinement_unavailable] "${wfName}" timeout (timeout=${perWfResult.timeoutMs}ms, nodes=${perWfNodeCount}, retry=${reducedContextRetryAttempted}) — shipping un-refined decomposed spec` });
                 } else {
                   failedCount++;
                   console.log(`[UiPath] Per-workflow refinement "${wfName}": null result — keeping original decomposed spec`);
+                  refinementUnavailableList.push({
+                    workflow: wfName,
+                    reason: "null_result",
+                    timeoutMs: perWorkflowTimeout,
+                    nodeCount: perWfNodeCount,
+                    reducedContextRetryAttempted,
+                    detail: reducedContextRetryAttempted ? "refiner returned null after reduced-context retry" : "refiner returned null",
+                  });
+                  if (onProgress) onProgress({ type: "warning", stage: "refinement_unavailable", message: `[refinement_unavailable] "${wfName}" null_result (timeout=${perWorkflowTimeout}ms, nodes=${perWfNodeCount}, retry=${reducedContextRetryAttempted}) — shipping un-refined decomposed spec` });
                 }
               } catch (perWfErr: any) {
+                // Task #556 Wave 1 — SpecContractViolation at refiner_output
+                // (or refiner_input, should it ever reach this catch) is a
+                // typed stage-boundary contract failure. It must NOT be
+                // silently coerced into a refinement_unavailable fallback
+                // — rethrow so it propagates up as a fatal stage failure.
+                if (perWfErr instanceof SpecContractViolation) {
+                  console.error(`[UiPath] Per-workflow refinement "${wfName}": SpecContractViolation at boundary="${perWfErr.boundary}" — propagating as fatal stage failure (not converting to refinement_unavailable)`);
+                  throw perWfErr;
+                }
                 failedCount++;
                 console.log(`[UiPath] Per-workflow refinement "${wfName}": error (${perWfErr.message}) — keeping original decomposed spec`);
+                const isTimeout = /timeout|timed out|deadline/i.test(perWfErr?.message || "");
+                refinementUnavailableList.push({
+                  workflow: wfName,
+                  reason: isTimeout ? "timeout" : "exception",
+                  timeoutMs: perWorkflowTimeout,
+                  nodeCount: perWfNodeCount,
+                  reducedContextRetryAttempted: false,
+                  detail: perWfErr?.message || String(perWfErr),
+                });
+                if (onProgress) onProgress({ type: "warning", stage: "refinement_unavailable", message: `[refinement_unavailable] "${wfName}" ${isTimeout ? "timeout" : "exception"}: ${perWfErr?.message || String(perWfErr)} — shipping un-refined decomposed spec` });
               }
             }
 
@@ -4564,8 +4731,17 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const earlyTf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (_earlyMetaTarget?.targetFramework || (earlyIsServerless ? "Portable" : "Windows"));
     const earlyTreeSpecs: TreeWorkflowSpec[] = [];
     if (allTreeEnrichments.size > 0) {
-      Array.from(allTreeEnrichments.values()).forEach(entry => earlyTreeSpecs.push(entry.spec));
+      // Task #556 Wave 1 — boundary contract enforcement #4
+      // (assembler-input). Every spec the assembler is about to consume
+      // must satisfy WorkflowSpecSchema. Throws SpecContractViolation
+      // when violated so failures surface here, not as obscure XAML
+      // emission crashes downstream.
+      Array.from(allTreeEnrichments.entries()).forEach(([wfName, entry]) => {
+        enforceWorkflowSpecContract(entry.spec, "assembler_input", wfName);
+        earlyTreeSpecs.push(entry.spec);
+      });
     } else if (treeEnrichment?.status === "success") {
+      enforceWorkflowSpecContract(treeEnrichment.workflowSpec, "assembler_input", treeEnrichment.workflowSpec?.name);
       earlyTreeSpecs.push(treeEnrichment.workflowSpec);
     }
     const earlyDepRes = resolveDependencies(pkg, _studioProfile, earlyTreeSpecs.length > 0 ? earlyTreeSpecs : null, earlyTf as "Windows" | "Portable");
@@ -4727,11 +4903,21 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
     const _metaTarget2 = _metadataService.getStudioTarget();
     const tf: TargetFramework = _studioProfile ? _studioProfile.targetFramework : (_metaTarget2?.targetFramework || (isServerless ? "Portable" : "Windows"));
     const allTreeSpecsForDeps: TreeWorkflowSpec[] = [];
+    // Task #556 Wave 1 — boundary contract enforcement #4 (assembler-input)
+    // on the fresh/non-cached build path. Previously this enforcement only
+    // ran inside the cache-hit branch, so a cache miss could reach XAML
+    // emission without the WorkflowSpecSchema check. Running it here on
+    // every entry ensures the contract is enforced on EVERY run (cached
+    // and non-cached). Any violation throws SpecContractViolation which
+    // propagates as a typed stage failure instead of being silently
+    // coerced into emission.
     if (allTreeEnrichments.size > 0) {
-      Array.from(allTreeEnrichments.values()).forEach(entry => {
+      Array.from(allTreeEnrichments.entries()).forEach(([wfName, entry]) => {
+        enforceWorkflowSpecContract(entry.spec, "assembler_input", wfName);
         allTreeSpecsForDeps.push(entry.spec);
       });
     } else if (treeEnrichment?.status === "success") {
+      enforceWorkflowSpecContract(treeEnrichment.workflowSpec, "assembler_input", treeEnrichment.workflowSpec?.name);
       allTreeSpecsForDeps.push(treeEnrichment.workflowSpec);
     }
     const priorCompliantXamlSources: string[] = [];
@@ -11006,6 +11192,14 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         generationModeReason: modeConfig.reason,
         analysis: dhgAnalysis,
         authoritativeClassification,
+        // Task #556 Wave 3/4 — typed degradation surfaces wired into the
+        // DHG context so the generated handoff document renders a
+        // first-class `refinement_degraded` block and typed
+        // `authority_unavailable` banner when applicable.
+        refinementDegraded: refinementUnavailableList.length > 0 ? true : undefined,
+        refinementUnavailable: refinementUnavailableList.length > 0 ? refinementUnavailableList : undefined,
+        authorityStatus: assemblerOutcomeReport.authorityStatus,
+        authorityUnavailableReason: assemblerOutcomeReport.authorityUnavailableReason,
       };
       const dhg = generateDhgFromOutcomeReport(assemblerOutcomeReport, dhgContext);
       archive.append(dhg, { name: `${libPath}/DeveloperHandoffGuide.md` });
@@ -11544,6 +11738,11 @@ ${depEntries}
     postFreezeMutationTrace: getMutationTrace(),
     workflowAutoWiringDiagnostics: wiringDiagnostics,
     symbolDiscoveryDiagnostics: collectedSymbolDiscoveryDiagnostics.length > 0 ? collectedSymbolDiscoveryDiagnostics : undefined,
+    // Task #556 Wave 3 — surface per-workflow refinement degradation in
+    // the outcome report so the run ledger and DHG see it as a typed
+    // field rather than having to re-derive it from PipelineResult.
+    refinementUnavailable: refinementUnavailableList.length > 0 ? refinementUnavailableList : undefined,
+    refinementDegraded: refinementUnavailableList.length > 0 ? true : undefined,
   };
 
   if (buildCacheKey && fingerprint) {
@@ -11634,7 +11833,7 @@ ${depEntries}
       }
     }
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult, criticalActivityContractDiagnostics: collectedRequiredPropertyTraces.length > 0 ? buildDiagnosticsResult(collectedRequiredPropertyTraces) : undefined };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult, criticalActivityContractDiagnostics: collectedRequiredPropertyTraces.length > 0 ? buildDiagnosticsResult(collectedRequiredPropertyTraces) : undefined, refinementUnavailable: refinementUnavailableList.length > 0 ? refinementUnavailableList : undefined };
 }
 
 export function createTrackedArchive() {

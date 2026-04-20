@@ -458,6 +458,25 @@ export interface PipelineOutcomeReport {
   traceabilityManifest?: TraceabilityManifest;
   reachabilityPruning?: Array<{ file: string; action: "removed" | "retained"; reason: string }>;
   infrastructureRenameRecords?: Array<{ originalName: string; renamedName: string; reason: string; affectedReferences: string[] }>;
+  // Task #556 Wave 3 — refinement degradation surfaced in the outcome
+  // report so the run ledger and DHG can present per-workflow refinement
+  // skip reasons end-to-end instead of having to re-derive them from
+  // PipelineResult.
+  refinementDegraded?: boolean;
+  refinementUnavailable?: Array<{
+    workflow: string;
+    reason: "null_result" | "exception" | "validation_failed" | "timeout";
+    timeoutMs: number;
+    nodeCount: number;
+    reducedContextRetryAttempted: boolean;
+    detail?: string;
+  }>;
+  // Task #556 Wave 4 — authority outcome surfaced in the outcome report
+  // for the same reason. The hard-fail (windows-required +
+  // cli_skipped_incompatible_agent + full_implementation) does not reach
+  // this code path because it throws earlier; everything else lands here.
+  authorityStatus?: "available" | "unavailable";
+  authorityUnavailableReason?: string;
 }
 
 export interface PipelineResult {
@@ -504,6 +523,24 @@ export interface PipelineResult {
     unmappedRuleIds: string[];
   };
   traceabilityManifest?: TraceabilityManifest;
+  // Task #556 Wave 3 — refinement degradation surfaced on PipelineResult so
+  // it can be persisted to the run ledger, written to the DHG, and shown
+  // in the UI rather than only appearing as a console log.
+  refinementDegraded?: boolean;
+  refinementUnavailable?: Array<{
+    workflow: string;
+    reason: "null_result" | "exception" | "validation_failed" | "timeout";
+    timeoutMs: number;
+    nodeCount: number;
+    reducedContextRetryAttempted: boolean;
+    detail?: string;
+  }>;
+  // Task #556 Wave 4 — typed authority outcome surfaced when CLI authority
+  // could not validate the package (incompatible local agent, remote
+  // dispatcher unreachable, etc). For windows-required full_implementation
+  // runs this is converted into a hard failure earlier in the pipeline.
+  authorityStatus?: "available" | "unavailable";
+  authorityUnavailableReason?: string;
 }
 
 export interface DhgResult {
@@ -914,6 +951,15 @@ function buildDhgFromBuildResult(
           ? "CLI execution failed"
           : undefined,
       traceabilityManifest: traceabilityManifest || undefined,
+      // Task #556 Wave 3/4 — first-class typed degradation surfaces.
+      // refinement_degraded + per-workflow refinement_unavailable
+      // records and authority_unavailable are rendered as dedicated DHG
+      // blocks so readers see a typed degradation outcome separate from
+      // the legacy CLI mode wording.
+      refinementDegraded: effectiveOutcomeReport.refinementDegraded,
+      refinementUnavailable: effectiveOutcomeReport.refinementUnavailable,
+      authorityStatus: effectiveOutcomeReport.authorityStatus,
+      authorityUnavailableReason: effectiveOutcomeReport.authorityUnavailableReason,
     };
     dhgContent = generateDhgFromOutcomeReport(effectiveOutcomeReport, dhgContext);
   } else {
@@ -1889,6 +1935,12 @@ export async function compilePackageFromSpecs(
     }
 
     let cliValidationResult: import("./uipath-cli-validator").CliValidationResult | undefined;
+    // Task #556 Wave 4 — populated after cli_validation completes; surfaces
+    // typed authority outcome on the PipelineResult so the run ledger and
+    // DHG can show "authority_unavailable" rather than the previous silent
+    // skip behaviour.
+    let __authorityStatusForResult: "available" | "unavailable" | undefined;
+    let __authorityUnavailableReasonForResult: string | undefined;
     try {
       tracker.start("cli_validation", "Running UiPath CLI authoritative validation");
       const { runCliValidation, checkCliCompatibility, formatCliValidationSummary } = await import("./uipath-cli-validator");
@@ -2012,6 +2064,63 @@ export async function compilePackageFromSpecs(
         recoverable: true,
       });
       tracker.complete("cli_validation", "CLI validation unavailable — falling back to custom validation");
+    }
+
+    // Task #556 Wave 4 — typed authority outcome.
+    //
+    // Convert the previous silent skip / catch-and-continue behaviour into
+    // a typed authority outcome:
+    //
+    //   - any cli mode that means "we did not get an authoritative pack
+    //     result from a real UiPath CLI runner" maps to authority_unavailable
+    //   - cli_validated (local) and cli_remote_windows (remote) map to
+    //     authority_available
+    //
+    // For Windows-required projects (Windows / WindowsLegacy) running in
+    // full_implementation mode this is escalated to a hard failure: the
+    // user has asked for a production-ready package, and the only system
+    // that can authoritatively validate Windows packages is unavailable,
+    // so we refuse to ship rather than emit a buffer that we cannot
+    // attest is correct.
+    {
+      const mode = cliValidationResult?.mode;
+      const projectType = cliValidationResult?.compatibility.projectType;
+      const isAvailable = mode === "cli_validated" || mode === "cli_remote_windows";
+      __authorityStatusForResult = isAvailable ? "available" : "unavailable";
+      if (!isAvailable) {
+        const reason = mode
+          ? `cli mode "${mode}"${projectType ? ` (project type ${projectType})` : ""}`
+          : "cli_validation did not produce a result";
+        __authorityUnavailableReasonForResult = reason;
+        pipelineWarnings.push({
+          code: "AUTHORITY_UNAVAILABLE",
+          message: `[authority_unavailable] ${reason} — package will be shipped but is not authoritatively validated`,
+          stage: "cli_validation",
+          recoverable: true,
+        });
+        tracker.warn("cli_validation", `[authority_unavailable] ${reason}`, {
+          mode,
+          projectType,
+        });
+
+        const isWindowsRequired = projectType === "Windows" || projectType === "WindowsLegacy";
+        // `mode` here refers to the cli mode; the pipeline's generation
+        // mode is bound to the outer `mode` variable in the enclosing
+        // `compilePackageFromSpecs` scope. We use the spec-provided
+        // `requestedMode` (which is the user's original request) so an
+        // emergency-fallback downgrade does not also suppress the hard
+        // fail.
+        const effectiveGenerationMode = requestedMode || "full_implementation";
+        const isFullImpl = effectiveGenerationMode === "full_implementation";
+        // Hard-fail only for the named combination per task #556 Wave 4:
+        //   Windows-required + cli_skipped_incompatible_agent + full_implementation.
+        // Other unavailable modes degrade to a recoverable warning.
+        if (isWindowsRequired && mode === "cli_skipped_incompatible_agent" && isFullImpl) {
+          const failMsg = `[authority_unavailable] Hard-fail: Windows-required project (${projectType}) was requested in full_implementation mode but the local agent cannot run the Windows-flavour CLI and no remote runner was reachable. Refusing to ship an unvalidated authoritative artifact.`;
+          tracker.fail("cli_validation", failMsg, { cliMode: mode, projectType, generationMode: effectiveGenerationMode });
+          throw new Error(failMsg);
+        }
+      }
     }
 
     if (options?.runId) {
@@ -2281,6 +2390,23 @@ export async function compilePackageFromSpecs(
     };
     if (buildResult.outcomeReport) {
       buildResult.outcomeReport.cliAuthorityLedger = __ledger;
+      // Task #556 Wave 4 — persist authority outcome onto
+      // outcomeReport BEFORE DHG generation so buildDhgFromBuildResult
+      // (which reads from effectiveOutcomeReport = finalQualityReport?.outcomeContext
+      // || buildResult.outcomeReport) renders the typed
+      // authority_unavailable DHG block. Previously these fields only
+      // flowed through to PipelineResult, so the DHG could miss them
+      // despite authority being unavailable.
+      buildResult.outcomeReport.authorityStatus = __authorityStatusForResult;
+      buildResult.outcomeReport.authorityUnavailableReason = __authorityUnavailableReasonForResult;
+      // Also carry refinement-degradation state onto outcomeReport so
+      // the same DHG path reads it from a single source (even though
+      // buildResult.refinementUnavailable is populated earlier, we
+      // mirror it here for consistency with the DHG's source-of-truth).
+      if (buildResult.refinementUnavailable && buildResult.refinementUnavailable.length > 0) {
+        buildResult.outcomeReport.refinementDegraded = true;
+        buildResult.outcomeReport.refinementUnavailable = buildResult.refinementUnavailable;
+      }
     }
     console.log(`[Pipeline][cli-authority] Ledger: packArtifactSource=${__ledger.packArtifactSource}${__ledger.packFallbackReason ? `(${__ledger.packFallbackReason})` : ""}, openabilityTruth=${__ledger.openabilityTruthSource}, fidelityTruth=${__ledger.fidelityTruthSource}, framework=${__ledger.frameworkSelectionSource}, runner=${__ledger.cliRunnerType}, runMode=${__ledger.runMode}`);
 
@@ -2392,6 +2518,12 @@ export async function compilePackageFromSpecs(
         ? { perBucketCounts: __cliDefectRouting.perBucketCounts, unmappedRuleIds: __cliDefectRouting.unmappedRuleIds }
         : undefined,
       traceabilityManifest,
+      // Task #556 Wave 3 — surface refinement degradation
+      refinementUnavailable: buildResult.refinementUnavailable,
+      refinementDegraded: !!(buildResult.refinementUnavailable && buildResult.refinementUnavailable.length > 0),
+      // Task #556 Wave 4 — surface authority outcome (filled below from CLI mode)
+      authorityStatus: __authorityStatusForResult,
+      authorityUnavailableReason: __authorityUnavailableReasonForResult,
     };
 
     evictOldestPipelineCacheEntry();

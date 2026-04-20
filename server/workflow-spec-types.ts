@@ -189,3 +189,38 @@ export function validateWorkflowSpec(data: unknown): { success: true; data: Work
   });
   return { success: false, errors };
 }
+
+/**
+ * Task #556 Wave 1 — Typed contract violation raised when a stage boundary
+ * receives or produces data that does not satisfy the schema for that
+ * boundary. Carries the boundary name so the run ledger can report which
+ * stage failed without having to re-derive it from the stack.
+ */
+export class SpecContractViolation extends Error {
+  readonly boundary: string;
+  readonly errors: string[];
+  readonly workflowName?: string;
+  constructor(boundary: string, errors: string[], workflowName?: string) {
+    const summary = errors.slice(0, 5).join("; ");
+    super(`SpecContractViolation at ${boundary}${workflowName ? ` (${workflowName})` : ""}: ${summary}${errors.length > 5 ? ` (+${errors.length - 5} more)` : ""}`);
+    this.name = "SpecContractViolation";
+    this.boundary = boundary;
+    this.errors = errors;
+    this.workflowName = workflowName;
+  }
+}
+
+/**
+ * Boundary-enforcing parse. Throws SpecContractViolation when the data does
+ * not satisfy WorkflowSpecSchema. Use at the four named stage boundaries:
+ *   - decomposer output (per-workflow tree mapping)
+ *   - refiner input
+ *   - refiner output
+ *   - assembler input (when a WorkflowSpec is consumed downstream)
+ */
+export function enforceWorkflowSpecContract(data: unknown, boundary: string, workflowName?: string): WorkflowSpec {
+  const result = WorkflowSpecSchema.safeParse(data);
+  if (result.success) return result.data;
+  const errors = result.error.issues.map(issue => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+  throw new SpecContractViolation(boundary, errors, workflowName);
+}

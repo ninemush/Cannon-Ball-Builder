@@ -140,6 +140,28 @@ export interface DhgContext {
   cliRanForWorkflowClassification?: boolean;
   cliFallbackReason?: string;
   traceabilityManifest?: TraceabilityManifest;
+  // Task #556 Wave 3 — refinement degradation surface. When the refinement
+  // stage cannot produce a final spec for one or more workflows, the
+  // pipeline ships the un-refined decomposed spec and records the event
+  // here so the DHG and live UI render the degradation in a first-class
+  // way (not via CLI mode wording).
+  refinementDegraded?: boolean;
+  refinementUnavailable?: Array<{
+    workflow: string;
+    reason: "null_result" | "exception" | "validation_failed" | "timeout";
+    timeoutMs?: number;
+    nodeCount?: number;
+    reducedContextRetryAttempted?: boolean;
+    detail?: string;
+  }>;
+  // Task #556 Wave 4 — typed authority status. `authority_unavailable` is
+  // the new typed outcome used when CLI authoritative validation could
+  // not run (e.g., Windows-required full_implementation on a non-Windows
+  // runner). Surfaced separately from `cliValidationMode` so the DHG can
+  // render a typed authority-unavailable banner regardless of which CLI
+  // label was emitted.
+  authorityStatus?: "available" | "unavailable";
+  authorityUnavailableReason?: string;
 }
 
 interface WorkflowTierClassification {
@@ -438,6 +460,33 @@ export function generateDhgFromOutcomeReport(
     ) {
       md += `\n> **Note:** Remote Windows runner dispatch did not produce a CLI verdict (${context.cliRemoteRunner?.fallbackReason || "unknown reason"}). The pipeline gracefully degraded to fallback packaging. See the runbook in \`replit.md\` for the runner health-state semantics and escalation path.\n`;
     }
+  }
+
+  // Task #556 Wave 4 — typed authority-status surface. Rendered
+  // independently of the legacy CLI mode label so readers see an explicit
+  // typed authority outcome (not inferred from CLI wording).
+  if (context.authorityStatus === "unavailable") {
+    md += `\n**Authority Status:** \`authority_unavailable\``;
+    if (context.authorityUnavailableReason) {
+      md += ` — ${context.authorityUnavailableReason}`;
+    }
+    md += `\n`;
+    md += `\n> **Warning:** CLI authoritative validation is unavailable for this run. The package was produced without the authoritative verdict, so downstream systems must treat this as a non-authoritative outcome.\n`;
+  }
+
+  // Task #556 Wave 3 — refinement-degraded surface. Rendered in the DHG
+  // header as a typed first-class degradation event so readers see a
+  // dedicated refinement degradation block, not a CLI-adjacent note.
+  if (context.refinementDegraded || (context.refinementUnavailable && context.refinementUnavailable.length > 0)) {
+    const entries = context.refinementUnavailable || [];
+    md += `\n**Refinement:** \`refinement_degraded\` — ${entries.length} workflow(s) shipped un-refined\n`;
+    if (entries.length > 0) {
+      md += `\n| Workflow | Reason | Timeout (ms) | Nodes | Reduced-Context Retry | Detail |\n|---|---|---|---|---|---|\n`;
+      for (const e of entries) {
+        md += `| \`${e.workflow}\` | \`${e.reason}\` | ${e.timeoutMs ?? "—"} | ${e.nodeCount ?? "—"} | ${e.reducedContextRetryAttempted ? "yes" : "no"} | ${(e.detail || "").replace(/\|/g, "\\|").slice(0, 200)} |\n`;
+      }
+    }
+    md += `\n> **Note:** One or more workflows could not be refined by the AI refiner. The pipeline shipped the un-refined decomposed spec for those workflows. Each entry records the typed reason (\`null_result\`, \`timeout\`, \`validation_failed\`, or \`exception\`) and whether the reduced-context retry was attempted.\n`;
   }
 
   // Task #541 — surface the truth-source ledger so a reader can see which
