@@ -444,7 +444,7 @@ export function gen_http_client(args: GeneratorArgs): string {
   const acceptFormat = args.acceptFormat || args.AcceptFormat || "JSON";
   const body = args.body || args.Body || "";
   const bodyFormat = args.bodyFormat || args.BodyFormat || "application/json";
-  const outputVar = args.outputVar || args.ResponseContent || "str_ResponseContent";
+  const outputVar = args.outputVar || args.ResponseContent || "str_ResponseBody";
   const statusVar = args.statusVar || args.ResponseStatus || "";
 
   let bodyAttr = "";
@@ -746,10 +746,18 @@ export function gen_output_data_table(args: GeneratorArgs): string {
 
 export function gen_create_form_task(args: GeneratorArgs): string {
   const dn = _escapeXmlAttr(args.displayName || "Create Form Task");
-  const taskTitle = args.taskTitle || args.TaskTitle || "";
-  const taskCatalog = args.taskCatalog || args.TaskCatalog || "";
+  const taskTitleRaw = (args.taskTitle as string) || (args.TaskTitle as string) || "";
+  const titleRaw = (args.title as string) || (args.Title as string) || taskTitleRaw || "Form Task";
+  const formSchemaPathRaw = (args.formSchemaPath as string) || (args.FormSchemaPath as string) || "FormSchema.json";
+  const taskPriorityRaw = (args.taskPriority as string) || (args.TaskPriority as string) || "Medium";
+  const taskCatalog = (args.taskCatalog as string) || (args.TaskCatalog as string) || "";
 
-  return `<upers:CreateFormTask TaskTitle="${_escapeXmlAttr(taskTitle)}" TaskCatalog="${_escapeXmlAttr(taskCatalog)}" DisplayName="${dn}" />`;
+  let attrs = `Title="${_escapeXmlAttr(titleRaw)}" FormSchemaPath="${_escapeXmlAttr(formSchemaPathRaw)}" TaskPriority="${_escapeXmlAttr(taskPriorityRaw)}"`;
+  if (taskTitleRaw) attrs += ` TaskTitle="${_escapeXmlAttr(taskTitleRaw)}"`;
+  if (taskCatalog) attrs += ` TaskCatalog="${_escapeXmlAttr(taskCatalog)}"`;
+  attrs += ` DisplayName="${dn}"`;
+
+  return `<upers:CreateFormTask ${attrs} />`;
 }
 
 export function gen_read_pdf_text(args: GeneratorArgs): string {

@@ -45,9 +45,13 @@ export function getPackageNamespaceMap(): Record<string, PackageNamespaceInfo> {
     for (const entry of entries) {
       const key = entry.packageId;
       if (!map[key]) {
-        const xmlns = entry.xmlns || (entry.clrNamespace && entry.assembly
-          ? `clr-namespace:${entry.clrNamespace};assembly=${entry.assembly}`
-          : "");
+        const xmlns = entry.xmlns
+          ? entry.xmlns
+          : (entry.clrNamespace === "UiPath.Core.Activities" && entry.prefix === "ui")
+            ? "http://schemas.uipath.com/workflow/activities"
+            : (entry.clrNamespace && entry.assembly
+              ? `clr-namespace:${entry.clrNamespace};assembly=${entry.assembly}`
+              : "");
         map[key] = {
           prefix: entry.prefix,
           xmlns,

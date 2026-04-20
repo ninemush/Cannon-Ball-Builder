@@ -856,19 +856,15 @@ function discoverAndRegisterArgRef(argName: string, registry: DeclarationRegistr
   const direction = lower.startsWith("out_") ? "OutArgument" as const
     : lower.startsWith("io_") ? "InOutArgument" as const
     : "InArgument" as const;
-  const inferredType = inferTypeFromPrefix(argName);
-  if (!inferredType) {
-    registry.recordSymbolDiagnostic({
-      symbol: argName,
-      category: "argument",
-      inferredType: "x:Object",
-      declarationEmitted: false,
-      scope: "workflow",
-      source: "discovered-reference",
-      ambiguityReason: `No type evidence from prefix for argument "${argName}"`,
-    });
-    console.log(`[Argument Declaration] Skipping auto-declaration of "${argName}" in "${workflowName}" — no type evidence from prefix`);
-    return;
+  const inferredFromPrefix = inferTypeFromPrefix(argName);
+  // For argument prefixes (in_/out_/io_), the prefix only encodes direction —
+  // not type. When no body-prefix carries type evidence, fall back to x:Object
+  // so the argument is still declared (Studio accepts x:Object), rather than
+  // leaving it undeclared and triggering a downstream "undeclared variable"
+  // QG error.
+  const inferredType = inferredFromPrefix ?? "x:Object";
+  if (!inferredFromPrefix) {
+    console.log(`[Argument Declaration] No body-prefix type evidence for "${argName}" in "${workflowName}" — declaring as ${direction} x:Object`);
   }
   registry.registerArgument({
     name: argName,

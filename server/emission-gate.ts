@@ -1030,6 +1030,17 @@ export function checkNormalizationInvariants(
     });
   }
 
+  const blockedSentinelPattern = /__BLOCKED_TYPED_PROPERTY__/g;
+  let blockedMatch;
+  while ((blockedMatch = blockedSentinelPattern.exec(content)) !== null) {
+    if (isInDeclarationRange(blockedMatch.index)) continue;
+    violations.push({
+      pattern: "blocked-sentinel-leak",
+      detail: `Blocked property sentinel leaked into XAML at ${fileName}:${findLineNumber(content, blockedMatch.index)} — value "${blockedMatch[0]}" must be filtered before emission`,
+      line: findLineNumber(content, blockedMatch.index),
+    });
+  }
+
   const allSentinelPattern = /\b(__BLOCKED_\w+|HANDOFF_\w+|STUB_\w+|ASSEMBLY_FAILED\w*|PLACEHOLDER_\w+)\b/g;
   let bsMatch;
   while ((bsMatch = allSentinelPattern.exec(content)) !== null) {

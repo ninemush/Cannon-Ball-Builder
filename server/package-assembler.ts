@@ -3258,6 +3258,11 @@ export function buildAssemblyToPackageMap(): Map<string, string> {
       }
     }
   }
+  for (const [aliasAssembly, canonicalPackage] of Object.entries(UIPATH_PACKAGE_ALIAS_MAP)) {
+    if (!map.has(aliasAssembly) && !isFrameworkAssembly(canonicalPackage)) {
+      map.set(aliasAssembly, canonicalPackage);
+    }
+  }
   return map;
 }
 

@@ -1877,7 +1877,7 @@ export function runPreCompliancePackageModeGuard(
       violations: broadViolations,
       summary: genuineCount === 0
         ? `Pre-compliance guard passed (catalog unavailable — broad scan; ${broadViolations.length} pipeline-fallback safe placeholder(s) recorded as localized degradation)`
-        : `Pre-compliance guard FAILED: ${genuineCount} genuine sentinel violation(s) (of ${broadViolations.length} total; ${broadViolations.length - genuineCount} pipeline-fallback)`,
+        : `Pre-compliance guard FAILED via broad scan (catalog unavailable): ${genuineCount} genuine sentinel violation(s) (of ${broadViolations.length} total; ${broadViolations.length - genuineCount} pipeline-fallback)`,
     };
   }
 
