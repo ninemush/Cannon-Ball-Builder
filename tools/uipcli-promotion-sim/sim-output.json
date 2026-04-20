@@ -1,0 +1,304 @@
+{
+  "generatedAt": "2026-04-20T12:48:22.663Z",
+  "summary": {
+    "totalRuns": 10,
+    "simulatableRuns": 0,
+    "regressionRiskRuns": 0,
+    "expectedChurnRuns": 0,
+    "safeRuns": 0,
+    "topLine": "deferred",
+    "rationale": "DEFERRED: 0 of 10 runs in the sample carried real CLI execution data, so #541 has no CLI-grounded behavior to differ on. The simulator cannot produce evidence-based verdict/artifact/routing/DHG deltas from this sample. Re-run after a Windows runner (#549) lands or after #541 Phase 1 step 1 (capability-driven framework selection) starts producing CLI shadow data on Linux."
+  },
+  "reports": [
+    {
+      "runId": "f7d4f7ac-01fe-4f60-99d3-14a46f39e91c",
+      "specId": "d3274c92-1bb8-46a9-8a14-4ddd0c7d3da6",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "ffeeb0f4-5ee0-422c-b347-ac1a60e9b74d",
+      "specId": "348a09fd-b435-45fb-9dbc-ee0c30ea6135",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "66561075-d7c8-4ffe-b2c6-cc64d07fa982",
+      "specId": "d3274c92-1bb8-46a9-8a14-4ddd0c7d3da6",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "b2bda0c2-b70e-41da-8649-479ba3f9e209",
+      "specId": "348a09fd-b435-45fb-9dbc-ee0c30ea6135",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "53b42526-961d-45eb-a1ff-7e44279d53d6",
+      "specId": "d3274c92-1bb8-46a9-8a14-4ddd0c7d3da6",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "e8a4c523-49cf-4c22-b408-1fa3eabe4278",
+      "specId": "348a09fd-b435-45fb-9dbc-ee0c30ea6135",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "failed",
+        "simulatedStatus": "failed",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "fallback_heuristic"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "0a2318f3-1b3b-4cd6-8219-dba1a798dc5a",
+      "specId": "d3274c92-1bb8-46a9-8a14-4ddd0c7d3da6",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "0b60dfcd-a70e-4aa0-9c5c-223585f1ad2e",
+      "specId": "348a09fd-b435-45fb-9dbc-ee0c30ea6135",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "failed",
+        "simulatedStatus": "failed",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "fallback_heuristic"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "d5f102a2-2a62-4f8f-84d8-5544b4a656fb",
+      "specId": "348a09fd-b435-45fb-9dbc-ee0c30ea6135",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    },
+    {
+      "runId": "03cda18b-26bf-463c-baf7-d2e50385472d",
+      "specId": "d3274c92-1bb8-46a9-8a14-4ddd0c7d3da6",
+      "cliMode": "absent",
+      "notSimulatable": true,
+      "verdict": {
+        "actualStatus": "structurally_invalid",
+        "simulatedStatus": "structurally_invalid",
+        "simulatable": false,
+        "agree": true,
+        "reason": "CLI did not produce usable signals (mode=absent); #541 falls back to legacy heuristic — simulated verdict is identical to actual by definition. Run is not counted toward simulatable totals.",
+        "openabilityTruthSource": "fallback_heuristic",
+        "fidelityTruthSource": "final_quality_report"
+      },
+      "artifact": {
+        "packArtifactSourceLegacy": "fallback_adm_zip",
+        "packArtifactSourceSimulated": "fallback_adm_zip",
+        "packFallbackReason": "cli_unavailable",
+        "comparable": false,
+        "entryDiff": [],
+        "notes": "Simulated #541 would also use the hand-rolled packer; both runs ship the same artifact."
+      },
+      "routing": [],
+      "studioCompat": [],
+      "risks": [],
+      "notes": [
+        "Outcome report contains no cliValidation block; CLI either did not run or the result is not persisted today."
+      ]
+    }
+  ]
+}
