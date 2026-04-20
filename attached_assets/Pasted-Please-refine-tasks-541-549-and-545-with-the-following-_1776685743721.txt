@@ -1,0 +1,132 @@
+Please refine tasks #541, #549, and #545 with the following changes. Preserve the current structure and forensic grounding, but tighten the execution boundaries and acceptance criteria.
+
+GLOBAL INTENT
+Stay true to the goal:
+- uipcli is authoritative for Studio openability and first-party packaging
+- pipeline-native validation remains authoritative for business-logic fidelity / degradation that CLI cannot see
+- #549 unlocks Windows-project CLI coverage
+- #545 is optional, non-gating verification only
+
+Do not broaden scope. Tighten the plans without turning them into platform-architecture rewrites.
+
+==================================================
+#541 REFINEMENTS
+==================================================
+
+1) Tighten the “hard structural fact” exception
+In the verdict reconciliation section, replace any open-ended wording like “unless there is a hard structural fact that invalidates the CLI result” with an explicit bounded list. Allowed examples:
+- CLI-produced artifact missing at expected path
+- shipped artifact hash mismatch / corruption
+- artifact stale relative to current run id
+- pack reported success but returned unusable output metadata
+- entry artifact absent despite successful pack record
+
+The point: finalQualityReport may still downgrade fidelity, but it must not override successful CLI openability except in narrowly defined artifact-integrity cases.
+
+2) Constrain blocking_cli_error harder
+Keep the 3-bucket model:
+- mapped_to_iterative_corrector
+- surfaced_as_localized_dhg_todo
+- blocking_cli_error
+
+But explicitly state:
+- blocking_cli_error is rare
+- membership must be explicit and reviewable rule-by-rule
+- it must not become the default sink for unmapped CLI errors
+- unknown future ruleIds default to surfaced_as_localized_dhg_todo, never blocking_cli_error unless explicitly added with justification
+
+3) Add rollout control for the Phase 1 authority switch
+Add a requirement that the CLI-authoritative shipping/verdict path is feature-flagged for rollout.
+Persist a machine-readable run field showing whether the run executed in:
+- shadow mode
+- authoritative mode
+
+This does not weaken the end-state. It only makes rollout safer.
+
+4) Tighten package-removal safety
+Keep auto-add allowed.
+Tighten removal:
+- removal requires proof against the exact emitted project under analysis
+- removals must be logged with reason + artifact diff evidence
+- no package-removal behavior may ship in the same PR that first introduces CLI-derived package reconciliation unless replay evidence is attached
+
+5) Clarify dependency on #549 for the Windows-required named fixture bar
+Keep the strict named-fixture bar for BirthdayGreetings and POInvoiceReconYY.
+But explicitly state:
+- the full strict CLI-pack bar for Windows-required fixtures depends on #549
+- before #549, #541 can fully satisfy the strict bar only for CrossPlatform-eligible fixtures
+- do not let this ambiguity create a false failure against #541 when the actual blocker is lack of Windows runner coverage
+
+==================================================
+#549 REFINEMENTS
+==================================================
+
+6) Force a single chosen runner topology in the implemented plan
+Keep the option-comparison step, but refine acceptance so the final task requires:
+- one chosen topology
+- one documented rationale
+- one production path
+Do not leave multiple equivalent implementation branches open at acceptance time.
+
+7) Add queueing / timeout policy
+In the health-state / dispatch section, require explicit values or config-backed policy for:
+- max dispatch wait
+- max execution time
+- whether “busy” means queue vs immediate fallback
+- retry count
+- when degraded still dispatches vs falls back
+
+8) Persist request / response hash chain
+Because the runner contract is artifact-based, require:
+- content hash of dispatched project bundle
+- returned artifact hash
+- persisted association between request hash, runner metadata, and returned artifact hash
+This is needed for reproducibility and debugging.
+
+9) Add one operational non-functional metric
+In the runbook / verification section, require capturing:
+- observed median or p95 dispatch/cold-start latency
+- approximate per-run cost band
+This is not a hard product-quality gate, but it must be documented.
+
+==================================================
+#545 REFINEMENTS
+==================================================
+
+10) Keep #545, but make deferral automatic when data is low-value
+Refine the task so it explicitly says:
+- #545 is optional and non-gating
+- preferred input set is the last 5–10 runs where CLI actually executed
+- include both local_linux and remote_windows if available
+- if no meaningful remote_windows sample exists yet, the task may be deferred automatically without blocking #541
+
+11) Keep #545 scoped strictly to Phase 1 behavior
+Do not let it expand into simulation of:
+- validator retirement
+- package resolver retirement
+- activity-contract extractor
+- regression fixtures
+It should remain limited to:
+- verdict delta
+- shipped artifact delta
+- analyzer routing delta
+- DHG Studio Compatibility delta
+- regression-risk summary
+
+==================================================
+EDITORIAL / STRUCTURAL
+==================================================
+
+12) Preserve the current forensic grounding
+Do not remove references to:
+- d3274c92
+- 348a09fd
+- BDAYGREETINGS-DailyWorkQueue
+- GetCredential.AssetName drift
+- Windows-runner skip behavior
+These are important evidence anchors and should remain visible.
+
+13) Do not duplicate policy text unnecessarily
+If “Done looks like” already captures a rule mechanically, do not restate it again in a separate reviewer-policy block unless the duplication adds real enforcement value.
+
+Please return the refined task text for #541, #549, and #545 with these changes incorporated, while preserving the current intent and staged structure.

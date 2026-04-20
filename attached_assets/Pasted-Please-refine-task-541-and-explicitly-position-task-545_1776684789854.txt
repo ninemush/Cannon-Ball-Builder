@@ -1,0 +1,154 @@
+Please refine task #541 and explicitly position task #545 as optional post-#549 verification rather than a prerequisite gate.
+
+Goals for the refinement:
+
+1. Keep #541 fully aligned to the core goal: deeply embed uipcli as the first-party authoritative source for validation, packaging, and DHG truth wherever CLI actually runs.
+2. Keep #541 true to the authority model. Do not drift back toward “CLI as advisory.” When CLI runs successfully, it must be the primary source of truth.
+3. Reflect the practical sequencing reality: Windows-project coverage depends on #549.
+
+Please update #541 with the following refinements:
+
+A. Tighten the authority model
+
+* State explicitly that there is only one authoritative pack artifact per run:
+
+  * if CLI pack succeeds, the shipped artifact must be the exact CLI-produced .nupkg
+  * if CLI is skipped or fails before artifact creation, fallback packaging may be used
+  * when fallback packaging is used, the run record and DHG must state that first-party packaging was not achieved for that run
+* Add a persisted field:
+
+  * packArtifactSource: "uipcli" | "fallback_adm_zip"
+  * plus subreason / mode when fallback is used
+
+B. Tighten verdict truth hierarchy
+
+* Make the hierarchy explicit:
+
+  1. if CLI ran and cliPackSuccess === false, verdict must be structurally_invalid
+  2. if CLI ran and cliPackSuccess === true, CLI analyzer results determine studio_stable vs openable_with_warnings
+  3. finalQualityReport.derivedStatus may still participate, but must not override a failed CLI pack
+  4. fallback structural heuristics are allowed only when CLI did not run or produced no usable result
+* Use the real enum names from source, not assumed names. Verify against current code.
+
+C. Make framework choice capability-driven and auditable
+
+* Preserve the current refined design: do not blanket-flip everything to CrossPlatform
+* The framework decision must be based on the final emitted activity/package set, not the pre-emission spec alone
+* Persist:
+
+  * frameworkSelectionSource: "static_profile" | "post_emission_override"
+  * frameworkSelectionReason
+  * the package/activity that forced Windows when applicable
+* When CLI is skipped because of framework/runner mismatch, DHG must say exactly why
+
+D. Tighten analyzer routing invariants
+
+* Add a hard invariant:
+
+  * no Error-severity CLI analyzer rule may end up silently demoted
+* Every Error rule must land in exactly one bucket:
+
+  * mapped_to_iterative_corrector
+  * surfaced_as_localized_DHG_TODO
+  * known_blocking_cli_error
+* Unknown future ruleIds must default to localized DHG surfacing, never silent warning demotion
+* Keep the mapping scope realistic:
+
+  * require full coverage for Error rules observed in the named replay fixtures plus the selected corpus baseline
+  * do not require speculative mapping of every possible analyzer rule up front
+
+E. Tighten package reconciliation safety
+
+* Keep auto-add behavior for packages CLI proves are missing
+* Restrict package removal:
+
+  * removal allowed only when verified safe against the emitted project under analysis
+  * never remove packages just because one analyzer/pack run did not reference them
+* State clearly that “auto-add yes, cautious removal only with proof” is the rule
+
+F. Tighten validator retirement
+
+* Do not phrase Phase 2 as blanket retirement of hand-rolled validators
+* Make it defect-class gated:
+
+  * each hand-rolled validator may be retired only for the specific defect classes where replay/corpus evidence proves CLI replacement coverage
+* Keep vbnet-expression-linter as pre-emission heuristic unless and until defect-class replacement is proven
+
+G. Preserve the high regression bar for the two named fixtures
+
+* Keep the strong acceptance bar for BirthdayGreetings (348a09fd) and POInvoiceReconYY (d3274c92):
+
+  * zero CLI analyzer Errors
+  * zero pack errors
+  * shipped artifact comes from CLI
+  * no whole-workflow stubs from defect classes previously closed
+* Do not soften this bar for the named fixtures
+* Softer “routed-or-surfaced” wording is acceptable only for broader non-named corpus runs
+
+H. Preserve forensic grounding
+
+* Keep the concrete run citations and defect references in the plan:
+
+  * d3274c92 recent runs
+  * BDAYGREETINGS-DailyWorkQueue false positive
+  * GetCredential.AssetName / Target drift
+  * Windows-runner skip behavior
+* Do not over-abstract the evidence section
+
+I. Reduce duplication
+
+* If the plan has both “Done looks like” and separate “Reviewer rules,” trim duplication
+* Prefer one strong set of mechanically checkable acceptance criteria over repeated policy wording
+
+J. Clarify sequencing with #549 and #545
+
+* Update #541 to state clearly:
+
+  * #549 is the counterpart task that unlocks authoritative CLI coverage for Windows projects
+  * #541 still delivers immediate value for CrossPlatform-eligible projects and for consumer logic
+* Reframe #545:
+
+  * it is not a prerequisite for #541
+  * it is an optional or post-#549 verification/reporting task
+  * its best use is after #549 has generated real Windows-project CLI shadow data
+* In other words:
+
+  * recommended sequence: #549 first, then #541, then optional #545 verification
+  * acceptable fast-track: partial #541 Phase 1 framework-selection work while #549 is in flight
+
+K. Add one explicit non-goal
+
+* #541 must not silently become a broad platform-modernization catch-all
+* It is specifically about:
+
+  * CLI execution coverage
+  * CLI authority for packaging/verdict/DHG truth
+  * analyzer routing
+  * incremental validator/package/registry modernization where explicitly stated
+* Unrelated cleanup stays out
+
+Also please refine #545 accordingly:
+
+1. Recast it as a non-gating simulation/report task
+2. Make clear it is most valuable after #549 is producing Windows-run shadow CLI data
+3. Keep it read-only
+4. Focus it on:
+
+   * actual vs simulated verdict delta
+   * actual shipped artifact vs CLI artifact delta
+   * analyzer Error routing delta
+   * DHG Studio Compatibility delta
+   * explicit regression-risk summary
+5. Add a recommendation section in #545 stating:
+
+   * if #549 is not yet live and recent representative runs are mostly CLI-skipped Windows projects, #545 may be deferred without blocking #541
+   * if #549 is live, #545 becomes high-value post-implementation verification
+
+Please return:
+
+1. a tightened rewritten #541
+2. a tightened rewritten #545
+3. a short sequencing recommendation at the top:
+
+   * preferred order
+   * optional order if we want speed

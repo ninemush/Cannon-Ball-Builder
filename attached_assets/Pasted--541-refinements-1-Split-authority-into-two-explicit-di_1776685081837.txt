@@ -1,0 +1,137 @@
+#541 refinements
+1. Split “authority” into two explicit dimensions
+
+Right now the plan can still be misread as one monolithic truth source. Tighten it to:
+
+Openability authority: uipcli
+Packaging authority: uipcli
+Business-logic fidelity / degradation authority: finalQualityReport + DHG + prior structural diagnostics
+
+That avoids future confusion and keeps the plan aligned to your actual goal.
+
+Suggested wording:
+
+“uipcli is the authoritative source for package openability and the authoritative producer of the shipped package artifact when pack succeeds.”
+“Pipeline-native validation remains the authority for non-openability concerns that CLI does not model, including localized degradation, whole-workflow stubbing, and business-logic preservation.”
+2. Tighten the reconciliation rule
+
+Replit is right to push back on demoting finalQualityReport on the success path.
+
+Refine #541 to say:
+
+If cliPackSuccess === false → structurally_invalid
+If cliPackSuccess === true:
+CLI determines Studio-openable
+finalQualityReport.derivedStatus may still downgrade from studio_stable to openable_with_warnings or handoff_only when pipeline degradations remain
+but it must not contradict openability by claiming the package is structurally invalid unless there is a hard structural fact that also invalidates the CLI result or the CLI result is absent/stale/corrupt
+
+That gives you a clean hierarchy instead of a fuzzy “participates” rule.
+
+3. Persist a clearer truth-source ledger
+
+Add these run-record fields explicitly:
+
+packArtifactSource: "uipcli" | "fallback_adm_zip"
+openabilityTruthSource: "uipcli" | "fallback_heuristic"
+fidelityTruthSource: "final_quality_report" | "fallback_heuristic"
+frameworkSelectionSource: "static_profile" | "post_emission_override"
+frameworkSelectionReason: string
+cliRunnerType: "local_linux" | "remote_windows" | "none"
+
+This will save you pain later when debugging mixed-path runs.
+
+4. Make unknown CLI error handling impossible to silently bypass
+
+Replit’s third bucket is useful, but define it tightly.
+
+Use exactly these buckets:
+
+mapped_to_iterative_corrector
+surfaced_as_localized_dhg_todo
+blocking_cli_error
+
+And define blocking_cli_error as:
+
+CLI Error severity
+no known corrective mapping
+cannot be honestly represented as a localized handoff without misrepresenting package viability
+
+That keeps it from becoming a dumping ground.
+
+5. Tighten the package-reconciliation safety rule
+
+This is important enough to say twice in the task:
+
+Auto-add is allowed
+Auto-remove is opt-in and proof-based
+
+Refine to:
+
+removal only when validated against the exact emitted project under analysis
+no broad “package not referenced by this one pack run, therefore remove it” logic
+package removals must be logged with reason and artifact diff evidence
+6. Make Phase 2 retirement explicitly defect-class scoped
+
+Replit is right here. I’d make this even sharper:
+
+No validator retirement may happen in the same PR as its replacement unless replay evidence is attached
+each retired defect class must cite:
+old validator source
+CLI rule(s) covering it
+at least one replay/corpus proof
+one false-positive that is eliminated by the change
+
+That will stop “quiet validator shutdown” drift.
+
+7. Keep the hard bar for the two named fixtures
+
+I would keep:
+
+zero analyzer Errors
+zero pack errors
+shipped artifact from CLI
+no whole-workflow stubs from previously closed defect classes
+
+For those two fixtures specifically, softer wording would be too lenient.
+
+#549 refinements
+
+This task is directionally right, but I’d tighten three things.
+
+1. Make the runner contract artifact-based, not workspace-based
+
+Do not let #549 drift into “remote machine builds from mutable repo state.”
+
+Refine it so the Windows runner receives:
+
+a versioned project bundle payload
+pinned CLI version
+pinned runtime
+explicit command
+returns:
+analyze JSON
+pack JSON
+produced .nupkg
+stdout/stderr
+runner metadata
+
+That makes runs reproducible and auditable.
+
+2. Add byte-fidelity proof as an acceptance criterion
+
+You already hint at this. Make it explicit:
+
+the .nupkg returned from remote Windows and marked as shipped must be byte-identical to the artifact persisted by the pipeline for that run
+3. Add health-state semantics
+
+Not just “reachable/unreachable.”
+
+Use:
+
+healthy
+degraded
+busy
+unreachable
+misconfigured
+
+And persist the state that caused fallback. That will matter operationally.

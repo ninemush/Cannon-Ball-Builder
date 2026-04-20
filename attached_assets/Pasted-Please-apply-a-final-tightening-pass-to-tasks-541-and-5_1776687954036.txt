@@ -1,0 +1,43 @@
+Please apply a final tightening pass to tasks #541 and #549 only. Do not broaden scope, do not change the authority model, and do not weaken the goal of making uipcli authoritative for Studio openability and packaging while keeping pipeline-native validation authoritative for business-logic fidelity/degradation.
+
+Refine #541 with these exact clarifications:
+
+1. Shadow-mode artifact handling:
+
+   * Make explicit that in runMode = "shadow", the CLI-produced artifact is persisted for comparison/evidence only and is never shipped as the production artifact.
+2. Analyzer bucket evidence location:
+
+   * Tighten the wording so per-bucket counts and unmapped ruleIds must be persisted on the run record and surfaced in the DHG or attached evidence bundle. Build-time reporting alone is not sufficient.
+3. blocking_cli_error on successful pack:
+
+   * Clarify behavior when cliPackSuccess = true and one or more analyzer Errors land in blocking_cli_error.
+   * State that such a run cannot be classified as studio_stable.
+   * It must downgrade at least to openable_with_warnings, and may become structurally_invalid only if the specific blocking_cli_error rule is explicitly defined as openability-blocking in the rule membership list.
+   * Preserve the current split: CLI owns openability, pipeline-native validation owns fidelity.
+4. 20-run retirement sample:
+
+   * Keep the existing requirement that the sample includes both local_linux and remote_windows once #549 is live.
+   * Add that the sample must include at least one Windows-required project once #549 is live.
+
+Refine #549 with these exact clarifications:
+
+1. Health probe behavior:
+
+   * Replace the ambiguous “periodically (or on demand before each dispatch)” wording with a concrete statement that runner health is cached with a short TTL and refreshed on demand when stale; dispatch must not rely on an unbounded blocking probe before every job.
+2. Byte-fidelity failure consequences:
+
+   * Extend the byte-fidelity failure rule so that a mismatch forces packArtifactSource = "fallback_adm_zip" and preserves the failed remote artifact hash chain on the run record for forensic review.
+
+Important constraints:
+
+* Do not change the core authority split in #541.
+* Do not make #545 gating.
+* Do not introduce new phases or new tasks.
+* Do not broaden package-removal behavior.
+* Keep all existing forensic grounding, named runs, named fixtures, and counterpart dependency on #549 intact.
+
+Output:
+
+1. A concise summary of the exact edits made.
+2. The fully updated task text for #541.
+3. The fully updated task text for #549.
