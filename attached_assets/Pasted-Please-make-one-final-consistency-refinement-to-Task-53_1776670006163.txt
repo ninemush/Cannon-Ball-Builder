@@ -1,0 +1,43 @@
+Please make one final consistency refinement to Task #539. Do not change the core intent, evidence, root patterns, acceptance criteria, or named fixtures. This is a scope-alignment cleanup only.
+
+Refinement required:
+The task now correctly narrows CLI/uipcli work to fixture-driven, minimal contract corrections in Step 5 and explicitly hands the broader CLI-authoritative roadmap to Plan #541. But some narrative sections still describe the older, broader CLI plan, which creates internal contradiction.
+
+Please update Task #539 so every non-task section stays aligned with the current narrowed scope:
+
+1. In **Answers to your planning questions**, revise **Q3** so it no longer says Step 5 “replaces the curated registry with the uipcli analyze-derived contracts as the source of truth” inside this task.
+   Replace that idea with:
+
+   * In **#539**, only the smallest replay-gated contract corrections needed for the named fixtures are in scope.
+   * The broader contract-extractor / uipcli-derived registry replacement is explicitly moved to **Plan #541**.
+   * The Windows runner / full CLI-authoritative contract harvesting is useful background, but not part of this PR.
+
+2. In **Q5**, remove any wording that implies this task’s differentiator is a broad cause-policy or CLI-platform modernization change.
+   Keep the focus on:
+
+   * source migration of the three workflow-tree-assembler sites,
+   * additive no-whole-workflow-stub protection for `todo-attribute`,
+   * wrapper-attribute smallest-scope repair,
+   * fixture-based replay enforcement.
+     If CLI/uipcli is mentioned at all, it should only be as “minimal replay-gated registry correction here; broader CLI modernization in Plan #541.”
+
+3. In **Scope discipline / Out of scope**, remove the sentence:
+
+   * “Step 5's catalog refresh from uipcli-derived contracts is the only CLI-related work in this task; do not expand it.”
+     and replace it with wording that matches the actual task:
+   * “Step 5 keeps only the smallest replay-gated contract corrections needed for the named fixtures. The broader uipcli-derived catalog refresh and contract-extractor pipeline are out of scope here and belong to Plan #541.”
+
+4. In any remaining narrative text that still says or implies:
+
+   * “replace the curated registry,”
+   * “uipcli-derived contracts as source of truth,”
+   * “Windows runner / VM for this task,”
+     change it so those are clearly identified as **Plan #541** material, not #539 material.
+
+5. Keep the existing **Cross-task handoff rule** exactly as the governing rule:
+   if any CLI/uipcli item is removed, narrowed, or deferred from #539, it must be named explicitly and moved into Plan #541.
+
+Goal of this refinement:
+After the edit, Task #539 should read as a tightly scoped source-fix + containment + replay-enforcement task, with only minimal replay-gated contract corrections retained, and with zero ambiguity that the broader CLI-authoritative rollout lives in Plan #541.
+
+Return the revised Task #539 with only these consistency refinements applied.

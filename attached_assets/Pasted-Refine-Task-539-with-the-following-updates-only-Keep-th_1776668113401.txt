@@ -1,0 +1,81 @@
+Refine Task #539 with the following updates only. Keep the existing evidence, root-cause findings, run references, and overall structure intact. Do not broaden the task. The goal remains: Studio-stable package, preserved business logic, localized TODOs only where truly necessary, no silent disappearance, and no whole-workflow stubs for this defect class on the named replay fixtures.
+
+1. Add an explicit cross-task handoff rule for any removed CLI/uipcli work.
+   Insert this near the top of the task, after Goal alignment or Scope discipline:
+
+“Cross-task handoff rule. If any uipcli-related item is removed, narrowed, or deferred out of Task #539 during refinement or implementation, it must be added explicitly to Plan #541 rather than dropped. No CLI/uipcli work may disappear between tasks. The PR or task update must name the exact moved item(s) and point to the corresponding Plan #541 section.”
+
+2. Keep #539 source-fix first, containment second.
+   Add this sentence near the start of the Tasks section:
+
+“Task #539 is satisfied only if the three named source emission sites in `server/workflow-tree-assembler.ts` are migrated. Recovery-path hardening is defense-in-depth only and cannot be used as the primary mechanism for passing the replay fixtures.”
+
+Also add to acceptance:
+
+“A PR that leaves any of the three named `workflow-tree-assembler.ts` sites still emitting raw bracket-wrapped `["TODO - ..."]` placeholders is automatically non-compliant, even if replay fixtures pass via recovery logic.”
+
+3. Replace brittle raw-text checks with parsed structural checks.
+   Strengthen the build-time assertion so it is structural, not substring-based:
+
+* parse assembled XAML structurally
+* fail if a placeholder-bearing value injects raw double quotes into an XML attribute without escaping
+* fail if TODO / PLACEHOLDER tokens appear in attribute-name, element-name, or namespace-prefix position
+* do not fail merely because escaped TODO / PLACEHOLDER text exists in legitimate attribute-value or text-node content
+
+4. Make replay preservation measurable from the post-enrichment tree.
+   Add this explicit source-of-truth statement to the replay acceptance block:
+
+“For replay acceptance, the reference set of expected business activities is the post-enrichment workflow/activity tree before package assembly. Each previously enriched activity must end up in exactly one of two places: (a) preserved in final XAML, or (b) represented by a localized DHG handoff entry naming that activity and the manual fix. If it appears in neither place, that is silent business-logic disappearance and the task fails.”
+
+5. Tighten the todo-attribute fallback hierarchy on the named fixtures.
+   Strengthen the hierarchy language so it is unambiguous and testable:
+
+* First: source migration prevents malformed attribute emission.
+* Second: smallest-scope repair strips only the offending attribute on the smallest valid wrapper/container.
+* Third: for the named replay fixtures only, whole-workflow stubbing with `stubCause: "todo-attribute"` is forbidden and is an automatic task failure.
+
+Do not allow wording that implies whole-workflow stubbing is an acceptable worst-case fallback for these replay fixtures.
+
+6. Keep #539 narrowly scoped and push any removed CLI expansion into Plan #541.
+   Revise the uipcli-related step so it stays limited to what #539 actually needs for the replay fixtures:
+
+* fix `ui:GetCredential.Target`
+* fix package resolution for `UiPath.Credentials.Activities`
+* correct directly implicated contract entries needed for these fixtures
+
+Then add:
+
+“Full CLI-authoritative rollout, registry replacement as platform default, contract-extractor pipeline, daily drift gate, authoritative CLI verdicting, CLI-pack-as-shipped-artifact, and broader validator retirement belong to Plan #541. If any previously written uipcli-related text is removed from #539, it must be moved into #541 explicitly, not discarded.”
+
+7. Tighten Pattern E so degradation cannot erase useful work.
+   Add:
+
+“For mail/task-family lowering, missing required content may degrade only the smallest activity or locked cluster that structurally depends on the missing property. Surrounding non-dependent steps must remain intact. Cluster-wide degradation is allowed only if smaller localization is structurally impossible, and that impossibility must be recorded in diagnostics and the DHG.”
+
+Keep the existing no-fabrication rule.
+
+8. Strengthen Pattern B acceptance.
+   Add this to the typed-arguments step or acceptance block:
+
+“`InvokeWorkflowFile` must not emit both attribute-form `Arguments=` and typed child-argument form on the same node. If both exist pre-canonicalization, the canonicalizer must remove the attribute-form binding and preserve only the typed child-argument block.”
+
+9. Add per-workflow acceptance for the previously stubbed workflows.
+   In the replay acceptance section, require that each previously stubbed workflow individually satisfies:
+
+* no whole-workflow stub from `todo-attribute` or `pipeline-fallback-compliance-crash`
+* preserved real structure or localized handoff
+* no silent disappearance
+
+Do not allow package-level pass criteria alone to mask failure of an individual workflow.
+
+10. Tighten the scope language around the CLI-derived contract/catalog step.
+    Replace broad wording with:
+
+“Implement only the smallest contract-source correction necessary for the replay fixtures in this task. Do not turn #539 into the broader CLI-authoritative adoption plan. Any removed or deferred uipcli/platform-modernization work must be moved into Plan #541 explicitly.”
+
+11. Add one explicit review rule.
+    Add this to Scope discipline or acceptance:
+
+“Reviewers must verify both dimensions: (a) source migration occurred at the three named emission sites, and (b) replay fixtures preserve business logic without whole-workflow stubs for this defect class. Green tests alone are insufficient if either dimension is missing.”
+
+Please update Task #539 accordingly, preserving its current forensic detail and evidence, but making it narrower, more enforceable, and impossible to satisfy through recovery-only, whole-workflow stubbing, or silent business-logic deletion. Any uipcli-related material removed from #539 must be copied into Plan #541 in the same edit.

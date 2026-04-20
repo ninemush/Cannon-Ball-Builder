@@ -1,0 +1,59 @@
+Please refine Task #539 only. Keep the core direction and evidence intact, but tighten it so the implementation cannot “pass” by only hardening recovery while leaving the source emitter defect alive.
+
+Refinement goals:
+
+1. Make the primary fix source-side, not recovery-side
+Add an explicit requirement that #539 is not satisfied unless the three missed emission sites in server/workflow-tree-assembler.ts are migrated to the canonical placeholder path. Recovery hardening is defense-in-depth only, not an acceptable substitute.
+
+Add wording like:
+“A PR does not satisfy this task if the replay fixtures pass only because bounded recovery strips malformed output while the three un-migrated TODO emission sites remain unchanged. Source migration of those sites is mandatory; recovery hardening is secondary containment.”
+
+2. Replace the brittle `"TODO` substring assertion with a structural XML-shape assertion
+Right now the task says to scan emitted attribute values for the `"TODO` substring. That is too text-shape-specific and can both miss structurally similar regressions and false-positive on legitimate escaped content.
+
+Replace it with:
+“Add a build-time assembler-output assertion that fails when either:
+(a) any placeholder-bearing value containing raw double quotes is emitted into an XML attribute without escaping, or
+(b) any TODO/PLACEHOLDER token appears in XML attribute-name, element-name, or namespace-prefix position.
+Escaped TODO/PLACEHOLDER text inside legitimate attribute-value or text-node content is not by itself a failure.”
+
+This must operate on the assembled XAML shape, not just grep for one literal token.
+
+3. Tighten the bounded-recovery requirement
+Keep the same direction, but make the fallback hierarchy explicit:
+- first: source migration prevents malformed attribute emission
+- second: smallest-scope wrapper/container repair for this defect class
+- third: never whole-workflow stub for todo-attribute on the named fixtures
+
+Add explicit wording:
+“For stubCauseTag === 'todo-attribute', whole-workflow stubbing on the named fixtures is a regression. If source migration and smallest-scope repair both fail on a named fixture, treat that as task failure, not as an acceptable fallback outcome.”
+
+4. Clarify Pattern E so no one fabricates content to satisfy lowering
+Pattern E is acceptable only as localized degradation. Make this explicit:
+“Do not synthesize fake mail/task content merely to satisfy lowering. If Body / TaskTitle / equivalent required content is unavailable at lowering time, preserve the surrounding workflow and degrade only the specific activity or locked cluster at the smallest possible scope with an actionable DHG entry.”
+
+5. Make the replay acceptance criteria harder and more goal-aligned
+Strengthen the Done / replay block so it proves real-business-logic preservation, not just XML survival.
+
+Please add these hard assertions for the two replay fixtures (d3274c92 and 348a09fd):
+- zero whole-workflow stubs with stubCause in {"todo-attribute", "pipeline-fallback-compliance-crash"} on the named fixtures
+- zero “Compliance transform failed — XAML XML well-formedness” entries in outcome_report for the previously affected workflows
+- previously stubbed workflows remain present with real activity structure, except for explicitly localized handoff nodes
+- any localized degradation must have a DHG entry naming the exact activity/cluster and manual fix
+- no replay passes merely because the malformed attribute was stripped and the business activity silently disappeared
+
+Add wording like:
+“For this defect class, smallest-scope localized degradation is acceptable; silent business-logic disappearance is not. Any replay where a previously generated activity vanishes without a corresponding localized handoff entry is a regression.”
+
+6. Keep the task scoped
+Do not broaden #539 into a larger architecture or CLI roadmap. Keep it focused on:
+- residual todo-attribute cascade
+- typed InvokeWorkflowFile.Arguments canonicalization
+- GetCredential.Target contract drift
+- queue/asset bareword quoting
+- transaction-item type prefix correction
+- localized mail/task-family degradation
+- same-input replay enforcement
+
+Please return:
+A revised version of #539 only, with the above tightenings folded into the existing text, preserving its structure and evidence style.

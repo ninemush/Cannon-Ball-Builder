@@ -1,0 +1,59 @@
+Please apply these final refinements to Task #539 only. Keep the current structure, evidence, named runs, root patterns, acceptance criteria, and scope discipline intact. Do not broaden the task.
+
+1. Tighten Step 2 so the new no-stub protection does not accidentally become cause-agnostic.
+   In the step that says:
+
+“Extend the whole-workflow-stub block in tryStructuralPreservationOrStub so that stubCauseTag === "todo-attribute" follows the same path as "pipeline-fallback-compliance-crash".”
+
+append:
+
+“This change is additive, not a general rewrite of cause handling. In this task, only `stubCauseTag === "todo-attribute"` is newly added to the protected no-whole-workflow-stub branch. Do not generalize this task into a broader cause-policy refactor; broader verdict/cause-policy work remains in #528 / Plan #541.”
+
+Rationale: the current wording is correct in intent, but an implementer could use it to widen behavior beyond the task.
+
+2. Make Step 5c even harder to use as a back door for registry expansion.
+   After Step 5c, add:
+
+“Any Step 5c correction must be proven necessary by a failing replay on one of the two named fixtures before the correction and a passing replay after it. A registry change justified only by static inspection, anticipated future need, or unrelated runs is out of scope for #539.”
+
+Rationale: right now 5c is pretty tight, but this makes it explicitly replay-gated.
+
+3. Make the anti-disappearance source-of-truth testable against stable identifiers.
+   In the “Source of truth for what should be preserved” section, append:
+
+“The post-enrichment snapshot must capture stable activity identifiers sufficient to match enrichment artifacts to final XAML or DHG entries deterministically. Matching by display text alone is insufficient if duplicate or similar activity names exist. Use the workflow path plus activity identifier/path within the enriched tree as the comparison key.”
+
+Rationale: otherwise Step 8E can become fuzzy when activity names repeat.
+
+4. Strengthen the wrapper-repair path so it cannot silently strip semantically important attributes without being surfaced.
+   In the repair-path observability step, append:
+
+“If the stripped attribute is one that carries executable semantics rather than decoration (for example an expression-bearing property), the diagnostic must also include whether the repair resulted in (a) preserved sibling structure with a localized handoff, or (b) loss of executable behavior at that node. Replay assertions must verify that case (b) is accompanied by a DHG handoff entry for that exact node.”
+
+Rationale: this closes the loophole where the XML becomes valid but business behavior is silently neutered.
+
+5. Tighten Pattern E so cluster-wide degradation cannot be chosen just because it is easier.
+   In the Pattern E section, replace:
+
+“Cluster-wide degradation is allowed only if smaller localization is structurally impossible...”
+with:
+
+“Cluster-wide degradation is allowed only if smaller localization is structurally impossible and that impossibility is demonstrated in diagnostics with the exact structural reason. ‘Implementation convenience’, ‘existing lock behavior’, or ‘current lowering architecture’ are not sufficient reasons.”
+
+Rationale: this keeps the task aligned to smallest-scope preservation.
+
+6. Make assertion G mechanically checkable, not just narrative.
+   In package-level assertion G, append:
+
+“For each previously stubbed workflow, the replay fixture must record pre-fix degradation scope from the cited run and compare it against post-fix scope. ‘Reduced degradation scope’ means a strictly smaller degraded region than the prior whole-workflow stub, measured as: whole-workflow stub > cluster degradation > activity/property-level degradation. This comparison must be encoded in the regression assertion, not left to reviewer judgment.”
+
+Rationale: otherwise G is directionally right but not objectively testable.
+
+7. Add one final guard against fake Pattern B fixes.
+   Under assertion F, append:
+
+“In addition, the replay must assert that the typed child-argument block contains at least the expected argument keys for the affected invokes from the named fixtures. A pass based only on removing `Arguments=` without materializing the required typed children is insufficient.”
+
+Rationale: this prevents a hollow fix where the bad form is removed but the invoke is left under-bound.
+
+Please return the revised Task #539 text with only these refinements incorporated and no other restructuring.

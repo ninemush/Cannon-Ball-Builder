@@ -1,0 +1,43 @@
+Please make one final tightening pass to Task #539. Do not change the core intent, evidence, named runs, root patterns, acceptance model, or scope split with Plan #541. This is a narrow consistency and loophole-closing pass only.
+
+Required refinements:
+
+1. Fix the stale cross-reference in **Q4**.
+   Q4 currently says “Step 4 of this plan changes the lowering policy...”, but the mail/task-family degradation policy is no longer Step 4 in the current task structure.
+   Replace that wording with a neutral reference such as:
+
+   * “this task changes the lowering policy...”
+     or
+   * “the mail/task-family degradation section below changes the lowering policy...”
+     so the task has no stale step-number references.
+
+2. Tighten **Pattern B acceptance** so it cannot pass hollowly.
+   In the current Pattern B / assertion F wording, “at least the expected argument keys” is still too weak.
+   Please strengthen it so that for the affected `InvokeWorkflowFile` nodes on the named fixtures:
+
+   * final XAML contains **only** canonical typed child-argument bindings,
+   * final XAML contains **zero** attribute-form `Arguments=` bindings,
+   * all contract-required keys for the affected invokes are present in the typed child block,
+   * no leftover non-canonical or duplicate bindings remain on the same invoke.
+     Keep this asserted on the final emitted artifact, not inferred from validator silence.
+
+3. Tighten **Step 5b proof of necessity**.
+   Keep Step 5b narrow and usage-driven, but add a replay-gated proof requirement:
+
+   * on the relevant named fixture, the package-resolution defect must be observable before the fix,
+   * after the fix, `UiPath.Credentials.Activities` is present because `ui:GetCredential` is actually emitted in the replay artifact,
+   * broad unconditional inclusion still fails scope.
+     This should mirror the same “replay-gated necessity” standard already used for 5c.
+
+4. Add one explicit anti-loophole sentence to the **wrapper/container repair** path.
+   The current wording is strong, but add this explicit constraint:
+
+   * stripping the offending attribute is acceptable only if the affected node is either preserved with executable semantics intact, or represented by a localized DHG handoff entry for that exact node.
+     This should align with the existing semantic-attribute classification and anti-disappearance rule, but make it explicit right at the repair step so it cannot be interpreted as “make XML valid first, explain later.”
+
+5. Keep the current CLI/uipcli scope split exactly as-is.
+   Do not re-expand #539 into broader CLI-authoritative work.
+   Preserve the current rule that anything broader than the minimal replay-gated contract corrections belongs in Plan #541.
+
+Goal of this refinement:
+After the edit, Task #539 should be internally consistent, free of stale references, and closed against the last few “green tests but shallow implementation” loopholes, while still staying narrowly scoped.

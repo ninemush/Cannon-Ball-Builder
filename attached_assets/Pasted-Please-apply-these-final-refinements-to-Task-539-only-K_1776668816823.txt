@@ -1,0 +1,60 @@
+Please apply these final refinements to Task #539 only. Keep the current structure, evidence, runs, root patterns, and acceptance shape intact. Do not broaden scope.
+
+1. Tighten Step 1 so the source migration is mechanically verifiable, not just reviewer-read.
+   After the sentence that says the three named sites must be migrated, add:
+
+“Add a unit test that imports the specific helpers or snapshots the emitted placeholder values from the three named `workflow-tree-assembler.ts` branches and asserts they no longer return raw bracket-wrapped strings of the form `["TODO - ..."]`. This test is mandatory so source migration is proven mechanically, not only by code review.”
+
+Rationale: right now the task says reviewers must read the diff, which is good, but it still leaves a hollow implementation path if the diff is ambiguous.
+
+2. Narrow and clarify the build-time structural assertion so it does not overreach into legitimate quoted expressions.
+   In the build-time structural assertion step, replace the part that says:
+   “any placeholder-bearing value containing raw double quotes is emitted into an XML attribute without escaping”
+   with:
+
+“any attribute-value emission path that receives a placeholder-bearing VB expression and serializes it into XML attribute syntax without XML-escaping the quote characters required by that context”
+
+Then add:
+
+“This assertion is context-aware. It must not fail on legitimate quoted VB expressions that are correctly XML-escaped in attribute-value position.”
+
+Rationale: the current wording could be read too broadly and accidentally ban valid quoted VB expressions in attributes.
+
+3. Make Step 3 measurable by diagnostics, not just behavior.
+   In the wrapper/container repair step, append:
+
+“Whenever this repair path strips an offending attribute from a non-leaf container, it must emit a structured diagnostic into `final_quality_report.diagnostics` containing: workflow name, activity/container type, offending attribute name if known, parser coordinates, and repair action taken. Replay assertions must verify that this diagnostic appears on the named fixtures if this path is exercised.”
+
+Rationale: otherwise Step 3 can silently do work and be hard to distinguish from disappearance.
+
+4. Tighten Step 5c so it cannot become a back door for registry sprawl.
+   Replace:
+   “Correct any other directly implicated registry entries surfaced by replay of the two named fixtures — but only those entries, and only if the replay regression assertions in Step 8 cannot pass without the correction.”
+   with:
+
+“Correct only additional registry entries that are directly implicated by the two named replay fixtures and that fail one of Step 8’s hard assertions. Each such correction must be listed explicitly in the PR with: activity name, failing replay file/line, observed defect, exact registry field changed, and the specific Step 8 assertion it unblocks. No opportunistic registry cleanup is allowed in this task.”
+
+Rationale: this keeps Step 5c from ballooning.
+
+5. Add one more anti-regression assertion for Pattern B.
+   Under the replay acceptance block, add:
+
+“F. For `InvokeWorkflowFile` on the named fixtures, the final emitted XAML must contain only canonical typed child-argument bindings and zero attribute-form `Arguments=` bindings. This is asserted on final XAML, not inferred from absence of type-mismatch errors.”
+
+Rationale: otherwise Pattern B could appear fixed because downstream validators stopped complaining, while bad emission still exists.
+
+6. Tighten the Pattern E acceptance so TODO sentinel use stays localized.
+   In the Pattern E section, append:
+
+“When a canonical TODO sentinel is inserted for a missing required property, the DHG entry must reference that exact property on that exact activity, and replay assertions must confirm no additional sibling properties on the same activity were replaced by TODO unless they were independently missing.”
+
+Rationale: prevents “localized” degradation from quietly spreading across the activity.
+
+7. Add one final package-level honesty check.
+   Under Step 8 package-level assertions, add:
+
+“G. For every workflow that previously had a whole-workflow stub in the cited runs, the replay must show either reduced degradation scope or full preservation. Equal-scope degradation is not sufficient for this task unless explicitly justified by a remaining genuine structural impossibility recorded in diagnostics.”
+
+Rationale: this keeps the task aimed at real closure, not just relabeling.
+
+Please return the revised Task #539 text with only these refinements incorporated and no other restructuring.

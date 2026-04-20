@@ -1,0 +1,42 @@
+Please make only these final refinements to Task #539. Do not restructure the task, do not broaden scope, and do not touch the evidence, named runs, root patterns, or acceptance framing unless required by the edits below.
+
+1. Tighten the build-time structural assertion so it is mechanically executable and not interpreted too loosely.
+
+In the “Build-time structural assertion” step, after the current wording, add:
+
+“The check must run on the final assembled XAML string for every workflow before compliancePass, using the same XML parser family already used in the pipeline for well-formedness checking. It must fail on either:
+(i) parser-invalid XML caused by placeholder-bearing attribute serialization, or
+(ii) successful parse plus explicit detection that a TODO/PLACEHOLDER token appears in attribute-name / element-name / namespace-prefix position.
+It must not require a second, custom XML model if the existing parser plus a targeted position check can express the same rule.”
+
+Reason: this keeps the requirement strong but implementable. Right now “operate on the parsed XAML structure and on the emission path’s escaping behavior” could invite an over-engineered or hard-to-maintain solution.
+
+2. Tighten Step 5b so package auto-declaration is fixture-scoped, not accidental package bloat.
+
+After Step 5b, add:
+
+“This auto-declaration must be driven by actual activity usage in emitted XAML for the replay fixtures, not by unconditional package inclusion. A fix that adds UiPath.Credentials.Activities globally to all generated projects without usage-based resolution is out of scope for #539 and counts as over-broad.”
+
+Reason: without this, an implementer could satisfy the replay by globally adding the package everywhere.
+
+3. Make the per-workflow acceptance block explicitly include assertion D where localized degradation exists.
+
+In the “Per-workflow acceptance” section, replace:
+
+‘each previously stubbed workflow must individually satisfy A, C, and E’
+
+with:
+
+‘each previously stubbed workflow must individually satisfy A, C, and E, and must satisfy D whenever any localized degradation exists in that workflow.’
+
+Reason: package-level D is good, but this makes sure DHG honesty is enforced workflow-by-workflow too.
+
+4. Add one final anti-hollow-fix guard for Pattern C.
+
+After the transaction-item prefix correction step, add:
+
+“Pattern C is not considered fixed merely because the validator stops reporting the downcast. The final emitted variable declaration and the consuming property binding must agree on `UiPath.Core.QueueItem` in the replay artifacts. A pass caused by removing the consuming activity or rerouting the binding without a localized handoff is a regression under assertion E.”
+
+Reason: this prevents a fake fix where the failing binding disappears instead of being correctly typed.
+
+Please return the revised Task #539 with only these refinements applied.
