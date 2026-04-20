@@ -1,0 +1,96 @@
+Refine task #556 with the following changes. Keep the task focused and mechanically reviewable.
+
+1) Preserve Waves 1–3 as the primary purpose of #556
+The core of #556 is systemic pipeline-shape remediation:
+- enforce WorkflowSpecSchema at runtime stage boundaries
+- move spec graph validation immediately after spec_merge
+- fix the deterministic spec-to-tree adapter crash (`raw.split is not a function`)
+- replace silent enrichment fallback with visible, typed degradation
+- raise enrichment timeout floor and add one reduced-context retry
+
+Reviewer rule: #556 is not satisfied unless these structural fixes land. Wave 4 policy changes alone are insufficient.
+
+2) Add a new “resolution-validation” tier explicitly
+Split pre-refinement checks into:
+- structural validation: schema conformance, DAG/no cycles, reachability from Main, declared-vs-invoked workflow name match
+- resolution validation: activity exists in catalog, required properties present where derivable from spec, invocation targets resolvable, package dependencies derivable from referenced activities
+- behavioral validation: stays downstream (Studio smoke test, CLI validation, final artifact validation)
+
+Acceptance wording:
+A spec containing cycles, orphan workflows, unresolved invocation targets, unresolved activity packages, or catalog-invalid properties is rejected before refinement begins with a typed error visible in the run UI.
+
+3) Tighten the schema-enforcement wording
+The existing WorkflowSpecSchema must be enforced with safeParse/parse at these exact boundaries:
+- decomposer output
+- refiner input
+- refiner output
+- assembler input
+
+Failures become typed SpecContractViolation errors, not downstream crashes and not silent coercions.
+
+Add reviewer rule:
+A PR that only adds typing or z.infer usage without runtime safeParse/parse calls does not satisfy this section.
+
+4) Fix the adapter bug as a hard correctness issue
+Keep the existing diagnosis that `raw.split is not a function` is deterministic and silently swallowed today.
+Refine acceptance to:
+- this log line must never appear again
+- the catch-and-continue at the stage boundary is removed
+- stage-boundary failures propagate as typed errors
+- catch-and-continue remains allowed only for bounded intra-stage retry loops
+
+5) Tighten enrichment timeout/remediation behavior
+Keep the timeout increase and reduced-context retry, but make the policy more explicit:
+- timeout floor is 120s minimum
+- timeout scales with per-workflow node count in the correct direction (larger workflow => larger timeout)
+- on first timeout, retry once with workflow-local-only context and without wide catalog/orchestrator artifact injection
+- if retry fails, emit typed refinement_unavailable event with workflow name, reason, timeout value, and whether reduced-context retry was attempted
+- DHG and live run UI must both show per-workflow refinement degradation
+- if more than 50% of workflows fail refinement, the run must not continue labelled as full_implementation without disclosure
+
+Refine wording here:
+Rather than silently mixing refined and unrefined workflows under full_implementation, the run must either:
+(a) be explicitly downgraded to baseline_openable, or
+(b) remain in full_implementation but carry an explicit refinement_degraded state visible in the run UI, ledger, and DHG.
+Pick one approach and standardize it. Do not allow silent mixed-quality labeling.
+
+6) Rework Wave 4 so it respects dependency on #549
+Do NOT leave Wave 4 as unconditional:
+“In full_implementation mode, cli_skipped_incompatible_agent is a hard fail.”
+
+Replace it with dependency-aware policy:
+- Before #549 is live and healthy for the relevant project class, CLI unavailability becomes an explicit typed outcome such as validation_unavailable / authority_unavailable with DHG + UI visibility.
+- After #549 is live for Windows-required projects, cli_skipped_incompatible_agent becomes a hard fail for full_implementation on those projects.
+- Silent CLI skip is forbidden in all cases.
+
+Acceptance wording:
+Users either receive an authority-validated artifact, or an explicit validation_unavailable / authority_unavailable outcome explaining why first-party validation could not be performed. No silent skip.
+
+7) Add explicit dependency note
+State clearly:
+- #556 Waves 1–3 are independently shippable and valuable before #549
+- the strict “CLI must run or fail” policy for Windows-required full_implementation runs becomes enforceable only once #549 is live
+
+8) Preserve the current out-of-scope guard
+Do not let #556 become a general platform overhaul.
+Keep out of scope:
+- LLM/provider changes
+- activity catalog redesign
+- deterministic graph-builder rewrite
+- DB-wide ledger redesign
+- unrelated cleanup
+
+9) Add reviewer anti-loophole rule
+A PR does NOT satisfy #556 if it:
+- only reorders logging
+- only adds UI messaging without changing enforcement
+- only raises timeout without fixing silent degradation
+- only changes CLI skip wording without fixing structural validation timing
+- only adds TypeScript types without runtime schema enforcement
+
+Return the refined task with:
+- updated What & Why
+- updated Done looks like
+- Waves 1–4 rewritten per above
+- dependency note on #549
+- reviewer rules embedded in acceptance criteria
