@@ -22,6 +22,37 @@ export interface InvokeContractTraceEntry {
   undeclaredSymbols: string[];
 }
 
+/**
+ * Task #563 — telemetry record describing a single scaffold-authority
+ * pass: which workflow was claimed as the entry point, the call graph
+ * the scaffold pre-declared, the 6 fast-fail check outcomes, and any
+ * complexity-gate rewrites that were applied.
+ */
+export interface ScaffoldAuthorityTraceEntry {
+  declaredEntryWorkflow: string | null;
+  workflowNames: string[];
+  invocationEdges: Array<{ caller: string; target: string; bindingKeys: string[] }>;
+  fastFailChecks: Array<{ name: string; passed: boolean; details?: string }>;
+  complexityGateRewrites: Array<{ kind: "entry-rewrite" | "binding-rewrite"; from: string; to: string }>;
+  validatorRunCount: number;
+  passed: boolean;
+  // Task #563 (review) — wrapper entry source: how the assembler
+  // decided which workflow Main.xaml should invoke. "spec" = pulled
+  // from pkg.entryWorkflow; "fallback" = legacy Main/first-workflow
+  // election (now never expected); "error" = no entry available, run
+  // will fail downstream.
+  wrapperEntrySource?: "spec" | "fallback" | "error";
+  wrapperEntryWorkflow?: string | null;
+  // Task #563 (review) — binding usage counts so reviewers can audit
+  // whether downstream wiring actually consumed the scaffold bindings
+  // versus repair-injected or heuristic ones.
+  bindingUsageCounts?: {
+    authoritative: number;       // sourced directly from scaffold argumentBindings
+    heuristic: number;           // discovered by entry-scope variable lookup
+    repairInjected: number;      // synthesized by spec-merge-repair
+  };
+}
+
 export interface StageHashParityEntry {
   workflowFile: string;
   postGeneration?: string;
@@ -36,6 +67,7 @@ interface TraceStore {
   propertySerializationTrace: PropertySerializationTraceEntry[];
   invokeContractTrace: InvokeContractTraceEntry[];
   stageHashParity: StageHashParityEntry[];
+  scaffoldAuthorityTrace: ScaffoldAuthorityTraceEntry[];
 }
 
 const traceContext = new AsyncLocalStorage<TraceStore>();
@@ -50,6 +82,7 @@ const _fallbackStore: TraceStore = {
   propertySerializationTrace: [],
   invokeContractTrace: [],
   stageHashParity: [],
+  scaffoldAuthorityTrace: [],
 };
 
 export function runWithTraceContext<T>(fn: () => T): T {
@@ -57,6 +90,7 @@ export function runWithTraceContext<T>(fn: () => T): T {
     propertySerializationTrace: [],
     invokeContractTrace: [],
     stageHashParity: [],
+    scaffoldAuthorityTrace: [],
   };
   return traceContext.run(store, fn);
 }
@@ -140,11 +174,27 @@ export function hasStageHash(workflowFile: string, stage: keyof Omit<StageHashPa
   return !!existing && !!existing[stage];
 }
 
+export function emitScaffoldAuthorityTrace(entry: ScaffoldAuthorityTraceEntry): void {
+  getStore().scaffoldAuthorityTrace.push(entry);
+}
+
+export function getAndClearScaffoldAuthorityTrace(): ScaffoldAuthorityTraceEntry[] {
+  const store = getStore();
+  const trace = store.scaffoldAuthorityTrace;
+  store.scaffoldAuthorityTrace = [];
+  return trace;
+}
+
+export function getScaffoldAuthorityTrace(): ReadonlyArray<ScaffoldAuthorityTraceEntry> {
+  return getStore().scaffoldAuthorityTrace;
+}
+
 export function clearAllTraces(): void {
   const store = getStore();
   store.propertySerializationTrace = [];
   store.invokeContractTrace = [];
   store.stageHashParity = [];
+  store.scaffoldAuthorityTrace = [];
 }
 
 export function computeContentHash(content: string): string {

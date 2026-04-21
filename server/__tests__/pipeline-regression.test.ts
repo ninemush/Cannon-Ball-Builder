@@ -23,6 +23,9 @@ import { BLOCKED_PROPERTY_SENTINEL, isBlockedPropertyValue, isBlockedSentinel } 
 import { gen_invoke_workflow_file } from "../xaml/deterministic-generators";
 import type { PropertyValue } from "../workflow-spec-types";
 import { checkStudioLoadability, resolveDependencies, assertDhgArchiveParity, buildAssemblyToPackageMap, renameInfrastructureCollisions } from "../package-assembler";
+import { validateSpecGraphAtMerge } from "../spec-graph-validator";
+import { getCallerFirstOrder, getCalleeFirstOrder } from "../spec-graph-orders";
+import type { UiPathPackageSpec, SpecScaffoldMeta } from "../types/uipath-package";
 import { runFinalArtifactValidation, type PackageCompletenessViolation, type PackageCompletenessViolationsArtifact } from "../final-artifact-validation";
 import { validateWorkflowGraph } from "../xaml/workflow-graph-validator";
 import {
@@ -7381,14 +7384,14 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
 
   describe("Task #524 — Systemic pipeline failure fixes (Runs 472-473)", () => {
     it("(a) generated workflow named 'Main' in REFramework mode is renamed to avoid collision", () => {
-      const scaffoldMeta = {
-        executionOrder: ["Main", "SubWorkflow1"],
+      const scaffoldMeta: SpecScaffoldMeta = {
+        entryWorkflow: "Main",
         workflowContracts: [
-          { name: "Main", invokes: ["SubWorkflow1"], sharedArguments: [] },
+          { name: "Main", invokes: [{ target: "SubWorkflow1", argumentBindings: {} }], sharedArguments: [] },
           { name: "SubWorkflow1", invokes: [], sharedArguments: [] },
         ],
-      };
-      const enrichments = [
+      } as SpecScaffoldMeta;
+      const enrichments: Array<{ name: string; spec: { name: string; rootSequence: { children: unknown[] } } }> = [
         { name: "Main", spec: { name: "Main", rootSequence: { children: [] } } },
         { name: "SubWorkflow1", spec: { name: "SubWorkflow1", rootSequence: { children: [] } } },
       ];
@@ -7401,20 +7404,19 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       expect(scaffoldMeta.workflowContracts[0].name).toBe("Orchestrate");
       expect(enrichments[0].name).toBe("Orchestrate");
       expect(enrichments[0].spec.name).toBe("Orchestrate");
-      expect(scaffoldMeta.executionOrder).toContain("Orchestrate");
-      expect(scaffoldMeta.executionOrder).not.toContain("Main");
+      expect(scaffoldMeta.entryWorkflow).toBe("Orchestrate");
       const subInvokes = scaffoldMeta.workflowContracts.find(c => c.name === "SubWorkflow1")?.invokes || [];
-      expect(subInvokes).not.toContain("Main");
+      expect(subInvokes.map(i => i.target)).not.toContain("Main");
     });
 
     it("(b) generated workflow named 'Process' in REFramework mode is renamed to avoid collision", () => {
-      const scaffoldMeta = {
-        executionOrder: ["Process", "Helper"],
+      const scaffoldMeta: SpecScaffoldMeta = {
+        entryWorkflow: "Process",
         workflowContracts: [
-          { name: "Process", invokes: ["Helper"], sharedArguments: [] },
+          { name: "Process", invokes: [{ target: "Helper", argumentBindings: {} }], sharedArguments: [] },
           { name: "Helper", invokes: [], sharedArguments: [] },
         ],
-      };
+      } as SpecScaffoldMeta;
       const enrichments = [
         { name: "Process", spec: { name: "Process", rootSequence: { children: [] } } },
         { name: "Helper", spec: { name: "Helper", rootSequence: { children: [] } } },
@@ -7425,8 +7427,7 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       expect(records.length).toBeGreaterThan(0);
       expect(records[0].originalName).toBe("Process");
       expect(records[0].renamedName).toBe("ProcessLogic");
-      expect(scaffoldMeta.executionOrder).toContain("ProcessLogic");
-      expect(scaffoldMeta.executionOrder).not.toContain("Process");
+      expect(scaffoldMeta.entryWorkflow).toBe("ProcessLogic");
       expect(enrichments[0].name).toBe("ProcessLogic");
     });
 
@@ -7487,12 +7488,12 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
     });
 
     it("infrastructure rename does not apply in non-REFramework mode", () => {
-      const scaffoldMeta = {
-        executionOrder: ["Main"],
+      const scaffoldMeta: SpecScaffoldMeta = {
+        entryWorkflow: "Main",
         workflowContracts: [
           { name: "Main", invokes: [], sharedArguments: [] },
         ],
-      };
+      } as SpecScaffoldMeta;
       const enrichments = [
         { name: "Main", spec: { name: "Main", rootSequence: { children: [] } } },
       ];
@@ -7510,13 +7511,13 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
     });
 
     it("infrastructure rename avoids collision with existing workflow names", () => {
-      const scaffoldMeta = {
-        executionOrder: ["Main", "Orchestrate"],
+      const scaffoldMeta: SpecScaffoldMeta = {
+        entryWorkflow: "Main",
         workflowContracts: [
-          { name: "Main", invokes: ["Orchestrate"], sharedArguments: [] },
+          { name: "Main", invokes: [{ target: "Orchestrate", argumentBindings: {} }], sharedArguments: [] },
           { name: "Orchestrate", invokes: [], sharedArguments: [] },
         ],
-      };
+      } as SpecScaffoldMeta;
       const enrichments = [
         { name: "Main", spec: { name: "Main", rootSequence: { children: [] } } },
         { name: "Orchestrate", spec: { name: "Orchestrate", rootSequence: { children: [] } } },
@@ -7568,6 +7569,135 @@ describe("Spec-to-IR Normalization Layer (Task #475)", () => {
       if (attrMatch) {
         expect(attrMatch[1]).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
       }
+    });
+  });
+
+  describe("Task #563 — Scaffold authority pass", () => {
+    function makeInvokeStep(target: string) {
+      return {
+        activity: `Invoke ${target}`,
+        activityType: "InvokeWorkflowFile",
+        activityPackage: "UiPath.System.Activities",
+        properties: { WorkflowFileName: { type: "literal", value: `${target}.xaml` } },
+        selectorHint: null,
+        errorHandling: "rethrow",
+      };
+    }
+
+    it("(563.1) cycle-rejection — validator emits a tagged 'cycle' error for circular invocations", () => {
+      const pkg: UiPathPackageSpec = {
+        entryWorkflow: "A",
+        workflows: [
+          { name: "A", description: "", steps: [makeInvokeStep("B")], variables: [], arguments: [] },
+          { name: "B", description: "", steps: [makeInvokeStep("A")], variables: [], arguments: [] },
+        ],
+      } as UiPathPackageSpec;
+      const res = validateSpecGraphAtMerge(pkg);
+      expect(res.cycles.length).toBeGreaterThan(0);
+      expect(res.taggedErrors.some(e => e.class === "cycle")).toBe(true);
+      expect(res.errors.join(" | ")).toMatch(/Circular invocation/);
+    });
+
+    it("(563.2) orphan failing-run — validator surfaces a tagged 'orphan' error per unreachable workflow", () => {
+      const pkg: UiPathPackageSpec = {
+        entryWorkflow: "Main",
+        workflows: [
+          { name: "Main", description: "", steps: [makeInvokeStep("Used")], variables: [], arguments: [] },
+          { name: "Used", description: "", steps: [], variables: [], arguments: [] },
+          { name: "Orphan", description: "", steps: [], variables: [], arguments: [] },
+        ],
+      } as UiPathPackageSpec;
+      const res = validateSpecGraphAtMerge(pkg);
+      expect(res.orphans).toContain("Orphan");
+      expect(res.orphans).not.toContain("Used");
+      expect(res.taggedErrors.some(e => e.class === "orphan" && (e.detail as { workflow?: string } | undefined)?.workflow === "Orphan")).toBe(true);
+    });
+
+    it("(563.3) positive-path — well-formed entry-rooted graph passes validator with zero errors", () => {
+      const pkg: UiPathPackageSpec = {
+        entryWorkflow: "Main",
+        workflows: [
+          { name: "Main", description: "", steps: [makeInvokeStep("ChildA"), makeInvokeStep("ChildB")], variables: [], arguments: [] },
+          { name: "ChildA", description: "", steps: [makeInvokeStep("Leaf")], variables: [], arguments: [] },
+          { name: "ChildB", description: "", steps: [], variables: [], arguments: [] },
+          { name: "Leaf", description: "", steps: [], variables: [], arguments: [] },
+        ],
+      } as UiPathPackageSpec;
+      const res = validateSpecGraphAtMerge(pkg);
+      expect(res.errors).toEqual([]);
+      expect(res.cycles).toEqual([]);
+      expect(res.orphans).toEqual([]);
+      expect(res.taggedErrors).toEqual([]);
+    });
+
+    it("(563.4) missing-entry-workflow — validator emits tagged error when pkg.entryWorkflow absent", () => {
+      const pkg: UiPathPackageSpec = {
+        // entryWorkflow intentionally omitted
+        workflows: [
+          { name: "Main", description: "", steps: [], variables: [], arguments: [] },
+        ],
+      } as UiPathPackageSpec;
+      const res = validateSpecGraphAtMerge(pkg);
+      expect(res.taggedErrors.some(e => e.class === "missing-entry-workflow")).toBe(true);
+    });
+
+    it("(563.4b) unresolved-entry-workflow — validator emits tagged error when pkg.entryWorkflow names a non-existent workflow", () => {
+      const pkg: UiPathPackageSpec = {
+        entryWorkflow: "NotPresent",
+        workflows: [
+          { name: "Main", description: "", steps: [], variables: [], arguments: [] },
+          { name: "Helper", description: "", steps: [], variables: [], arguments: [] },
+        ],
+      } as UiPathPackageSpec;
+      const res = validateSpecGraphAtMerge(pkg);
+      expect(res.taggedErrors.some(e => e.class === "unresolved-entry-workflow")).toBe(true);
+      expect(res.errors.some(m => m.includes("NotPresent"))).toBe(true);
+    });
+
+    it("(563.5) wrapper-wiring — getCallerFirstOrder yields entry first, then descendants in BFS order", () => {
+      const meta: SpecScaffoldMeta = {
+        entryWorkflow: "Main",
+        workflowContracts: [
+          { name: "Main", invokes: [
+            { target: "ChildA", argumentBindings: {} },
+            { target: "ChildB", argumentBindings: {} },
+          ], sharedArguments: [] },
+          { name: "ChildA", invokes: [{ target: "Leaf", argumentBindings: {} }], sharedArguments: [] },
+          { name: "ChildB", invokes: [], sharedArguments: [] },
+          { name: "Leaf", invokes: [], sharedArguments: [] },
+        ],
+      } as SpecScaffoldMeta;
+      const order = getCallerFirstOrder(meta);
+      expect(order[0]).toBe("Main");
+      expect(order.indexOf("Main")).toBeLessThan(order.indexOf("ChildA"));
+      expect(order.indexOf("Main")).toBeLessThan(order.indexOf("ChildB"));
+      expect(order.indexOf("ChildA")).toBeLessThan(order.indexOf("Leaf"));
+      expect(new Set(order).size).toBe(order.length);
+    });
+
+    it("(563.6) hierarchical-late-stub — getCalleeFirstOrder yields leaves before callers ending at entry", () => {
+      const meta: SpecScaffoldMeta = {
+        entryWorkflow: "Main",
+        workflowContracts: [
+          { name: "Main", invokes: [{ target: "Mid", argumentBindings: {} }], sharedArguments: [] },
+          { name: "Mid", invokes: [{ target: "Leaf", argumentBindings: {} }], sharedArguments: [] },
+          { name: "Leaf", invokes: [], sharedArguments: [] },
+        ],
+      } as SpecScaffoldMeta;
+      const order = getCalleeFirstOrder(meta);
+      expect(order.indexOf("Leaf")).toBeLessThan(order.indexOf("Mid"));
+      expect(order.indexOf("Mid")).toBeLessThan(order.indexOf("Main"));
+      // Cycle tolerance: even with a back-edge the helper must not infinite-loop
+      // and must include every node exactly once.
+      const cyclic: SpecScaffoldMeta = {
+        entryWorkflow: "A",
+        workflowContracts: [
+          { name: "A", invokes: [{ target: "B", argumentBindings: {} }], sharedArguments: [] },
+          { name: "B", invokes: [{ target: "A", argumentBindings: {} }], sharedArguments: [] },
+        ],
+      } as SpecScaffoldMeta;
+      const cyclicOrder = getCalleeFirstOrder(cyclic);
+      expect(new Set(cyclicOrder)).toEqual(new Set(["A", "B"]));
     });
   });
 });

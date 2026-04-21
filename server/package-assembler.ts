@@ -195,7 +195,7 @@ export { normalizePackageName } from "./uipath-shared";
   import { runDhgAnalysis } from "./xaml/dhg-analyzers";
   import { XMLParser, XMLBuilder, XMLValidator } from "fast-xml-parser";
   import { runPostEmissionDependencyAnalysis, checkDependencyDriftAgainstMailFamilyLocks, type DependencyDiagnosticsArtifact, type ResolutionSource } from "./post-emission-dependency-analyzer";
-  import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
+  import { getAndClearPropertySerializationTrace, getAndClearInvokeContractTrace, getAndClearStageHashParity, getAndClearScaffoldAuthorityTrace, emitScaffoldAuthorityTrace, updateStageHash, hasStageHash, emitInvokeContractTrace, runWithTraceContext } from "./pipeline-trace-collector";
   import { validateContractIntegrity, buildWorkflowContracts, extractInvocations, resolveTargetContract, type WorkflowContract, type ContractIntegrityDefect } from "./xaml/workflow-contract-integrity";
   import { canonicalizeInvokeBindings, canonicalizeTargetValueExpressions, runPreGateResidualJsonCanonicalization, repairInvokeBindingsWithTripleEvidence, type InvokeCanonicalizationResult, type TargetValueCanonicalizationResult, type InvokeBindingRepairResult } from "./xaml/invoke-binding-canonicalizer";
   import { classifyFromArchiveBuffer, buildWorkflowStatusParity, normalizeClassifierFileName, AUTHORITATIVE_STUB_PATTERNS, verifyAndReclassifyFromArchive, assertClassificationFreshness, freezeArchiveWorkflows, isArchiveFrozen, getArchiveFreezePoint, resetArchiveFreeze, checkPostFreezeDeferredWriteMutation, getMutationTrace, recordMutationAttempt, assertNoPostFreezeStatusMutation, createGuardedDeferredWrites, createGuardedPostGateEntries, verifyFrozenArchiveBuffer, sealAuthoritativeXamlSource, getAuthoritativeXamlForArchive, recordAuthoritativeAppendHash, isAuthoritativeXamlSealed, getArchiveAuthorityDiagnostics, resetAuthoritativeSeal, type WorkflowStatusClassifierResult, type WorkflowStatusParityEntry, type WorkflowStatusParityResult, type PostClassifierMutationTrace, type ArchiveAuthorityDiagnostics } from "./workflow-status-classifier";
@@ -631,11 +631,20 @@ function stripDirectionalPrefix(argName: string): string {
   return argName;
 }
 
+interface SpecScaffoldInvocationLocal {
+  target: string;
+  argumentBindings: Record<string, string>;
+}
+
 interface SpecScaffoldMetaLocal {
-  executionOrder: string[];
+  // Task #563 — `entryWorkflow` is the authoritative single entry point
+  // declared by the spec_scaffold pass. `executionOrder` is intentionally
+  // gone; consumers derive ordering on demand via `getCallerFirstOrder`/
+  // `getCalleeFirstOrder` from `spec-graph-orders.ts`.
+  entryWorkflow: string;
   workflowContracts: Array<{
     name: string;
-    invokes: string[];
+    invokes: SpecScaffoldInvocationLocal[];
     sharedArguments: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
   }>;
 }
@@ -663,34 +672,93 @@ function buildSpecAwareInvocations(
     contractMap.set(normalizeWorkflowName(c.name), c);
   }
 
-  const invokedByOthers = new Set<string>();
-  for (const c of scaffoldMeta.workflowContracts) {
-    for (const inv of c.invokes) {
-      invokedByOthers.add(inv);
-      invokedByOthers.add(normalizeWorkflowName(inv));
-    }
+  // Task #563 — wrapper Main invokes ONLY the scaffold-declared
+  // `entryWorkflow`. Helper-of-helper graphs are wired by
+  // `wireChildWorkflowInvocations` later; the wrapper is intentionally
+  // a single-call sequence so reachability is deterministic.
+  if (!scaffoldMeta.entryWorkflow) {
+    failures.push(`[Spec Wiring] Scaffold metadata missing required "entryWorkflow" — wrapper cannot be built without an explicit entry`);
+    // Task #563 (review) — surface the wrapper-source decision as an
+    // explicit telemetry event even on the failure path.
+    emitScaffoldAuthorityTrace({
+      declaredEntryWorkflow: null,
+      workflowNames: scaffoldMeta.workflowContracts.map(c => c.name),
+      invocationEdges: [],
+      fastFailChecks: [{ name: "wrapper-entry-source", passed: false, details: "no entryWorkflow on scaffoldMeta" }],
+      complexityGateRewrites: [],
+      validatorRunCount: 0,
+      passed: false,
+      wrapperEntrySource: "error",
+      wrapperEntryWorkflow: null,
+    });
+    return { invocationXaml: "", variablesXaml: "", wiredWorkflows, diagnostics, failures };
   }
-
-  const topLevelWorkflows: string[] = [];
-  for (const name of scaffoldMeta.executionOrder) {
-    const normalized = normalizeWorkflowName(name);
-    if (isCanonicalInfrastructureName(normalized) && !generatedWorkflowNames.has(normalized) && !generatedWorkflowNames.has(name)) continue;
-    if (invokedByOthers.has(name) || invokedByOthers.has(normalized)) continue;
-    if (!generatedWorkflowNames.has(normalized) && !generatedWorkflowNames.has(name)) {
-      diagnostics.push(`[Spec Wiring] Workflow "${name}" in executionOrder but not in generated files — skipping`);
-      continue;
-    }
-    topLevelWorkflows.push(name);
+  const entryNorm = normalizeWorkflowName(scaffoldMeta.entryWorkflow);
+  if (!generatedWorkflowNames.has(entryNorm) && !generatedWorkflowNames.has(scaffoldMeta.entryWorkflow)) {
+    failures.push(`[Spec Wiring] Declared entryWorkflow "${scaffoldMeta.entryWorkflow}" is not present in generated workflow files`);
+    emitScaffoldAuthorityTrace({
+      declaredEntryWorkflow: scaffoldMeta.entryWorkflow,
+      workflowNames: scaffoldMeta.workflowContracts.map(c => c.name),
+      invocationEdges: [],
+      fastFailChecks: [{ name: "wrapper-entry-source", passed: false, details: "declared entryWorkflow not generated" }],
+      complexityGateRewrites: [],
+      validatorRunCount: 0,
+      passed: false,
+      wrapperEntrySource: "error",
+      wrapperEntryWorkflow: scaffoldMeta.entryWorkflow,
+    });
+    return { invocationXaml: "", variablesXaml: "", wiredWorkflows, diagnostics, failures };
   }
-
-  Array.from(generatedWorkflowNames).forEach(gwfName => {
-    const alreadyTop = topLevelWorkflows.some(t => normalizeWorkflowName(t) === gwfName);
-    if (alreadyTop) return;
-    if (invokedByOthers.has(gwfName)) return;
-    if (!contractMap.has(gwfName)) {
-      topLevelWorkflows.push(gwfName);
-    }
+  // Task #563 (review) — successful wrapper wiring; capture the source
+  // of the entry decision so reviewers can confirm it came from the
+  // scaffold rather than a fallback.
+  emitScaffoldAuthorityTrace({
+    declaredEntryWorkflow: scaffoldMeta.entryWorkflow,
+    workflowNames: scaffoldMeta.workflowContracts.map(c => c.name),
+    invocationEdges: [],
+    fastFailChecks: [{ name: "wrapper-entry-source", passed: true }],
+    complexityGateRewrites: [],
+    validatorRunCount: 0,
+    passed: true,
+    wrapperEntrySource: "spec",
+    wrapperEntryWorkflow: scaffoldMeta.entryWorkflow,
   });
+  // Task #563 (review) — wrapper invokes the entryWorkflow first
+  // (primary), then any secondary top-level roots (workflows with zero
+  // in-edges in the scaffold call graph) in caller-first traversal
+  // order. This guarantees the wrapper invokes every reachable subgraph
+  // root deterministically while wireChildWorkflowInvocations handles
+  // transitive descendants inside each subgraph.
+  const inEdgeCount = new Map<string, number>();
+  for (const c of scaffoldMeta.workflowContracts) {
+    inEdgeCount.set(normalizeWorkflowName(c.name), 0);
+  }
+  for (const c of scaffoldMeta.workflowContracts) {
+    for (const inv of c.invokes || []) {
+      const t = normalizeWorkflowName(inv.target);
+      inEdgeCount.set(t, (inEdgeCount.get(t) || 0) + 1);
+    }
+  }
+  const callerFirst = getCallerFirstOrder(scaffoldMeta);
+  const callerFirstIndex = new Map<string, number>();
+  callerFirst.forEach((n, i) => callerFirstIndex.set(normalizeWorkflowName(n), i));
+  const entryNormalized = normalizeWorkflowName(scaffoldMeta.entryWorkflow);
+  const secondaryRoots = scaffoldMeta.workflowContracts
+    .map(c => c.name)
+    .filter(name => {
+      const norm = normalizeWorkflowName(name);
+      if (norm === entryNormalized) return false;
+      if ((inEdgeCount.get(norm) || 0) > 0) return false;
+      if (!generatedWorkflowNames.has(norm) && !generatedWorkflowNames.has(name)) return false;
+      if (isCanonicalInfrastructureName(norm)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const ia = callerFirstIndex.get(normalizeWorkflowName(a)) ?? Number.MAX_SAFE_INTEGER;
+      const ib = callerFirstIndex.get(normalizeWorkflowName(b)) ?? Number.MAX_SAFE_INTEGER;
+      return ia - ib;
+    });
+  const topLevelWorkflows: string[] = [scaffoldMeta.entryWorkflow, ...secondaryRoots];
 
   let invocationXaml = "";
 
@@ -777,13 +845,39 @@ function wireChildWorkflowInvocations(
   const diagnostics: string[] = [];
   const failures: string[] = [];
   let wiredCount = 0;
+  // Task #563 (review) — track whether each argument expression was
+  // sourced from a scaffold-declared binding ("authoritative") or
+  // from the legacy stripDirectionalPrefix heuristic. Telemetry is
+  // emitted at the end so the trace records actual usage.
+  let authoritativeBindings = 0;
+  let heuristicBindings = 0;
 
   const contractMap = new Map<string, SpecScaffoldMetaLocal["workflowContracts"][number]>();
   for (const c of scaffoldMeta.workflowContracts) {
     contractMap.set(normalizeWorkflowName(c.name), c);
   }
 
-  for (const contract of scaffoldMeta.workflowContracts) {
+  // Task #563 — visit callers in caller-first BFS order from the
+  // declared entryWorkflow so child wiring is deterministic and any
+  // upstream variable allocations are settled before downstream callers
+  // depend on them.
+  const callerOrder = scaffoldMeta.entryWorkflow
+    ? getCallerFirstOrder(scaffoldMeta)
+    : scaffoldMeta.workflowContracts.map(c => c.name);
+  const orderedContracts: Array<typeof scaffoldMeta.workflowContracts[number]> = [];
+  const seenOrdered = new Set<string>();
+  for (const wfName of callerOrder) {
+    const c = contractMap.get(normalizeWorkflowName(wfName)) || contractMap.get(wfName);
+    if (c && !seenOrdered.has(c.name)) {
+      orderedContracts.push(c);
+      seenOrdered.add(c.name);
+    }
+  }
+  for (const c of scaffoldMeta.workflowContracts) {
+    if (!seenOrdered.has(c.name)) orderedContracts.push(c);
+  }
+
+  for (const contract of orderedContracts) {
     const callerNormalized = normalizeWorkflowName(contract.name);
     if (isCanonicalInfrastructureName(callerNormalized) && !generatedWorkflowNames.has(callerNormalized) && !generatedWorkflowNames.has(contract.name)) continue;
     if (!contract.invokes || contract.invokes.length === 0) continue;
@@ -795,7 +889,8 @@ function wireChildWorkflowInvocations(
     let modified = false;
     const callerVars = new Map<string, string>();
 
-    for (const invokedName of contract.invokes) {
+    for (const inv of contract.invokes) {
+      const invokedName = inv.target;
       const invokedNormalized = normalizeWorkflowName(invokedName);
       if (isCanonicalInfrastructureName(invokedNormalized) && !generatedWorkflowNames.has(invokedNormalized) && !generatedWorkflowNames.has(invokedName)) continue;
       const invokedFileName = `${invokedNormalized}.xaml`;
@@ -831,7 +926,21 @@ function wireChildWorkflowInvocations(
           break;
         }
 
-        const varName = stripDirectionalPrefix(arg.name);
+        // Task #563 — prefer scaffold-declared argumentBindings for the
+        // (caller → callee) edge; fall back to the legacy
+        // stripDirectionalPrefix heuristic when the scaffold did not
+        // declare a binding for this argument.
+        const declaredBinding = inv.argumentBindings ? inv.argumentBindings[arg.name] : undefined;
+        const varName = declaredBinding || stripDirectionalPrefix(arg.name);
+        if (declaredBinding) {
+          authoritativeBindings++;
+        } else {
+          // Task #563 (review) — emit explicit warning for every legacy
+          // heuristic binding so the operator can audit which (caller,
+          // callee, arg) tuples were not pre-declared by the scaffold.
+          console.warn(`[child_wiring] Scaffold did not declare a binding for "${callerNormalized}" → "${invokedNormalized}" arg "${arg.name}"; falling back to stripDirectionalPrefix heuristic → variable "${varName}"`);
+          heuristicBindings++;
+        }
         const existingType = callerVars.get(varName);
         if (existingType && existingType !== xamlType) {
           failures.push(`Child wiring ${callerNormalized}: variable "${varName}" type conflict "${existingType}" vs "${xamlType}" for argument "${arg.name}"`);
@@ -909,6 +1018,30 @@ function wireChildWorkflowInvocations(
       }
     }
   }
+
+  // Task #563 (review) — emit binding-usage telemetry so reviewers can
+  // confirm the wiring stage actually consumed the scaffold's
+  // argumentBindings rather than always falling back to the heuristic.
+  emitScaffoldAuthorityTrace({
+    declaredEntryWorkflow: scaffoldMeta.entryWorkflow ?? null,
+    workflowNames: scaffoldMeta.workflowContracts.map(c => c.name),
+    invocationEdges: orderedContracts.flatMap(c =>
+      (c.invokes || []).map(inv => ({
+        caller: c.name,
+        target: inv.target,
+        bindingKeys: inv.argumentBindings ? Object.keys(inv.argumentBindings) : [],
+      }))
+    ),
+    fastFailChecks: [{ name: "child-wiring-binding-usage", passed: failures.length === 0 }],
+    complexityGateRewrites: [],
+    validatorRunCount: 0,
+    passed: failures.length === 0,
+    bindingUsageCounts: {
+      authoritative: authoritativeBindings,
+      heuristic: heuristicBindings,
+      repairInjected: 0,
+    },
+  });
 
   return { diagnostics, failures, wiredCount };
 }
@@ -1141,6 +1274,7 @@ const CANONICAL_INFRASTRUCTURE_NAMES = new Set([
 ]);
 
 import { normalizeWorkflowName, canonicalizeWorkflowName } from "./workflow-name-utils";
+import { getCallerFirstOrder } from "./spec-graph-orders";
 export { normalizeWorkflowName, canonicalizeWorkflowName } from "./workflow-name-utils";
 
 export function detectFinalDedupCollisions(
@@ -1252,23 +1386,29 @@ export function renameInfrastructureCollisions(
     contract.name = safeName;
     affectedRefs.push(`contract.name: ${oldName} → ${safeName}`);
 
+    // Task #563 — invokes is now Array<{target, argumentBindings}>;
+    // rewrite the `target` field in place when the rename collides.
     for (const otherContract of specScaffoldMeta.workflowContracts) {
       if (otherContract.invokes) {
         for (let i = 0; i < otherContract.invokes.length; i++) {
-          const invNorm = normalizeWorkflowName(otherContract.invokes[i]);
-          if (invNorm === normalized || canonicalizeWorkflowName(otherContract.invokes[i]) === canonicalizeWorkflowName(oldName)) {
-            affectedRefs.push(`${otherContract.name}.invokes[${i}]: ${otherContract.invokes[i]} → ${safeName}`);
-            otherContract.invokes[i] = safeName;
+          const inv = otherContract.invokes[i];
+          const invNorm = normalizeWorkflowName(inv.target);
+          if (invNorm === normalized || canonicalizeWorkflowName(inv.target) === canonicalizeWorkflowName(oldName)) {
+            affectedRefs.push(`${otherContract.name}.invokes[${i}].target: ${inv.target} → ${safeName}`);
+            inv.target = safeName;
           }
         }
       }
     }
 
-    for (let i = 0; i < specScaffoldMeta.executionOrder.length; i++) {
-      const eoNorm = normalizeWorkflowName(specScaffoldMeta.executionOrder[i]);
-      if (eoNorm === normalized || canonicalizeWorkflowName(specScaffoldMeta.executionOrder[i]) === canonicalizeWorkflowName(oldName)) {
-        affectedRefs.push(`executionOrder[${i}]: ${specScaffoldMeta.executionOrder[i]} → ${safeName}`);
-        specScaffoldMeta.executionOrder[i] = safeName;
+    // Task #563 — `entryWorkflow` must follow infrastructure renames so
+    // the wrapper Main wires to the renamed file rather than the
+    // collided REFramework name.
+    if (specScaffoldMeta.entryWorkflow) {
+      const entryNormCmp = normalizeWorkflowName(specScaffoldMeta.entryWorkflow);
+      if (entryNormCmp === normalized || canonicalizeWorkflowName(specScaffoldMeta.entryWorkflow) === canonicalizeWorkflowName(oldName)) {
+        affectedRefs.push(`entryWorkflow: ${specScaffoldMeta.entryWorkflow} → ${safeName}`);
+        specScaffoldMeta.entryWorkflow = safeName;
       }
     }
 
@@ -3109,6 +3249,11 @@ function runSpecGraphValidation(
     graph.set(file, refs);
   });
 
+  // Task #563 (review) — reachability is anchored ONLY at wrapper
+  // Main.xaml. Seeding the entryWorkflow as a second BFS root would
+  // mask a broken wrapper (Main not invoking entry) by reporting
+  // entry's descendants as reachable anyway. The entry-rooted view
+  // is reported separately as a parallel diagnostic below.
   const reachable = new Set<string>();
   const mainKey = allFiles.has("Main.xaml") ? "Main.xaml" : (filenameToKey.get("Main.xaml") || "Main.xaml");
   const queue = [mainKey];
@@ -3160,7 +3305,8 @@ function runSpecGraphValidation(
       return mapped ? allFiles.get(mapped) : undefined;
     })();
     if (!callerContent) continue;
-    for (const invokedName of contract.invokes) {
+    for (const inv of contract.invokes) {
+      const invokedName = inv.target;
       const invokedNormalized = normalizeWorkflowName(invokedName);
       const invokedFileName = `${invokedNormalized}.xaml`;
       const hasRef = callerContent.includes(`WorkflowFileName="${invokedFileName}"`) ||
@@ -3797,6 +3943,7 @@ type CachedBuild = {
   propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
+  scaffoldAuthorityTrace?: import("./pipeline-trace-collector").ScaffoldAuthorityTraceEntry[];
 };
 
 const packageBuildCache = new Map<string, CachedBuild>();
@@ -3998,6 +4145,8 @@ export type BuildResult = {
   propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
+  // Task #563 — surface scaffold-authority telemetry on the assembler result
+  scaffoldAuthorityTrace?: import("./pipeline-trace-collector").ScaffoldAuthorityTraceEntry[];
   preEmissionLoweringDiagnostics?: CriticalActivityLoweringDiagnostics;
   crossFamilyDriftViolations?: Array<{ clusterId: string; lockedFamily: string; violatingArtifact: string; violationType: string; detail: string; packageFatal: boolean }>;
   preEmissionMailFamilyLockDiagnostics?: MailFamilyLockDiagnostics;
@@ -4238,7 +4387,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         cachedEntry = packageBuildCache.get(buildCacheKey);
       } else {
         console.log(`[UiPath Cache] FULL HIT for ${buildCacheKey} — all stages cached (enrichment, XAML, quality gate)`);
-        return { buffer: cachedEntry.buffer, gaps: cachedEntry.gaps, usedPackages: cachedEntry.usedPackages, cacheHit: true, qualityGateResult: cachedEntry.qualityGateResult, xamlEntries: cachedEntry.xamlEntries, dependencyMap: cachedEntry.dependencyMap, archiveManifest: cachedEntry.archiveManifest, usedFallbackStubs: false, generationMode, referencedMLSkillNames: cachedEntry.referencedMLSkillNames || [], usedAIFallback: cachedEntry.usedAIFallback || false, projectJsonContent: cachedEntry.projectJsonContent, outcomeReport: cachedEntry.outcomeReport, propertySerializationTrace: cachedEntry.propertySerializationTrace, invokeContractTrace: cachedEntry.invokeContractTrace, stageHashParity: cachedEntry.stageHashParity };
+        return { buffer: cachedEntry.buffer, gaps: cachedEntry.gaps, usedPackages: cachedEntry.usedPackages, cacheHit: true, qualityGateResult: cachedEntry.qualityGateResult, xamlEntries: cachedEntry.xamlEntries, dependencyMap: cachedEntry.dependencyMap, archiveManifest: cachedEntry.archiveManifest, usedFallbackStubs: false, generationMode, referencedMLSkillNames: cachedEntry.referencedMLSkillNames || [], usedAIFallback: cachedEntry.usedAIFallback || false, projectJsonContent: cachedEntry.projectJsonContent, outcomeReport: cachedEntry.outcomeReport, propertySerializationTrace: cachedEntry.propertySerializationTrace, invokeContractTrace: cachedEntry.invokeContractTrace, stageHashParity: cachedEntry.stageHashParity, scaffoldAuthorityTrace: cachedEntry.scaffoldAuthorityTrace };
       }
     } else if (cachedEntry) {
       const enrichHit = cachedEntry.stageEnrichment && cachedEntry.stageEnrichment.fingerprint === enrichmentFp;
@@ -4784,6 +4933,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
           propertySerializationTrace: cachedEntry.propertySerializationTrace,
           invokeContractTrace: cachedEntry.invokeContractTrace,
           stageHashParity: cachedEntry.stageHashParity,
+          scaffoldAuthorityTrace: cachedEntry.scaffoldAuthorityTrace,
         };
       } else {
         const qgReason = !cachedEntry.stageQualityGate
@@ -4840,6 +4990,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
             propertySerializationTrace: cachedEntry.propertySerializationTrace,
             invokeContractTrace: cachedEntry.invokeContractTrace,
             stageHashParity: cachedEntry.stageHashParity,
+            scaffoldAuthorityTrace: cachedEntry.scaffoldAuthorityTrace,
           };
         } else {
           console.log(`[UiPath Cache] Quality gate re-run FAILED (${rerunQG.summary?.totalErrors || 0} error(s)) — proceeding with full rebuild`);
@@ -7086,7 +7237,38 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
       if ((mainIsFullStub || mainIsFunctionallyEmpty) && mainDeferredKey) {
         _wiringDiag_mainStubInjectionAttempted = true;
         const stubbedMainXaml = deferredWrites.get(mainDeferredKey) || "";
-        const allWorkflowNames = new Set([...nonMainWorkflowNames, ...Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process")]);
+        // Task #563 — late-stub diagnostics walk the scaffold call-graph
+        // starting at the declared entryWorkflow rather than enumerating
+        // every generated XAML. Wrapper Main is only required to invoke
+        // the entryWorkflow itself; reachability of helpers comes from
+        // the entry's transitive `invokes`.
+        const reachableFromEntry = new Set<string>();
+        if (specScaffoldMeta?.entryWorkflow) {
+          const contractsByNorm = new Map<string, typeof specScaffoldMeta.workflowContracts[number]>();
+          for (const c of specScaffoldMeta.workflowContracts) {
+            contractsByNorm.set(normalizeWorkflowName(c.name), c);
+          }
+          const bfs = [normalizeWorkflowName(specScaffoldMeta.entryWorkflow)];
+          while (bfs.length > 0) {
+            const cur = bfs.shift()!;
+            if (reachableFromEntry.has(cur)) continue;
+            reachableFromEntry.add(cur);
+            const c = contractsByNorm.get(cur);
+            if (!c?.invokes) continue;
+            for (const inv of c.invokes) {
+              const t = normalizeWorkflowName(inv.target);
+              if (!reachableFromEntry.has(t)) bfs.push(t);
+            }
+          }
+        }
+        // Task #563 (review) — graph-rooted transitive reachability:
+        // Main.xaml itself is only required to invoke the entryWorkflow,
+        // BUT any workflow that is NOT reachable from the entry via
+        // the scaffold call graph is a genuine defect (it can never be
+        // executed). Report both classes.
+        const allWorkflowNames = specScaffoldMeta?.entryWorkflow
+          ? new Set([normalizeWorkflowName(specScaffoldMeta.entryWorkflow)])
+          : new Set([...nonMainWorkflowNames, ...Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process")]);
         const missingRefs: string[] = [];
         Array.from(allWorkflowNames).forEach(subWfName => {
           const subFileName = `${subWfName}.xaml`;
@@ -7105,13 +7287,44 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
         } else {
           _wiringDiag_mainStubInjectionSucceeded = true;
         }
+        // Walk every scaffold-declared workflow and report any that the
+        // entry's transitive `invokes` graph cannot reach. These are the
+        // "genuinely unreachable descendants" the prior implementation
+        // under-reported.
+        if (specScaffoldMeta?.entryWorkflow) {
+          const declaredWorkflows = specScaffoldMeta.workflowContracts.map(c => c.name);
+          const transitivelyUnreachable: string[] = [];
+          for (const wfName of declaredWorkflows) {
+            const norm = normalizeWorkflowName(wfName);
+            if (isCanonicalInfrastructureName(norm)) continue;
+            if (!reachableFromEntry.has(norm)) {
+              transitivelyUnreachable.push(wfName);
+            }
+          }
+          if (transitivelyUnreachable.length > 0) {
+            console.warn(`[Structural Dedup] DIAGNOSTIC: ${transitivelyUnreachable.length} workflow(s) declared in scaffold are NOT reachable from entryWorkflow "${specScaffoldMeta.entryWorkflow}" via the invokes graph: ${transitivelyUnreachable.join(", ")}`);
+            dependencyWarnings.push({
+              code: "SPEC_WORKFLOW_UNREACHABLE_FROM_ENTRY",
+              message: `${transitivelyUnreachable.length} workflow(s) unreachable from entryWorkflow via call graph: ${transitivelyUnreachable.join(", ")}`,
+              stage: "structural-dedup",
+              recoverable: false,
+            });
+          }
+        }
       }
       if (processIsFullStub) {
         _wiringDiag_processStubInjectionAttempted = true;
         const processDeferredKey = Array.from(deferredWrites.keys()).find(k => (k.split("/").pop() || k) === "Process.xaml");
         if (processDeferredKey) {
           const stubbedProcessXaml = deferredWrites.get(processDeferredKey) || "";
-          const processWorkflowNames = Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process" && n !== "InitAllSettings");
+          // Task #563 — in REFramework mode Process.xaml is the wrapper
+          // that invokes the entryWorkflow. The late-stub diagnostic
+          // therefore only requires the entry to be referenced; helper
+          // wiring is enforced by `wireChildWorkflowInvocations` and
+          // `runSpecGraphValidation`, not the wrapper.
+          const processWorkflowNames = specScaffoldMeta?.entryWorkflow
+            ? [normalizeWorkflowName(specScaffoldMeta.entryWorkflow)]
+            : Array.from(generatedWorkflowNames).filter(n => n !== "Main" && n !== "Process" && n !== "InitAllSettings");
           const missingProcessRefs: string[] = [];
           for (const subWfName of processWorkflowNames) {
             const subFileName = `${subWfName}.xaml`;
@@ -7217,7 +7430,7 @@ async function buildNuGetPackageImpl(pkg: UiPathPackage, version: string = "1.0.
               const reason = alreadyReferenced
                 ? `already referenced in Process.xaml but reachability graph did not detect it`
                 : specScaffoldMeta
-                  ? `spec-aware wiring was active but did not wire this workflow — check if it is a helper invoked by another workflow or if it was excluded from executionOrder`
+                  ? `spec-aware wiring was active but did not wire this workflow — check if it is a helper invoked by another workflow or if it is unreachable from the scaffold-declared entryWorkflow`
                   : `no spec scaffold metadata available — assembly used fallback wiring which could not reach this workflow`;
               console.warn(`[Structural Dedup] DIAGNOSTIC: "${retained}" unreachable — reason: ${reason}`);
               _wiringDiag_perWorkflowRejections.set(basename, `DIAGNOSTIC-ONLY: ${reason}`);
@@ -11671,6 +11884,8 @@ ${depEntries}
   }
 
   const collectedInvokeTrace = getAndClearInvokeContractTrace();
+  // Task #563 — collect scaffold-authority telemetry emitted at spec_scaffold
+  const collectedScaffoldAuthorityTrace = getAndClearScaffoldAuthorityTrace();
   const collectedStageHash = getAndClearStageHashParity();
   const brokenOnlyStageHash = collectedStageHash.filter(e => brokenWorkflowFiles.has(e.workflowFile));
 
@@ -11687,6 +11902,7 @@ ${depEntries}
     propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined,
     invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined,
     stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined,
+    scaffoldAuthorityTrace: collectedScaffoldAuthorityTrace.length > 0 ? collectedScaffoldAuthorityTrace : undefined,
     emissionGateViolations: emissionGateResult.violations.length > 0 ? {
       totalViolations: emissionGateResult.summary.totalViolations,
       stubbed: emissionGateResult.summary.stubbed,
@@ -11799,6 +12015,7 @@ ${depEntries}
       propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined,
       invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined,
       stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined,
+      scaffoldAuthorityTrace: collectedScaffoldAuthorityTrace.length > 0 ? collectedScaffoldAuthorityTrace : undefined,
     });
     console.log(`[UiPath Cache] Stored build for ${buildCacheKey} (${buffer.length} bytes, v${version}) with per-stage fingerprints [enrichment=${stageEnrichment.fingerprint.slice(0, 8)}, xaml=${xamlFp.slice(0, 8)}, qg=${qgFp.slice(0, 8)}]`);
   }
@@ -11833,7 +12050,7 @@ ${depEntries}
       }
     }
   }
-  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult, criticalActivityContractDiagnostics: collectedRequiredPropertyTraces.length > 0 ? buildDiagnosticsResult(collectedRequiredPropertyTraces) : undefined, refinementUnavailable: refinementUnavailableList.length > 0 ? refinementUnavailableList : undefined };
+  return { buffer, gaps: allGaps, usedPackages: allUsedPkgs, qualityGateResult, xamlEntries: finalXamlEntries, dependencyMap: finalDependencyMap, archiveManifest: finalArchiveManifest, usedFallbackStubs: usedFallback, generationMode, referencedMLSkillNames: [...genCtx.referencedMLSkillNames], dependencyWarnings: dependencyWarnings.length > 0 ? dependencyWarnings : undefined, emissionGateWarnings: emissionGateWarningsList.length > 0 ? emissionGateWarningsList : undefined, usedAIFallback: _usedAIFallback, outcomeReport, projectJsonContent: finalProjectJsonStr, dependencyDiagnostics: postEmissionDiagnostics, dependencyGaps: postEmissionGaps, ambiguousResolutions: postEmissionAmbiguous, orphanDependencies: postEmissionOrphans, propertySerializationTrace: collectedPropTrace.length > 0 ? collectedPropTrace : undefined, invokeContractTrace: collectedInvokeTrace.length > 0 ? collectedInvokeTrace : undefined, stageHashParity: brokenOnlyStageHash.length > 0 ? brokenOnlyStageHash : undefined, scaffoldAuthorityTrace: collectedScaffoldAuthorityTrace.length > 0 ? collectedScaffoldAuthorityTrace : undefined, preEmissionLoweringDiagnostics: mergedPreEmissionDiag, crossFamilyDriftViolations: crossFamilyDriftViolationsList.length > 0 ? crossFamilyDriftViolationsList : undefined, preEmissionMailFamilyLockDiagnostics, criticalOperationSpecNormalizationDiagnostics: specNormDiagnosticsResult, specNormAdoptionTrace: specNormAdoptionTraceResult, criticalActivityContractDiagnostics: collectedRequiredPropertyTraces.length > 0 ? buildDiagnosticsResult(collectedRequiredPropertyTraces) : undefined, refinementUnavailable: refinementUnavailableList.length > 0 ? refinementUnavailableList : undefined };
 }
 
 export function createTrackedArchive() {

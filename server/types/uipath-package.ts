@@ -113,6 +113,7 @@ export const uipathPackageSchema = z.object({
   projectName: z.string().default("UiPathPackage"),
   description: z.string().default(""),
   dependencies: z.array(z.string()).default([]),
+  entryWorkflow: z.string().optional(),
   workflows: z.array(z.object({
     name: z.string().default("Main"),
     description: z.string().default(""),
@@ -150,11 +151,16 @@ export const uipathPackageSchema = z.object({
 
 export type UiPathPackageSpec = z.infer<typeof uipathPackageSchema>;
 
+export interface ScaffoldInvocation {
+  target: string;
+  argumentBindings: Record<string, string>;
+}
+
 export interface SpecScaffoldMeta {
-  executionOrder: string[];
+  entryWorkflow: string;
   workflowContracts: Array<{
     name: string;
-    invokes: string[];
+    invokes: ScaffoldInvocation[];
     sharedArguments: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
   }>;
 }

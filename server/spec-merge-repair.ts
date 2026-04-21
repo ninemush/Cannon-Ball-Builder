@@ -40,13 +40,14 @@
  * surfacing).
  */
 
-import type { UiPathPackageSpec } from "./types/uipath-package";
+import type { UiPathPackageSpec, SpecScaffoldMeta } from "./types/uipath-package";
 import type { TaggedSpecMergeError } from "./spec-graph-validator";
 import type { ValueIntent } from "./xaml/expression-builder";
 import { catalogService } from "./catalog/catalog-service";
 import { normalizeWorkflowName } from "./workflow-name-utils";
 import { getCodeLLM, type LLMProvider } from "./lib/llm";
 import { trySanitizeAndParseJson } from "./lib/json-utils";
+import { emitScaffoldAuthorityTrace } from "./pipeline-trace-collector";
 
 type WorkflowSpec = UiPathPackageSpec["workflows"][number];
 type StepSpec = WorkflowSpec["steps"][number];
@@ -166,6 +167,13 @@ export interface RunSpecMergeRepairOptions {
   perCallBudgetMs?: number;
   /** Inject an alternate LLM for tests. */
   llmOverride?: Pick<LLMProvider, "create">;
+  /**
+   * Task #563 — scaffold-authoritative invocation graph (entry workflow
+   * + per-caller invokes with argumentBindings). When supplied, the
+   * orphan-rewire path consults these bindings before falling back to
+   * the entry-scope variable lookup heuristic.
+   */
+  scaffoldMeta?: SpecScaffoldMeta;
 }
 
 const DEFAULT_LLM_CALL_CAP = 3;
@@ -190,6 +198,12 @@ export async function runSpecMergeRepair(opts: RunSpecMergeRepairOptions): Promi
   const requiredPropertyActions: RequiredPropertyRepairAction[] = [];
   let llmCallCount = 0;
   let cancelled = false;
+  // Task #563 (review) — count repair-time argument bindings split by
+  // their source so the scaffold-authority telemetry can show how many
+  // were authoritative (declared by scaffold) vs repair-injected
+  // (entry-scope fallback).
+  let authoritativeRepairBindings = 0;
+  let repairInjectedBindings = 0;
 
   const orphansBeforeRepair = orphanErrors.length;
 
@@ -239,15 +253,43 @@ export async function runSpecMergeRepair(opts: RunSpecMergeRepairOptions): Promi
         const canRewire = zeroRequiredIn || (namedInIntent && argsSatisfiable);
 
         if (canRewire) {
-          // Inject InvokeWorkflowFile into entry workflow with deterministic
-          // argument bindings drawn from entry scope (variables/arguments
-          // matched by normalized name). For zero-required-In orphans the
-          // arguments map is empty.
+          // Inject InvokeWorkflowFile into entry workflow with argument
+          // bindings sourced from (Task #563 priority): the scaffold's
+          // declared invokes[].argumentBindings for this entry → orphan
+          // edge; falling back to a deterministic entry-scope lookup when
+          // the scaffold did not pre-declare bindings.
           const argumentsBinding: Record<string, { type: "variable"; name: string }> = {};
-          for (const a of requiredInArgs) {
-            const n = normalizeArgName(a.name);
-            const original = entryScope.get(n);
-            if (original) argumentsBinding[a.name] = { type: "variable", name: original };
+          const scaffoldBindings = lookupScaffoldBindings(
+            opts.scaffoldMeta,
+            entryWorkflow.name,
+            orphan.name,
+          );
+          if (scaffoldBindings) {
+            // Task #563 (review) — scaffold authority: when the scaffold
+            // declared a binding map for this edge, use it verbatim. Per-arg
+            // heuristic fallback is forbidden here; missing bindings surface
+            // as a downstream contract violation rather than being papered
+            // over by a name-match guess.
+            for (const a of requiredInArgs) {
+              const declared = scaffoldBindings[a.name];
+              if (declared) {
+                argumentsBinding[a.name] = { type: "variable", name: declared };
+                authoritativeRepairBindings++;
+              }
+            }
+          } else {
+            // Task #563 (review) — no scaffold binding map for this edge.
+            // Each heuristic injection emits an explicit warning so the
+            // operator can audit fabricated wiring after a run.
+            for (const a of requiredInArgs) {
+              const n = normalizeArgName(a.name);
+              const original = entryScope.get(n);
+              if (original) {
+                console.warn(`[spec_merge_repair] No scaffold-declared bindings for "${entryWorkflow.name}" → "${orphan.name}"; heuristically binding arg "${a.name}" to entry-scope variable "${original}"`);
+                argumentsBinding[a.name] = { type: "variable", name: original };
+                repairInjectedBindings++;
+              }
+            }
           }
           const stepProps: StepProperties = {
             WorkflowFileName: { type: "literal", value: `${orphan.name}.xaml` } satisfies ValueIntent,
@@ -422,6 +464,28 @@ export async function runSpecMergeRepair(opts: RunSpecMergeRepairOptions): Promi
 
   const orphansUnresolved = orphanActions.filter(a => a.action === "skipped").length;
 
+  // Task #563 (review) — emit binding-usage telemetry for repair-stage
+  // bindings. authoritative = pulled directly from scaffoldMeta;
+  // repairInjected = synthesized via entry-scope fallback. heuristic
+  // is always 0 here because repair never invokes the
+  // stripDirectionalPrefix path (that lives in package-assembler).
+  if (authoritativeRepairBindings + repairInjectedBindings > 0) {
+    emitScaffoldAuthorityTrace({
+      declaredEntryWorkflow: pkg.entryWorkflow ?? null,
+      workflowNames: pkg.workflows.map(w => w.name),
+      invocationEdges: [],
+      fastFailChecks: [{ name: "spec-merge-repair-bindings", passed: true }],
+      complexityGateRewrites: [],
+      validatorRunCount: 0,
+      passed: true,
+      bindingUsageCounts: {
+        authoritative: authoritativeRepairBindings,
+        heuristic: 0,
+        repairInjected: repairInjectedBindings,
+      },
+    });
+  }
+
   log(`[spec_merge_repair] orphans=${orphanActions.length} (rewired=${orphanActions.filter(a => a.action === "rewired").length}, pruned=${orphanActions.filter(a => a.action === "pruned").length}, skipped=${orphanActions.filter(a => a.action === "skipped").length}); requiredProps=${requiredPropertyActions.length} (filled=${requiredPropertyActions.filter(a => a.action !== "failed").length}, failed=${requiredPropertyActions.filter(a => a.action === "failed").length}); llmCalls=${llmCallCount}/${cap}; cancelled=${cancelled}`);
 
   return {
@@ -444,12 +508,47 @@ export async function runSpecMergeRepair(opts: RunSpecMergeRepairOptions): Promi
   };
 }
 
+/**
+ * Task #563 — look up scaffold-declared `argumentBindings` for the
+ * (caller → callee) edge from the scaffold authority graph. Returns
+ * null when no scaffoldMeta is supplied or no matching edge exists.
+ * Names are matched on normalized form so that `.xaml` suffixes or
+ * casing drift between scaffold authoring and orphan-rewire time do
+ * not silently bypass the lookup.
+ */
+function lookupScaffoldBindings(
+  scaffoldMeta: SpecScaffoldMeta | undefined,
+  callerName: string,
+  calleeName: string,
+): Record<string, string> | null {
+  if (!scaffoldMeta) return null;
+  const callerNorm = normalizeWorkflowName(callerName);
+  const calleeNorm = normalizeWorkflowName(calleeName);
+  const callerContract = scaffoldMeta.workflowContracts.find(
+    c => normalizeWorkflowName(c.name) === callerNorm,
+  );
+  if (!callerContract) return null;
+  const edge = (callerContract.invokes || []).find(
+    i => normalizeWorkflowName(i.target) === calleeNorm,
+  );
+  if (!edge) return null;
+  return edge.argumentBindings || {};
+}
+
 function pickEntryWorkflow(pkg: UiPathPackageSpec): UiPathPackageSpec["workflows"][number] | null {
   if (!pkg.workflows || pkg.workflows.length === 0) return null;
-  for (const wf of pkg.workflows) {
-    if (normalizeWorkflowName(wf.name) === "Main") return wf;
+  // Task #563 (review) — scaffold authority is strict. Only the
+  // explicit `entryWorkflow` declared on the spec is consulted. No
+  // "Main" or first-workflow fallback. If absent, repair returns null
+  // and the caller logs an orphan-action skip with the appropriate
+  // reason.
+  if (pkg.entryWorkflow) {
+    const entryNorm = normalizeWorkflowName(pkg.entryWorkflow);
+    for (const wf of pkg.workflows) {
+      if (normalizeWorkflowName(wf.name) === entryNorm) return wf;
+    }
   }
-  return pkg.workflows[0];
+  return null;
 }
 
 /**

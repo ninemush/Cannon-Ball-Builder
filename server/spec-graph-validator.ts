@@ -64,6 +64,12 @@ export type SpecMergeErrorClass =
   | "unresolved-package"
   | "missing-required-property"
   | "argument-contract"
+  // Task #563 — scaffold authority pass: spec carries `entryWorkflow`
+  // explicitly. When the merged spec arrives without one, the graph
+  // validator emits this tagged error and the run halts before the
+  // assembler is invited to guess.
+  | "missing-entry-workflow"
+  | "unresolved-entry-workflow"
   | "other";
 
 export type SpecMergeErrorOriginStage = "scaffold" | "detail" | "unknown";
@@ -215,13 +221,18 @@ function visitStepsForActivities(
   }
 }
 
-function findEntryWorkflowKey(workflowKeys: string[]): string | null {
-  // Prefer a workflow named "Main" (canonical entry). Fall back to the first
-  // declared workflow.
-  for (const key of workflowKeys) {
-    if (normalizeWorkflowName(key) === "Main") return key;
+function findEntryWorkflowKey(workflowKeys: string[], pkg?: UiPathPackageSpec): string | null {
+  // Task #563 (review) — scaffold authority is now strict: the entry
+  // workflow MUST be declared by name on the spec. No "Main" or
+  // first-workflow election; missing entry is surfaced by the caller as
+  // a tagged `missing-entry-workflow` error.
+  if (pkg?.entryWorkflow) {
+    const entryNorm = normalizeWorkflowName(pkg.entryWorkflow);
+    for (const key of workflowKeys) {
+      if (normalizeWorkflowName(key) === entryNorm) return key;
+    }
   }
-  return workflowKeys[0] || null;
+  return null;
 }
 
 /**
@@ -306,7 +317,32 @@ export function validateSpecGraphAtMerge(pkg: UiPathPackageSpec): SpecGraphValid
   for (const node of Array.from(graph.keys())) dfs(node, []);
 
   // Reachability from the entry workflow.
-  const entryKey = findEntryWorkflowKey(workflows.map(w => w.name));
+  // Task #563 — surface a tagged error if the spec arrived without an
+  // explicit `entryWorkflow`. We still attempt fallback to compute
+  // reachability so the user sees both classes of failure in one pass.
+  if (!pkg.entryWorkflow) {
+    const msg = `Spec missing required "entryWorkflow" field — scaffold authority cannot be enforced without an explicit entry`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "missing-entry-workflow",
+      originatedAtStage: "scaffold",
+      message: msg,
+    });
+  }
+  const entryKey = findEntryWorkflowKey(workflows.map(w => w.name), pkg);
+  // Task #563 (review) — fail fast at merge when an entryWorkflow value
+  // is present but does not resolve to any workflow in the merged spec.
+  // Otherwise this dangling-entry case slips into package assembly and
+  // surfaces as a confusing wrapper-wiring failure.
+  if (pkg.entryWorkflow && !entryKey) {
+    const msg = `Spec entryWorkflow "${pkg.entryWorkflow}" does not resolve to any workflow in the merged spec`;
+    errors.push(msg);
+    taggedErrors.push({
+      class: "unresolved-entry-workflow",
+      originatedAtStage: "scaffold",
+      message: msg,
+    });
+  }
   if (entryKey) {
     const entryNorm = normalizeWorkflowName(entryKey);
     const reachable = new Set<string>([entryNorm]);

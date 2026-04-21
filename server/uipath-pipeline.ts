@@ -375,6 +375,8 @@ export interface PipelineOutcomeReport {
   propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
+  // Task #563 — scaffold-authority telemetry surfaced on PipelineResult
+  scaffoldAuthorityTrace?: import("./pipeline-trace-collector").ScaffoldAuthorityTraceEntry[];
   preEmissionValidation?: {
     totalActivities: number;
     validActivities: number;
@@ -513,6 +515,8 @@ export interface PipelineResult {
   propertySerializationTrace?: import("./pipeline-trace-collector").PropertySerializationTraceEntry[];
   invokeContractTrace?: import("./pipeline-trace-collector").InvokeContractTraceEntry[];
   stageHashParity?: import("./pipeline-trace-collector").StageHashParityEntry[];
+  // Task #563 — scaffold-authority telemetry surfaced on PipelineResult
+  scaffoldAuthorityTrace?: import("./pipeline-trace-collector").ScaffoldAuthorityTraceEntry[];
   criticalActivityContractDiagnostics?: import("./required-property-diagnostics").RequiredPropertyDiagnosticsResult;
   cliValidationMode?: import("./uipath-cli-validator").CliValidationMode;
   cliValidationResult?: import("./uipath-cli-validator").CliValidationResult;
@@ -2510,6 +2514,8 @@ export async function compilePackageFromSpecs(
       propertySerializationTrace: buildResult.propertySerializationTrace,
       invokeContractTrace: buildResult.invokeContractTrace,
       stageHashParity: buildResult.stageHashParity,
+      // Task #563 — surface scaffold-authority telemetry to callers
+      scaffoldAuthorityTrace: buildResult.scaffoldAuthorityTrace,
       criticalActivityContractDiagnostics: buildResult.criticalActivityContractDiagnostics,
       cliValidationMode: cliValidationResult?.mode || "custom_validated_only",
       cliValidationResult: cliValidationResult,

@@ -9,6 +9,9 @@ import { buildCompactCatalogSummary } from "./catalog/xaml-template-builder";
 import { normalizeWorkflowName } from "./workflow-name-utils";
 import { catalogService } from "./catalog/catalog-service";
 import { recordLlmCall, buildLlmTraceEntry } from "./llm-trace-collector";
+import { emitScaffoldAuthorityTrace } from "./pipeline-trace-collector";
+import type { SpecScaffoldMeta as SpecScaffoldMetaShared, ScaffoldInvocation } from "./types/uipath-package";
+import { getCalleeFirstOrder } from "./spec-graph-orders";
 
 const SCAFFOLD_MAX_TOKENS = 4096;
 const SCAFFOLD_RETRY_LIMIT = 3;
@@ -70,14 +73,11 @@ export interface DecompositionMetrics {
   totalElapsedMs: number;
 }
 
-export interface SpecScaffoldMeta {
-  executionOrder: string[];
-  workflowContracts: Array<{
-    name: string;
-    invokes: string[];
-    sharedArguments: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
-  }>;
-}
+// Task #563 — re-export the shared scaffold meta shape so existing callers
+// importing `SpecScaffoldMeta` from this module still resolve. The
+// authoritative type now lives in `types/uipath-package.ts`.
+export type SpecScaffoldMeta = SpecScaffoldMetaShared;
+export type { ScaffoldInvocation };
 
 export interface DecomposedSpecResult {
   packageSpec: UiPathPackageSpec;
@@ -85,10 +85,29 @@ export interface DecomposedSpecResult {
   scaffoldMeta: SpecScaffoldMeta;
 }
 
+// Task #563 — REFramework infrastructure names that scaffold-authored
+// workflows must NOT use as their `name`. The wrapper `Main.xaml` and the
+// generated infra files (Init, GetTransactionData, ...) are produced by
+// the assembler, not the scaffold. Per Task #563 review: "Process" is
+// INCLUDED in this set — the wrapper Main.xaml is the only generated
+// orchestrator and the scaffold must declare its entry workflow with a
+// descriptive PascalCase name (e.g. "ProcessInvoices", "RunDispatcher").
+const RESERVED_REFRAMEWORK_NAMES = new Set([
+  "Main", "Process", "Init", "InitAllSettings",
+  "GetTransactionData", "SetTransactionStatus",
+  "CloseAllApplications", "KillAllProcesses",
+  "InitAllApplications", "RetryCurrentTransaction", "RetryInit",
+  "BuildTransactionData", "CleanupAndPrep", "SendNotifications",
+  "Finalise", "Finalize",
+]);
+
 interface ScaffoldWorkflowEntry {
   name: string;
   description: string;
-  invokes?: string[];
+  // Task #563 — post-parse `invokes` is always normalized to
+  // ScaffoldInvocation[]. The raw LLM payload may be string[] or
+  // structured; `parseScaffold` coerces bare strings with a warning.
+  invokes?: ScaffoldInvocation[];
   sharedArguments?: Array<{ name: string; direction: "in" | "out" | "in_out"; type: string }>;
   sharedAssets?: string[];
 }
@@ -100,7 +119,9 @@ interface ScaffoldResult {
   workflows: ScaffoldWorkflowEntry[];
   sharedQueueNames?: string[];
   sharedAssetNames?: string[];
-  executionOrder?: string[];
+  // Task #563 — scaffold MUST declare the entry workflow. We hard-fail
+  // in `parseScaffold` if absent (no inferred fallback).
+  entryWorkflow?: string;
 }
 
 function buildScaffoldPrompt(complexityGuidance?: string): string {
@@ -108,19 +129,24 @@ function buildScaffoldPrompt(complexityGuidance?: string): string {
     ? `\nWORKFLOW DECOMPOSITION GUIDANCE:\n${complexityGuidance}\n`
     : "";
 
+  const studioProfileBlock = buildStudioProfileBlock();
+
   return `You are a Senior Developer and Solution Architect. Apply production engineering rigor: enforce strict naming conventions (PascalCase project and workflow names, camelCase variables, PascalCase arguments), cohesive workflow boundaries where each workflow owns a meaningful business sub-process, meaningful shared arguments that cross workflow boundaries with clear direction, and realistic dependency declarations. Anticipate common runtime failures (selector timeouts, credential expiry, file locks) within each workflow using inline TryCatch and RetryScope — do NOT create separate error-handler or retry .xaml files. Comply strictly with the JSON schema below — no extra fields, no missing required fields, no prose outside the JSON.
 ${budgetSection}
-Based on the approved SDD and any PDD/process map context provided, generate a project scaffold for a UiPath automation package. Output a JSON object with this exact shape:
+${studioProfileBlock}Based on the approved SDD and any PDD/process map context provided, generate a project scaffold for a UiPath automation package. Output a JSON object with this exact shape:
 
 {
   "projectName": "string (PascalCase, no spaces)",
   "description": "string (brief project description)",
   "dependencies": ["UiPath.System.Activities", "... other required UiPath package names"],
+  "entryWorkflow": "string (PascalCase, MUST be one of the names in the workflows array below; NEVER a reserved REFramework name)",
   "workflows": [
     {
-      "name": "string (PascalCase filename without .xaml)",
+      "name": "string (PascalCase filename without .xaml; NEVER reserved REFramework names)",
       "description": "string (what this workflow does)",
-      "invokes": ["OtherWorkflowName (names of workflows this one calls via InvokeWorkflowFile)"],
+      "invokes": [
+        { "target": "OtherWorkflowName", "argumentBindings": { "CalleeArgName": "callerVariableOrArgName" } }
+      ],
       "sharedArguments": [
         { "name": "string (PascalCase)", "direction": "in|out|in_out", "type": "String|Int32|Boolean|DataTable|Dictionary<String,Object>|Array<String>|DateTime|SecureString" }
       ],
@@ -128,14 +154,23 @@ Based on the approved SDD and any PDD/process map context provided, generate a p
     }
   ],
   "sharedQueueNames": ["queue names used across workflows"],
-  "sharedAssetNames": ["orchestrator asset names used across workflows"],
-  "executionOrder": ["Main", "SubWorkflow1", "SubWorkflow2 (topological order)"]
+  "sharedAssetNames": ["orchestrator asset names used across workflows"]
 }
 
+ENTRY WORKFLOW (Task #563 — scaffold authority):
+- The "entryWorkflow" field is REQUIRED. Its value MUST be the exact name of one of the workflows you declare in the "workflows" array.
+- Choose a descriptive PascalCase entry name (e.g. "ProcessInvoices", "OrchestrateGreetings", "RunDispatcherPerformer", "ExecuteReconciliation"). The build system wires this workflow from the generated Main.xaml wrapper.
+- "entryWorkflow" MUST NOT be a reserved REFramework infrastructure name ("Main", "Process", "Init", "InitAllSettings", "GetTransactionData", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses", "InitAllApplications", "RetryCurrentTransaction", "RetryInit", "BuildTransactionData", "CleanupAndPrep", "SendNotifications", "Finalise", "Finalize"). The wrapper Main.xaml is the only generated orchestrator file.
+
+INVOKES SHAPE (Task #563):
+- "invokes" is an array of structured objects: { "target": "<workflow name>", "argumentBindings": { "<calleeArgName>": "<callerVarOrArgName>" } }.
+- "argumentBindings" maps every required In/InOut argument of the callee to a variable or argument visible in the caller's scope. Empty object is valid only if the callee has zero required In/InOut arguments.
+- Bare strings (e.g. "OtherWorkflow") are accepted for back-compatibility but are coerced with a warning — prefer the structured form.
+- The invocation graph (caller → callees) MUST be acyclic. No workflow may invoke itself.
+
 IMPORTANT RULES:
-- NEVER name a custom workflow "Main", "Process", "Init", "GetTransactionData", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses", "InitAllApplications", "RetryCurrentTransaction", "RetryInit", "BuildTransactionData", "CleanupAndPrep", "SendNotifications", "Finalise", or "Finalize". These are auto-generated REFramework infrastructure files. Name your orchestration workflows descriptively instead.
-  - WRONG: "Main" (collides with REFramework Main.xaml)
-  - WRONG: "Process" (collides with REFramework Process.xaml)
+- NEVER name a custom workflow "Main", "Process", "Init", "InitAllSettings", "GetTransactionData", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses", "InitAllApplications", "RetryCurrentTransaction", "RetryInit", "BuildTransactionData", "CleanupAndPrep", "SendNotifications", "Finalise", or "Finalize". These names are reserved for auto-generated infrastructure (the wrapper Main.xaml is the only generated orchestrator).
+  - WRONG: "Main" or "Process" (reserved infrastructure names)
   - RIGHT: "OrchestrateGreetings", "RunDispatcherPerformer", "ProcessInvoices", "ExecuteReconciliation"
 - Error handling (TryCatch, RetryScope) belongs INLINE within workflows — do NOT create separate error-handler or retry .xaml files
 - Only create a dedicated utility/helper workflow when the logic is genuinely reused by 2+ caller workflows (e.g., a shared login sequence)
@@ -143,7 +178,7 @@ IMPORTANT RULES:
 - The invokes array defines the invocation graph: which workflows call which via InvokeWorkflowFile
 - sharedArguments are input/output arguments that define a workflow's interface to ITS callers. Use CONCRETE types (String, Int32, Boolean, DataTable, etc.) — never bare "Object" unless genuinely polymorphic (generic container types like Dictionary<String,Object> are fine). Every argument MUST specify name, direction, and type.
 - A workflow's sharedArguments define its own public interface — callers pass data via local variables, config entries, or computed values. Do NOT duplicate callee arguments into the caller's sharedArguments unless the caller genuinely needs to expose them to its own callers.
-- executionOrder should be topological: invoked (dependency) workflows should come BEFORE the workflows that call them, so dependencies are generated first
+- Every workflow declared in "workflows" MUST be reachable from "entryWorkflow" via the invokes graph (BFS). No orphans allowed.
 - List ALL required UiPath package dependencies
 - Keep it concise — this is the project skeleton, not full workflow details
 
@@ -173,7 +208,7 @@ function buildDetailPrompt(workflow: ScaffoldWorkflowEntry, scaffold: ScaffoldRe
 
   const otherWorkflows = scaffold.workflows
     .filter(w => w.name !== workflow.name)
-    .map(w => `  - ${w.name}: ${w.description}${w.invokes?.length ? ` (invokes: ${w.invokes.join(", ")})` : ""}`);
+    .map(w => `  - ${w.name}: ${w.description}${w.invokes?.length ? ` (invokes: ${w.invokes.map(i => i.target).join(", ")})` : ""}`);
   if (otherWorkflows.length > 0) {
     contextLines.push(`Other workflows in this project:\n${otherWorkflows.join("\n")}`);
   }
@@ -202,7 +237,7 @@ ${contextLines.join("\n")}
 
 WORKFLOW PURPOSE:
 ${workflow.description}
-${workflow.invokes?.length ? `This workflow invokes: ${workflow.invokes.join(", ")}` : ""}
+${workflow.invokes?.length ? `This workflow invokes: ${workflow.invokes.map(i => i.target).join(", ")}` : ""}
 
 ${buildCompactCatalogSummary() || ""}
 Output a JSON object with this exact shape:
@@ -332,58 +367,26 @@ Pick the concrete executable step as the canonical representation. If TryCatch w
 Return ONLY the JSON object, no other text.`;
 }
 
-function buildExecutionOrder(workflows: ScaffoldWorkflowEntry[]): string[] {
-  const nameSet = new Set(workflows.map(w => w.name));
-  const graph = new Map<string, Set<string>>();
-  const inDegree = new Map<string, number>();
-
-  for (const w of workflows) {
-    graph.set(w.name, new Set());
-    inDegree.set(w.name, 0);
-  }
-
-  for (const w of workflows) {
-    if (w.invokes) {
-      for (const target of w.invokes) {
-        if (nameSet.has(target) && target !== w.name) {
-          graph.get(target)!.add(w.name);
-          inDegree.set(w.name, (inDegree.get(w.name) || 0) + 1);
-        }
-      }
-    }
-  }
-
-  const queue: string[] = [];
-  inDegree.forEach((deg, name) => {
-    if (deg === 0) queue.push(name);
-  });
-
-  const order: string[] = [];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    order.push(current);
-    const deps = graph.get(current);
-    if (deps) {
-      deps.forEach(dep => {
-        const newDeg = (inDegree.get(dep) || 1) - 1;
-        inDegree.set(dep, newDeg);
-        if (newDeg === 0) queue.push(dep);
-      });
-    }
-  }
-
-  for (const w of workflows) {
-    if (!order.includes(w.name)) order.push(w.name);
-  }
-
-  return order;
-}
+// Task #563 — `buildExecutionOrder` removed. Order is computed on demand
+// from the scaffold authority graph via `getCallerFirstOrder` /
+// `getCalleeFirstOrder` in `spec-graph-orders.ts`.
 
 function makeStubWorkflow(entry: ScaffoldWorkflowEntry): UiPathPackageSpec["workflows"][number] {
+  // Task #563 (review) — stub workflows must satisfy the full
+  // workflow shape (including `arguments`) so downstream wiring,
+  // validation, and assembly never have to defensively `?? []` the
+  // field. Carry through any sharedArguments declared by the
+  // scaffold so the stubbed workflow remains contract-compatible.
+  const stubArgs = (entry.sharedArguments || []).map(a => ({
+    name: a.name,
+    type: a.type,
+    direction: a.direction as "in" | "out" | "in_out" | "InArgument" | "OutArgument" | "InOutArgument",
+  }));
   return {
     name: entry.name,
     description: entry.description || "Stub workflow — detail generation failed",
     variables: [],
+    arguments: stubArgs,
     steps: [],
   };
 }
@@ -398,7 +401,7 @@ function isBareObjectType(type: string): boolean {
   return trimmed === "Object" && !/<|>/.test(type);
 }
 
-function validateScaffoldArgumentContracts(scaffold: ScaffoldResult): ScaffoldValidationResult {
+function validateScaffoldArgumentContracts(scaffold: ScaffoldResult, phase: "pre-gate" | "post-gate" = "pre-gate"): ScaffoldValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
   const workflowNames = new Set(scaffold.workflows.map(w => w.name));
@@ -412,6 +415,16 @@ function validateScaffoldArgumentContracts(scaffold: ScaffoldResult): ScaffoldVa
 
     if (!wf.name || !/^[A-Za-z][A-Za-z0-9_]*$/.test(wf.name)) {
       errors.push(`Invalid workflow name: "${wf.name}" — must be a valid identifier (alphanumeric and underscores, starting with a letter)`);
+    }
+
+    // Task #563 fast-fail: workflow names cannot collide with reserved
+    // REFramework infrastructure names (Main/Init/etc). "Process" is
+    // reserved at the LLM/scaffold authoring stage (`pre-gate`) but is
+    // permitted in `post-gate` because the complexity gate may
+    // intentionally synthesize a single canonical "Process" orchestrator
+    // when collapsing simple-tier scaffolds.
+    if (RESERVED_REFRAMEWORK_NAMES.has(wf.name) && !(phase === "post-gate" && wf.name === "Process")) {
+      errors.push(`Reserved workflow name: "${wf.name}" is a REFramework infrastructure name and cannot be authored by the scaffold`);
     }
 
     for (const arg of wf.sharedArguments || []) {
@@ -430,15 +443,141 @@ function validateScaffoldArgumentContracts(scaffold: ScaffoldResult): ScaffoldVa
     }
   }
 
+  // ----- Task #563 6 fast-fail scaffold-authority checks -----
+
+  // Check 1 — entry presence: scaffold must name an entryWorkflow that
+  // exists in the workflows array. (Pure absence is rejected at parse;
+  // here we additionally verify the named entry is declared.)
+  const entry = scaffold.entryWorkflow || "";
+  if (!entry) {
+    errors.push(`Scaffold authority: missing required "entryWorkflow" field`);
+  } else if (!workflowNames.has(entry)) {
+    errors.push(`Scaffold authority: entryWorkflow "${entry}" is not declared in the workflows array`);
+  }
+
+  // Check 2 — entry reserved: entryWorkflow cannot be a reserved
+  // REFramework infra name (Main/Init/etc.). "Process" is allowed
+  // post-gate (the complexity gate uses it as the canonical
+  // collapsed-orchestrator name).
+  if (entry && RESERVED_REFRAMEWORK_NAMES.has(entry) && !(phase === "post-gate" && entry === "Process")) {
+    errors.push(`Scaffold authority: entryWorkflow "${entry}" is a reserved REFramework infrastructure name`);
+  }
+
+  // Check 3 — no self-invoke.
   for (const caller of scaffold.workflows) {
-    if (!caller.invokes?.length) continue;
-    for (const calleeName of caller.invokes) {
-      if (!workflowNames.has(calleeName)) {
-        errors.push(`"${caller.name}" invokes undeclared workflow "${calleeName}" — add it to the scaffold or remove the reference`);
+    for (const inv of caller.invokes || []) {
+      if (inv.target === caller.name) {
+        errors.push(`Scaffold authority: workflow "${caller.name}" invokes itself (self-invocation is not allowed)`);
+      }
+      if (!workflowNames.has(inv.target)) {
+        errors.push(`"${caller.name}" invokes undeclared workflow "${inv.target}" — add it to the scaffold or remove the reference`);
       }
     }
   }
 
+  // Check 4 — no cycles in the invocation graph.
+  {
+    const adj = new Map<string, string[]>();
+    for (const w of scaffold.workflows) {
+      adj.set(w.name, (w.invokes || []).map(i => i.target).filter(t => workflowNames.has(t)));
+    }
+    const color = new Map<string, number>(); // 0=unseen,1=onStack,2=done
+    const cycles: string[][] = [];
+    function dfs(node: string, stack: string[]): void {
+      const c = color.get(node) || 0;
+      if (c === 1) {
+        const start = stack.indexOf(node);
+        if (start >= 0) cycles.push(stack.slice(start).concat(node));
+        return;
+      }
+      if (c === 2) return;
+      color.set(node, 1);
+      for (const next of adj.get(node) || []) dfs(next, [...stack, node]);
+      color.set(node, 2);
+    }
+    for (const w of scaffold.workflows) dfs(w.name, []);
+    for (const cyc of cycles) {
+      errors.push(`Scaffold authority: invocation cycle detected: ${cyc.join(" → ")}`);
+    }
+  }
+
+  // Check 5 — BFS reachability from entryWorkflow covers every workflow.
+  if (entry && workflowNames.has(entry)) {
+    const adj = new Map<string, string[]>();
+    for (const w of scaffold.workflows) {
+      adj.set(w.name, (w.invokes || []).map(i => i.target).filter(t => workflowNames.has(t)));
+    }
+    const reachable = new Set<string>([entry]);
+    const queue = [entry];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const next of adj.get(cur) || []) {
+        if (!reachable.has(next)) { reachable.add(next); queue.push(next); }
+      }
+    }
+    const orphans = Array.from(workflowNames).filter(n => !reachable.has(n));
+    if (orphans.length > 0) {
+      errors.push(`Scaffold authority: ${orphans.length} workflow(s) unreachable from entryWorkflow "${entry}": ${orphans.join(", ")}`);
+    }
+  }
+
+  // Check 6 — argument binding coverage. Every required In/InOut argument
+  // of a callee must be present in the caller's argumentBindings map.
+  const argsByWorkflow = new Map<string, Array<{ name: string; direction: string }>>();
+  for (const w of scaffold.workflows) {
+    argsByWorkflow.set(w.name, (w.sharedArguments || []).map(a => ({ name: a.name, direction: a.direction })));
+  }
+  for (const caller of scaffold.workflows) {
+    for (const inv of caller.invokes || []) {
+      if (!workflowNames.has(inv.target)) continue;
+      const calleeArgs = argsByWorkflow.get(inv.target) || [];
+      const requiredInputs = calleeArgs.filter(a => a.direction === "in" || a.direction === "in_out").map(a => a.name);
+      const bindings = inv.argumentBindings || {};
+      const missing = requiredInputs.filter(n => !(n in bindings));
+      if (missing.length > 0) {
+        errors.push(`Scaffold authority: "${caller.name}" invokes "${inv.target}" without binding required argument(s): ${missing.join(", ")}`);
+      }
+    }
+  }
+
+  // Check 7 (Task #563 review) — binding source-scope validation. Every
+  // value in argumentBindings names a variable/argument that MUST be
+  // visible in the caller's scope. At scaffold time the caller's scope
+  // is the union of its sharedArguments + (for the entry workflow only)
+  // the in-arguments declared on the entry. Bindings whose source name
+  // does not match any in-scope identifier are fast-failed so the LLM
+  // sees the violation at spec_scaffold rather than at XAML emission.
+  function callerScope(callerName: string): Set<string> {
+    const scope = new Set<string>();
+    const wf = scaffold.workflows.find(w => w.name === callerName);
+    if (!wf) return scope;
+    for (const a of wf.sharedArguments || []) {
+      if (a?.name) scope.add(a.name);
+    }
+    return scope;
+  }
+  for (const caller of scaffold.workflows) {
+    const scope = callerScope(caller.name);
+    for (const inv of caller.invokes || []) {
+      if (!workflowNames.has(inv.target)) continue;
+      const bindings = inv.argumentBindings || {};
+      const fabricated: string[] = [];
+      for (const [calleeArg, sourceName] of Object.entries(bindings)) {
+        if (!sourceName || typeof sourceName !== "string") continue;
+        // Allow VB literal sources (quoted strings, numerics, booleans, Nothing)
+        const looksLiteral = /^("|true$|false$|nothing$|-?\d)/i.test(sourceName.trim());
+        if (looksLiteral) continue;
+        if (!scope.has(sourceName)) {
+          fabricated.push(`${calleeArg}=${sourceName}`);
+        }
+      }
+      if (fabricated.length > 0) {
+        errors.push(`Scaffold authority: "${caller.name}" → "${inv.target}" binding source(s) not in caller scope: ${fabricated.join(", ")}. Add the source name(s) to "${caller.name}".sharedArguments or rewrite the binding.`);
+      }
+    }
+  }
+
+  // ----- Existing soft warnings -----
   const allArgs = new Map<string, Array<{ workflow: string; direction: string; type: string }>>();
   for (const wf of scaffold.workflows) {
     for (const arg of wf.sharedArguments || []) {
@@ -492,14 +631,44 @@ function parseScaffold(rawText: string): ScaffoldResult {
   if (!Array.isArray(parsed.sharedAssetNames)) {
     parsed.sharedAssetNames = [];
   }
-  if (!Array.isArray(parsed.executionOrder)) {
-    parsed.executionOrder = [];
+  // Task #563 — entryWorkflow is hard-required at parse time. We do
+  // NOT infer or fall back; the scaffold prompt makes the requirement
+  // explicit and downstream wiring depends on this string.
+  if (!parsed.entryWorkflow || typeof parsed.entryWorkflow !== "string") {
+    throw new Error('Scaffold missing required "entryWorkflow" field — scaffold authority requires the LLM to declare the entry orchestrator workflow');
   }
+
+  // Task #563 — accept legacy `executionOrder` only by silently dropping
+  // it. Order is now derived from the entry + invokes graph at use time.
+  if ("executionOrder" in parsed) {
+    delete parsed.executionOrder;
+  }
+
   for (const wf of parsed.workflows) {
-    if (!Array.isArray(wf.invokes)) wf.invokes = [];
     if (!Array.isArray(wf.sharedArguments)) wf.sharedArguments = [];
     if (!Array.isArray(wf.sharedAssets)) wf.sharedAssets = [];
     if (!wf.description || typeof wf.description !== "string") wf.description = "";
+
+    // Task #563 — coerce `invokes` into ScaffoldInvocation[]:
+    //   - already-structured entries pass through (after defaulting
+    //     argumentBindings to {})
+    //   - bare strings are coerced with a console warning
+    //   - anything else is dropped silently (parse-shape safety)
+    const rawInvokes = Array.isArray(wf.invokes) ? wf.invokes : [];
+    const coerced: ScaffoldInvocation[] = [];
+    for (const inv of rawInvokes) {
+      if (typeof inv === "string") {
+        console.warn(`[SpecDecomposer] Scaffold workflow "${wf.name}" used bare-string invokes entry "${inv}" — coercing to { target, argumentBindings:{} }. Prefer the structured form.`);
+        coerced.push({ target: inv, argumentBindings: {} });
+      } else if (inv && typeof inv === "object" && typeof (inv as any).target === "string") {
+        const bindings = (inv as any).argumentBindings;
+        coerced.push({
+          target: (inv as any).target,
+          argumentBindings: bindings && typeof bindings === "object" && !Array.isArray(bindings) ? bindings : {},
+        });
+      }
+    }
+    wf.invokes = coerced;
   }
 
   return parsed as ScaffoldResult;
@@ -633,6 +802,10 @@ function mergeSpec(
     projectName: scaffold.projectName,
     description: scaffold.description || "",
     dependencies: scaffold.dependencies || [],
+    // Task #563 — propagate scaffold-authority entry into the merged
+    // spec so downstream validators (spec-graph-validator, repair, the
+    // assembler wrapper) read it directly from the package object.
+    entryWorkflow: scaffold.entryWorkflow,
     workflows,
   };
 
@@ -762,6 +935,11 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
   ));
 
   let validation = validateScaffoldArgumentContracts(scaffold);
+  // Task #563 — telemetry: track validator runs and complexity-gate
+  // rewrites so the scaffold-authority trace surfaces both passes and
+  // any deterministic post-LLM rewrites that adjusted the graph.
+  let scaffoldValidatorRunCount = 1;
+  const scaffoldGateRewrites: Array<{ kind: "entry-rewrite" | "binding-rewrite"; from: string; to: string }> = [];
 
   if (validation.warnings.length > 0) {
     const warnSummary = validation.warnings.join("; ");
@@ -830,6 +1008,7 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
       ));
 
       const retryValidation = validateScaffoldArgumentContracts(retryScaffold);
+      scaffoldValidatorRunCount++;
 
       if (retryValidation.warnings.length > 0) {
         const warnSummary = retryValidation.warnings.join("; ");
@@ -893,78 +1072,144 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
     }
   }
 
-  let executionOrder: string[];
-  const scaffoldNames = new Set(scaffold.workflows.map(w => w.name));
-  const scaffoldOrderValid = (() => {
-    if (!scaffold.executionOrder?.length) return false;
-    if (!scaffold.executionOrder.every(name => scaffoldNames.has(name))) return false;
-    if (new Set(scaffold.executionOrder).size !== scaffold.executionOrder.length) return false;
-    const posMap = new Map<string, number>();
-    scaffold.executionOrder.forEach((name, idx) => posMap.set(name, idx));
-    for (const w of scaffold.workflows) {
-      if (w.invokes) {
-        for (const target of w.invokes) {
-          if (scaffoldNames.has(target) && target !== w.name) {
-            const targetPos = posMap.get(target);
-            const callerPos = posMap.get(w.name);
-            if (targetPos !== undefined && callerPos !== undefined && targetPos > callerPos) {
-              return false;
-            }
-          }
-        }
-      }
-    }
-    return true;
-  })();
-
-  if (scaffoldOrderValid) {
-    executionOrder = scaffold.executionOrder!;
-  } else {
-    executionOrder = buildExecutionOrder(scaffold.workflows);
-  }
-
-  runLogger.stageEnd("spec_scaffold", "succeeded", {
-    workflowCount: scaffold.workflows.length,
-    projectName: scaffold.projectName,
-    executionOrder,
-  });
-  onPipelineProgress?.({
-    type: "completed",
-    stage: "spec_scaffold",
-    message: `Scaffold ready: ${scaffold.workflows.length} workflow(s)`,
-    context: { workflowCount: scaffold.workflows.length, projectName: scaffold.projectName },
-  });
-
-  console.log(`[SpecDecomposer] Run ${runId}: Scaffold generated — ${scaffold.workflows.length} workflows: ${scaffold.workflows.map(w => w.name).join(", ")}`);
-
+  // Task #563 — complexity gate: collapse business workflows into a
+  // single "Process" orchestrator for the simple-tier budget. Must run
+  // BEFORE the orderedWorkflows derivation so the detail loop sees the
+  // post-collapse shape, and the validator must run TWICE (once after
+  // the LLM scaffold, once after the gate rewrites the graph) so that
+  // any post-collapse contract violations fast-fail just like an LLM
+  // violation would.
   const budgetMatch = complexityGuidance?.match(/~(\d+)[–-](\d+)\s+workflows/);
   const budgetMax = budgetMatch ? parseInt(budgetMatch[2], 10) : 0;
   const isSimpleTier = complexityGuidance?.toLowerCase().includes("simple") || (budgetMax > 0 && budgetMax <= 3);
 
   if (isSimpleTier && scaffold.workflows.length > (budgetMax || 3)) {
-    const INFRA_NAMES = new Set(["Main", "Init", "InitAllSettings", "GetTransactionData", "SetTransactionStatus", "CloseAllApplications", "KillAllProcesses", "Process"]);
-    const infraWorkflows = scaffold.workflows.filter(w => INFRA_NAMES.has(w.name));
-    const businessWorkflows = scaffold.workflows.filter(w => !INFRA_NAMES.has(w.name));
+    // Collapse every non-reserved business workflow into a single
+    // synthetic orchestrator named "Process" (the canonical
+    // ReFramework process name). The collapsed workflow becomes the
+    // new entryWorkflow and inherits the union of invokes +
+    // sharedArguments from its constituents. The validator's
+    // post-gate phase explicitly permits this single Process name.
+    const businessWorkflows = scaffold.workflows.filter(w => !RESERVED_REFRAMEWORK_NAMES.has(w.name));
+    const collapsedName = "Process";
 
     if (businessWorkflows.length > 1) {
+      const collapseSet = new Set(businessWorkflows.map(w => w.name));
       const mergedDescription = businessWorkflows.map(w => `${w.name}: ${w.description}`).join("; ");
-      const mergedInvokes = businessWorkflows.flatMap(w => w.invokes || []);
+      // Drop invokes that targeted collapsed siblings (they're now
+      // inlined). Surviving invokes (to non-collapsed helpers) carry
+      // their bindings through.
+      const survivingInvokes = businessWorkflows
+        .flatMap(w => w.invokes || [])
+        .filter(inv => !collapseSet.has(inv.target));
       const mergedArgs = businessWorkflows.flatMap(w => w.sharedArguments || []);
-      const processWf = infraWorkflows.find(w => w.name === "Process") || {
-        name: "Process",
-        description: `Process transaction — ${mergedDescription}`,
-        invokes: mergedInvokes,
+
+      const orchestratorWf: ScaffoldWorkflowEntry = {
+        name: collapsedName,
+        description: `Collapsed orchestrator — ${mergedDescription}`,
+        invokes: survivingInvokes,
         sharedArguments: mergedArgs,
         sharedAssets: [],
       };
-      if (infraWorkflows.find(w => w.name === "Process")) {
-        processWf.description += ` | Collapsed: ${mergedDescription}`;
+
+      scaffold.workflows = [
+        ...scaffold.workflows.filter(w => !collapseSet.has(w.name)),
+        orchestratorWf,
+      ];
+
+      // Task #563 — surviving non-collapsed callers may still reference
+      // collapsed siblings in their invokes lists; rewrite those edges
+      // so they target the orchestrator and merge their bindings.
+      for (const wf of scaffold.workflows) {
+        if (wf.name === collapsedName) continue;
+        if (!Array.isArray(wf.invokes)) continue;
+        const rewritten: ScaffoldInvocation[] = [];
+        const seenOrchestrator: { argumentBindings: Record<string, string> } = { argumentBindings: {} };
+        let touchedOrchestrator = false;
+        for (const inv of wf.invokes) {
+          if (collapseSet.has(inv.target)) {
+            for (const [k, v] of Object.entries(inv.argumentBindings || {})) {
+              seenOrchestrator.argumentBindings[k] = v;
+            }
+            touchedOrchestrator = true;
+            scaffoldGateRewrites.push({ kind: "binding-rewrite", from: `${wf.name}→${inv.target}`, to: `${wf.name}→${collapsedName}` });
+          } else {
+            rewritten.push(inv);
+          }
+        }
+        if (touchedOrchestrator) {
+          rewritten.push({ target: collapsedName, argumentBindings: seenOrchestrator.argumentBindings });
+        }
+        wf.invokes = rewritten;
       }
 
-      scaffold.workflows = [...infraWorkflows.filter(w => w.name !== "Process"), processWf];
+      const previousEntry = scaffold.entryWorkflow;
+      scaffold.entryWorkflow = collapsedName;
+      if (previousEntry && previousEntry !== collapsedName) {
+        scaffoldGateRewrites.push({ kind: "entry-rewrite", from: previousEntry, to: collapsedName });
+      }
+
       console.log(`[SpecDecomposer] Complexity gate: Collapsed ${businessWorkflows.length} business workflow(s) into Process.xaml for simple automation (budget max: ${budgetMax || 3})`);
+
+      // Task #563 — re-run validator after the gate so post-collapse
+      // contract violations fast-fail. We surface errors as a hard
+      // failure (the gate produced an invalid scaffold and the LLM
+      // cannot help here since it's a deterministic local rewrite).
+      const postGate = validateScaffoldArgumentContracts(scaffold, "post-gate");
+      scaffoldValidatorRunCount++;
+      if (postGate.errors.length > 0) {
+        const summary = postGate.errors.join("; ");
+        runLogger.stageEnd("spec_scaffold", "failed", undefined, `Post-complexity-gate validation failed: ${summary}`);
+        onPipelineProgress?.({
+          type: "failed",
+          stage: "spec_scaffold",
+          message: `Complexity-gate collapse produced ${postGate.errors.length} contract violation(s)`,
+          context: { errors: postGate.errors },
+        });
+        throw new Error(`Scaffold authority post-complexity-gate violations: ${summary}`);
+      }
+      validation = postGate;
     }
   }
+
+  // Task #563 — emit scaffold-authority telemetry capturing the
+  // declared entry, the declared call-graph (caller → target plus
+  // bound argument keys), the validator pass count, and any
+  // complexity-gate rewrites. Errors at this point are non-blocking
+  // (we already threw on hard failures above), so `passed` is true.
+  emitScaffoldAuthorityTrace({
+    declaredEntryWorkflow: scaffold.entryWorkflow || null,
+    workflowNames: scaffold.workflows.map(w => w.name),
+    invocationEdges: scaffold.workflows.flatMap(w =>
+      (w.invokes || []).map(inv => ({
+        caller: w.name,
+        target: inv.target,
+        bindingKeys: Object.keys(inv.argumentBindings || {}),
+      }))
+    ),
+    fastFailChecks: [
+      { name: "entry-workflow-presence", passed: !!scaffold.entryWorkflow },
+      { name: "argument-contract-validation", passed: validation.errors.length === 0,
+        details: validation.errors.length > 0 ? validation.errors.join("; ") : undefined },
+    ],
+    complexityGateRewrites: scaffoldGateRewrites,
+    validatorRunCount: scaffoldValidatorRunCount,
+    passed: validation.errors.length === 0 && !!scaffold.entryWorkflow,
+  });
+
+  runLogger.stageEnd("spec_scaffold", "succeeded", {
+    workflowCount: scaffold.workflows.length,
+    projectName: scaffold.projectName,
+    entryWorkflow: scaffold.entryWorkflow,
+  });
+  onPipelineProgress?.({
+    type: "completed",
+    stage: "spec_scaffold",
+    message: `Scaffold ready: ${scaffold.workflows.length} workflow(s)`,
+    context: { workflowCount: scaffold.workflows.length, projectName: scaffold.projectName, entryWorkflow: scaffold.entryWorkflow },
+  });
+
+  console.log(`[SpecDecomposer] Run ${runId}: Scaffold generated — ${scaffold.workflows.length} workflows (entry=${scaffold.entryWorkflow}): ${scaffold.workflows.map(w => w.name).join(", ")}`);
 
   const workflowMap = new Map<string, ScaffoldWorkflowEntry>();
   for (const w of scaffold.workflows) {
@@ -973,7 +1218,18 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
 
   const workflowDetails = new Map<string, UiPathPackageSpec["workflows"][number]>();
 
-  const orderedWorkflows = executionOrder
+  // Task #563 — order detail emission callee-first so callee contracts
+  // are produced before their callers.
+  const calleeFirstOrder = getCalleeFirstOrder({
+    entryWorkflow: scaffold.entryWorkflow!,
+    workflowContracts: scaffold.workflows.map(w => ({
+      name: w.name,
+      invokes: w.invokes || [],
+      sharedArguments: (w.sharedArguments || []).map(a => ({ name: a.name, direction: a.direction, type: a.type })),
+    })),
+  });
+
+  const orderedWorkflows = calleeFirstOrder
     .filter(name => workflowMap.has(name))
     .map(name => workflowMap.get(name)!);
 
@@ -1309,10 +1565,13 @@ export async function generateDecomposedSpec(options: DecomposeOptions): Promise
   console.log(`[SpecDecomposer] Run ${runId}: Decomposition complete — ${mergedSpec.workflows.length} workflows, ${metrics.stubCount} stubs, ${metrics.totalLlmCalls} LLM calls, ${metrics.totalElapsedMs}ms total`);
 
   const scaffoldMeta: SpecScaffoldMeta = {
-    executionOrder,
+    entryWorkflow: scaffold.entryWorkflow!,
     workflowContracts: scaffold.workflows.map(w => ({
       name: w.name,
-      invokes: w.invokes || [],
+      invokes: (w.invokes || []).map(i => ({
+        target: i.target,
+        argumentBindings: i.argumentBindings || {},
+      })),
       sharedArguments: (w.sharedArguments || []).map(a => ({
         name: a.name,
         direction: a.direction,

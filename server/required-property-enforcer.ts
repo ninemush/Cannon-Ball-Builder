@@ -241,7 +241,7 @@ const REQUIRED_PROPERTY_CLASSIFICATION_REGISTRY: ClassificationEntry[] = [
     propertyName: "WorkflowFileName",
     classification: "generator-owned",
     approvedEnforcerRecovery: true,
-    rationale: "Primary authority is spec invokes/executionOrder. Enforcer has proven context-derived recovery deriving .xaml filename.",
+    rationale: "Primary authority is the spec scaffold's `invokes` graph rooted at `entryWorkflow` (Task #563 — `executionOrder` removed in favor of on-demand BFS via spec-graph-orders). Enforcer has proven context-derived recovery deriving .xaml filename.",
   },
   {
     activityType: "QueryEntity",

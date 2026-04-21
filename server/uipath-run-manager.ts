@@ -10,7 +10,7 @@ import type { PipelineProgressEvent, PipelineProgressCallback } from "./uipath-p
 import { initTrace, flushAndClear, runInTraceContext } from "./llm-trace-collector";
 import type { UipathGenerationRun } from "@shared/schema";
 import { sanitizeAndParseJson } from "./lib/json-utils";
-import { uipathPackageSchema } from "./types/uipath-package";
+import { uipathPackageSchema, type SpecScaffoldMeta } from "./types/uipath-package";
 import { UIPATH_PROMPT, repairTruncatedPackageJson } from "./uipath-prompts";
 import { QualityGateError } from "./uipath-integration";
 import type { MetaValidationMode } from "./meta-validation";
@@ -510,6 +510,10 @@ async function executeRun(
                 taggedErrors,
                 abortSignal: repairAbortController.signal,
                 onLog: (msg) => console.log(`[RunManager] Run ${runId}: ${msg}`),
+                // Task #563 (review) — pass scaffold-authoritative
+                // invocation graph + bindings so orphan rewire uses the
+                // declared bindings rather than heuristic discovery.
+                scaffoldMeta: (packageJson as { _specScaffoldMeta?: SpecScaffoldMeta })._specScaffoldMeta,
               });
 
               packageJson = repairedPackage;
